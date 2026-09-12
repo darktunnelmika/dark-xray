@@ -10,21 +10,22 @@ C_RESET='\033[0m'; C_CYAN='\033[38;5;51m'; C_BLUE='\033[38;5;39m'; C_PURPLE='\03
 cleanup(){ [[ -n "${TMP:-}" && -d "$TMP" ]] && rm -rf "$TMP" || true; }
 trap cleanup EXIT
 
-line(){ printf '%*s\n' 74 '' | tr ' ' '═'; }
+repeat(){ local ch="$1" n="$2" i; for ((i=0;i<n;i++)); do printf '%s' "$ch"; done; }
+line(){ repeat '═' 74; printf '\n'; }
 banner(){
   clear 2>/dev/null || true
-  printf "${C_CYAN}╔"; line | tr '\n' '╗'; printf "${C_RESET}\n"
+  printf "${C_CYAN}╔"; repeat '═' 74; printf "╗${C_RESET}\n"
   printf "${C_CYAN}║${C_RESET}${C_PURPLE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "D A R K   X R A Y"
   printf "${C_CYAN}║${C_RESET}${C_BLUE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "100-STEP CYBER INSTALLER"
-  printf "${C_CYAN}╚"; line | tr '\n' '╝'; printf "${C_RESET}\n"
+  printf "${C_CYAN}╚"; repeat '═' 74; printf "╝${C_RESET}\n"
   printf "${C_DIM}Standalone panel • Own DB/API/UI • Xray-core engine • No Sanayi runtime${C_RESET}\n\n"
 }
 progress(){
   local n="$1" text="$2" filled=$((n/5)) empty=$((20-filled))
   (( filled > 20 )) && filled=20
   printf "${C_CYAN}[%03d/100]${C_RESET} [" "$n"
-  printf "%${filled}s" '' | tr ' ' '█'
-  printf "%${empty}s" '' | tr ' ' '░'
+  repeat '█' "$filled"
+  repeat '░' "$empty"
   printf "] %s\n" "$text"
 }
 fail(){ printf "${C_RED}[FAILED]${C_RESET} %s\n" "$*" >&2; exit 1; }
