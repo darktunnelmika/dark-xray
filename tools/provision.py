@@ -96,7 +96,19 @@ def main():
     # be overwritten by a compromised web account.
     for path in (APP/'.venv/bin').iterdir():
         if not path.is_symlink():os.chmod(path,0o755)
-    run(['runuser','-u','darkxray','--',py,APP/'backend/server.py','--config',CONF/'config.json','--data',DATA,'init','--username',a.username])
+    while True:
+        cp=subprocess.run(['runuser','-u','darkxray','--',py,APP/'backend/server.py','--config',CONF/'config.json','--data',DATA,'init','--username',a.username],check=False)
+        if cp.returncode==0:
+            break
+        print('\nOwner setup was rejected. Use a password between 12 and 512 characters and repeat it exactly.')
+        if not sys.stdin.isatty():
+            raise SystemExit('Owner initialization failed in non-interactive mode')
+        try:
+            retry=input('Retry owner password? [Y/n]: ').strip().lower()
+        except (EOFError,KeyboardInterrupt):
+            raise SystemExit('Owner password entry cancelled')
+        if retry not in ('','y','yes'):
+            raise SystemExit('Owner initialization cancelled; installation not completed')
     for name in ['dark-xray.service','dark-xray-guard.service']:
         shutil.copy2(APP/'deploy'/name,Path('/etc/systemd/system')/name)
     wrapper=Path('/usr/local/bin/darkxray')
