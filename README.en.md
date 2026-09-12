@@ -7,35 +7,35 @@ Independent Xray control panel with a Persian cyber-dark interface, reseller own
 Baseline: `0.6.0-standalone-lab`.
 
 > [!CAUTION]
-> **INITIAL IMPORT IS INCOMPLETE. DO NOT INSTALL FROM THIS REPOSITORY YET.**
-> The main branch now contains 22 of the original archive's 67 paths, with the two READMEs replaced by publication notices. Three backend files are present, but the remaining backend, web interface, tools, tests and CI workflow are still missing.
+> **SOURCE IMPORT REMAINS INCOMPLETE. DO NOT INSTALL FROM THIS REPOSITORY.**
+> 64 of the original archive's 67 file paths are present. Three backend files remain absent:
+>
+> - `backend/guard_bridge.py`
+> - `backend/guardd.py`
+> - `backend/policy_api.py`
 
-## Publication status
+## Publication status — 2026-09-13
 
-The normal retry of the earlier two-file upload was accepted. The following modules were uploaded without changing their source contents, and their Git blob hashes match the original archive:
+Previously accepted source objects were recovered. The repository now includes all original web assets, tools, tests, documentation, licensing, CI and deployment files, plus six backend modules: auth, backup, core, dark_policy, manager and server.
 
-- `backend/auth.py` — sessions, TOTP and scoped administrator API keys.
-- `backend/backup.py` — encrypted backups and restore into a new destination.
-- `backend/core.py` — standalone storage and direct Xray process management.
+The omitted `tests/test_v06.py` was restored. A transfer difference in `tests/legacy/test_policy.py` and newline differences in three historical QA reports were corrected to the source archive. Application source has not been rewritten during this import.
 
-The next upload, `backend/dark_policy.py`, was stopped by the publishing tool with:
+The publishing tool blocked the remaining three backend uploads because it could not determine the requests' safety status. Repository write permission is available; publication nevertheless remains incomplete. No replacement stubs or bypasses are included.
 
-```text
-This tool call was blocked by OpenAI because we couldn't determine the safety status of the request.
-```
+See [PUBLISH-STATUS.json](PUBLISH-STATUS.json) for the exact archive identity, missing paths and verified directory hashes. Instructions in the development guide describe the complete source package; do not execute them from this incomplete checkout.
 
-The message does not establish the exact cause. The blocked file has not been published. Full publication and successful GitHub Actions execution are NOT claimed. See [PUBLISH-STATUS.json](PUBLISH-STATUS.json) for the archive identity, verified hashes and remaining files.
+## Project architecture
 
-## Project direction
+DARK owns its UI, API, accounts and database. It does not require a Sanayi/3x-ui installation, API token, second login or embedded pages. Xray-core is supplied separately.
 
-DARK has its own UI, API, accounts and database. It must not depend on a Sanayi/3x-ui installation, token, second login or embedded pages. Xray-core is supplied separately.
+The development baseline contains client ownership on shared inbounds, reseller quotas and an independent traffic ledger, IP policies, TOTP, an initial installer and encrypted backups. Source presence is not a production-readiness claim.
 
-The local baseline package contains reseller/client ownership, quotas and an independent traffic ledger, IP policies, TOTP, an initial installer and encrypted backups. Those components are not fully present here until the source import is completed; their presence in the local package does not establish production readiness.
+## Validation and limits
 
-The baseline remains experimental: real Xray connectivity, live firewall packet enforcement, fresh-VPS installation and load capacity have not been validated. Multi-node operation and some advanced features remain incomplete.
+Files under `qa/` are historical v0.6 development reports, not fresh validation of this branch. The historical 189-test result must not be presented as a current GitHub Actions pass. The initial Actions run for recovery commit `8316f19` failed in Repository hygiene and did not execute the subsequent test suite. Check the Actions tab for later run results; no successful current run is claimed here.
 
-## Local revalidation
+Real Xray proxy connectivity, kernel firewall effects, clean-VPS installation, live certificate issuance and load capacity remain unverified. Multi-node operation, global multi-node IP limits, migration and some advanced features remain incomplete.
 
-The original archive checksum checks and best-effort repository hygiene scan passed. Two complete Python test groups passed again: 78 legacy tests and 28 standalone tests. The 120-second execution limit was reached during the supervisor group, so a complete-suite pass is NOT claimed for this transfer. The leftover local test-double process was stopped. This is not a live Xray or firewall validation.
+`SHA256SUMS` is the unchanged ORIGINAL ARCHIVE manifest. It is not a complete-checkout certificate: verification against this branch will fail for the three missing files and the two intentionally updated README notices. The other 62 published archive files match their original bytes.
 
-The installation entrypoints and uploaded modules require files that are still missing; do not run them. Do not publish real credentials, certificates, private keys, databases or unredacted logs.
+Do not publish real credentials, private keys, certificates, databases or unredacted logs. See [the Persian development guide](README.fa.md), [feature status](STATUS.fa.md), [security](SECURITY.md) and [third-party notices](THIRD-PARTY-NOTICES.md).

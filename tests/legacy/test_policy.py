@@ -72,7 +72,7 @@ def test_unverified_fail_safe(store):
     with pytest.raises(PolicyError):p.assert_enforcement_safe()
     assert Guard(p,store).observe('a','8.8.8.8')['applied'] is False
 
-@pytest.mark.parametrize('ip',['127.0.0.1','::1','10.0.0.1','fe80::1','224.0.0.0','0.0.0.0'])
+@pytest.mark.parametrize('ip',['127.0.0.1','::1','10.0.0.1','fe80::1','224.0.0.1','0.0.0.0'])
 def test_special_sources_exempt(store,ip):assert Guard(policy(),store).observe('a',ip)['decision']=='exempt'
 
 def test_explicit_exempt_peer(store):
