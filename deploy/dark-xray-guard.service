@@ -1,0 +1,32 @@
+[Unit]
+Description=DARK XRAY narrow IP enforcement broker
+After=network.target
+ConditionPathExists=/etc/dark-xray/guard.json
+
+[Service]
+Type=simple
+User=root
+Group=darkxray
+WorkingDirectory=/opt/dark-xray
+ExecStart=/opt/dark-xray/.venv/bin/python /opt/dark-xray/backend/guardd.py --config /etc/dark-xray/guard.json
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=dark-xray-guard
+RuntimeDirectoryMode=0750
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+ReadWritePaths=/run/dark-xray-guard
+
+[Install]
+WantedBy=multi-user.target

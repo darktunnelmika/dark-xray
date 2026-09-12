@@ -1,0 +1,26 @@
+{
+  "public_origin": "http://127.0.0.1:2087",
+  "public_address": "127.0.0.1",
+  "xray_binary": "/usr/local/lib/dark-xray/xray",
+  "xray_assets": "/usr/local/lib/dark-xray",
+  "xray_api_port": 10085,
+  "writes_enabled": true,
+  "secure_cookie": false,
+  "poll_seconds": 5,
+  "core_autostart": false,
+  "direct_source_verified": false,
+  "ip_window_seconds": 120,
+  "protected_ports": [
+    22,
+    2087,
+    10085
+  ],
+  "test_engine": false,
+  "bind_host": "127.0.0.1",
+  "bind_port": 2087,
+  "tls_certificate": "",
+  "tls_private_key": "",
+  "guard_socket": "/run/dark-xray-guard/control.sock",
+  "ip_ban_seconds": 1800,
+  "ip_exempt_ips": []
+}

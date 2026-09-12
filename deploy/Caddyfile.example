@@ -1,0 +1,5 @@
+# Example only. Caddy terminates HTTPS for DARK, not for another management panel.
+# Set config.json public_origin=https://panel.example.com and secure_cookie=true.
+panel.example.com {
+    reverse_proxy 127.0.0.1:2087
+}

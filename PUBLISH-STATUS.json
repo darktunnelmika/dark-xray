@@ -1,0 +1,26 @@
+{
+  "project": "DARK XRAY",
+  "repository": "darktunnelmika/dark-xray",
+  "branch": "main",
+  "date": "2026-09-12",
+  "status": "incomplete_import",
+  "installable_from_repository": false,
+  "baseline_version": "0.6.0-standalone-lab",
+  "source_archive": "DARK-XRAY-v0.6-GitHub-Ready.zip",
+  "source_archive_sha256": "d234a1bd2a6314905bce17dd5e7c6b13ed9594727c42542a0b3a126a632082f7",
+  "source_archive_file_count": 67,
+  "source_paths_present": 19,
+  "note": "README.md and README.en.md were replaced with explicit incomplete-import notices; PUBLISH-STATUS.json is additional metadata.",
+  "missing_directories": ["backend", "web", "tools", "tests", "qa", ".github"],
+  "missing_root_files": ["LICENSE", "README.fa.md", "SHA256SUMS", "STATUS.fa.md", "UPLOAD.fa.md"],
+  "blocker": {
+    "operation": "upload backend/auth.py and backend/backup.py",
+    "attempts": 2,
+    "message": "This tool call was blocked by OpenAI because we couldn't determine the safety status of the request.",
+    "cause_confirmed": false
+  },
+  "github_actions_run": false,
+  "real_xray_connectivity_verified": false,
+  "live_firewall_verified": false,
+  "production_ready": false
+}

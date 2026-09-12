@@ -1,0 +1,50 @@
+# Local configuration and credentials
+config.json
+.env
+.env.*
+!.env.example
+!config.example.json
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+id_rsa*
+id_ed25519*
+credentials.json
+auth.json
+# State, databases and backups
+data/
+runtime/
+backups/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.bak
+*.backup
+# Python and tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+# Generated local QA
+qa/junit/
+qa/*.log
+qa/*.png
+qa/*.tap
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

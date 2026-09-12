@@ -1,0 +1,35 @@
+[Unit]
+Description=DARK XRAY independent panel and owned Xray-core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=darkxray
+Group=darkxray
+WorkingDirectory=/opt/dark-xray
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DARK_CONFIG=/etc/dark-xray/config.json
+Environment=DARK_DATA=/var/lib/dark-xray
+ExecStart=/opt/dark-xray/darkxray serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+UMask=0077
+# The only elevated capability: listening on approved ports below 1024.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/dark-xray
+
+[Install]
+WantedBy=multi-user.target

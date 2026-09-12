@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PY="$ROOT/.venv/bin/python"
+[[ -x "$PY" ]] || { echo 'Run ./install.sh (local development) or sudo bash setup.sh (fresh test VPS).' >&2; exit 1; }
+export PYTHONDONTWRITEBYTECODE=1
+CONFIG="${DARK_CONFIG:-$ROOT/config.json}"
+DATA="${DARK_DATA:-$ROOT/data}"
+case "${1:-menu}" in
+ menu) exec "$PY" "$ROOT/tools/menu.py" ;;
+ doctor) shift; exec "$PY" "$ROOT/tools/doctor.py" --config "$CONFIG" --data "$DATA" "$@" ;;
+ domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
+ guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
+ selftest) shift; exec "$PY" "$ROOT/tools/smoke-real.py" "$@" ;;
+ *) exec "$PY" "$ROOT/backend/server.py" --config "$CONFIG" --data "$DATA" "$@" ;;
+esac
