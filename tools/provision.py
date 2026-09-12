@@ -69,8 +69,6 @@ def main():
     if Path('/usr/local/bin/darkxray').exists():raise SystemExit('An existing darkxray command was found; nothing overwritten')
     if a.port in [22,10085,*a.ssh_port]:raise SystemExit('Panel port overlaps SSH or the core API')
 
-    # Validate the owner secret before mutating the host. This avoids half-installs
-    # caused only by a short/mismatched password.
     bootstrap_password=owner_password()
 
     if a.install_os_packages:
@@ -80,7 +78,6 @@ def main():
         run(['useradd','--system','--home-dir',str(DATA),'--shell','/usr/sbin/nologin','darkxray'])
         account=pwd.getpwnam('darkxray')
     if account.pw_uid==0:raise SystemExit('Service account must not be root')
-    # Copy source only. Developer databases, test reports, virtualenv and keys do not ship to the VPS.
     APP.mkdir(mode=0o755,parents=True);os.chmod(APP,0o755)
     for name in ['backend','web','tools','deploy']:
         shutil.copytree(ROOT/name,APP/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
@@ -88,7 +85,7 @@ def main():
         shutil.copy2(ROOT/name,APP/name)
     run([sys.executable,'-m','venv',str(APP/'.venv')])
     py=APP/'.venv/bin/python'
-    run([py,'-m','pip','install','-r',APP/'requirements.txt'])
+    run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
     core=Path('/usr/local/lib/dark-xray')/a.core_version
     if core.parent.is_symlink():raise SystemExit('Core parent symlink refused')
     core.parent.mkdir(parents=True,exist_ok=True,mode=0o755);os.chmod(core.parent,0o755)
@@ -119,8 +116,6 @@ def main():
     for path in (APP/'.venv/bin').iterdir():
         if not path.is_symlink():os.chmod(path,0o755)
 
-    # backend/server.py uses getpass for bootstrap. Feed the already validated
-    # secret over stdin so it never appears in argv, process listings or logs.
     init_input=bootstrap_password+'\n'+bootstrap_password+'\n'
     cp=subprocess.run(
         ['runuser','-u','darkxray','--',str(py),str(APP/'backend/server.py'),'--config',str(CONF/'config.json'),'--data',str(DATA),'init','--username',a.username],
@@ -136,7 +131,6 @@ def main():
     wrapper.write_text('''#!/usr/bin/env bash
 set -Eeuo pipefail
 export DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray
-# Keep SQLite WAL/lock/key files owned by the service account, even from root's menu.
 case "${1:-menu}" in
   init|reset-password|check|serve|backup|doctor)
     if [[ $EUID -eq 0 ]]; then
