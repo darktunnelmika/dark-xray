@@ -16,7 +16,7 @@ def write_wrapper():
 set -Eeuo pipefail
 export DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray
 case "${1:-menu}" in
-  init|reset-password|check|serve|backup|doctor|restore)
+  init|reset-password|check|serve|backup|doctor)
     if [[ $EUID -eq 0 ]]; then
       exec runuser -u darkxray -- env DARK_CONFIG="$DARK_CONFIG" DARK_DATA="$DARK_DATA" /opt/dark-xray/darkxray "$@"
     fi ;;
@@ -49,7 +49,6 @@ def main():
     print('Rollback source snapshot:',backup)
     subprocess.run(['systemctl','daemon-reload'],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     guard_was_active=subprocess.run(['systemctl','is-active','--quiet','dark-xray-guard.service'],check=False).returncode==0
-    # A damaged/stopped service should not prevent source repair.
     subprocess.run(['systemctl','stop','dark-xray.service'],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     try:
         for name in ('backend','web','tools','deploy'):
@@ -59,7 +58,7 @@ def main():
         for name in ('darkxray','requirements.txt','LICENSE','THIRD-PARTY-NOTICES.md','VERSION'):
             if (src/name).exists(): shutil.copy2(src/name,APP/name)
         os.chmod(APP/'darkxray',0o755)
-        run([APP/'.venv/bin/python','-m','pip','install','-r',APP/'requirements.txt'],stdout=subprocess.DEVNULL)
+        run([APP/'.venv/bin/python','-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
         for unit in ('dark-xray.service','dark-xray-guard.service'):
             shutil.copy2(APP/'deploy'/unit,Path('/etc/systemd/system')/unit)
         write_wrapper()
