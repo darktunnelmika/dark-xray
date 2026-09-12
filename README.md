@@ -27,6 +27,28 @@
 
 تست سازگاری `tests/legacy/test_api.py` بعد از این بازآرایی ۲۰/۲۰ پاس شد. کل مجموعهٔ تست محلی نیز ۱۸۹ تست موفق ثبت کرد و GitHub Actions روی Python 3.12 و 3.13 با موفقیت کامل شد.
 
+## DARK XRAY Cyber Control Center
+
+بعد از نصب، دستور زیر مرکز مدیریت ترمینالی DARK XRAY را باز می‌کند:
+
+```bash
+darkxray
+```
+
+این منو با ظاهر سایبری و شماره‌گذاری سریع، امکانات مدیریتی اصلی را یکجا می‌دهد:
+
+- Live Status برای Panel، IP Guard، CPU، RAM، Disk، Endpoint و Xray binary
+- Start / Stop / Restart سرویس DARK XRAY
+- Log Center برای پنل، IP Guard و لاگ زنده
+- Diagnostics / Doctor
+- Backup رمزدار و Restore در مسیر جدا
+- Reset رمز Owner بدون نمایش credentialهای ذخیره‌شده
+- TLS / Domain و مدیریت Let's Encrypt / Certbot
+- IP Guard: وضعیت، فعال‌سازی، انتخاب پورت‌های داده، exempt IP و لاگ
+- System & Network: BBR، پورت‌های Listening، nftables و Autostart
+
+منو عمداً password، API key و private key ذخیره‌شده را نمایش نمی‌دهد و عملیات حساس مثل Restart، TLS و فعال‌سازی firewall نیاز به تأیید صریح دارند.
+
 ## معماری مستقل
 
 ```text
