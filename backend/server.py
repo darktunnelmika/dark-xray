@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import sqlite3
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -32,6 +33,8 @@ from core import CoreEngine,CoreError,Config,SUB_RE
 VERSION='0.6.0-standalone-lab'
 ROOT=Path(__file__).resolve().parents[1]
 COOKIE='dark_session'
+PASSWORD_MIN_LENGTH=8
+PASSWORD_MAX_LENGTH=512
 
 class UnbanIP(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True)
@@ -40,7 +43,7 @@ class UnbanIP(BaseModel):
 class Model(BaseModel): model_config=ConfigDict(extra='forbid',strict=True)
 class Login(Model):
     username:str=Field(min_length=1,max_length=128)
-    password:str=Field(min_length=1,max_length=512)
+    password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
     otp:str=Field(default='',max_length=64)
 class OwnerBody(Model):
     name:str=Field(min_length=1,max_length=128)
@@ -62,12 +65,12 @@ class Adopt(Model):
     email:str=Field(min_length=1,max_length=128)
 class AdminBody(Model):
     username:str=Field(min_length=1,max_length=128)
-    password:str=Field(min_length=12,max_length=512)
+    password:str=Field(min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
     role:Literal['owner','reseller','readonly']='reseller'
     permissions:dict[str,str]|None=None
 class AdminPatch(Model):
     disabled:bool|None=None
-    password:str|None=Field(default=None,min_length=12,max_length=512)
+    password:str|None=Field(default=None,min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
     permissions:dict[str,str]|None=None
 class ResolveReset(Model):confirmation:str=Field(min_length=1,max_length=128)
 class Action(Model): action:Literal['enable','disable','reset','delete']
@@ -81,12 +84,12 @@ class KeyBody(Model):
     name:str=Field(min_length=1,max_length=128)
     permissions:dict[str,str]
     days:StrictInt=Field(default=30,ge=1,le=365)
-class MFASetup(Model):password:str=Field(min_length=1,max_length=512)
+class MFASetup(Model):password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
 class Code(Model):code:str=Field(min_length=6,max_length=64)
 class MFADisable(MFASetup):code:str=Field(min_length=6,max_length=64)
 class Password(Model):
-    old_password:str=Field(min_length=1,max_length=512)
-    new_password:str=Field(min_length=12,max_length=512)
+    old_password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
+    new_password:str=Field(min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
 
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
@@ -102,7 +105,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.middleware('http')
     async def security(request:Request,call_next):
-        # Do not trust forwarded host/IP headers. TLS reverse proxy preserves Host.
         if request.headers.get('host','').lower()!=public.netloc.lower():
             return JSONResponse({'detail':'Unexpected Host'},400)
         origin=request.headers.get('origin')
@@ -249,8 +251,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/clients/bulk')
     def bulk(body:Bulk,p:Principal=Depends(current)):
         writable()
-        # Authorize the whole batch before side effects to avoid an IDOR hidden
-        # in a partly-valid list. Individual engine failures remain explicit.
         action='delete' if body.action=='delete' else 'reset' if body.action=='reset' else 'edit'
         for email in body.emails:manager.own_row(p.actor,email,action)
         out=[]
@@ -308,7 +308,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if p.actor.role!='owner':
             p.actor.require('inbounds','read',p.actor.id)
             allowed=set(manager.profile(p.actor.id)['allowed']) if p.actor.permissions.get('inbounds.read')!='all' else None
-        # Even the owner list is slim; credentials are fetched on demand.
         keys={'id','remark','protocol','port','listen','enable','tag','nodeId','up','down','total','expiryTime'}
         return [{k:v for k,v in r.items() if k in keys} for r in rows if allowed is None or r['id'] in allowed]
     @app.get('/api/unmanaged')
@@ -357,8 +356,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
-        # One consistent database, including policy and runtime tables.
-        # The MFA encryption key and local certificate files remain separate.
         import tempfile
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'dark.sqlite3';store.backup(path)
@@ -465,12 +462,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     return app
 
 
+def _read_password(prompt:str,repeat:str,*,stdin_mode:bool=False)->str:
+    if stdin_mode:
+        first=sys.stdin.readline().rstrip('\r\n');second=sys.stdin.readline().rstrip('\r\n')
+        if not first or not second:raise PolicyError('Password input missing')
+    else:
+        from getpass import getpass
+        first=getpass(prompt);second=getpass(repeat)
+    if first!=second:raise PolicyError('Passwords differ')
+    return first
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config',type=Path,default=Path('./config.json'))
     p.add_argument('--data',type=Path,default=Path('./data'))
     subs=p.add_subparsers(dest='command',required=True)
-    init=subs.add_parser('init');init.add_argument('--username',default='dark')
+    init=subs.add_parser('init');init.add_argument('--username',default='dark');init.add_argument('--password-stdin',action='store_true',help=argparse.SUPPRESS)
     reset=subs.add_parser('reset-password');reset.add_argument('--username',required=True)
     serve=subs.add_parser('serve');serve.add_argument('--host',default=None);serve.add_argument('--port',type=int,default=None)
     subs.add_parser('check')
@@ -487,26 +495,20 @@ def main():
         else: result=restore_backup(args.archive,args.destination,pwd)
         print(json.dumps(result,indent=2));return
     args.data.mkdir(parents=True,exist_ok=True,mode=0o700)
-    # One process owns this SQLite state and engine reconciliation stream.
     import fcntl
     lockfile=(args.data/'instance.lock').open('a')
     try:fcntl.flock(lockfile,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:raise SystemExit('Another DARK instance is already using this data directory')
     store=Store(args.data/'dark.sqlite3')
-    # Manager schema must exist before first bootstrap.
     config=Config.load(args.config);engine=CoreEngine(config,store,args.data/'runtime');manager=Manager(store,engine);auth=Auth(store,args.data/'secret.key')
     try:
         if args.command=='init':
-            from getpass import getpass
-            pwd=getpass('DARK owner password (at least 12 characters): ')
-            if pwd!=getpass('Repeat password: '):raise PolicyError('Passwords differ')
+            pwd=_read_password(f'DARK owner password (at least {PASSWORD_MIN_LENGTH} characters): ','Repeat password: ',stdin_mode=args.password_stdin)
             auth.bootstrap(args.username,pwd)
             manager.owner_put(SYSTEM,args.username,name=args.username,allowed=[])
             print('Independent DARK owner initialized. No other panel is required.');return
         if args.command=='reset-password':
-            from getpass import getpass
-            pwd=getpass('New owner password (at least 12 characters): ')
-            if pwd!=getpass('Repeat password: '):raise PolicyError('Passwords differ')
+            pwd=_read_password(f'New owner password (at least {PASSWORD_MIN_LENGTH} characters): ','Repeat password: ')
             with store.lock:r=store.db.execute('SELECT role FROM api_admins WHERE id=?',(args.username,)).fetchone()
             if not r or r['role']!='owner':raise PolicyError('Offline recovery only supports existing owner accounts')
             auth.admin_edit(SYSTEM,args.username,password=pwd)
