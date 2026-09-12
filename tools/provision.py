@@ -118,7 +118,7 @@ def main():
 
     init_input=bootstrap_password+'\n'+bootstrap_password+'\n'
     cp=subprocess.run(
-        ['runuser','-u','darkxray','--',str(py),str(APP/'backend/server.py'),'--config',str(CONF/'config.json'),'--data',str(DATA),'init','--username',a.username],
+        ['runuser','-u','darkxray','--',str(py),str(APP/'backend/server.py'),'--config',str(CONF/'config.json'),'--data',str(DATA),'init','--username',a.username,'--password-stdin'],
         input=init_input,text=True,check=False)
     bootstrap_password='';init_input=''
     if cp.returncode!=0:
