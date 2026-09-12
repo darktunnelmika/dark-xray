@@ -1,0 +1,6 @@
+[hidden]{display:none!important}.v3-card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.v3-card-grid p{color:var(--muted);line-height:1.9;font-size:13px}.fallback-row{border:1px solid var(--border,#20303d);border-radius:10px;padding:14px;margin:12px 0;background:#0b131c}.v3-native-protocol{margin-top:18px}.data-table td{line-height:1.85}.data-table td strong.green{font-size:19px}.section-tag{letter-spacing:.1em}.share-layout textarea{width:100%;max-width:100%}.share-layout .qr-box{align-self:start}.sidebar .nav-label{margin-top:14px}.nav-btn{min-height:38px}.main .demo-bar{position:relative}.v3-card-grid .panel{min-width:0}.fallback-row .form-field{min-width:0}#v3-share-output{font-family:monospace;font-size:12px;line-height:1.8;white-space:pre;overflow:auto}#credential-notice{margin-top:8px}.form-grid .alert-note{grid-column:1/-1}
+@media(max-width:1080px){.v3-card-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:700px){.v3-card-grid{grid-template-columns:1fr}.share-layout{grid-template-columns:1fr}.qr-box{max-width:220px;margin:auto}.fallback-row{padding:10px}.data-table td{min-width:100px}}
+
+/* Keep Latin identifiers separated from Persian detail lines. */
+.data-table td > .subtext{display:block;margin-top:4px;}

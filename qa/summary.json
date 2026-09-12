@@ -1,0 +1,126 @@
+{
+  "project": "DARK XRAY",
+  "version": "0.6.0-standalone-lab",
+  "date": "2026-09-12",
+  "python": {
+    "collected": 176,
+    "passed": 175,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 1,
+    "execution": "independent suite processes; final JUnit cases deduplicated",
+    "suites": [
+      {
+        "report": "qa/junit/legacy.xml",
+        "total": 78,
+        "passed": 78,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "report": "qa/junit/restart.xml",
+        "total": 2,
+        "passed": 2,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "report": "qa/junit/standalone.xml",
+        "total": 28,
+        "passed": 28,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "report": "qa/junit/supervisor.xml",
+        "total": 9,
+        "passed": 9,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "report": "qa/junit/v06.xml",
+        "total": 59,
+        "passed": 58,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 1
+      }
+    ]
+  },
+  "javascript": {
+    "passed": 14,
+    "failed": 0,
+    "scope": "pure native-form data mapping, not a DOM/browser test",
+    "report": "qa/form-models.tap"
+  },
+  "total_successful_assertion_tests": 189,
+  "browser": {
+    "browser": "Chromium",
+    "backend": "real local HTTP + SQLite",
+    "real_xray": false,
+    "checks": [],
+    "status": "blocked",
+    "error": "Page.goto: net::ERR_BLOCKED_BY_ADMINISTRATOR at http://127.0.0.1:47119/\nCall log:\n  - navigating to \"http://127.0.0.1:47119/\", waiting until \"networkidle\"\n"
+  },
+  "environment": {
+    "python": "3.13.5",
+    "kernel": "6.18.35",
+    "nft_binary_available": false
+  },
+  "real_layers_exercised": {
+    "sqlite": true,
+    "local_tcp_http": true,
+    "sessions_csrf": true,
+    "unix_socket_peer_credentials": true,
+    "encrypted_backup_restore": true,
+    "node_javascript": true
+  },
+  "not_verified": {
+    "real_xray_binary_execution": true,
+    "real_proxy_traffic": true,
+    "nftables_kernel_packet_enforcement": true,
+    "clean_vps_systemd_install": true,
+    "live_certificate_issuance_renewal": true,
+    "browser_layout_interactions": true,
+    "multi_node_global_ip_limit": true,
+    "load_capacity": true,
+    "migration_from_other_panels": true
+  },
+  "test_doubles": {
+    "xray": "tests/fixtures/fake_xray.py (explicit TEST DOUBLE; never proxies)",
+    "nftables": "tests/test_v06.py FakeNft runner; commands recorded, no kernel effect"
+  },
+  "download_result": {
+    "release_metadata_retrieved": true,
+    "pinned_tag": "v26.3.27",
+    "binary_obtained": false,
+    "limitation": "Official binary could not be retrieved in this runtime; direct DNS/network unavailable and download tool failed"
+  },
+  "architecture": {
+    "independent_runtime": true,
+    "other_panel_required": false,
+    "native_web_assets": true,
+    "fresh_installer_only": true,
+    "main_service_user": "darkxray",
+    "main_service_capabilities": [
+      "CAP_NET_BIND_SERVICE"
+    ],
+    "optional_guard_service_capabilities": [
+      "CAP_NET_ADMIN"
+    ],
+    "guard_ipc": "Unix socket / SO_PEERCRED",
+    "py_syntax_compile": "passed",
+    "js_syntax_check": "passed",
+    "shell_syntax_check": "passed",
+    "cli_help_parsing": "passed (provision, guard-enable, domain, selftest; no installation executed)",
+    "font_files_bundled": false,
+    "xray_binary_bundled": false,
+    "sample_or_production_credentials_bundled": "only clearly marked test fixture credentials; no preconfigured production login"
+  },
+  "no_remote_changes": "No user VPS, existing panel, GitHub repository or user database was modified."
+}

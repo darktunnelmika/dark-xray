@@ -1,0 +1,21 @@
+{
+  "independent_runtime": true,
+  "other_panel_required": false,
+  "native_web_assets": true,
+  "fresh_installer_only": true,
+  "main_service_user": "darkxray",
+  "main_service_capabilities": [
+    "CAP_NET_BIND_SERVICE"
+  ],
+  "optional_guard_service_capabilities": [
+    "CAP_NET_ADMIN"
+  ],
+  "guard_ipc": "Unix socket / SO_PEERCRED",
+  "py_syntax_compile": "passed",
+  "js_syntax_check": "passed",
+  "shell_syntax_check": "passed",
+  "cli_help_parsing": "passed (provision, guard-enable, domain, selftest; no installation executed)",
+  "font_files_bundled": false,
+  "xray_binary_bundled": false,
+  "sample_or_production_credentials_bundled": "only clearly marked test fixture credentials; no preconfigured production login"
+}

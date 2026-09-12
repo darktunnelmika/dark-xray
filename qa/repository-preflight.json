@@ -1,0 +1,71 @@
+{
+  "project": "DARK XRAY",
+  "version": "0.6.0-standalone-lab",
+  "purpose": "GitHub repository preparation, not a new runtime release",
+  "date": "2026-09-12",
+  "github_repository_created": false,
+  "github_push_performed": false,
+  "github_actions_executed": false,
+  "source_archive_sha256": "ee929a7bde1cee7607f9f72569431536137c8fea8f76f3c136422996501d8cec",
+  "unchanged_runtime_deployment_and_license_files": [
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "backend/auth.py",
+    "backend/backup.py",
+    "backend/core.py",
+    "backend/dark_policy.py",
+    "backend/guard_bridge.py",
+    "backend/guardd.py",
+    "backend/manager.py",
+    "backend/policy_api.py",
+    "backend/server.py",
+    "darkxray",
+    "deploy/Caddyfile.example",
+    "deploy/dark-xray-guard.service",
+    "deploy/dark-xray.service",
+    "install.sh",
+    "requirements-dev.txt",
+    "requirements.txt",
+    "setup.sh",
+    "web/form-models.js",
+    "web/forms06.js",
+    "web/index.html",
+    "web/live.css",
+    "web/live.js",
+    "web/style.css",
+    "web/v3.css",
+    "web/vendor-qr.js",
+    "web/workspace.css"
+  ],
+  "checks": {
+    "secret_scan": "No matches for selected token/private-key patterns; best-effort, not a complete secret audit",
+    "excluded": "No database, actual config.json, private key, certificate or font file packaged",
+    "publisher_shell_syntax": "passed; remote creation and push NOT executed",
+    "local_link_validation": "passed"
+  },
+  "current_local_tests": {
+    "legacy": {
+      "passed": 78,
+      "duration_seconds": 8.6
+    },
+    "standalone": {
+      "passed": 28,
+      "duration_seconds": 6.84
+    },
+    "v06": {
+      "passed": 58,
+      "skipped": 1,
+      "warnings": 2,
+      "duration_seconds": 16.8
+    },
+    "javascript_form_models": {
+      "passed": 14
+    },
+    "supervisor": {
+      "status": "incomplete full rerun: aggregate shell command exceeded 90 seconds during supervisor suite",
+      "targeted_recheck": "test_edited_config_restarts_owned_process passed in 9.93 seconds, with a faulthandler timeout diagnostic during teardown"
+    },
+    "scope_note": "Do not add historical qa/summary.json counts to these results. No real Xray, live firewall, fresh-VPS installation or browser tests were performed for packaging."
+  },
+  "readiness": "experimental; no production readiness claim"
+}
