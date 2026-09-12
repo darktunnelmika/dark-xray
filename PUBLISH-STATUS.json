@@ -3,44 +3,67 @@
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
   "date": "2026-09-13",
-  "status": "complete_source_import",
+  "status": "active_standalone_lab",
+  "source_import_complete": true,
   "installable_from_repository_for_lab_testing": true,
   "production_ready": false,
   "baseline_version": "0.6.0-standalone-lab",
-  "original_archive": "DARK-XRAY-v0.6-GitHub-Ready.zip",
-  "original_archive_sha256": "d234a1bd2a6314905bce17dd5e7c6b13ed9594727c42542a0b3a126a632082f7",
-  "original_archive_file_count": 67,
-  "original_paths_byte_identical": 63,
-  "intentionally_changed_original_paths": [
-    "README.md",
-    "README.en.md",
-    "SHA256SUMS",
-    "backend/policy_api.py"
-  ],
-  "added_refactor_files": [
-    "backend/policy_auth.py",
-    "backend/policy_routes.py"
-  ],
-  "additional_repository_files": ["PUBLISH-STATUS.json"],
-  "guard_files_byte_identical": {
-    "backend/guard_bridge.py": "1f71a17f2551bb4dfaae151a7dd3e91af4d95bec",
-    "backend/guardd.py": "bee9b1c80e371c718689014d4dc1a5d6b516a4bc"
+  "original_archive": {
+    "name": "DARK-XRAY-v0.6-GitHub-Ready.zip",
+    "sha256": "d234a1bd2a6314905bce17dd5e7c6b13ed9594727c42542a0b3a126a632082f7",
+    "file_count": 67
   },
-  "policy_api_refactor": {
-    "reason": "The original monolithic policy_api upload was repeatedly blocked by the publishing tool. It was split into smaller reviewable modules while preserving the tested public API.",
-    "compatibility_test": "tests/legacy/test_api.py",
-    "compatibility_result": "20 passed"
+  "source_import_notes": {
+    "guard_bridge_original_blob": "1f71a17f2551bb4dfaae151a7dd3e91af4d95bec",
+    "guardd_original_blob": "bee9b1c80e371c718689014d4dc1a5d6b516a4bc",
+    "policy_api_split": [
+      "backend/policy_auth.py",
+      "backend/policy_routes.py",
+      "backend/policy_api.py"
+    ],
+    "policy_api_split_reason": "The original monolithic policy API was split into smaller reviewable modules while preserving compatibility."
   },
-  "validation": {
-    "local_repository_hygiene": "passed",
-    "local_isolated_tests": 189,
-    "github_actions_run_id": 34721081134,
-    "github_actions_commit": "b4b0dc6f6979eb62a24e480f5199fdc64a12cfdb",
-    "python_3_12": "success",
-    "python_3_13": "success",
-    "real_xray_connectivity_verified": false,
-    "live_firewall_verified": false,
-    "fresh_vps_install_verified": false,
-    "production_load_verified": false
-  }
+  "current_main_features": {
+    "default_web_language": "en",
+    "optional_web_language": "fa",
+    "web_direction_default": "ltr",
+    "cyber_ui_layer": "web/cyber.css",
+    "language_layer": "web/i18n-en.js",
+    "browser_policy_bridge": "web/runtime-policy.js",
+    "account_password_min_characters": 8,
+    "account_password_max_characters": 512,
+    "encrypted_backup_passphrase_min_characters": 12,
+    "online_installer": "install-online.sh",
+    "installer_progress_scale": "001-100",
+    "installer_states": ["clean", "partial", "installed"],
+    "installer_profiles": ["domain_tls", "ip_ssh_tunnel", "advanced"],
+    "partial_install_recovery": true,
+    "safe_update_with_source_snapshot": true,
+    "xray_core_reuse_or_quarantine": true,
+    "tls_failure_is_non_destructive": true,
+    "terminal_manager_command": "darkxray"
+  },
+  "ci": {
+    "runs_on_push_to_main": true,
+    "python_versions": ["3.12", "3.13"],
+    "checks": [
+      "repository_hygiene",
+      "installer_runtime_selftest",
+      "terminal_manager_smoke",
+      "cyber_ui_and_english_default_smoke",
+      "javascript_syntax",
+      "8_character_password_policy",
+      "isolated_xray_test_double_suite",
+      "simulated_firewall_suite"
+    ]
+  },
+  "live_validation": {
+    "real_xray_client_connectivity_verified_for_all_vps": false,
+    "live_nftables_packet_enforcement_verified_for_all_vps": false,
+    "certificate_renewal_verified_across_providers": false,
+    "reboot_recovery_verified_across_providers": false,
+    "production_load_verified": false,
+    "global_multi_node_ip_limit_complete": false
+  },
+  "checksum_note": "SHA256SUMS belongs to the previous publication snapshot and must be regenerated for the next stabilized release/tag; current main is validated by CI and exact commit SHA."
 }
