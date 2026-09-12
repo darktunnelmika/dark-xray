@@ -2,23 +2,50 @@
 
 # DARK XRAY
 
-Independent Xray control panel with a Persian cyber-dark interface, reseller ownership and server-side access control.
+Independent Xray control panel with an English-first cyber-dark interface, reseller ownership and server-side access control.
 
 Baseline: `0.6.0-standalone-lab`.
 
 > [!CAUTION]
-> **The source import is complete, but this is still a Lab/experimental release and is NOT production-ready.**
-> Repository tests pass, while real Xray connectivity on a fresh VPS, live firewall packet effects, certificate issuance and load capacity remain unverified.
+> **The v0.6 source is complete, but this is still a Lab/experimental release and is NOT declared production-ready.**
+> Repository CI is green, while live client connectivity, real nftables enforcement, certificate behavior across providers, reboot recovery and load capacity still require separate VPS validation.
 
-## Publication status — 2026-09-13
+## Online installer
 
-All required v0.6 source components are now present on `main`. `guard_bridge.py` and `guardd.py` were published byte-for-byte from the original archive. The large `policy_api.py` was split for reviewability without changing its tested API behavior:
+For an Ubuntu/Debian systemd VPS:
 
-- `backend/policy_auth.py` — auth models, permissions and bootstrap
-- `backend/policy_routes.py` — FastAPI routes and HTTP access control
-- `backend/policy_api.py` — compatibility exports and CLI entrypoint
+```bash
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-online.sh -o /tmp/dark-xray-install.sh
+sudo bash /tmp/dark-xray-install.sh
+```
 
-The legacy API compatibility suite passes 20/20 after the refactor. The local isolated suite records 189 passing tests, and GitHub Actions completes successfully on Python 3.12 and 3.13.
+The 1→100 installer distinguishes three states:
+
+- **Clean** — fresh install
+- **Partial / Failed** — preserve leftovers into recovery storage, then repair safely
+- **Installed** — safe update or open the manager
+
+The recommended `Domain + HTTPS/TLS` profile handles domain, panel port, owner, Xray-core and Certbot in one wizard. DNS/TLS failure no longer destroys an otherwise healthy installation; TLS can be retried later from `darkxray`.
+
+After installation:
+
+```bash
+darkxray
+```
+
+## Cyber Control Center
+
+The terminal manager includes live status, service control, logs, diagnostics, encrypted backups, owner-password recovery, domain/TLS, IP Guard, BBR, listening ports, nftables status, autostart and safe update with rollback snapshots.
+
+Stored passwords, API keys and private keys are not printed by the manager, and disruptive operations require explicit confirmation.
+
+## Account password policy
+
+DARK XRAY account passwords now use a minimum of **8 characters** and a maximum of 512 characters. The same rule applies to owner, admin/reseller creation and password changes. Encrypted backup passphrases are a separate policy and still require at least 12 characters.
+
+## English-first cyber UI
+
+The web UI defaults to **English / LTR** and provides an EN/FA switch. A DARK-specific presentation layer adds a dark grid/scanline background, glassy panels, green/cyan glow, LTR sidebar geometry, clearer online/warning states and a hardened login surface without changing API, ownership or Xray behavior.
 
 ## Architecture
 
@@ -27,7 +54,7 @@ DARK UI → DARK API / Access Control → DARK Database → Xray-core
                                               └→ IP guard (nftables)
 ```
 
-DARK does not require Sanayi/3x-ui or another panel. It owns its UI, accounts, database and API; Xray-core is the separate connection engine.
+DARK does not require Sanayi/3x-ui or another panel at runtime. Good installer/manager patterns such as staged setup, SSL management, updates and service control were used as UX references while DARK keeps its own UI, database, API and services.
 
 ## v0.6 baseline capabilities
 
@@ -38,17 +65,17 @@ DARK does not require Sanayi/3x-ui or another panel. It owns its UI, accounts, d
 - host metrics/dashboard
 - native Host, Outbound and Routing forms plus advanced JSON
 - encrypted backup and isolated restore
-- standalone installation and systemd units
-- Python/JavaScript tests and GitHub Actions
+- standalone systemd installation
+- Python/JavaScript tests and GitHub Actions on Python 3.12 and 3.13
 
 ## Validation limits
 
-GitHub Actions is green on Python 3.12 and 3.13 for the completed source commit. Those checks use a test-double Xray and simulated firewall, so **green CI does not prove live VPN connectivity or kernel firewall enforcement on a VPS**.
+CI includes repository hygiene, installer runtime self-test, manager smoke tests, English/cyber UI smoke checks, JavaScript syntax checks and the isolated test suites. These checks use a test-double Xray and simulated firewall, so **green CI does not prove live VPN connectivity or kernel firewall enforcement on every VPS**.
 
-Still required before production use: fresh-VPS installation, real Xray client connectivity, live IP-limit enforcement, quota disable/restore, certificate issuance, reboot recovery and load testing. Multi-node operation, global multi-node IP limits, migration and some advanced features remain under development.
+Still required before production use: real Xray client connectivity, live IP-limit enforcement, quota disable/restore, certificate renewal, reboot recovery and load/concurrency testing. Multi-node operation and global multi-node IP limits remain incomplete.
 
 See [Persian development guide](README.fa.md), [feature status](STATUS.fa.md), [security](SECURITY.md), [third-party notices](THIRD-PARTY-NOTICES.md), and [publication status](PUBLISH-STATUS.json).
 
-`SHA256SUMS` is regenerated for the current repository state and excludes itself.
+`SHA256SUMS` represents the previous publication snapshot and should be regenerated for the next stabilized release/tag. For current `main`, rely on CI and the exact commit SHA.
 
 Do not publish real credentials, private keys, certificates, databases or unredacted logs.
