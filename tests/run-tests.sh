@@ -10,3 +10,4 @@ python -m pytest tests/test_supervisor.py -k 'not explicit_restart and not resta
 python -m pytest tests/test_supervisor.py -k 'explicit_restart or restart_failure' -q --junitxml=qa/junit/restart.xml
 python -m pytest tests/test_v06.py -q --junitxml=qa/junit/v06.xml
 node --test tests/form-models.test.cjs
+node --test tests/inbounds-v2.test.cjs
