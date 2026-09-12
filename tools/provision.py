@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Fresh independent Linux/systemd install. No other panel is read or modified."""
-import argparse, hashlib, json, os, pwd, re, shutil, subprocess, sys, time
+import argparse, getpass, hashlib, json, os, pwd, re, shutil, subprocess, sys, time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 APP=Path('/opt/dark-xray');CONF=Path('/etc/dark-xray');DATA=Path('/var/lib/dark-xray')
+PASSWORD_MIN_LENGTH=8
+PASSWORD_MAX_LENGTH=512
 
-def run(args):subprocess.run(list(map(str,args)),check=True)
+def run(args,**kwargs):return subprocess.run(list(map(str,args)),check=True,**kwargs)
 
 def core_is_usable(core:Path, version:str)->bool:
     xray=core/'xray'
@@ -25,6 +27,23 @@ def quarantine_core(core:Path)->Path:
         target=core.with_name(core.name+f'.broken-{stamp}-{n}');n+=1
     core.rename(target)
     return target
+
+def owner_password()->str:
+    if not sys.stdin.isatty():
+        raise SystemExit('Interactive TTY is required for owner password entry')
+    while True:
+        try:
+            first=getpass.getpass(f'DARK owner password ({PASSWORD_MIN_LENGTH}-{PASSWORD_MAX_LENGTH} characters): ')
+            second=getpass.getpass('Repeat owner password: ')
+        except (EOFError,KeyboardInterrupt):
+            raise SystemExit('\nOwner password entry cancelled')
+        if not PASSWORD_MIN_LENGTH<=len(first)<=PASSWORD_MAX_LENGTH:
+            print(f'Password must be between {PASSWORD_MIN_LENGTH} and {PASSWORD_MAX_LENGTH} characters. Try again.')
+            continue
+        if first!=second:
+            print('Passwords do not match. Try again.')
+            continue
+        return first
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -49,6 +68,11 @@ def main():
         raise SystemExit('Existing DARK paths found. Nothing overwritten. Back up before an explicit upgrade; this is the fresh installer.')
     if Path('/usr/local/bin/darkxray').exists():raise SystemExit('An existing darkxray command was found; nothing overwritten')
     if a.port in [22,10085,*a.ssh_port]:raise SystemExit('Panel port overlaps SSH or the core API')
+
+    # Validate the owner secret before mutating the host. This avoids half-installs
+    # caused only by a short/mismatched password.
+    bootstrap_password=owner_password()
+
     if a.install_os_packages:
         run(['apt-get','update']);run(['apt-get','install','-y','python3-venv','ca-certificates'])
     try:account=pwd.getpwnam('darkxray')
@@ -60,7 +84,7 @@ def main():
     APP.mkdir(mode=0o755,parents=True);os.chmod(APP,0o755)
     for name in ['backend','web','tools','deploy']:
         shutil.copytree(ROOT/name,APP/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
-    for name in ['darkxray','requirements.txt','LICENSE','THIRD-PARTY-NOTICES.md']:
+    for name in ['darkxray','requirements.txt','LICENSE','THIRD-PARTY-NOTICES.md','VERSION']:
         shutil.copy2(ROOT/name,APP/name)
     run([sys.executable,'-m','venv',str(APP/'.venv')])
     py=APP/'.venv/bin/python'
@@ -92,23 +116,19 @@ def main():
     for name in ['darkxray','.venv/bin/python','.venv/bin/pip']:
         path=APP/name
         if path.exists() and not path.is_symlink():os.chmod(path,0o755)
-    # venv executables need to remain executable; source is root-owned and cannot
-    # be overwritten by a compromised web account.
     for path in (APP/'.venv/bin').iterdir():
         if not path.is_symlink():os.chmod(path,0o755)
-    while True:
-        cp=subprocess.run(['runuser','-u','darkxray','--',py,APP/'backend/server.py','--config',CONF/'config.json','--data',DATA,'init','--username',a.username],check=False)
-        if cp.returncode==0:
-            break
-        print('\nOwner setup was rejected. Use a password between 12 and 512 characters and repeat it exactly.')
-        if not sys.stdin.isatty():
-            raise SystemExit('Owner initialization failed in non-interactive mode')
-        try:
-            retry=input('Retry owner password? [Y/n]: ').strip().lower()
-        except (EOFError,KeyboardInterrupt):
-            raise SystemExit('Owner password entry cancelled')
-        if retry not in ('','y','yes'):
-            raise SystemExit('Owner initialization cancelled; installation not completed')
+
+    # backend/server.py uses getpass for bootstrap. Feed the already validated
+    # secret over stdin so it never appears in argv, process listings or logs.
+    init_input=bootstrap_password+'\n'+bootstrap_password+'\n'
+    cp=subprocess.run(
+        ['runuser','-u','darkxray','--',str(py),str(APP/'backend/server.py'),'--config',str(CONF/'config.json'),'--data',str(DATA),'init','--username',a.username],
+        input=init_input,text=True,check=False)
+    bootstrap_password='';init_input=''
+    if cp.returncode!=0:
+        raise SystemExit('Owner initialization failed; partial install can be repaired by the online installer')
+
     for name in ['dark-xray.service','dark-xray-guard.service']:
         shutil.copy2(APP/'deploy'/name,Path('/etc/systemd/system')/name)
     wrapper=Path('/usr/local/bin/darkxray')
