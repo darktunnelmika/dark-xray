@@ -9,15 +9,37 @@
   "source_archive": "DARK-XRAY-v0.6-GitHub-Ready.zip",
   "source_archive_sha256": "d234a1bd2a6314905bce17dd5e7c6b13ed9594727c42542a0b3a126a632082f7",
   "source_archive_file_count": 67,
-  "source_paths_present": 19,
-  "note": "README.md and README.en.md were replaced with explicit incomplete-import notices; PUBLISH-STATUS.json is additional metadata.",
-  "missing_directories": ["backend", "web", "tools", "tests", "qa", ".github"],
+  "source_paths_present": 22,
+  "source_paths_missing": 45,
+  "note": "README.md and README.en.md are explicit incomplete-import notices rather than the archive originals; PUBLISH-STATUS.json is additional metadata.",
+  "last_transfer": {
+    "added_paths": ["backend/auth.py", "backend/backup.py", "backend/core.py"],
+    "source_content_changed": false,
+    "verified_git_blob_hashes": {
+      "backend/auth.py": "0a0e5129280b7cf976214ce68b2a4c49af0f750e",
+      "backend/backup.py": "abd3d168cf7d7d98b5c3e70c30b87a247d88c31f",
+      "backend/core.py": "3e290f508178479368e8fafb6cc0025c4a92e725"
+    }
+  },
+  "partial_directories": ["backend"],
+  "missing_backend_files": ["dark_policy.py", "guard_bridge.py", "guardd.py", "manager.py", "policy_api.py", "server.py"],
+  "missing_directories": ["web", "tools", "tests", "qa", ".github"],
   "missing_root_files": ["LICENSE", "README.fa.md", "SHA256SUMS", "STATUS.fa.md", "UPLOAD.fa.md"],
   "blocker": {
-    "operation": "upload backend/auth.py and backend/backup.py",
-    "attempts": 2,
+    "operation": "upload backend/dark_policy.py",
+    "attempts_this_transfer": 1,
     "message": "This tool call was blocked by OpenAI because we couldn't determine the safety status of the request.",
-    "cause_confirmed": false
+    "cause_confirmed": false,
+    "blocked_content_published": false,
+    "previous_auth_backup_block": "The normal retry of the original two-file upload was accepted; their hashes match the source archive."
+  },
+  "local_revalidation": {
+    "original_archive_checksums": "passed",
+    "best_effort_repository_hygiene": "passed for the 67 original files; not a complete security audit",
+    "completed_python_test_groups": {"legacy": 78, "standalone": 28},
+    "completed_group_tests_passed": 106,
+    "full_test_suite_completed": false,
+    "interruption": "The 120-second execution limit was reached during the supervisor test group. Partial progress from that group is not included in the completed-group count. Its leftover local fake-Xray process was stopped."
   },
   "github_actions_run": false,
   "real_xray_connectivity_verified": false,
