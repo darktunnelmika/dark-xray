@@ -44,6 +44,54 @@ port_busy(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$1$"; }
 public_ipv4(){ curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}'; }
 ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '/^port /{print $2;exit}'; else echo 22; fi; }
 
+state_from_flags(){
+  local app="$1" conf="$2" data="$3" wrapper="$4" unit="$5"
+  if (( app && conf && data && wrapper && unit )); then
+    printf 'installed'
+  elif (( app || conf || data || wrapper || unit )); then
+    printf 'partial'
+  else
+    printf 'clean'
+  fi
+}
+install_state(){
+  local app=0 conf=0 data=0 wrapper=0 unit=0
+  [[ -d /opt/dark-xray && -x /opt/dark-xray/.venv/bin/python ]] && app=1
+  [[ -f /etc/dark-xray/config.json ]] && conf=1
+  [[ -d /var/lib/dark-xray ]] && data=1
+  [[ -x /usr/local/bin/darkxray ]] && wrapper=1
+  [[ -f /etc/systemd/system/dark-xray.service ]] && unit=1
+  state_from_flags "$app" "$conf" "$data" "$wrapper" "$unit"
+}
+show_install_artifacts(){
+  printf '  %-34s %s\n' '/opt/dark-xray' "$([[ -d /opt/dark-xray ]] && echo PRESENT || echo missing)"
+  printf '  %-34s %s\n' '/etc/dark-xray/config.json' "$([[ -f /etc/dark-xray/config.json ]] && echo PRESENT || echo missing)"
+  printf '  %-34s %s\n' '/var/lib/dark-xray' "$([[ -d /var/lib/dark-xray ]] && echo PRESENT || echo missing)"
+  printf '  %-34s %s\n' '/usr/local/bin/darkxray' "$([[ -x /usr/local/bin/darkxray ]] && echo PRESENT || echo missing)"
+  printf '  %-34s %s\n' 'dark-xray.service' "$([[ -f /etc/systemd/system/dark-xray.service ]] && echo PRESENT || echo missing)"
+}
+repair_partial_install(){
+  local stamp recovery
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  recovery="/root/dark-xray-partial-recovery-$stamp"
+  mkdir -p "$recovery"
+  progress 3 "Preserving partial configuration/data"
+  systemctl stop dark-xray.service >/dev/null 2>&1 || true
+  systemctl stop dark-xray-guard.service >/dev/null 2>&1 || true
+  [[ -e /etc/dark-xray ]] && mv /etc/dark-xray "$recovery/etc-dark-xray"
+  [[ -e /var/lib/dark-xray ]] && mv /var/lib/dark-xray "$recovery/var-lib-dark-xray"
+  if [[ -d /opt/dark-xray ]]; then
+    tar -C /opt -czf "$recovery/opt-dark-xray-source.tar.gz" \
+      --exclude='dark-xray/.venv' --exclude='dark-xray/__pycache__' dark-xray 2>/dev/null || true
+    rm -rf /opt/dark-xray
+  fi
+  rm -f /usr/local/bin/darkxray
+  rm -f /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-guard.service
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl reset-failed >/dev/null 2>&1 || true
+  ok "Partial state preserved at: $recovery"
+}
+
 if [[ "${1:-}" == "--selftest" ]]; then
   banner
   progress 1 "Runtime helper self-test"
@@ -52,6 +100,9 @@ if [[ "${1:-}" == "--selftest" ]]; then
   ! valid_port 70000 || fail "valid_port accepted 70000"
   valid_user dark || fail "valid_user rejected dark"
   valid_domain panel.example.com || fail "valid_domain rejected panel.example.com"
+  [[ "$(state_from_flags 0 0 0 0 0)" == clean ]] || fail "clean-state classifier failed"
+  [[ "$(state_from_flags 1 0 1 0 0)" == partial ]] || fail "partial-state classifier failed"
+  [[ "$(state_from_flags 1 1 1 1 1)" == installed ]] || fail "installed-state classifier failed"
   ok "Installer runtime self-test passed"
   exit 0
 fi
@@ -62,10 +113,12 @@ command -v apt-get >/dev/null 2>&1 || fail "This installer currently supports Ub
 
 banner
 progress 1 "Preflight checks"
-if [[ -e /opt/dark-xray || -e /etc/dark-xray || -e /var/lib/dark-xray || -e /usr/local/bin/darkxray ]]; then
-  warn "Existing DARK XRAY installation detected."
+STATE="$(install_state)"
+if [[ "$STATE" == installed ]]; then
+  warn "A complete DARK XRAY installation was detected."
   echo "  1) Safe update existing installation"
   echo "  2) Open current manager"
+  echo "  3) Show installation status"
   echo "  0) Exit"
   choice="$(ask 'Choose' '1')"
   case "$choice" in
@@ -77,13 +130,30 @@ if [[ -e /opt/dark-xray || -e /etc/dark-xray || -e /var/lib/dark-xray || -e /usr
       TMP="$(mktemp -d /tmp/dark-xray-update.XXXXXX)"
       progress 15 "Downloading verified project source"
       git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
-      progress 35 "Creating rollback snapshot"
+      progress 35 "Creating rollback snapshot and applying safe update"
       python3 "$TMP/src/tools/update.py" --source "$TMP/src" --non-interactive || fail "Update failed; see messages above"
       progress 100 "Update complete"
       ok "Run: darkxray"
       exit 0
       ;;
     2) exec /usr/local/bin/darkxray ;;
+    3) show_install_artifacts; exit 0 ;;
+    *) exit 0 ;;
+  esac
+elif [[ "$STATE" == partial ]]; then
+  warn "A PARTIAL/FAILED DARK XRAY installation was detected."
+  show_install_artifacts
+  echo
+  echo "  1) Repair partial install and continue fresh installation"
+  echo "  2) Show paths only and exit"
+  echo "  0) Exit"
+  choice="$(ask 'Choose' '1')"
+  case "$choice" in
+    1)
+      repair_partial_install
+      STATE="clean"
+      ;;
+    2) exit 0 ;;
     *) exit 0 ;;
   esac
 fi
