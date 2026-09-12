@@ -9,9 +9,7 @@ C_RESET='\033[0m'; C_CYAN='\033[38;5;51m'; C_BLUE='\033[38;5;39m'; C_PURPLE='\03
 
 cleanup(){ [[ -n "${TMP:-}" && -d "$TMP" ]] && rm -rf "$TMP" || true; }
 trap cleanup EXIT
-
 repeat(){ local ch="$1" n="$2" i; for ((i=0;i<n;i++)); do printf '%s' "$ch"; done; }
-line(){ repeat '═' 74; printf '\n'; }
 banner(){
   clear 2>/dev/null || true
   printf "${C_CYAN}╔"; repeat '═' 74; printf "╗${C_RESET}\n"
@@ -21,16 +19,9 @@ banner(){
   printf "${C_DIM}Standalone panel • Own DB/API/UI • Xray-core engine • No Sanayi runtime${C_RESET}\n\n"
 }
 progress(){
-  local n="$1" text="$2"
-  local filled empty
-  filled=$((n/5))
-  empty=$((20-filled))
-  (( filled > 20 )) && filled=20
-  (( empty < 0 )) && empty=0
-  printf "${C_CYAN}[%03d/100]${C_RESET} [" "$n"
-  repeat '█' "$filled"
-  repeat '░' "$empty"
-  printf "] %s\n" "$text"
+  local n="$1" text="$2"; local filled empty
+  filled=$((n/5)); empty=$((20-filled)); (( filled > 20 )) && filled=20; (( empty < 0 )) && empty=0
+  printf "${C_CYAN}[%03d/100]${C_RESET} [" "$n"; repeat '█' "$filled"; repeat '░' "$empty"; printf "] %s\n" "$text"
 }
 fail(){ printf "${C_RED}[FAILED]${C_RESET} %s\n" "$*" >&2; exit 1; }
 ok(){ printf "${C_GREEN}[OK]${C_RESET} %s\n" "$*"; }
@@ -46,13 +37,9 @@ ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '
 
 state_from_flags(){
   local app="$1" conf="$2" data="$3" wrapper="$4" unit="$5"
-  if (( app && conf && data && wrapper && unit )); then
-    printf 'installed'
-  elif (( app || conf || data || wrapper || unit )); then
-    printf 'partial'
-  else
-    printf 'clean'
-  fi
+  if (( app && conf && data && wrapper && unit )); then printf 'installed';
+  elif (( app || conf || data || wrapper || unit )); then printf 'partial';
+  else printf 'clean'; fi
 }
 install_state(){
   local app=0 conf=0 data=0 wrapper=0 unit=0
@@ -72,90 +59,59 @@ show_install_artifacts(){
 }
 repair_partial_install(){
   local stamp recovery
-  stamp="$(date +%Y%m%d-%H%M%S)"
-  recovery="/root/dark-xray-partial-recovery-$stamp"
-  mkdir -p "$recovery"
+  stamp="$(date +%Y%m%d-%H%M%S)"; recovery="/root/dark-xray-partial-recovery-$stamp"; mkdir -p "$recovery"
   progress 3 "Preserving partial configuration/data"
   systemctl stop dark-xray.service >/dev/null 2>&1 || true
   systemctl stop dark-xray-guard.service >/dev/null 2>&1 || true
   [[ -e /etc/dark-xray ]] && mv /etc/dark-xray "$recovery/etc-dark-xray"
   [[ -e /var/lib/dark-xray ]] && mv /var/lib/dark-xray "$recovery/var-lib-dark-xray"
   if [[ -d /opt/dark-xray ]]; then
-    tar -C /opt -czf "$recovery/opt-dark-xray-source.tar.gz" \
-      --exclude='dark-xray/.venv' --exclude='dark-xray/__pycache__' dark-xray 2>/dev/null || true
+    tar -C /opt -czf "$recovery/opt-dark-xray-source.tar.gz" --exclude='dark-xray/.venv' --exclude='dark-xray/__pycache__' dark-xray 2>/dev/null || true
     rm -rf /opt/dark-xray
   fi
-  rm -f /usr/local/bin/darkxray
-  rm -f /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-guard.service
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl reset-failed >/dev/null 2>&1 || true
+  rm -f /usr/local/bin/darkxray /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-guard.service
+  systemctl daemon-reload >/dev/null 2>&1 || true; systemctl reset-failed >/dev/null 2>&1 || true
   ok "Partial state preserved at: $recovery"
 }
 
 if [[ "${1:-}" == "--selftest" ]]; then
-  banner
-  progress 1 "Runtime helper self-test"
-  progress 100 "Progress renderer self-test"
-  valid_port 2087 || fail "valid_port rejected 2087"
-  ! valid_port 70000 || fail "valid_port accepted 70000"
-  valid_user dark || fail "valid_user rejected dark"
-  valid_domain panel.example.com || fail "valid_domain rejected panel.example.com"
+  banner; progress 1 "Runtime helper self-test"; progress 100 "Progress renderer self-test"
+  valid_port 2087 || fail "valid_port rejected 2087"; ! valid_port 70000 || fail "valid_port accepted 70000"
+  valid_user dark || fail "valid_user rejected dark"; valid_domain panel.example.com || fail "valid_domain rejected panel.example.com"
   [[ "$(state_from_flags 0 0 0 0 0)" == clean ]] || fail "clean-state classifier failed"
   [[ "$(state_from_flags 1 0 1 0 0)" == partial ]] || fail "partial-state classifier failed"
   [[ "$(state_from_flags 1 1 1 1 1)" == installed ]] || fail "installed-state classifier failed"
-  ok "Installer runtime self-test passed"
-  exit 0
+  ok "Installer runtime self-test passed"; exit 0
 fi
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root: sudo bash /tmp/dark-xray-install.sh"
 [[ -d /run/systemd/system ]] || fail "A Linux VPS with systemd is required."
 command -v apt-get >/dev/null 2>&1 || fail "This installer currently supports Ubuntu/Debian (apt)."
 
-banner
-progress 1 "Preflight checks"
+banner; progress 1 "Preflight checks"
 STATE="$(install_state)"
 if [[ "$STATE" == installed ]]; then
   warn "A complete DARK XRAY installation was detected."
-  echo "  1) Safe update existing installation"
-  echo "  2) Open current manager"
-  echo "  3) Show installation status"
-  echo "  0) Exit"
+  echo "  1) Safe update existing installation"; echo "  2) Open current manager"; echo "  3) Show installation status"; echo "  0) Exit"
   choice="$(ask 'Choose' '1')"
   case "$choice" in
     1)
-      progress 5 "Installing update prerequisites"
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -qq
-      apt-get install -y -q git ca-certificates python3 >/dev/null
+      progress 5 "Installing update prerequisites"; export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq; apt-get install -y -q git ca-certificates python3 >/dev/null
       TMP="$(mktemp -d /tmp/dark-xray-update.XXXXXX)"
-      progress 15 "Downloading verified project source"
-      git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
+      progress 15 "Downloading verified project source"; git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
       progress 35 "Creating rollback snapshot and applying safe update"
       python3 "$TMP/src/tools/update.py" --source "$TMP/src" --non-interactive || fail "Update failed; see messages above"
-      progress 100 "Update complete"
-      ok "Run: darkxray"
-      exit 0
-      ;;
+      progress 100 "Update complete"; ok "Run: darkxray"; exit 0 ;;
     2) exec /usr/local/bin/darkxray ;;
     3) show_install_artifacts; exit 0 ;;
     *) exit 0 ;;
   esac
 elif [[ "$STATE" == partial ]]; then
-  warn "A PARTIAL/FAILED DARK XRAY installation was detected."
-  show_install_artifacts
-  echo
-  echo "  1) Repair partial install and continue fresh installation"
-  echo "  2) Show paths only and exit"
-  echo "  0) Exit"
+  warn "A PARTIAL/FAILED DARK XRAY installation was detected."; show_install_artifacts; echo
+  echo "  1) Repair partial install and continue fresh installation"; echo "  2) Show paths only and exit"; echo "  0) Exit"
   choice="$(ask 'Choose' '1')"
-  case "$choice" in
-    1)
-      repair_partial_install
-      STATE="clean"
-      ;;
-    2) exit 0 ;;
-    *) exit 0 ;;
-  esac
+  case "$choice" in 1) repair_partial_install; STATE="clean" ;; 2) exit 0 ;; *) exit 0 ;; esac
 fi
 
 progress 5 "Detecting server network and SSH"
@@ -166,9 +122,7 @@ echo "Install profile:"
 echo "  1) Domain + HTTPS/TLS  (recommended)"
 echo "  2) IP + SSH tunnel     (no public panel listener)"
 echo "  3) Advanced            (custom panel/core settings)"
-MODE="$(ask 'Choose profile' '1')"
-[[ "$MODE" =~ ^[123]$ ]] || fail "Invalid install profile"
-
+MODE="$(ask 'Choose profile' '1')"; [[ "$MODE" =~ ^[123]$ ]] || fail "Invalid install profile"
 OWNER="$(ask 'Owner username' 'dark')"; valid_user "$OWNER" || fail "Invalid owner username"
 PANEL_PORT="$(ask 'Panel port' '2087')"; valid_port "$PANEL_PORT" || fail "Invalid panel port"
 (( PANEL_PORT >= 1024 )) || fail "Panel port must be >= 1024"
@@ -177,57 +131,59 @@ port_busy "$PANEL_PORT" && fail "Panel port $PANEL_PORT is already in use"
 PUBLIC_ADDRESS="$(ask 'Public proxy IP/DNS' "${DETECTED_IP:-127.0.0.1}")"; [[ -n "$PUBLIC_ADDRESS" ]] || fail "Public address required"
 CORE_VERSION="v26.3.27"
 if [[ "$MODE" == 3 ]]; then CORE_VERSION="$(ask 'Stable Xray-core version' "$CORE_VERSION")"; [[ "$CORE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid Xray version"; fi
-DOMAIN=""; EMAIL=""
+DOMAIN=""; EMAIL=""; TLS_READY=0
 if [[ "$MODE" == 1 ]]; then
   while :; do DOMAIN="$(ask 'Panel domain (A/AAAA record must point here)')"; valid_domain "$DOMAIN" && break; warn "Invalid domain"; done
   while :; do EMAIL="$(ask 'ACME email')"; [[ "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] && break; warn "Invalid email"; done
 fi
 
-echo
-printf "${C_PURPLE}INSTALL PLAN${C_RESET}\n"
+echo; printf "${C_PURPLE}INSTALL PLAN${C_RESET}\n"
 printf "  Owner        : %s\n  Panel port   : %s\n  Proxy address: %s\n  Xray core    : %s\n" "$OWNER" "$PANEL_PORT" "$PUBLIC_ADDRESS" "$CORE_VERSION"
 [[ -n "$DOMAIN" ]] && printf "  Domain       : %s\n  HTTPS URL    : https://%s:%s\n" "$DOMAIN" "$DOMAIN" "$PANEL_PORT"
 printf "  SSH port     : %s\n" "$DETECTED_SSH"
 yesno "Start installation?" y || exit 0
 
-export DEBIAN_FRONTEND=noninteractive
-progress 10 "Updating package index"
-apt-get update -qq
+export DEBIAN_FRONTEND=noninteractive PIP_DISABLE_PIP_VERSION_CHECK=1
+progress 10 "Updating package index"; apt-get update -qq
 progress 18 "Installing system prerequisites"
 apt-get install -y -q git curl ca-certificates python3 python3-venv unzip openssl iproute2 >/dev/null
 [[ "$MODE" == 1 ]] && apt-get install -y -q certbot >/dev/null
 
 TMP="$(mktemp -d /tmp/dark-xray-install.XXXXXX)"
-progress 25 "Cloning DARK XRAY from GitHub"
-git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
+progress 25 "Cloning DARK XRAY from GitHub"; git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
 cd "$TMP/src"
-
-progress 35 "Checking source before provisioning"
-python3 tools/repo-check.py >/dev/null || fail "Repository hygiene check failed"
-
+progress 35 "Checking source before provisioning"; python3 tools/repo-check.py >/dev/null || fail "Repository hygiene check failed"
 progress 45 "Provisioning isolated service account and application"
-bash setup.sh --public-address "$PUBLIC_ADDRESS" --ssh-port "$DETECTED_SSH" --username "$OWNER" --port "$PANEL_PORT" --core-version "$CORE_VERSION" --install-os-packages
+# Prerequisites are already installed above; avoid a second apt pass here.
+bash setup.sh --public-address "$PUBLIC_ADDRESS" --ssh-port "$DETECTED_SSH" --username "$OWNER" --port "$PANEL_PORT" --core-version "$CORE_VERSION"
 
 progress 65 "Verifying systemd services and Xray core"
 systemctl is-enabled dark-xray.service >/dev/null || fail "dark-xray service is not enabled"
-systemctl is-active dark-xray.service >/dev/null || fail "dark-xray service is not active"
+systemctl is-active dark-xray.service >/dev/null || { systemctl status dark-xray.service --no-pager -l || true; fail "dark-xray service is not active"; }
 /usr/local/bin/darkxray check >/dev/null || fail "DARK core check failed"
 
-if [[ "$MODE" == 1 ]]; then
+if [[ "$MODE" == 1 && -n "$DOMAIN" ]]; then
   progress 72 "Checking DNS for $DOMAIN"
   RESOLVED="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
-  if [[ -n "$DETECTED_IP" && -n "$RESOLVED" && "$RESOLVED" != "$DETECTED_IP" ]]; then
+  if [[ -z "$RESOLVED" ]]; then
+    warn "$DOMAIN has no visible IPv4 A record yet."
+    yesno "Try Let's Encrypt anyway?" n || { warn "TLS skipped; configure it later from darkxray."; DOMAIN=""; }
+  elif [[ -n "$DETECTED_IP" && "$RESOLVED" != "$DETECTED_IP" ]]; then
     warn "$DOMAIN resolves to $RESOLVED but detected public IPv4 is $DETECTED_IP"
-    yesno "Continue certificate request anyway?" n || { warn "Panel installed; TLS skipped. Run darkxray later to configure domain."; DOMAIN=""; }
+    yesno "Try certificate request anyway?" n || { warn "TLS skipped; configure it later from darkxray."; DOMAIN=""; }
   fi
 fi
 
 if [[ -n "$DOMAIN" ]]; then
   progress 80 "Issuing Let's Encrypt certificate"
-  if port_busy 80; then fail "Port 80 is busy. Panel is installed, but TLS cannot be issued until port 80 is free."; fi
-  /usr/local/bin/darkxray domain --domain "$DOMAIN" --email "$EMAIL" --port "$PANEL_PORT" --agree-tos
-  progress 90 "Validating HTTPS configuration"
-  grep -q '"secure_cookie": true' /etc/dark-xray/config.json || fail "TLS config validation failed"
+  if port_busy 80; then
+    warn "Port 80 is busy. TLS will be skipped; the panel installation will remain usable."
+  elif /usr/local/bin/darkxray domain --domain "$DOMAIN" --email "$EMAIL" --port "$PANEL_PORT" --agree-tos; then
+    progress 90 "Validating HTTPS configuration"
+    if grep -q '"secure_cookie": true' /etc/dark-xray/config.json; then TLS_READY=1; else warn "TLS config validation failed; use darkxray to repair TLS."; fi
+  else
+    warn "Let's Encrypt failed. DARK XRAY is installed; run darkxray later to retry domain/TLS setup."
+  fi
 fi
 
 if yesno "Enable BBR congestion control?" y; then
@@ -239,17 +195,17 @@ SYSCTL
   sysctl --system >/dev/null 2>&1 || warn "BBR sysctl could not be fully applied"
 fi
 
-progress 97 "Running final doctor"
-/usr/local/bin/darkxray doctor || warn "Doctor reported warnings; review them before production use"
-
+progress 97 "Running final doctor"; /usr/local/bin/darkxray doctor || warn "Doctor reported warnings; review them before production use"
 progress 100 "DARK XRAY installation complete"
 printf "\n${C_GREEN}╔════════════════ INSTALL COMPLETE ════════════════╗${C_RESET}\n"
-if [[ -n "$DOMAIN" ]]; then
+if (( TLS_READY )); then
   printf "${C_GREEN}║${C_RESET} Panel: https://%s:%s\n" "$DOMAIN" "$PANEL_PORT"
 else
-  printf "${C_GREEN}║${C_RESET} Panel stays loopback-only for safety.\n"
-  printf "${C_GREEN}║${C_RESET} SSH: ssh -L %s:127.0.0.1:%s root@SERVER -p %s\n" "$PANEL_PORT" "$PANEL_PORT" "$DETECTED_SSH"
+  printf "${C_GREEN}║${C_RESET} Panel is installed; public TLS is not active yet.\n"
+  printf "${C_GREEN}║${C_RESET} Local: ssh -L %s:127.0.0.1:%s root@SERVER -p %s\n" "$PANEL_PORT" "$PANEL_PORT" "$DETECTED_SSH"
   printf "${C_GREEN}║${C_RESET} Open: http://127.0.0.1:%s\n" "$PANEL_PORT"
+  [[ "$MODE" == 1 ]] && printf "${C_GREEN}║${C_RESET} TLS retry: darkxray → Domain / TLS\n"
 fi
 printf "${C_GREEN}║${C_RESET} Manager: darkxray\n"
+printf "${C_GREEN}║${C_RESET} UI language: English by default (EN/FA switch in panel)\n"
 printf "${C_GREEN}╚══════════════════════════════════════════════════╝${C_RESET}\n"
