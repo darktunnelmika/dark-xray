@@ -42,15 +42,18 @@ DEFAULT_PERMISSIONS={
  'owner':{},
 }
 
+PASSWORD_MIN_LENGTH=8
+PASSWORD_MAX_LENGTH=512
+
 def password_hash(password: str, salt: bytes | None=None) -> str:
-    if not isinstance(password,str) or not 12 <= len(password) <= 512:
-        raise PolicyError('Password must be between 12 and 512 characters')
+    if not isinstance(password,str) or not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
+        raise PolicyError(f'Password must be between {PASSWORD_MIN_LENGTH} and {PASSWORD_MAX_LENGTH} characters')
     salt=salt or secrets.token_bytes(16)
     digest=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1,dklen=32)
     return f'scrypt$16384$8$1${salt.hex()}${digest.hex()}'
 
 def verify_password(password: str, encoded: str) -> bool:
-    if not isinstance(password,str) or len(password)>512:return False
+    if not isinstance(password,str) or len(password)>PASSWORD_MAX_LENGTH:return False
     try:
         typ,n,r,p,salt,target=encoded.split('$')
         if (typ,n,r,p)!=('scrypt','16384','8','1'):return False
@@ -86,7 +89,7 @@ class StrictModel(BaseModel):
 
 class Login(StrictModel):
     username: str=Field(min_length=1,max_length=128)
-    password: str=Field(min_length=1,max_length=512)
+    password: str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
 
 class AdminCreate(Login):
     role: Literal['reseller','readonly','owner']='reseller'
@@ -94,7 +97,7 @@ class AdminCreate(Login):
 
 class AdminEdit(StrictModel):
     disabled: bool|None=None
-    password: str|None=Field(default=None,min_length=12,max_length=512)
+    password: str|None=Field(default=None,min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
     permissions: dict[str,str]|None=None
 
 class OwnerEdit(StrictModel):
@@ -129,5 +132,4 @@ class Usage(StrictModel):
 class Refund(StrictModel):
     order_id: str=Field(min_length=1,max_length=256)
     event_id: str=Field(min_length=1,max_length=256)
-
 
