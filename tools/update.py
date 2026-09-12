@@ -32,6 +32,7 @@ def main():
             path=APP/name
             if path.exists(): tf.add(path,arcname=name)
     print('Rollback source snapshot:',backup)
+    guard_was_active=subprocess.run(['systemctl','is-active','--quiet','dark-xray-guard.service'],check=False).returncode==0
     run(['systemctl','stop','dark-xray.service'])
     try:
         for name in ('backend','web','tools','deploy'):
@@ -47,6 +48,8 @@ def main():
         run(['systemctl','daemon-reload'])
         run(['systemctl','start','dark-xray.service'])
         run(['systemctl','is-active','--quiet','dark-xray.service'])
+        if guard_was_active:
+            run(['systemctl','restart','dark-xray-guard.service'])
     except Exception:
         subprocess.run(['systemctl','start','dark-xray.service'],check=False)
         raise
