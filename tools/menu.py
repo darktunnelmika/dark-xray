@@ -1,524 +1,363 @@
 #!/usr/bin/env python3
-"""DARK XRAY interactive terminal control center.
-
-The menu intentionally delegates privileged operations to explicit system tools
-and DARK's existing helpers. It never prints stored passwords, API tokens or
-private keys.
-"""
+"""DARK XRAY cyber terminal control center."""
 from __future__ import annotations
-
-import json
-import os
-import shutil
-import socket
-import subprocess
-import sys
-import time
+import json, os, shutil, socket, sqlite3, subprocess, sys, tempfile, time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-IS_INSTALLED = ROOT == Path("/opt/dark-xray")
-COMMAND = Path("/usr/local/bin/darkxray") if IS_INSTALLED else ROOT / "darkxray"
-CONFIG = Path(os.environ.get("DARK_CONFIG", "/etc/dark-xray/config.json" if IS_INSTALLED else ROOT / "config.json"))
-DATA = Path(os.environ.get("DARK_DATA", "/var/lib/dark-xray" if IS_INSTALLED else ROOT / "data"))
-VERSION_FILE = ROOT / "VERSION"
+ROOT=Path(__file__).resolve().parents[1]
+INSTALLED=ROOT==Path('/opt/dark-xray')
+COMMAND=Path('/usr/local/bin/darkxray') if INSTALLED else ROOT/'darkxray'
+CONFIG=Path(os.environ.get('DARK_CONFIG',str(Path('/etc/dark-xray/config.json') if INSTALLED else ROOT/'config.json')))
+DATA=Path(os.environ.get('DARK_DATA',str(Path('/var/lib/dark-xray') if INSTALLED else ROOT/'data')))
+VERSION=ROOT/'VERSION'
+TTY=sys.stdout.isatty(); COLOR=TTY and not os.environ.get('NO_COLOR')
+R='\033[0m' if COLOR else ''; B='\033[1m' if COLOR else ''; D='\033[2m' if COLOR else ''
+CY='\033[38;5;51m' if COLOR else ''; BL='\033[38;5;39m' if COLOR else ''; PU='\033[38;5;141m' if COLOR else ''
+GR='\033[38;5;46m' if COLOR else ''; YE='\033[38;5;226m' if COLOR else ''; RE='\033[38;5;196m' if COLOR else ''; GY='\033[38;5;245m' if COLOR else ''
 
-# ANSI palette. NO_COLOR is respected for serial consoles and log captures.
-USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
-RESET = "\033[0m" if USE_COLOR else ""
-BOLD = "\033[1m" if USE_COLOR else ""
-DIM = "\033[2m" if USE_COLOR else ""
-GREEN = "\033[38;5;46m" if USE_COLOR else ""
-CYAN = "\033[38;5;51m" if USE_COLOR else ""
-BLUE = "\033[38;5;39m" if USE_COLOR else ""
-PURPLE = "\033[38;5;141m" if USE_COLOR else ""
-YELLOW = "\033[38;5;226m" if USE_COLOR else ""
-RED = "\033[38;5;196m" if USE_COLOR else ""
-GRAY = "\033[38;5;245m" if USE_COLOR else ""
-
-
-def clear() -> None:
-    if sys.stdout.isatty():
-        print("\033[2J\033[H", end="")
-
-
-def run(args, *, check=False, capture=False, env=None):
+def clear():
+    if TTY: print('\033[2J\033[H',end='')
+def run(args,capture=False,check=False):
     try:
-        return subprocess.run(
-            [str(x) for x in args],
-            check=check,
-            text=True,
-            stdout=subprocess.PIPE if capture else None,
-            stderr=subprocess.STDOUT if capture else None,
-            env=env,
-        )
-    except FileNotFoundError:
-        print(f"{RED}Command not found:{RESET} {args[0]}")
-        return None
-    except subprocess.CalledProcessError as ex:
-        print(f"{RED}Command failed{RESET} (exit {ex.returncode})")
-        return ex
-
-
-def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
-
-
-def service_state(name: str) -> str:
-    if not command_exists("systemctl"):
-        return "n/a"
-    cp = run(["systemctl", "is-active", name], capture=True)
-    return (cp.stdout or "").strip() if cp else "unknown"
-
-
-def enabled_state(name: str) -> str:
-    if not command_exists("systemctl"):
-        return "n/a"
-    cp = run(["systemctl", "is-enabled", name], capture=True)
-    return (cp.stdout or "").strip() if cp else "unknown"
-
-
-def badge(state: str) -> str:
-    if state == "active":
-        return f"{GREEN}● ONLINE{RESET}"
-    if state in {"inactive", "failed", "deactivating"}:
-        return f"{RED}● {state.upper()}{RESET}"
-    return f"{YELLOW}● {state.upper()}{RESET}"
-
-
-def version() -> str:
-    try:
-        return VERSION_FILE.read_text().strip()
-    except OSError:
-        return "unknown"
-
-
-def load_config() -> dict:
-    try:
-        return json.loads(CONFIG.read_text())
-    except Exception:
-        return {}
-
-
-def human_bytes(n: float) -> str:
-    n = float(n)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(n) < 1024:
-            return f"{n:.1f}{unit}"
-        n /= 1024
-    return f"{n:.1f}PB"
-
-
-def host_metrics() -> tuple[str, str, str]:
+        return subprocess.run([str(x) for x in args],text=True,check=check,
+            stdout=subprocess.PIPE if capture else None,stderr=subprocess.STDOUT if capture else None)
+    except (FileNotFoundError,subprocess.CalledProcessError) as e:
+        print(f'{RE}Command failed:{R} {args[0]}')
+        return e
+def exists(name): return shutil.which(name) is not None
+def service(name,mode='is-active'):
+    if not exists('systemctl'): return 'n/a'
+    cp=run(['systemctl',mode,name],capture=True)
+    if not hasattr(cp,'returncode'): return 'unknown'
+    out=((cp.stdout or '').strip().splitlines() or ['unknown'])[0]
+    if out in {'active','inactive','failed','activating','deactivating','enabled','disabled','static','masked'}: return out
+    return 'n/a'
+def badge(s):
+    return f'{GR}● ONLINE{R}' if s=='active' else f'{RE}● {s.upper()}{R}' if s in {'inactive','failed','dead'} else f'{YE}● {s.upper()}{R}'
+def cfg():
+    try:return json.loads(CONFIG.read_text())
+    except Exception:return {}
+def ver():
+    try:return VERSION.read_text().strip()
+    except Exception:return 'unknown'
+def human(n):
+    n=float(n)
+    for u in ('B','KB','MB','GB','TB'):
+        if abs(n)<1024:return f'{n:.1f}{u}'
+        n/=1024
+    return f'{n:.1f}PB'
+def metrics():
     try:
         import psutil
-        cpu = f"{psutil.cpu_percent(interval=0.15):.0f}%"
-        vm = psutil.virtual_memory()
-        ram = f"{human_bytes(vm.used)}/{human_bytes(vm.total)} ({vm.percent:.0f}%)"
-        disk = psutil.disk_usage("/")
-        disk_s = f"{human_bytes(disk.used)}/{human_bytes(disk.total)} ({disk.percent:.0f}%)"
-        return cpu, ram, disk_s
-    except Exception:
-        return "n/a", "n/a", "n/a"
-
-
-def panel_url(cfg: dict) -> str:
-    origin = str(cfg.get("public_origin") or "").strip()
-    if origin:
-        return origin
-    host = cfg.get("bind_host", "127.0.0.1")
-    port = cfg.get("bind_port", 2087)
-    return f"http://{host}:{port}"
-
-
-def pause() -> None:
+        vm=psutil.virtual_memory(); ds=psutil.disk_usage('/')
+        return f'{psutil.cpu_percent(interval=.12):.0f}%',f'{human(vm.used)}/{human(vm.total)} ({vm.percent:.0f}%)',f'{human(ds.used)}/{human(ds.total)} ({ds.percent:.0f}%)'
+    except Exception:return 'n/a','n/a','n/a'
+def endpoint(c):
+    return str(c.get('public_origin') or f"http://{c.get('bind_host','127.0.0.1')}:{c.get('bind_port',2087)}")
+def header(title='CONTROL CENTER',sub=''):
+    clear(); w=76
+    print(f'{CY}╔'+('═'*w)+f'╗{R}')
+    print(f'{CY}║{R}{B}{"D A R K   X R A Y".center(w)}{R}{CY}║{R}')
+    print(f'{CY}║{R}{PU}{"CYBER CONTROL CENTER".center(w)}{R}{CY}║{R}')
+    print(f'{CY}╠'+('═'*w)+f'╣{R}')
+    print(f'{CY}║{R} {B}{title:<74}{R}{CY}║{R}')
+    if sub: print(f'{CY}║{R} {GY}{sub[:74]:<74}{R}{CY}║{R}')
+    print(f'{CY}╚'+('═'*w)+f'╝{R}')
+def pause():
+    try:input(f'\n{GY}Press Enter to return...{R}')
+    except (EOFError,KeyboardInterrupt):pass
+def ask(prompt,default=''):
     try:
-        input(f"\n{GRAY}Press Enter to return...{RESET}")
-    except (EOFError, KeyboardInterrupt):
-        pass
-
-
-def confirm(message: str, token: str = "YES") -> bool:
+        x=input(f'{prompt}{f" [{default}]" if default else ""}: ').strip(); return x or default
+    except (EOFError,KeyboardInterrupt):return ''
+def confirm(text,token='YES'):
+    try:return input(f'{YE}{text}{R}\nType {token}: ').strip()==token
+    except (EOFError,KeyboardInterrupt):return False
+def need_root():
+    if os.geteuid()==0:return True
+    print(f'{RE}Root is required for this action.{R}');pause();return False
+def atomic_config(value):
+    if not need_root():return False
+    CONFIG.parent.mkdir(parents=True,exist_ok=True)
+    fd,name=tempfile.mkstemp(prefix='.dark-config-',dir=CONFIG.parent)
     try:
-        answer = input(f"{YELLOW}{message}{RESET}\nType {token} to continue: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return answer == token
+        with os.fdopen(fd,'w') as f:json.dump(value,f,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+        os.chmod(name,0o640)
+        if CONFIG.exists():st=CONFIG.stat();os.chown(name,st.st_uid,st.st_gid)
+        os.replace(name,CONFIG);return True
+    finally:
+        if os.path.exists(name):os.unlink(name)
+def inbound_ports():
+    db=DATA/'dark.sqlite3'
+    if not db.exists():return set()
+    out=set()
+    try:
+        with sqlite3.connect(f'file:{db}?mode=ro',uri=True) as con:
+            for (body,) in con.execute('SELECT body FROM core_inbounds'):
+                try:out.add(int(json.loads(body).get('port')))
+                except Exception:pass
+    except Exception:pass
+    return out
+def port_busy(port):
+    if not exists('ss'):return False
+    cp=run(['ss','-ltnH'],capture=True); needle=f':{port}'
+    return bool(cp and any(line.split()[3].endswith(needle) for line in (cp.stdout or '').splitlines() if len(line.split())>=4))
 
-
-def heading(title: str, subtitle: str = "") -> None:
-    clear()
-    width = 72
-    print(f"{CYAN}╔{'═' * width}╗{RESET}")
-    print(f"{CYAN}║{RESET}{BOLD}{'D A R K   X R A Y'.center(width)}{RESET}{CYAN}║{RESET}")
-    print(f"{CYAN}║{RESET}{PURPLE}{'CYBER CONTROL CENTER'.center(width)}{RESET}{CYAN}║{RESET}")
-    print(f"{CYAN}╠{'═' * width}╣{RESET}")
-    print(f"{CYAN}║{RESET} {BOLD}{title:<70}{RESET}{CYAN}║{RESET}")
-    if subtitle:
-        print(f"{CYAN}║{RESET} {GRAY}{subtitle:<70}{RESET}{CYAN}║{RESET}")
-    print(f"{CYAN}╚{'═' * width}╝{RESET}")
-
-
-def status_dashboard() -> None:
-    heading("LIVE STATUS", "Panel, guard, host resources and current endpoint")
-    cfg = load_config()
-    panel = service_state("dark-xray.service")
-    guard = service_state("dark-xray-guard.service")
-    cpu, ram, disk = host_metrics()
-    print(f"\n  Panel service    {badge(panel)}")
-    print(f"  IP Guard         {badge(guard)}")
-    print(f"  Autostart        {enabled_state('dark-xray.service')}")
-    print(f"  Version          {version()}")
-    print(f"  Endpoint         {panel_url(cfg)}")
-    print(f"  CPU              {cpu}")
-    print(f"  RAM              {ram}")
-    print(f"  Disk             {disk}")
-    print(f"  Hostname         {socket.gethostname()}")
-    print(f"  Writes           {'enabled' if cfg.get('writes_enabled', True) else 'disabled'}")
-    print(f"  Xray binary      {cfg.get('xray_binary', 'not configured')}")
-    print()
-    if COMMAND.exists():
-        run([COMMAND, "check"])
+def dashboard():
+    c=cfg(); cpu,ram,disk=metrics(); p=service('dark-xray.service'); g=service('dark-xray-guard.service')
+    header('LIVE STATUS',endpoint(c))
+    print(f'''\n  Panel            {badge(p)}
+  IP Guard         {badge(g)}
+  Autostart        {service('dark-xray.service','is-enabled')}
+  Version          {ver()}
+  CPU              {cpu}
+  RAM              {ram}
+  Disk             {disk}
+  Host             {socket.gethostname()}
+  Panel port       {c.get('bind_port','?')}
+  Xray API         {c.get('xray_api_port','?')}
+  Xray binary      {c.get('xray_binary','not configured')}
+  Writes           {'enabled' if c.get('writes_enabled',True) else 'disabled'}
+''')
     pause()
 
-
-def service_action(action: str) -> None:
-    if os.geteuid() != 0:
-        print(f"{RED}Root is required for service control.{RESET}")
-        pause()
-        return
-    if action in {"stop", "restart"}:
-        if not confirm("This interrupts active proxy sessions."):
-            return
-    run(["systemctl", action, "dark-xray.service"])
-    time.sleep(0.5)
-    print("Panel:", badge(service_state("dark-xray.service")))
-    pause()
-
-
-def logs_menu() -> None:
+def service_menu():
     while True:
-        heading("LOG CENTER", "systemd logs; no stored credentials are printed by this menu")
-        print("""
-  1) Last 100 panel log lines
-  2) Follow panel logs live
-  3) Last 100 IP Guard log lines
-  4) Follow IP Guard logs live
-  5) Xray/runtime diagnostics
-  0) Back
-""")
-        c = ask()
-        if c == "0":
-            return
-        unit = None
-        follow = False
-        if c in {"1", "2"}:
-            unit, follow = "dark-xray.service", c == "2"
-        elif c in {"3", "4"}:
-            unit, follow = "dark-xray-guard.service", c == "4"
-        elif c == "5":
-            run([COMMAND, "doctor"])
-            pause()
-            continue
-        else:
-            continue
-        args = ["journalctl", "-u", unit, "--no-pager", "-n", "100"]
-        if follow:
-            args = ["journalctl", "-u", unit, "-f", "-n", "30"]
-            print(f"{GRAY}Ctrl+C returns to the menu.{RESET}")
-        try:
-            run(args)
-        except KeyboardInterrupt:
-            pass
-        pause()
-
-
-def backup_menu() -> None:
-    while True:
-        heading("BACKUP & RECOVERY", "Encrypted backups; live restore is intentionally not automatic")
-        print("""
-  1) Create encrypted backup
-  2) Restore backup into a NEW destination
-  3) Reset owner password
-  4) Show data/config paths
-  0) Back
-""")
-        c = ask()
-        if c == "0":
-            return
-        if c == "1":
-            default = "/var/lib/dark-xray/backups/dark-xray.darkbackup" if IS_INSTALLED else str(ROOT / "dark-xray.darkbackup")
-            path = prompt("Backup output", default)
-            if path:
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                run([COMMAND, "backup", "--output", path])
-                pause()
-        elif c == "2":
-            archive = prompt("Backup archive")
-            destination = prompt("NEW empty restore directory", "/var/lib/dark-xray-restore")
-            if archive and destination and confirm("Restore is isolated and will NOT overwrite the live instance."):
-                run([COMMAND, "restore", "--archive", archive, "--destination", destination])
-                pause()
-        elif c == "3":
-            user = prompt("Owner username", "dark")
-            if user and confirm("This revokes existing sessions for that owner. TOTP remains enabled."):
-                run([COMMAND, "reset-password", "--username", user])
-                pause()
-        elif c == "4":
-            print("Config :", CONFIG)
-            print("Data   :", DATA)
-            print("App    :", ROOT)
-            pause()
-
-
-def tls_menu() -> None:
-    while True:
-        cfg = load_config()
-        heading("TLS / DOMAIN", f"Current endpoint: {panel_url(cfg)}")
-        print("""
-  1) Issue / replace Let's Encrypt certificate
-  2) Renew configured certificate now
-  3) Show certificate details
-  4) Certbot timer status
-  0) Back
-""")
-        c = ask()
-        if c == "0":
-            return
-        if c == "1":
-            if os.geteuid() != 0:
-                print(f"{RED}Root is required for certificate provisioning.{RESET}")
-                pause()
-                continue
-            domain = prompt("Domain (no https://)")
-            email = prompt("ACME email")
-            port = prompt("Public panel HTTPS port", str(cfg.get("bind_port", 2087)))
-            if domain and email and port and confirm("Port 80 must be reachable for HTTP-01. Continue?"):
-                run([COMMAND, "domain", "--domain", domain, "--email", email, "--port", port, "--agree-tos"])
-                pause()
-        elif c == "2":
-            if os.geteuid() == 0 and confirm("Renewal restarts DARK and may interrupt active sessions."):
-                run([COMMAND, "domain", "--renew"])
-                pause()
-            elif os.geteuid() != 0:
-                print(f"{RED}Root is required.{RESET}")
-                pause()
-        elif c == "3":
-            cert = cfg.get("tls_certificate")
-            if cert and Path(cert).exists() and command_exists("openssl"):
-                run(["openssl", "x509", "-in", cert, "-noout", "-subject", "-issuer", "-dates"])
-            else:
-                print("No readable configured certificate.")
-            pause()
-        elif c == "4":
-            run(["systemctl", "status", "certbot.timer", "--no-pager"])
-            pause()
-
-
-def guard_menu() -> None:
-    while True:
-        heading("IP GUARD", "Per-client source-IP policy and isolated nftables worker")
-        print(f"\n  Guard service     {badge(service_state('dark-xray-guard.service'))}\n")
-        print("""
-  1) Guard status
-  2) Configure / enable IP Guard
-  3) Restart Guard worker
-  4) Stop Guard worker
-  5) View Guard logs
-  6) Show enablement safety notes
-  0) Back
-""")
-        c = ask()
-        if c == "0":
-            return
-        if c == "1":
-            run(["systemctl", "status", "dark-xray-guard.service", "--no-pager"])
-            pause()
-        elif c == "2":
-            if os.geteuid() != 0:
-                print(f"{RED}Root is required.{RESET}")
-                pause()
-                continue
-            ports = prompt("Explicit Xray DATA ports (comma separated, e.g. 443,2020)")
-            if not ports:
-                continue
-            exempt = prompt("Optional exempt IP (blank = none)")
-            print(f"{YELLOW}Only continue if Xray logs show the real client packet source on THIS host.{RESET}")
-            if confirm("I verified direct source IPs. Enable reviewed firewall enforcement?"):
-                args = [COMMAND, "guard-enable", "--ports", ports, "--verified-direct-sources"]
-                if exempt:
-                    args += ["--exempt", exempt]
-                run(args)
-                pause()
-        elif c == "3":
-            if os.geteuid() == 0:
-                run(["systemctl", "restart", "dark-xray-guard.service"])
-            else:
-                print(f"{RED}Root is required.{RESET}")
-            pause()
-        elif c == "4":
-            if os.geteuid() == 0 and confirm("Temporary DARK bans are cleared when the broker stops."):
-                run(["systemctl", "stop", "dark-xray-guard.service"])
-            pause()
-        elif c == "5":
-            run(["journalctl", "-u", "dark-xray-guard.service", "--no-pager", "-n", "120"])
-            pause()
-        elif c == "6":
-            print("""
-  • Do NOT enable on an opaque IP tunnel/proxy path.
-  • SSH, panel and Xray API ports remain protected.
-  • The worker owns a DARK-only nftables table; it does not flush the host ruleset.
-  • One public IP may represent several devices behind NAT.
-  • Validate with two independent source networks before production use.
-""")
-            pause()
-
-
-def system_menu() -> None:
-    while True:
-        heading("SYSTEM & NETWORK", "Host-side helpers; changes require explicit confirmation")
-        print("""
-  1) Full diagnostics
-  2) Enable BBR (fq + bbr)
-  3) Show firewall / nftables summary
-  4) Show listening ports
-  5) Enable panel autostart
-  6) Disable panel autostart
-  0) Back
-""")
-        c = ask()
-        if c == "0":
-            return
-        if c == "1":
-            run([COMMAND, "doctor"])
-            pause()
-        elif c == "2":
-            if os.geteuid() != 0:
-                print(f"{RED}Root is required.{RESET}")
-            elif confirm("Set net.core.default_qdisc=fq and net.ipv4.tcp_congestion_control=bbr?"):
-                Path("/etc/sysctl.d/99-dark-xray-bbr.conf").write_text(
-                    "net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n"
-                )
-                run(["sysctl", "--system"])
-            pause()
-        elif c == "3":
-            if command_exists("nft"):
-                run(["nft", "list", "tables"])
-                run(["nft", "list", "table", "inet", "dark_xray"])
-            else:
-                print("nft command is not installed.")
-            pause()
-        elif c == "4":
-            run(["ss", "-lntup"])
-            pause()
-        elif c in {"5", "6"}:
-            if os.geteuid() != 0:
-                print(f"{RED}Root is required.{RESET}")
-            else:
-                run(["systemctl", "enable" if c == "5" else "disable", "dark-xray.service"])
-            pause()
-
-
-def settings_view() -> None:
-    heading("CURRENT SETTINGS", "Secrets and private keys are intentionally hidden")
-    cfg = load_config()
-    safe_keys = (
-        "public_origin", "public_address", "bind_host", "bind_port",
-        "xray_binary", "xray_assets", "xray_api_port", "core_autostart",
-        "writes_enabled", "secure_cookie", "protected_ports",
-        "direct_source_verified",
-    )
-    for key in safe_keys:
-        if key in cfg:
-            print(f"  {key:<24} {cfg[key]}")
-    for key in ("tls_certificate", "tls_private_key"):
-        if cfg.get(key):
-            print(f"  {key:<24} configured")
-    pause()
-
-
-def ask() -> str:
-    try:
-        return input(f"{CYAN}DARK{RESET}{PURPLE}XRAY{RESET} > ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return "0"
-
-
-def prompt(label: str, default: str = "") -> str:
-    suffix = f" [{default}]" if default else ""
-    try:
-        value = input(f"{label}{suffix}: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return ""
-    return value or default
-
-
-def main_menu() -> None:
-    while True:
-        cfg = load_config()
-        panel = service_state("dark-xray.service")
-        guard = service_state("dark-xray-guard.service")
-        cpu, ram, _ = host_metrics()
-        heading(
-            f"DARK XRAY {version()}",
-            f"Panel {panel.upper()}  •  Guard {guard.upper()}  •  CPU {cpu}  •  RAM {ram}",
-        )
-        print(f"""
- {GREEN}SERVICE{RESET}                              {PURPLE}SECURITY / NETWORK{RESET}
-  1) Live status dashboard                  8) TLS / Domain manager
-  2) Start DARK XRAY                        9) IP Guard manager
-  3) Stop DARK XRAY                        10) System / Network tools
+        header('SERVICE CONTROL',f"Panel {service('dark-xray.service')} • Guard {service('dark-xray-guard.service')}")
+        print('''\n  1) Status details
+  2) Start DARK XRAY
+  3) Stop DARK XRAY
   4) Restart DARK XRAY + Xray
+  5) Enable autostart
+  6) Disable autostart
+  7) Show systemd unit
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if not need_root():continue
+        if x=='1':run(['systemctl','status','dark-xray.service','--no-pager']);pause()
+        elif x=='2':run(['systemctl','start','dark-xray.service']);pause()
+        elif x in {'3','4'}:
+            if confirm('Active proxy sessions will be interrupted.'):
+                run(['systemctl','stop' if x=='3' else 'restart','dark-xray.service']);pause()
+        elif x=='5':run(['systemctl','enable','--now','dark-xray.service']);pause()
+        elif x=='6':
+            if confirm('Disable automatic startup?'):run(['systemctl','disable','dark-xray.service']);pause()
+        elif x=='7':run(['systemctl','cat','dark-xray.service','--no-pager']);pause()
 
- {BLUE}MAINTENANCE{RESET}                          {CYAN}INFORMATION{RESET}
-  5) Logs & diagnostics                    11) Current safe settings
-  6) Backup & recovery                     12) Open panel address
-  7) Run doctor                            13) About / version
-
-  0) Exit
-""")
-        c = ask()
-        if c in {"0", "q", "quit", "exit"}:
-            clear()
-            print(f"{CYAN}DARK XRAY{RESET} control center closed.")
-            return
-        if c == "1":
-            status_dashboard()
-        elif c == "2":
-            service_action("start")
-        elif c == "3":
-            service_action("stop")
-        elif c == "4":
-            service_action("restart")
-        elif c == "5":
-            logs_menu()
-        elif c == "6":
-            backup_menu()
-        elif c == "7":
-            run([COMMAND, "doctor"])
+def settings_menu():
+    while True:
+        c=cfg();header('PANEL SETTINGS',endpoint(c))
+        print('''\n  1) Safe configuration summary
+  2) Change panel port
+  3) Change public proxy address
+  4) Reset owner password
+  5) Show access URL / SSH tunnel
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x=='1':
+            hidden={'tls_private_key','privateKey','password','token','api_key'}
+            safe={k:('*** hidden ***' if any(h.lower() in k.lower() for h in hidden) else v) for k,v in c.items()}
+            print(json.dumps(safe,indent=2,ensure_ascii=False));pause()
+        elif x=='2':
+            if not need_root():continue
+            val=ask('New panel port',str(c.get('bind_port',2087)))
+            if not val.isdigit() or not 1024<=int(val)<=65535:print(f'{RE}Invalid nonprivileged port.{R}');pause();continue
+            new=int(val); old=int(c.get('bind_port',2087)); reserved={int(c.get('xray_api_port',10085)),22}|inbound_ports()
+            if new in reserved:print(f'{RE}Port conflicts with SSH/Xray API/data inbound.{R}');pause();continue
+            if new!=old and port_busy(new):print(f'{RE}Port is already listening.{R}');pause();continue
+            if not confirm(f'Change panel port {old} → {new} and restart?'):continue
+            c['bind_port']=new
+            c['protected_ports']=sorted((set(map(int,c.get('protected_ports',[])))-{old})|{new,22,int(c.get('xray_api_port',10085))})
+            origin=str(c.get('public_origin',''))
+            if origin.startswith('http://127.0.0.1:'):c['public_origin']=f'http://127.0.0.1:{new}'
+            elif origin.startswith('https://'):
+                host=origin.split('://',1)[1].split(':',1)[0];c['public_origin']=f'https://{host}:{new}'
+            if atomic_config(c):run(['systemctl','restart','dark-xray.service']);print(f'{GR}Port updated.{R}')
             pause()
-        elif c == "8":
-            tls_menu()
-        elif c == "9":
-            guard_menu()
-        elif c == "10":
-            system_menu()
-        elif c == "11":
-            settings_view()
-        elif c == "12":
-            print(f"\nPanel: {panel_url(cfg)}")
-            if str(cfg.get("bind_host", "")).startswith("127.") and IS_INSTALLED:
-                print("Loopback mode: use SSH port forwarding or configure TLS/domain first.")
+        elif x=='3':
+            if not need_root():continue
+            v=ask('Public proxy IP/DNS',str(c.get('public_address','')))
+            if not v or any(ch in v for ch in '/?#@ \r\n'):print(f'{RE}Invalid address.{R}');pause();continue
+            if confirm(f'Set public proxy address to {v}?'):
+                c['public_address']=v
+                if atomic_config(c):run(['systemctl','restart','dark-xray.service'])
             pause()
-        elif c == "13":
-            heading("ABOUT")
-            print(f"\n  DARK XRAY {version()}")
-            print("  Standalone Xray control panel")
-            print("  Command: darkxray")
-            print("  Repository: https://github.com/darktunnelmika/dark-xray")
-            print("\n  This menu never displays stored passwords, API tokens or private keys.")
+        elif x=='4':
+            user=ask('Owner username','dark')
+            if user and confirm('Reset owner password and revoke current sessions?'):run([COMMAND,'reset-password','--username',user]);pause()
+        elif x=='5':
+            port=c.get('bind_port',2087);print('Panel URL:',endpoint(c));print(f'SSH tunnel: ssh -L {port}:127.0.0.1:{port} root@SERVER -p SSH_PORT');pause()
+
+def tls_menu():
+    while True:
+        c=cfg();header('DOMAIN / TLS',endpoint(c))
+        print('''\n  1) Set domain + issue Let's Encrypt TLS
+  2) Renew certificate now
+  3) Certificate details
+  4) Certbot timer status
+  5) DNS check
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x=='1':
+            if not need_root():continue
+            domain=ask('Domain');email=ask('ACME email');port=ask('HTTPS panel port',str(c.get('bind_port',2087)))
+            if domain and email and port and confirm('Port 80 must reach this server. Issue and activate TLS?'):
+                run([COMMAND,'domain','--domain',domain,'--email',email,'--port',port,'--agree-tos']);pause()
+        elif x=='2':
+            if need_root() and confirm('Renewal restarts DARK and active sessions may drop.'):run([COMMAND,'domain','--renew']);pause()
+        elif x=='3':
+            cert=c.get('tls_certificate')
+            if cert and Path(cert).exists() and exists('openssl'):run(['openssl','x509','-in',cert,'-noout','-subject','-issuer','-dates','-ext','subjectAltName'])
+            else:print('No active certificate.')
             pause()
+        elif x=='4':run(['systemctl','status','certbot.timer','--no-pager']);pause()
+        elif x=='5':
+            d=ask('Domain');run(['getent','ahostsv4',d]) if d else None;pause()
 
+def guard_menu():
+    while True:
+        header('IP GUARD',f"worker: {service('dark-xray-guard.service')}")
+        print('''\n  1) Status
+  2) Configure / enable
+  3) Restart worker
+  4) Stop worker
+  5) Guard logs
+  6) Safety notes
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x=='1':run(['systemctl','status','dark-xray-guard.service','--no-pager']);pause()
+        elif x=='2':
+            if not need_root():continue
+            ports=ask('Xray DATA ports, comma separated');ex=ask('Optional exempt IP')
+            print(f'{YE}Enable only if Xray logs contain the real client packet source on this host.{R}')
+            if ports and confirm('I verified direct source IPs. Enable enforcement?'):
+                a=[COMMAND,'guard-enable','--ports',ports,'--verified-direct-sources'];a += ['--exempt',ex] if ex else []
+                run(a);pause()
+        elif x=='3':
+            if need_root():run(['systemctl','restart','dark-xray-guard.service']);pause()
+        elif x=='4':
+            if need_root() and confirm('Stop worker and clear DARK temporary bans?'):run(['systemctl','stop','dark-xray-guard.service']);pause()
+        elif x=='5':run(['journalctl','-u','dark-xray-guard.service','-n','120','--no-pager']);pause()
+        elif x=='6':print('\n  • Do not enable behind opaque tunnels.\n  • SSH/panel/API ports are protected.\n  • Validate with two source networks before production.\n');pause()
 
-if __name__ == "__main__":
-    main_menu()
+def backup_menu():
+    while True:
+        header('BACKUP / RECOVERY','Encrypted application backups')
+        print('''\n  1) Create encrypted backup
+  2) Restore into NEW directory
+  3) Show backup directory
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x=='1':
+            default=str(DATA/'backups'/f"dark-{time.strftime('%Y%m%d-%H%M%S')}.darkbackup")
+            path=ask('Backup file',default);Path(path).parent.mkdir(parents=True,exist_ok=True);run([COMMAND,'backup','--output',path]);pause()
+        elif x=='2':
+            arc=ask('Backup archive');dst=ask('NEW empty restore directory','/var/lib/dark-xray-restore')
+            if arc and confirm('Restore does not overwrite live data. Continue?'):run([COMMAND,'restore','--archive',arc,'--destination',dst]);pause()
+        elif x=='3':print(DATA/'backups');pause()
+
+def logs_menu():
+    while True:
+        header('LOG CENTER','systemd journal + DARK diagnostics')
+        print('''\n  1) Panel logs (last 150)
+  2) Follow panel logs
+  3) Guard logs (last 150)
+  4) Follow guard logs
+  5) Doctor
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x in {'1','2','3','4'}:
+            unit='dark-xray.service' if x in {'1','2'} else 'dark-xray-guard.service';follow=x in {'2','4'}
+            args=['journalctl','-u',unit,'-n','40' if follow else '150','-f'] if follow else ['journalctl','-u',unit,'-n','150','--no-pager']
+            try:run(args)
+            except KeyboardInterrupt:pass
+            pause()
+        elif x=='5':run([COMMAND,'doctor']);pause()
+
+def system_menu():
+    while True:
+        header('SYSTEM / NETWORK','No automatic UFW/SSH changes')
+        print('''\n  1) Full diagnostics
+  2) Enable BBR (fq + bbr)
+  3) Listening TCP ports
+  4) DARK nftables table
+  5) Disk / memory / uptime
+  6) Restart networking-independent DARK services
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x=='1':run([COMMAND,'doctor']);pause()
+        elif x=='2':
+            if need_root() and confirm('Apply persistent fq + BBR sysctl?'):
+                Path('/etc/sysctl.d/99-dark-xray-bbr.conf').write_text('net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n')
+                run(['sysctl','--system']);pause()
+        elif x=='3':run(['ss','-lntp']);pause()
+        elif x=='4':run(['nft','list','table','inet','dark_xray']) if exists('nft') else print('nft not installed');pause()
+        elif x=='5':run(['uptime']);run(['free','-h']);run(['df','-h','/']);pause()
+        elif x=='6':
+            if need_root() and confirm('Restart DARK panel and Guard?'):
+                run(['systemctl','restart','dark-xray.service']);
+                if service('dark-xray-guard.service')=='active':run(['systemctl','restart','dark-xray-guard.service'])
+                pause()
+
+def update_menu():
+    header('UPDATE DARK XRAY','Safe source update; /etc and /var/lib are preserved')
+    print('Current version:',ver())
+    print('\nUpdate creates a source rollback archive before replacing application files.')
+    if need_root() and confirm('Download latest main branch and update DARK XRAY?'):
+        run([COMMAND,'update']);pause()
+
+def repair_menu():
+    while True:
+        header('REPAIR / MAINTENANCE','Conservative recovery tools')
+        print('''\n  1) Doctor
+  2) Reload systemd + restart panel
+  3) Reinstall systemd unit files from /opt
+  4) Show application paths
+  5) Uninstall application (PRESERVE data/config)
+  0) Back''')
+        x=ask('DARK')
+        if x=='0':return
+        if x=='1':run([COMMAND,'doctor']);pause()
+        elif x=='2':
+            if need_root() and confirm('Restart panel?'):run(['systemctl','daemon-reload']);run(['systemctl','restart','dark-xray.service']);pause()
+        elif x=='3':
+            if need_root():
+                for n in ('dark-xray.service','dark-xray-guard.service'):
+                    shutil.copy2(ROOT/'deploy'/n,Path('/etc/systemd/system')/n)
+                run(['systemctl','daemon-reload']);print(f'{GR}Units restored.{R}');pause()
+        elif x=='4':print('App:',ROOT,'\nConfig:',CONFIG,'\nData:',DATA);pause()
+        elif x=='5':
+            if not need_root():continue
+            if confirm('Remove application and services, but KEEP /etc/dark-xray and /var/lib/dark-xray?','UNINSTALL'):
+                run(['systemctl','disable','--now','dark-xray.service']);run(['systemctl','disable','--now','dark-xray-guard.service'])
+                for p in ('/etc/systemd/system/dark-xray.service','/etc/systemd/system/dark-xray-guard.service','/usr/local/bin/darkxray'):
+                    Path(p).unlink(missing_ok=True)
+                shutil.rmtree('/opt/dark-xray',ignore_errors=True);run(['systemctl','daemon-reload']);print('Application removed; config/data preserved.');raise SystemExit(0)
+
+def main():
+    while True:
+        c=cfg();p=service('dark-xray.service');g=service('dark-xray-guard.service');cpu,ram,_=metrics()
+        header('MAIN MENU',f"Panel {p} • Guard {g} • CPU {cpu} • RAM {ram} • {endpoint(c)}")
+        print(f'''\n  {CY}01){R} Live Status            {CY}07){R} Log Center
+  {CY}02){R} Service Control        {CY}08){R} System / Network
+  {CY}03){R} Panel Settings         {CY}09){R} Update DARK XRAY
+  {CY}04){R} Domain / TLS            {CY}10){R} Doctor / Diagnostics
+  {CY}05){R} IP Guard                {CY}11){R} Repair / Uninstall
+  {CY}06){R} Backup / Recovery       {CY}00){R} Exit
+''')
+        x=ask('DARK').lstrip('0') or '0'
+        if x=='0':return
+        actions={'1':dashboard,'2':service_menu,'3':settings_menu,'4':tls_menu,'5':guard_menu,'6':backup_menu,'7':logs_menu,'8':system_menu,'9':update_menu,'10':lambda:(run([COMMAND,'doctor']),pause()),'11':repair_menu}
+        fn=actions.get(x)
+        if fn:fn()
+        else:print(f'{RE}Invalid option.{R}');time.sleep(.6)
+if __name__=='__main__':
+    try:main()
+    except KeyboardInterrupt:print('\nBye.')
