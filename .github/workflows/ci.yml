@@ -45,10 +45,15 @@ jobs:
         run: |
           node --check web/i18n-en.js
           node --check web/runtime-policy.js
+          node --check web/inbounds-models.js
+          node --check web/inbounds-v2.js
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q '/assets/cyber.css' web/index.html
           grep -q '/assets/i18n-en.js' web/index.html
           grep -q '/assets/runtime-policy.js' web/index.html
+          grep -q '/assets/inbounds-v2.css' web/index.html
+          grep -q '/assets/inbounds-models.js' web/index.html
+          grep -q '/assets/inbounds-v2.js' web/index.html
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/policy_auth.py
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/server.py
           grep -q 'PASSWORD_MIN_LENGTH=8' tools/provision.py
