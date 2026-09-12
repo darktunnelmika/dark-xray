@@ -38,9 +38,20 @@ jobs:
           bash install-online.sh --selftest > /tmp/dark-installer-smoke.txt
           grep -q '\[100/100\]' /tmp/dark-installer-smoke.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
-          python -m py_compile tools/menu.py tools/update.py tools/provision.py
+          python -m py_compile tools/menu.py tools/update.py tools/provision.py backend/server.py backend/policy_auth.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
           grep -q 'MAIN MENU' /tmp/dark-menu-smoke.txt
+      - name: Cyber UI and English-default smoke
+        run: |
+          node --check web/i18n-en.js
+          node --check web/runtime-policy.js
+          grep -q '<html lang="en" dir="ltr">' web/index.html
+          grep -q '/assets/cyber.css' web/index.html
+          grep -q '/assets/i18n-en.js' web/index.html
+          grep -q '/assets/runtime-policy.js' web/index.html
+          grep -q 'PASSWORD_MIN_LENGTH=8' backend/policy_auth.py
+          grep -q 'PASSWORD_MIN_LENGTH=8' backend/server.py
+          grep -q 'PASSWORD_MIN_LENGTH=8' tools/provision.py
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.txt
       - name: Isolated test suite (test-double Xray; simulated firewall)
