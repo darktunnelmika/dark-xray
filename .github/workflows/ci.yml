@@ -32,9 +32,12 @@ jobs:
           node-version: '22'
       - name: Repository hygiene
         run: python tools/repo-check.py
-      - name: Installer and manager syntax smoke
+      - name: Installer runtime and manager smoke
         run: |
           bash -n install-online.sh setup.sh darkxray
+          bash install-online.sh --selftest > /tmp/dark-installer-smoke.txt
+          grep -q '\[100/100\]' /tmp/dark-installer-smoke.txt
+          grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
           python -m py_compile tools/menu.py tools/update.py tools/provision.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
           grep -q 'MAIN MENU' /tmp/dark-menu-smoke.txt
