@@ -9,45 +9,60 @@
 
 # DARK XRAY 🖤
 
-پنل مستقل مدیریت Xray با رابط فارسی سایبری، مالکیت مشتری، مدیریت نمایندگان و کنترل سطح دسترسی.
+پنل مستقل مدیریت Xray با رابط Cyber/Dark، مالکیت مشتری، مدیریت نمایندگان و کنترل سطح دسترسی. زبان پیش‌فرض رابط وب **English / LTR** است و از داخل خود پنل می‌توان بین English و فارسی جابه‌جا شد.
 
 نسخهٔ مبنا: `0.6.0-standalone-lab`
 
 > [!CAUTION]
-> **انتقال سورس کامل شده، اما پروژه هنوز نسخهٔ آزمایشی/Lab است و Production Ready نیست.**
-> تست‌های خودکار مخزن موفق‌اند، ولی اتصال واقعی Xray روی VPS تازه، اثر فایروال روی ترافیک واقعی، صدور گواهی زنده و ظرفیت زیر بار هنوز به‌صورت عملی تأیید نشده‌اند.
+> **سورس نسخهٔ ۰.۶ کامل است، اما پروژه هنوز Lab/Experimental است و Production Ready اعلام نشده.**
+> CI مخزن موفق است، ولی اتصال واقعی کلاینت، اعمال واقعی nftables، صدور گواهی روی همهٔ دیتاسنترها، بازیابی پس از ریبوت و ظرفیت زیر بار باید روی VPS واقعی جداگانه تأیید شوند.
 
-## وضعیت انتشار — ۱۳ سپتامبر ۲۰۲۶
+## نصب آنلاین
 
-تمام اجزای لازم نسخهٔ ۰.۶ اکنون روی شاخهٔ `main` حضور دارند. دو ماژول `guard_bridge.py` و `guardd.py` عیناً با بایت‌های بستهٔ اصلی منتقل شدند. فایل بزرگ `policy_api.py` برای قابلیت بازبینی و انتشار بهتر بدون تغییر رفتار API به سه بخش تقسیم شد:
+روی Ubuntu/Debian دارای systemd:
 
-- `backend/policy_auth.py` — مدل‌ها، احراز هویت، مجوزها و bootstrap
-- `backend/policy_routes.py` — مسیرهای FastAPI و کنترل دسترسی HTTP
-- `backend/policy_api.py` — لایهٔ سازگاری و ورودی CLI
+```bash
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-online.sh -o /tmp/dark-xray-install.sh
+sudo bash /tmp/dark-xray-install.sh
+```
 
-تست سازگاری `tests/legacy/test_api.py` بعد از این بازآرایی ۲۰/۲۰ پاس شد. کل مجموعهٔ تست محلی نیز ۱۸۹ تست موفق ثبت کرد و GitHub Actions روی Python 3.12 و 3.13 با موفقیت کامل شد.
+Installer دارای روند ۱→۱۰۰ است و سه حالت را تشخیص می‌دهد:
 
-## DARK XRAY Cyber Control Center
+- **Clean** — نصب تازه
+- **Partial / Failed** — نگهداری بقایای قبلی در recovery و Repair امن
+- **Installed** — Safe Update یا ورود مستقیم به Manager
 
-بعد از نصب، دستور زیر مرکز مدیریت ترمینالی DARK XRAY را باز می‌کند:
+پروفایل پیشنهادی `Domain + HTTPS/TLS` دامنه، پورت، Owner، Xray-core و Certbot را در همان Wizard مدیریت می‌کند. شکست DNS/TLS دیگر نصب سالم پنل را خراب نمی‌کند و TLS را می‌توان بعداً از `darkxray` دوباره اجرا کرد.
+
+پس از نصب:
 
 ```bash
 darkxray
 ```
 
-این منو با ظاهر سایبری و شماره‌گذاری سریع، امکانات مدیریتی اصلی را یکجا می‌دهد:
+## DARK XRAY Cyber Control Center
 
-- Live Status برای Panel، IP Guard، CPU، RAM، Disk، Endpoint و Xray binary
-- Start / Stop / Restart سرویس DARK XRAY
-- Log Center برای پنل، IP Guard و لاگ زنده
-- Diagnostics / Doctor
-- Backup رمزدار و Restore در مسیر جدا
-- Reset رمز Owner بدون نمایش credentialهای ذخیره‌شده
-- TLS / Domain و مدیریت Let's Encrypt / Certbot
-- IP Guard: وضعیت، فعال‌سازی، انتخاب پورت‌های داده، exempt IP و لاگ
-- System & Network: BBR، پورت‌های Listening، nftables و Autostart
+منوی ترمینال، عملیات مدیریتی اصلی را یکجا نگه می‌دارد:
 
-منو عمداً password، API key و private key ذخیره‌شده را نمایش نمی‌دهد و عملیات حساس مثل Restart، TLS و فعال‌سازی firewall نیاز به تأیید صریح دارند.
+- Live Status برای Panel، IP Guard، CPU، RAM، Disk، Endpoint و Xray
+- Start / Stop / Restart و Autostart
+- Log Center و Doctor / Diagnostics
+- Backup رمزدار و Restore ایزوله
+- Reset رمز Owner
+- Domain / TLS / Let's Encrypt / Certbot
+- IP Guard و پورت‌های دادهٔ تأییدشده
+- BBR، پورت‌های Listening و وضعیت nftables
+- Safe Update با snapshot برگشت
+
+رمز، API key و private key ذخیره‌شده در منو چاپ نمی‌شوند و عملیات حساس نیاز به تأیید صریح دارند.
+
+## سیاست رمز حساب‌ها
+
+حداقل رمز **حساب‌های DARK XRAY برابر ۸ کاراکتر** و حداکثر ۵۱۲ کاراکتر است. این قانون برای Owner، Admin/Reseller و تغییر رمز یکسان شده است. Passphrase بکاپ رمزدار یک سیاست جداگانه دارد و همچنان حداقل ۱۲ کاراکتر می‌خواهد.
+
+## رابط Cyber/Dark
+
+رابط وب اکنون به‌صورت پیش‌فرض English/LTR است و لایهٔ Cyber اختصاصی DARK دارد: پس‌زمینهٔ grid/scanline، پنل‌های شیشه‌ای تیره، glow سبز/فیروزه‌ای، سایدبار LTR، وضعیت‌های واضح Online/Warning و سوییچ EN/FA. این لایه فقط presentation است و منطق API/مالکیت/Xray را تغییر نمی‌دهد.
 
 ## معماری مستقل
 
@@ -56,25 +71,25 @@ DARK UI → DARK API / Access Control → DARK Database → Xray-core
                                               └→ IP guard (nftables)
 ```
 
-سنایی یا پنل دیگری پیش‌نیاز این پروژه نیست. رابط، حساب‌ها، دیتابیس و API متعلق به DARK هستند و Xray-core موتور مستقل اتصال است.
+سنایی/3x-ui یا پنل دیگری پیش‌نیاز Runtime نیست. برای تجربهٔ Installer/Manager از الگوهای خوب پنل‌های成熟 مثل نصب مرحله‌ای، مدیریت SSL، Update و Service Control الهام گرفته شده، اما دیتابیس، UI، API و سرویس‌های DARK مستقل‌اند.
 
-## امکانات موجود در مبنای ۰.۶
+## امکانات مبنای ۰.۶
 
-- مدیریت اینباند، مشتری و مالکیت مشتری روی اینباندهای مشترک
-- مدیریت نماینده، سقف تعداد مشتری، سهمیه و دفتر مستقل مصرف
-- احراز هویت، نشست، TOTP و API key
-- محدودیت IP با worker جداگانه و دسترسی محدود به nftables
-- داشبورد و منابع میزبان
-- Host، Outbound و Routing با فرم بومی و JSON پیشرفته
-- بکاپ رمزدار و بازیابی در مسیر جدا
-- نصب مستقل و سرویس‌های systemd
-- تست‌های خودکار Python و JavaScript و GitHub Actions
+- مدیریت Inbound، Client و مالکیت روی Inboundهای مشترک
+- مدیریت نماینده، سقف مشتری، سهمیه و ledger مستقل مصرف
+- Session، TOTP و API key
+- محدودیت IP با worker مستقل و دسترسی محدود nftables
+- Host metrics و Dashboard
+- Host، Outbound و Routing با فرم بومی و Advanced JSON
+- Backup/Restore
+- systemd installation
+- تست‌های Python/JavaScript و GitHub Actions روی Python 3.12 و 3.13
 
 ## وضعیت اعتبارسنجی
 
-GitHub Actions برای کامیت تکمیل سورس روی هر دو نسخهٔ Python 3.12 و 3.13 سبز است. این تست‌ها از Xray آزمایشی/test-double و فایروال شبیه‌سازی‌شده استفاده می‌کنند؛ بنابراین **موفقیت CI به معنی تأیید اتصال واقعی VPN یا اعمال واقعی nftables روی VPS نیست.**
+CI شامل Repository Hygiene، Runtime Self-Test نصب‌کننده، Smoke منوی مدیریتی، Smoke رابط English/Cyber، بررسی JavaScript و مجموعهٔ تست‌های ایزوله است. این تست‌ها از Xray test-double و firewall شبیه‌سازی‌شده استفاده می‌کنند؛ بنابراین سبز بودن CI به معنی تأیید نهایی ترافیک واقعی VPN روی هر VPS نیست.
 
-هنوز باید روی VPS آزمایشی جدا این موارد بررسی شوند: Xray واقعی، اتصال کلاینت، محدودیت IP واقعی، قطع و بازگشت سهمیه، نصب تمیز، گواهی، ریبوت سرویس و تست بار. چندنود، IP سراسری چندنودی، مهاجرت و بعضی قابلیت‌های پیشرفته نیز هنوز در مرحلهٔ توسعه‌اند.
+قبل از استفادهٔ production هنوز باید روی VPS واقعی بررسی شوند: اتصال کلاینت Xray، IP Guard واقعی، سهمیه، certificate renewal، reboot recovery و load/concurrency. Multi-node و global IP limit چندنودی نیز هنوز کامل نیستند.
 
 ## راهنماها
 
@@ -82,8 +97,8 @@ GitHub Actions برای کامیت تکمیل سورس روی هر دو نسخه
 - [وضعیت امکانات نسخهٔ ۰.۶](STATUS.fa.md)
 - [امنیت](SECURITY.md)
 - [اجزای ثالث و مجوزها](THIRD-PARTY-NOTICES.md)
-- [وضعیت دقیق انتشار](PUBLISH-STATUS.json)
+- [وضعیت انتشار](PUBLISH-STATUS.json)
 
-`SHA256SUMS` برای وضعیت فعلی مخزن بازتولید شده است و فایل خودش را شامل نمی‌شود.
+`SHA256SUMS` مربوط به snapshot انتشار قبلی است و پس از تثبیت release/tag بعدی باید دوباره تولید شود؛ برای وضعیت جاری شاخهٔ `main` به CI و commit SHA تکیه کنید.
 
-**رمز، توکن، کلید خصوصی، گواهی، دیتابیس واقعی یا لاگ بدون سانسور را در مخزن و Issue منتشر نکنید.**
+**Credential واقعی، private key، certificate، database یا log بدون سانسور را در مخزن و Issue منتشر نکنید.**
