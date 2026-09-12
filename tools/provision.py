@@ -1,11 +1,30 @@
 #!/usr/bin/env python3
 """Fresh independent Linux/systemd install. No other panel is read or modified."""
-import argparse, hashlib, json, os, pwd, re, shutil, subprocess, sys
+import argparse, hashlib, json, os, pwd, re, shutil, subprocess, sys, time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 APP=Path('/opt/dark-xray');CONF=Path('/etc/dark-xray');DATA=Path('/var/lib/dark-xray')
 
 def run(args):subprocess.run(list(map(str,args)),check=True)
+
+def core_is_usable(core:Path, version:str)->bool:
+    xray=core/'xray'
+    if not xray.is_file():return False
+    try:
+        cp=subprocess.run([str(xray),'version'],check=True,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=10)
+    except Exception:
+        return False
+    expected=version.lstrip('v')
+    return expected in (cp.stdout or '')
+
+def quarantine_core(core:Path)->Path:
+    stamp=time.strftime('%Y%m%d-%H%M%S')
+    target=core.with_name(core.name+f'.broken-{stamp}')
+    n=1
+    while target.exists():
+        target=core.with_name(core.name+f'.broken-{stamp}-{n}');n+=1
+    core.rename(target)
+    return target
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -49,10 +68,16 @@ def main():
     core=Path('/usr/local/lib/dark-xray')/a.core_version
     if core.parent.is_symlink():raise SystemExit('Core parent symlink refused')
     core.parent.mkdir(parents=True,exist_ok=True,mode=0o755);os.chmod(core.parent,0o755)
-    if a.core_archive:
-        run([py,APP/'tools/import-core.py','--archive',a.core_archive.resolve(),'--sha256',a.core_sha256,'--destination',core])
+    if core.exists() and core_is_usable(core,a.core_version):
+        print(f'Reusing verified existing Xray core: {core}')
     else:
-        run([py,APP/'tools/fetch-core.py','--version',a.core_version,'--destination',core])
+        if core.exists():
+            quarantined=quarantine_core(core)
+            print(f'Incomplete/mismatched Xray core moved aside: {quarantined}')
+        if a.core_archive:
+            run([py,APP/'tools/import-core.py','--archive',a.core_archive.resolve(),'--sha256',a.core_sha256,'--destination',core])
+        else:
+            run([py,APP/'tools/fetch-core.py','--version',a.core_version,'--destination',core])
     run([core/'xray','version'])
     CONF.mkdir(mode=0o750);os.chmod(CONF,0o750);os.chown(CONF,0,account.pw_gid)
     DATA.mkdir(mode=0o700);os.chown(DATA,account.pw_uid,account.pw_gid)
