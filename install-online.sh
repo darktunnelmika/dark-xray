@@ -21,8 +21,12 @@ banner(){
   printf "${C_DIM}Standalone panel • Own DB/API/UI • Xray-core engine • No Sanayi runtime${C_RESET}\n\n"
 }
 progress(){
-  local n="$1" text="$2" filled=$((n/5)) empty=$((20-filled))
+  local n="$1" text="$2"
+  local filled empty
+  filled=$((n/5))
+  empty=$((20-filled))
   (( filled > 20 )) && filled=20
+  (( empty < 0 )) && empty=0
   printf "${C_CYAN}[%03d/100]${C_RESET} [" "$n"
   repeat '█' "$filled"
   repeat '░' "$empty"
@@ -39,6 +43,18 @@ valid_domain(){ [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Z
 port_busy(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$1$"; }
 public_ipv4(){ curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}'; }
 ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '/^port /{print $2;exit}'; else echo 22; fi; }
+
+if [[ "${1:-}" == "--selftest" ]]; then
+  banner
+  progress 1 "Runtime helper self-test"
+  progress 100 "Progress renderer self-test"
+  valid_port 2087 || fail "valid_port rejected 2087"
+  ! valid_port 70000 || fail "valid_port accepted 70000"
+  valid_user dark || fail "valid_user rejected dark"
+  valid_domain panel.example.com || fail "valid_domain rejected panel.example.com"
+  ok "Installer runtime self-test passed"
+  exit 0
+fi
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root: sudo bash /tmp/dark-xray-install.sh"
 [[ -d /run/systemd/system ]] || fail "A Linux VPS with systemd is required."
