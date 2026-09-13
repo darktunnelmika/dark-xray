@@ -38,28 +38,33 @@ jobs:
           bash install-online.sh --selftest > /tmp/dark-installer-smoke.txt
           grep -q '\[100/100\]' /tmp/dark-installer-smoke.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
-          python -m py_compile tools/menu.py tools/update.py tools/provision.py backend/server.py backend/policy_auth.py backend/core.py backend/reality_scan.py
+          python -m py_compile tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py backend/server.py backend/auth.py backend/policy_auth.py backend/core.py backend/reality_scan.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
           grep -q 'MAIN MENU' /tmp/dark-menu-smoke.txt
-      - name: Cyber UI, Inbounds V3 and English-default smoke
+          grep -q 'settings-apply' darkxray
+      - name: Cyber UI, Inbounds V3, Settings V2 and English-default smoke
         run: |
           node --check web/i18n-en.js
-          node --check web/runtime-policy.js
           node --check web/inbounds-models.js
           node --check web/inbounds-v3.js
+          node --check web/settings-v2.js
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q '/assets/cyber.css' web/index.html
           grep -q '/assets/i18n-en.js' web/index.html
-          grep -q '/assets/runtime-policy.js' web/index.html
           grep -q '/assets/inbounds-v3.css' web/index.html
           grep -q '/assets/inbounds-models.js' web/index.html
           grep -q '/assets/inbounds-v3.js' web/index.html
+          grep -q '/assets/settings-v2.css' web/index.html
+          grep -q '/assets/settings-v2.js' web/index.html
+          ! grep -q '/assets/runtime-policy.js' web/index.html
           ! grep -q '/assets/inbounds-v2.js' web/index.html
           grep -q "target-search" web/inbounds-v3.js
           grep -q "realIpPreset" web/inbounds-v3.js
           grep -q "maxTimeDiff" web/inbounds-v3.js
           grep -q "@app.post('/api/reality/scan')" backend/server.py
+          grep -q "/api/runtime-config" backend/server.py
           grep -q "panelMeta must be an object" backend/core.py
+          grep -q "session_seconds" backend/auth.py
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/policy_auth.py
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/server.py
           grep -q 'PASSWORD_MIN_LENGTH=8' tools/provision.py
