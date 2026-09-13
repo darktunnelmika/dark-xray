@@ -1,0 +1,33 @@
+name: Patch Node Deploy Consistency once
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-node-deploy-consistency-once.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+      - name: Apply node deploy and consistency patch
+        run: python tools/patch_node_deploy_consistency_once.py
+      - name: Smoke final consistency
+        run: |
+          python -m py_compile backend/server.py backend/nodes.py backend/core.py
+          node --check web/nodes-v2.js
+          node --check web/live.js
+          grep -q "@app.post('/node/api/inbounds')" backend/server.py
+          grep -q 'def deploy_inbound' backend/nodes.py
+          grep -q 'v0.7 · STANDALONE' web/live.js
+          grep -q "'json','clash'" backend/core.py
+      - name: Commit application patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/nodes.py backend/server.py backend/core.py web/nodes-v2.js web/live.js tests/test_nodes_v2.py tests/test_subscription_v2.py
+          git commit -m 'Complete node inbound deployment and v0.7 UI consistency'
+          git push
