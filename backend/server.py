@@ -316,7 +316,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             p.actor.require('inbounds','read',p.actor.id)
             allowed=set(manager.profile(p.actor.id)['allowed']) if p.actor.permissions.get('inbounds.read')!='all' else None
         keys={'id','remark','protocol','port','listen','enable','tag','nodeId','up','down','total','expiryTime'}
-        return [{k:v for k,v in r.items() if k in keys} for r in rows if allowed is None or r['id'] in allowed]
+        out=[]
+        for r in rows:
+            if allowed is not None and r['id'] not in allowed:continue
+            item={k:v for k,v in r.items() if k in keys}
+            stream=r.get('streamSettings',{}) if isinstance(r.get('streamSettings',{}),dict) else {}
+            item['network']=stream.get('network','tcp')
+            item['security']=stream.get('security','none')
+            out.append(item)
+        return out
     @app.get('/api/unmanaged')
     def unmanaged(p:Principal=Depends(owner)):
         with store.lock:managed={r[0] for r in store.db.execute('SELECT email FROM managed_clients')}

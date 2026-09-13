@@ -253,7 +253,7 @@ class CoreEngine:
     @serialized
     def save_inbound(self,data:dict,i:int|None=None)->dict:
         self._write();v=copy.deepcopy(data)
-        allowed={'remark','protocol','listen','port','enable','tag','settings','streamSettings','sniffing','id'}
+        allowed={'remark','protocol','listen','port','enable','tag','settings','streamSettings','sniffing','panelMeta','id'}
         if not isinstance(v,dict) or set(v)-allowed: raise CoreError('Unknown inbound field')
         v.pop('id',None)
         if v.get('protocol') not in PROTOCOLS: raise CoreError('This standalone editor does not yet support that protocol')
@@ -269,6 +269,9 @@ class CoreEngine:
         for key in ('settings','streamSettings','sniffing'):
             v.setdefault(key,{});
             if not isinstance(v[key],dict):raise CoreError(key+' must be an object')
+        v.setdefault('panelMeta',{})
+        if not isinstance(v['panelMeta'],dict):raise CoreError('panelMeta must be an object')
+        if len(json.dumps(v['panelMeta']))>20000:raise CoreError('panelMeta too large')
         if v['settings'].get('clients') or v['settings'].get('accounts'):
             raise CoreError('Credentials must be managed through DARK clients, not hidden in inbound JSON')
         v['settings'].pop('clients',None);v['settings'].pop('accounts',None)
@@ -741,7 +744,11 @@ class CoreEngine:
                         pub=X25519PrivateKey.from_private_bytes(base64.urlsafe_b64decode(key+'='*((4-len(key)%4)%4))).public_key()
                         q['pbk']=base64.urlsafe_b64encode(pub.public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode().rstrip('=')
                     except (ValueError,TypeError):warnings.append('Invalid REALITY key for '+ib['tag']);continue
-                    q['sid']=next(iter(security.get('shortIds',[])),'');q['fp']=host.get('fingerprint','chrome')
+                    q['sid']=next(iter(security.get('shortIds',[])),'')
+                    meta=ib.get('panelMeta',{}).get('reality',{}) if isinstance(ib.get('panelMeta',{}),dict) else {}
+                    q['fp']=host.get('fingerprint') or meta.get('fingerprint','chrome')
+                    spider=meta.get('spiderX','')
+                    if spider:q['spx']=spider
                 if sec=='tls' and host.get('alpn'):q['alpn']=host['alpn']
                 if net in ('ws','httpupgrade','xhttp'):
                     ns=st.get(net+'Settings',{});q['path']=host.get('path',ns.get('path','/'))
