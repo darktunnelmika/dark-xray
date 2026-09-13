@@ -13,23 +13,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: true
-      - name: Apply Settings V2 migration
+      - name: Scope legacy hydration to Settings V2 sections
+        run: python tools/patch_settings_merge_scope.py
+      - name: Smoke patch
         run: |
-          python tools/apply_settings_v2_backend.py
-          python tools/patch_settings_v2_compat.py
-      - name: Smoke patched files
+          python -m py_compile backend/core.py
+          grep -q "name in {'panel','runtime','subscription','ipguard'}" backend/core.py
+      - name: Commit patch
         run: |
-          python -m py_compile backend/core.py backend/server.py backend/auth.py tools/menu.py tools/settings_apply.py
-          bash -n darkxray tests/run-tests.sh
-          node --check web/settings-v2.js
-          grep -q "/api/runtime-config" backend/server.py
-          grep -q "/assets/settings-v2.js" web/index.html
-          grep -q "session_seconds" backend/auth.py
-      - name: Commit application code
-        run: |
-          git checkout -- .github/workflows/ci.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/core.py backend/server.py backend/auth.py darkxray tools/menu.py web/live.js web/index.html tests/test_settings_v2.py tests/run-tests.sh
-          git commit -m 'Wire Settings V2 across web backend and terminal manager'
+          git add backend/core.py
+          git commit -m 'Scope legacy settings hydration to compatible sections'
           git push
