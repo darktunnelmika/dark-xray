@@ -1,0 +1,32 @@
+name: Patch Installer Hardening once
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-installer-hardening-once.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+      - name: Apply installer hardening
+        run: python tools/patch_installer_hardening_once.py
+      - name: Smoke installer and updater
+        run: |
+          bash -n install-online.sh darkxray
+          bash install-online.sh --selftest >/tmp/selftest
+          grep -q 'Installer runtime self-test passed' /tmp/selftest
+          python -m py_compile tools/update.py
+          grep -q 'DARK_XRAY_REF' install-online.sh
+          grep -q 'restoring previous DARK XRAY source' tools/update.py
+      - name: Commit application code
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add install-online.sh
+          git commit -m 'Pin installer source refs and harden Safe Update flow'
+          git push
