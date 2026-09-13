@@ -29,10 +29,33 @@
     "web_direction_default": "ltr",
     "cyber_ui_layer": "web/cyber.css",
     "language_layer": "web/i18n-en.js",
-    "browser_policy_bridge": "web/runtime-policy.js",
+    "browser_policy_bridge": null,
     "account_password_min_characters": 8,
     "account_password_max_characters": 512,
     "encrypted_backup_passphrase_min_characters": 12,
+    "inbounds_ui": "v3",
+    "reality_server_side_target_scan": true,
+    "settings_ui": "v2",
+    "settings_tabs": [
+      "general",
+      "security",
+      "network",
+      "domain_tls",
+      "subscription",
+      "ip_guard",
+      "appearance",
+      "system"
+    ],
+    "root_runtime_settings_staging": true,
+    "root_runtime_apply_command": "sudo darkxray settings-apply",
+    "session_lifetime_policy_applies_to_cookie_and_database_session": true,
+    "subscription_runtime_settings": [
+      "enabled",
+      "default_format_raw_or_base64",
+      "profile_update_interval",
+      "remark_template",
+      "support_url"
+    ],
     "online_installer": "install-online.sh",
     "installer_progress_scale": "001-100",
     "installer_states": ["clean", "partial", "installed"],
@@ -50,9 +73,12 @@
       "repository_hygiene",
       "installer_runtime_selftest",
       "terminal_manager_smoke",
-      "cyber_ui_and_english_default_smoke",
+      "inbounds_v3_smoke",
+      "settings_v2_smoke",
+      "reality_scanner_safety_tests",
       "javascript_syntax",
       "8_character_password_policy",
+      "settings_v2_backend_tests",
       "isolated_xray_test_double_suite",
       "simulated_firewall_suite"
     ]
@@ -65,5 +91,5 @@
     "production_load_verified": false,
     "global_multi_node_ip_limit_complete": false
   },
-  "checksum_note": "SHA256SUMS belongs to the previous publication snapshot and must be regenerated for the next stabilized release/tag; current main is validated by CI and exact commit SHA."
+  "checksum_note": "SHA256SUMS is regenerated only after the stabilized main snapshot is finalized; production readiness still requires live VPS validation."
 }
