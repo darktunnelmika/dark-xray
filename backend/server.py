@@ -30,6 +30,7 @@ from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
+from nodes import NodeRegistry,token_digest
 
 VERSION='0.6.0-standalone-lab'
 ROOT=Path(__file__).resolve().parents[1]
@@ -119,17 +120,32 @@ class RealityProbe(Model):
     target:str=Field(min_length=1,max_length=300)
 class RealitySearch(Model):
     targets:list[str]=Field(default_factory=list,max_length=20)
+class NodeCreate(Model):
+    id:str=Field(min_length=1,max_length=128)
+    name:str=Field(min_length=1,max_length=128)
+    origin:str=Field(min_length=8,max_length=500)
+    token:str=Field(min_length=40,max_length=256)
+    enabled:bool=True
+class NodePatch(Model):
+    name:str=Field(min_length=1,max_length=128)
+    origin:str=Field(min_length=8,max_length=500)
+    token:str|None=Field(default=None,min_length=40,max_length=256)
+    keep_token:bool=False
+    enabled:bool=True
+class NodeTokenCreate(Model):
+    name:str=Field(min_length=1,max_length=64)
+    days:StrictInt=Field(default=365,ge=1,le=3650)
 
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
-    config=manager.engine.config;store=manager.store;engine=manager.engine
+    config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if background:manager.start()
         yield
         manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
-    app.state.manager=manager;app.state.auth=auth;app.state.engine=engine
+    app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
     public=urlsplit(config.public_origin)
 
     @app.middleware('http')
@@ -384,6 +400,77 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.own_row(p.actor,email,'ip');writable()
         if device_id<1:raise HTTPException(400,'Invalid device ID')
         return {'engine':engine.clear_devices(email,device_id)}
+
+    def node_agent(request:Request):
+        header=request.headers.get('authorization','')
+        if not header.startswith('Bearer dkn_') or len(header)>300:raise HTTPException(401,'DARK node token required')
+        token=header[7:];now=time.time()
+        with store.transaction() as db:
+            row=db.execute('SELECT * FROM node_agent_tokens WHERE digest=? AND enabled=1 AND expires_at>?',(token_digest(token),now)).fetchone()
+            if not row:raise HTTPException(401,'Node token expired or revoked')
+            db.execute('UPDATE node_agent_tokens SET last_used=? WHERE id=?',(now,row['id']))
+        return row['id']
+
+    @app.get('/api/node-agent/tokens')
+    def node_tokens(p:Principal=Depends(owner)):
+        with store.lock:return [dict(r) for r in store.db.execute('SELECT id,name,enabled,expires_at,created_at,last_used FROM node_agent_tokens ORDER BY created_at DESC')]
+    @app.post('/api/node-agent/tokens')
+    def node_token_create(body:NodeTokenCreate,p:Principal=Depends(owner)):
+        token='dkn_'+secrets.token_urlsafe(40);kid=secrets.token_hex(10);now=time.time()
+        with store.transaction() as db:db.execute('INSERT INTO node_agent_tokens(id,name,digest,enabled,expires_at,created_at,last_used) VALUES(?,?,?,1,?,?,0)',(kid,body.name,token_digest(token),now+body.days*86400,now))
+        manager.audit(p.actor,p.actor.id,'node_token.create',kid)
+        return {'id':kid,'token':token,'displayed_once':True,'expires_at':now+body.days*86400}
+    @app.delete('/api/node-agent/tokens/{token_id}')
+    def node_token_revoke(token_id:str,p:Principal=Depends(owner)):
+        with store.transaction() as db:
+            cur=db.execute('UPDATE node_agent_tokens SET enabled=0 WHERE id=?',(token_id,))
+            if not cur.rowcount:raise HTTPException(404,'Node token not found')
+        manager.audit(p.actor,p.actor.id,'node_token.revoke',token_id);return {'revoked':True}
+
+    @app.get('/node/api/health')
+    def node_health(token_id:str=Depends(node_agent)):
+        system=engine.system();runtime=engine.runtime_state()
+        with store.lock:managed=store.db.execute("SELECT COUNT(*) FROM managed_clients WHERE state!='deleted'").fetchone()[0]
+        return {'service':'DARK XRAY NODE','version':VERSION,'token_id':token_id,
+                'core':{'state':runtime['state'],'version':runtime['version'],'dirty':runtime['dirty'],'last_error':runtime['last_error']},
+                'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),'uptime':system['uptime']},
+                'inbounds':len(engine.inbounds()),'managed_clients':managed,'writes_enabled':config.writes_enabled}
+    @app.get('/node/api/inbounds')
+    def node_inbounds(token_id:str=Depends(node_agent)):
+        keys={'id','remark','protocol','port','listen','enable','tag'};out=[]
+        for r in engine.inbounds():
+            item={k:v for k,v in r.items() if k in keys};st=r.get('streamSettings',{}) if isinstance(r.get('streamSettings'),dict) else {}
+            item['network']=st.get('network','tcp');item['security']=st.get('security','none');out.append(item)
+        return out
+    @app.post('/node/api/core/{action}')
+    def node_core(action:str,token_id:str=Depends(node_agent)):
+        writable()
+        if action not in {'validate','restart','start','stop'}:raise HTTPException(404,'Unknown node core action')
+        return {'engine':engine.command(action),'node_agent':True}
+
+    @app.get('/api/nodes')
+    def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
+    @app.post('/api/nodes')
+    def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
+        writable();result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled);manager.audit(p.actor,p.actor.id,'node.create',body.id);return result
+    @app.patch('/api/nodes/{node_id}')
+    def remote_node_edit(node_id:str,body:NodePatch,p:Principal=Depends(owner)):
+        writable();token=body.token
+        if not token:
+            if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
+            token=nodes.get(node_id,secret=True)['token']
+        result=nodes.put(node_id,body.name,body.origin,token,body.enabled);manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
+    @app.delete('/api/nodes/{node_id}')
+    def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
+        writable();result=nodes.delete(node_id);manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
+    @app.post('/api/nodes/{node_id}/probe')
+    def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
+        result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
+    @app.get('/api/nodes/{node_id}/inbounds')
+    def remote_node_inbounds(node_id:str,p:Principal=Depends(owner)):return nodes.remote_inbounds(node_id)
+    @app.post('/api/nodes/{node_id}/core/{action}')
+    def remote_node_core(node_id:str,action:str,p:Principal=Depends(owner)):
+        writable();result=nodes.remote_core(node_id,action);manager.audit(p.actor,p.actor.id,'node.core.'+action,node_id);return result
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
