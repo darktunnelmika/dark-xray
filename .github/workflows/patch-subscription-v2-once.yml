@@ -1,0 +1,32 @@
+name: Patch Subscription V2 once
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-subscription-v2-once.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+      - name: Apply Subscription V2 migration
+        run: python tools/patch_subscription_v2_once.py
+      - name: Smoke Subscription V2
+        run: |
+          python -m py_compile backend/core.py backend/server.py
+          node --check web/settings-v2.js
+          bash -n tests/run-tests.sh
+          grep -q "default_format.*clash" backend/core.py
+          grep -q "application/yaml" backend/core.py
+          grep -q "mihomo" backend/server.py
+      - name: Commit application code
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/core.py backend/server.py web/settings-v2.js tests/run-tests.sh tests/test_subscription_v2.py
+          git commit -m 'Build Subscription V2 with JSON Clash and user-agent detection'
+          git push
