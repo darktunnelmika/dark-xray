@@ -842,7 +842,7 @@ class CoreEngine:
                     user=base64.urlsafe_b64encode((method+':'+c['password']).encode()).decode().rstrip('=');uri='ss://'+user+'@'+hp+'#'+quote(label)
                 else:warnings.append('No subscription generator for '+proto);continue
                 links.append({'inboundId':i,'remark':label,'uri':uri})
-        return {'links':links,'warnings':warnings,'formats':['raw','base64']}
+        return {'links':links,'warnings':warnings,'formats':['raw','base64','json','clash']}
 
     @staticmethod
     def _clash_proxy(uri:str,name:str)->dict:

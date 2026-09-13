@@ -442,6 +442,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             item={k:v for k,v in r.items() if k in keys};st=r.get('streamSettings',{}) if isinstance(r.get('streamSettings'),dict) else {}
             item['network']=st.get('network','tcp');item['security']=st.get('security','none');out.append(item)
         return out
+    @app.post('/node/api/inbounds')
+    def node_inbound_add(body:dict,token_id:str=Depends(node_agent)):
+        writable()
+        # Agent tokens can provision validated data-plane inbounds, but they do not
+        # mutate reseller ownership/client records. Core apply remains a separate action.
+        result=engine.save_inbound(body)
+        return result
     @app.post('/node/api/core/{action}')
     def node_core(action:str,token_id:str=Depends(node_agent)):
         writable()
@@ -468,6 +475,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
     @app.get('/api/nodes/{node_id}/inbounds')
     def remote_node_inbounds(node_id:str,p:Principal=Depends(owner)):return nodes.remote_inbounds(node_id)
+    @app.post('/api/nodes/{node_id}/inbounds')
+    def remote_node_deploy_inbound(node_id:str,body:dict,p:Principal=Depends(owner)):
+        writable();result=nodes.deploy_inbound(node_id,body)
+        manager.audit(p.actor,p.actor.id,'node.inbound.deploy',node_id,str(result['inbound'].get('id','')))
+        return result
     @app.post('/api/nodes/{node_id}/core/{action}')
     def remote_node_core(node_id:str,action:str,p:Principal=Depends(owner)):
         writable();result=nodes.remote_core(node_id,action);manager.audit(p.actor,p.actor.id,'node.core.'+action,node_id);return result

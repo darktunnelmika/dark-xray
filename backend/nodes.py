@@ -151,3 +151,9 @@ class NodeRegistry:
         doc,ms=self._request(node_id,'/node/api/inbounds')
         if not isinstance(doc,list):raise PolicyError('Invalid node inbound response')
         return {'latency_ms':ms,'items':doc}
+
+    def deploy_inbound(self,node_id:str,payload:dict)->dict:
+        if not isinstance(payload,dict):raise PolicyError('Inbound payload must be an object')
+        doc,ms=self._request(node_id,'/node/api/inbounds','POST',payload,12.0)
+        if not isinstance(doc,dict) or type(doc.get('id')) is not int:raise PolicyError('Invalid node inbound deploy response')
+        return {'latency_ms':ms,'inbound':doc,'applied':False,'next':'validate/restart remote Xray'}

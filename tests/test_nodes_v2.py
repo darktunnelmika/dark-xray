@@ -31,3 +31,11 @@ def test_central_node_token_encrypted_and_probe(env,monkeypatch):
 def test_node_url_rejects_private_resolution(env,monkeypatch):
  _,_,_,c=env;monkeypatch.setattr(nodes_mod.socket,'getaddrinfo',lambda *a,**k:[(2,1,6,'',('127.0.0.1',443))])
  r=c.post('/api/nodes',json={'id':'bad','name':'Bad','origin':'https://bad.example','token':'dkn_'+('B'*60),'enabled':True});assert r.status_code==400
+
+
+def test_agent_can_stage_inbound_without_copying_clients(env):
+ store,eng,_,c=env;r=c.post('/api/node-agent/tokens',json={'name':'central-stage','days':10});token=r.json()['token']
+ ib={"remark":"REMOTE","listen":"127.0.0.1","port":19831,"protocol":"vless","enable":True,"tag":"remote-stage","settings":{"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"},"sniffing":{}}
+ out=c.post('/node/api/inbounds',json=ib,headers={'authorization':'Bearer '+token});assert out.status_code==200,out.text
+ assert out.json()['id']==1 and eng.inbound(1)['tag']=='remote-stage'
+ assert eng.runtime_state()['dirty'] is True

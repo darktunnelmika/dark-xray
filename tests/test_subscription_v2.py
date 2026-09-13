@@ -17,6 +17,7 @@ def env(tmp_path):
 def test_formats_and_headers(env):
  c,url=env;s=c.get("/api/settings/subscription").json()["value"];s.update(default_format="raw",auto_detect=True,profile_title="DARK TEST",profile_url="https://profile.test",announce="hello");assert c.put("/api/settings/subscription",json={"value":s}).status_code==200
  raw=c.get(url);assert raw.status_code==200 and raw.content.startswith(b"vless://") and raw.headers["profile-title"]=="DARK TEST"
+ links=c.get('/api/clients/sub-v2/links').json()['engine'];assert set(links['formats'])=={'raw','base64','json','clash'}
  b64=c.get(url+"?format=base64");assert base64.b64decode(b64.content).startswith(b"vless://")
  js=c.get(url+"?format=json");doc=js.json();assert doc["title"]=="DARK TEST" and doc["links"][0]["uri"].startswith("vless://")
  clash=c.get(url+"?format=clash");assert clash.status_code==200 and 'DARK AUTO' in clash.text and 'vless' in clash.text
