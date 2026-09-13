@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 REPO="https://github.com/darktunnelmika/dark-xray.git"
-BRANCH="main"
+SOURCE_REF="${DARK_XRAY_REF:-main}"
 TMP=""
 C_RESET='\033[0m'; C_CYAN='\033[38;5;51m'; C_BLUE='\033[38;5;39m'; C_PURPLE='\033[38;5;141m'; C_GREEN='\033[38;5;46m'; C_YELLOW='\033[38;5;226m'; C_RED='\033[38;5;196m'; C_DIM='\033[2m'
 
@@ -34,6 +34,17 @@ valid_domain(){ [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Z
 port_busy(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$1$"; }
 public_ipv4(){ curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}'; }
 ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '/^port /{print $2;exit}'; else echo 22; fi; }
+valid_source_ref(){ [[ -n "$1" && ${#1} -le 200 && "$1" != -* && "$1" =~ ^[A-Za-z0-9._/@+-]+$ ]]; }
+fetch_source(){
+  local dest="$1" ref="$SOURCE_REF"
+  valid_source_ref "$ref" || fail "Invalid DARK_XRAY_REF"
+  mkdir -p "$dest"
+  git -C "$dest" init -q
+  git -C "$dest" remote add origin "$REPO"
+  git -C "$dest" fetch -q --depth 1 origin "$ref" || fail "GitHub fetch failed for ref: $ref"
+  git -C "$dest" checkout -q --detach FETCH_HEAD
+  git -C "$dest" rev-parse HEAD
+}
 
 state_from_flags(){
   local app="$1" conf="$2" data="$3" wrapper="$4" unit="$5"
@@ -78,6 +89,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
   banner; progress 1 "Runtime helper self-test"; progress 100 "Progress renderer self-test"
   valid_port 2087 || fail "valid_port rejected 2087"; ! valid_port 70000 || fail "valid_port accepted 70000"
   valid_user dark || fail "valid_user rejected dark"; valid_domain panel.example.com || fail "valid_domain rejected panel.example.com"
+  valid_source_ref main || fail "valid_source_ref rejected main"; valid_source_ref 0123456789abcdef || fail "valid_source_ref rejected commit"; ! valid_source_ref --upload-pack=x || fail "valid_source_ref accepted option injection"
   [[ "$(state_from_flags 0 0 0 0 0)" == clean ]] || fail "clean-state classifier failed"
   [[ "$(state_from_flags 1 0 1 0 0)" == partial ]] || fail "partial-state classifier failed"
   [[ "$(state_from_flags 1 1 1 1 1)" == installed ]] || fail "installed-state classifier failed"
@@ -99,7 +111,7 @@ if [[ "$STATE" == installed ]]; then
       progress 5 "Installing update prerequisites"; export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq; apt-get install -y -q git ca-certificates python3 >/dev/null
       TMP="$(mktemp -d /tmp/dark-xray-update.XXXXXX)"
-      progress 15 "Downloading verified project source"; git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
+      progress 15 "Downloading pinned project source"; FETCHED_SHA="$(fetch_source "$TMP/src")"; printf '  Source commit: %s\n' "$FETCHED_SHA"
       progress 35 "Creating rollback snapshot and applying safe update"
       python3 "$TMP/src/tools/update.py" --source "$TMP/src" --non-interactive || fail "Update failed; see messages above"
       progress 100 "Update complete"; ok "Run: darkxray"; exit 0 ;;
@@ -140,7 +152,7 @@ fi
 echo; printf "${C_PURPLE}INSTALL PLAN${C_RESET}\n"
 printf "  Owner        : %s\n  Panel port   : %s\n  Proxy address: %s\n  Xray core    : %s\n" "$OWNER" "$PANEL_PORT" "$PUBLIC_ADDRESS" "$CORE_VERSION"
 [[ -n "$DOMAIN" ]] && printf "  Domain       : %s\n  HTTPS URL    : https://%s:%s\n" "$DOMAIN" "$DOMAIN" "$PANEL_PORT"
-printf "  SSH port     : %s\n" "$DETECTED_SSH"
+printf "  SSH port     : %s\n  Source ref   : %s\n" "$DETECTED_SSH" "$SOURCE_REF"
 yesno "Start installation?" y || exit 0
 
 export DEBIAN_FRONTEND=noninteractive PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -150,7 +162,7 @@ apt-get install -y -q git curl ca-certificates python3 python3-venv unzip openss
 [[ "$MODE" == 1 ]] && apt-get install -y -q certbot >/dev/null
 
 TMP="$(mktemp -d /tmp/dark-xray-install.XXXXXX)"
-progress 25 "Cloning DARK XRAY from GitHub"; git clone --depth 1 --branch "$BRANCH" "$REPO" "$TMP/src" >/dev/null 2>&1 || fail "GitHub clone failed"
+progress 25 "Fetching DARK XRAY source"; FETCHED_SHA="$(fetch_source "$TMP/src")"; printf '  Source commit: %s\n' "$FETCHED_SHA"
 cd "$TMP/src"
 progress 35 "Checking source before provisioning"; python3 tools/repo-check.py >/dev/null || fail "Repository hygiene check failed"
 progress 45 "Provisioning isolated service account and application"
