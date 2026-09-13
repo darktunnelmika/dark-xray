@@ -44,7 +44,7 @@ def parse_target(value: str) -> ParsedTarget:
     value = (value or '').strip()
     if not value or len(value) > 300:
         raise RealityScanError('Target must be a host or host:port')
-    if any(ch in value for ch in '/?#@ \r\n\t'):
+    if any(ch in value for ch in '/?#@') or any(ch.isspace() for ch in value):
         raise RealityScanError('Target must not contain a URL path, credentials or whitespace')
     if '/' in value:
         raise RealityScanError('CIDR/range scanning is not supported')
@@ -65,6 +65,7 @@ def parse_target(value: str) -> ParsedTarget:
         if maybe_port.isdigit():
             host, port = maybe_host, int(maybe_port)
     elif value.count(':') > 1:
+        # Bare IPv6 literal without an explicit port.
         host = value
     host = host.rstrip('.').strip().lower()
     if not host or len(host) > 253 or not 1 <= port <= 65535:
@@ -136,6 +137,7 @@ def _scan_address(target: ParsedTarget, address: str, timeout: float) -> dict:
                 'certIssuer': _flatten_name(cert.get('issuer')),
                 'serverNames': sans,
                 'ok': True,
+                # Python's stdlib TLS API does not expose the negotiated ECDHE group.
                 'x25519Verified': None,
                 'recommended': tls13 and h2,
             }
@@ -188,6 +190,7 @@ def normalize_candidates(values: list[str] | None) -> list[str]:
         item = (item or '').strip()
         if not item:
             continue
+        # Parse now so malformed/private-looking URLs never enter the worker pool.
         parse_target(item)
         if item not in out:
             out.append(item)
