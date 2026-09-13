@@ -76,8 +76,30 @@ class AdminPatch(Model):
 class ResolveReset(Model):confirmation:str=Field(min_length=1,max_length=128)
 class Action(Model): action:Literal['enable','disable','reset','delete']
 class Bulk(Model):
-    emails:list[str]=Field(min_length=1,max_length=100)
+    emails:list[str]=Field(min_length=1,max_length=500)
     action:Literal['enable','disable','reset','delete']
+class GroupBody(Model):
+    owner:str=Field(min_length=1,max_length=128)
+    name:str=Field(min_length=1,max_length=64)
+    color:str=Field(default='',max_length=16)
+class BulkCreate(Model):
+    owner:str=Field(min_length=1,max_length=128)
+    prefix:str=Field(default='',max_length=64)
+    postfix:str=Field(default='',max_length=64)
+    first:StrictInt=Field(default=1,ge=0,le=999999)
+    quantity:StrictInt=Field(ge=1,le=500)
+    inboundIds:list[StrictInt]=Field(min_length=1,max_length=256)
+    client:dict[str,Any]=Field(default_factory=dict)
+class BulkAdjust(Model):
+    emails:list[str]=Field(min_length=1,max_length=500)
+    add_bytes:int=Field(default=0,ge=-((1<<63)-1),le=(1<<63)-1)
+    add_days:StrictInt=Field(default=0,ge=-36500,le=36500)
+    group:str|None=Field(default=None,max_length=64)
+    limit_hwid:StrictInt|None=Field(default=None,ge=0,le=1000)
+class BulkInbounds(Model):
+    emails:list[str]=Field(min_length=1,max_length=500)
+    inboundIds:list[StrictInt]=Field(min_length=1,max_length=256)
+    mode:Literal['attach','detach']
 class Credit(Model):
     amount:StrictInt=Field(ge=1,le=MAX_INT)
     event_id:str=Field(min_length=16,max_length=256)
@@ -267,6 +289,58 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             try:out.append({'email':email,'result':manager.action(p.actor,email,body.action)})
             except (PolicyError,CoreError) as e:out.append({'email':email,'error':str(e)[:300]})
         return out
+    @app.get('/api/groups')
+    def groups(p:Principal=Depends(current)):
+        return manager.groups(p.actor)
+    @app.post('/api/groups')
+    def group_put(body:GroupBody,p:Principal=Depends(current)):
+        writable();return manager.group_put(p.actor,body.owner,body.name,body.color)
+    @app.delete('/api/groups/{group_owner}/{group_name}')
+    def group_delete(group_owner:str,group_name:str,p:Principal=Depends(current)):
+        writable();return manager.group_delete(p.actor,group_owner,group_name)
+
+    @app.post('/api/clients/bulk-create')
+    def bulk_create(body:BulkCreate,p:Principal=Depends(current)):
+        writable();out=[]
+        for offset in range(body.quantity):
+            email=f'{body.prefix}{body.first+offset}{body.postfix}'.strip().lower()
+            payload=dict(body.client);payload['email']=email
+            try:out.append({'email':email,'result':manager.create(p.actor,body.owner,payload,body.inboundIds)})
+            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
+        return {'requested':body.quantity,'created':sum('result' in x for x in out),'items':out}
+
+    @app.post('/api/clients/bulk-adjust')
+    def bulk_adjust(body:BulkAdjust,p:Principal=Depends(current)):
+        writable();out=[];now_ms=int(time.time()*1000)
+        for email in dict.fromkeys(body.emails):
+            try:
+                d=manager.detail(p.actor,email,credentials=False);c=d['client'];patch={}
+                if body.add_bytes:
+                    current=int(c.get('totalGB',0))
+                    if current==0:raise PolicyError('Unlimited quota is unchanged by add-bytes; set a quota explicitly per client')
+                    patch['totalGB']=max(0,min((1<<63)-1,current+body.add_bytes))
+                if body.add_days:
+                    current=int(c.get('expiryTime',0));base=current if current>now_ms else now_ms
+                    patch['expiryTime']=max(0,base+body.add_days*86400000)
+                if body.group is not None:patch['group']=body.group
+                if body.limit_hwid is not None:patch['limitHwid']=body.limit_hwid
+                if not patch:raise PolicyError('No bulk adjustment requested')
+                out.append({'email':email,'result':manager.update(p.actor,email,patch)})
+            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
+        return {'changed':sum('result' in x for x in out),'items':out}
+
+    @app.post('/api/clients/bulk-inbounds')
+    def bulk_inbounds(body:BulkInbounds,p:Principal=Depends(current)):
+        writable();out=[]
+        for email in dict.fromkeys(body.emails):
+            try:
+                manager.own_row(p.actor,email,'attach');d=manager.detail(p.actor,email,credentials=False);current=set(d['inboundIds']);change=set(body.inboundIds)
+                ids=sorted(current|change) if body.mode=='attach' else sorted(current-change)
+                if not ids:raise PolicyError('A client must retain at least one inbound')
+                out.append({'email':email,'result':manager.update(p.actor,email,{},ids)})
+            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
+        return {'changed':sum('result' in x for x in out),'items':out}
+
     @app.get('/api/clients/{email}')
     def client(email:str,p:Principal=Depends(current)):
         return manager.detail(p.actor,email,credentials=True)

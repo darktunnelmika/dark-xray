@@ -58,6 +58,10 @@ class Manager:
             CREATE TABLE IF NOT EXISTS live_orders(
               id TEXT PRIMARY KEY,owner TEXT NOT NULL,email TEXT NOT NULL,kind TEXT NOT NULL,
               price INTEGER NOT NULL,at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS client_groups(
+              owner TEXT NOT NULL,name TEXT NOT NULL,color TEXT NOT NULL DEFAULT '',
+              created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,name));
+            CREATE INDEX IF NOT EXISTS client_groups_owner ON client_groups(owner,name);
             ''')
 
     def audit(self, actor: Actor, owner: str, action: str, target: str, detail: str = ''):
@@ -103,6 +107,58 @@ class Manager:
             self.audit(actor,owner,'owner.update',owner)
             # Reconcile synchronously when possible, otherwise the worker retries.
             self.tick(suppress=True)
+
+    @staticmethod
+    def _group_name(name: str) -> str:
+        if not isinstance(name,str):raise PolicyError('Invalid group name')
+        name=name.strip()
+        if not 1<=len(name)<=64 or any(ord(ch)<32 or ch=='/' or ord(ch)==92 for ch in name):raise PolicyError('Invalid group name')
+        return name
+
+    def groups(self,actor: Actor) -> list[dict]:
+        with self.store.lock:
+            rows=[dict(r) for r in self.store.db.execute('SELECT * FROM client_groups ORDER BY owner,name')]
+            clients=[dict(r) for r in self.store.db.execute("SELECT c.id,c.owner,c.used_bytes,m.desired FROM clients c JOIN managed_clients m ON m.email=c.id WHERE m.state!='deleted'")]
+        visible=[r for r in rows if actor.can('clients','read',r['owner'])]
+        index={(r['owner'],r['name']):r for r in visible}
+        for c in clients:
+            if not actor.can('clients','read',c['owner']):continue
+            try:name=json.loads(c['desired']).get('group','').strip()
+            except Exception:name=''
+            if name and (c['owner'],name) not in index:
+                row={'owner':c['owner'],'name':name,'color':'','created_at':0,'updated_at':0,'implicit':True}
+                visible.append(row);index[(c['owner'],name)]=row
+        for r in visible:
+            members=[]
+            for c in clients:
+                if c['owner']!=r['owner']:continue
+                try:g=json.loads(c['desired']).get('group','').strip()
+                except Exception:g=''
+                if g==r['name']:members.append(c)
+            r['client_count']=len(members);r['used_bytes']=sum(int(x['used_bytes']) for x in members)
+            r.setdefault('implicit',False)
+        return sorted(visible,key=lambda x:(x['owner'],x['name'].lower()))
+
+    def group_put(self,actor: Actor,owner: str,name: str,color: str='') -> dict:
+        actor.require('clients','edit',owner);name=self._group_name(name)
+        if not isinstance(color,str) or color and not re.fullmatch(r'#[0-9A-Fa-f]{6}',color):raise PolicyError('Invalid group color')
+        now=time.time()
+        with self.store.transaction() as db:
+            if not db.execute('SELECT 1 FROM owner_profiles WHERE id=?',(owner,)).fetchone():raise PolicyError('Unknown owner')
+            db.execute('INSERT INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(owner,name) DO UPDATE SET color=excluded.color,updated_at=excluded.updated_at',(owner,name,color,now,now))
+        self.audit(actor,owner,'group.save',name)
+        return {'owner':owner,'name':name,'color':color}
+
+    def group_delete(self,actor: Actor,owner: str,name: str) -> dict:
+        actor.require('clients','edit',owner);name=self._group_name(name)
+        with self.store.lock:
+            clients=self.store.db.execute("SELECT desired FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'",(owner,)).fetchall()
+        for r in clients:
+            try:g=json.loads(r[0]).get('group','').strip()
+            except Exception:g=''
+            if g==name:raise PolicyError('Move clients out of the group before deleting it')
+        with self.store.transaction() as db:db.execute('DELETE FROM client_groups WHERE owner=? AND name=?',(owner,name))
+        self.audit(actor,owner,'group.delete',name);return {'deleted':True}
 
     def check_inbounds(self, actor: Actor, owner: str, ids: list[int]):
         if not ids or len(ids)>256 or any(type(i)is not int or i<1 for i in ids):
@@ -158,6 +214,10 @@ class Manager:
             data['password']=data.get('password') or secrets.token_urlsafe(24)
             data['auth']=data.get('auth') or secrets.token_urlsafe(24)
             data['subId']=secrets.token_hex(16)  # never accept a reseller's public credential
+            if data.get('group'):
+                group=self._group_name(data['group']);data['group']=group
+                now=time.time()
+                with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
             for k,v in {'flow':'','security':'auto','limitIp':1,'limitHwid':0,'totalGB':0,
                         'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0}.items():data.setdefault(k,v)
             ceiling=self.profile(owner)['max_client_ips']
@@ -213,6 +273,10 @@ class Manager:
             if ids is None:ids=json.loads(meta['inbounds'])
             self.check_inbounds(actor,row['owner'],ids)
             desired.update(patch);desired['email']=email
+            if desired.get('group'):
+                group=self._group_name(desired['group']);desired['group']=group
+                now=time.time()
+                with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(row['owner'],group,'',now,now))
             cap=self.profile(row['owner'])['max_client_ips']
             if cap and (desired.get('limitIp',0)==0 or desired['limitIp']>cap):raise PolicyError('IP cap exceeds owner policy')
             changes={}
