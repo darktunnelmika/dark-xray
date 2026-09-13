@@ -445,6 +445,38 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         all_=p.actor.role=='owner' or p.actor.permissions.get(resource+'.read')=='all'
         with store.lock:return [dict(r) for r in store.db.execute('SELECT * FROM '+('money_ledger' if kind=='money' else 'traffic_ledger')+('' if all_ else ' WHERE owner=?')+' ORDER BY rowid DESC LIMIT 250',() if all_ else (p.actor.id,))]
 
+    @app.get('/api/logs/{kind}')
+    def logs(kind:Literal['process','error','access'],limit:int=400,p:Principal=Depends(owner)):
+        if not 1<=limit<=2000:raise HTTPException(400,'Log line limit must be 1..2000')
+        names={'process':'process.log','error':'error.log','access':'access.log'}
+        path=engine.runtime/names[kind]
+        if path.is_symlink():raise HTTPException(409,'Runtime log symlink refused')
+        if not path.exists():return {'kind':kind,'exists':False,'lines':[]}
+        try:
+            size=path.stat().st_size
+            # Read at most the newest 2 MiB; logs are operational surfaces, not bulk download endpoints.
+            with path.open('rb') as f:
+                if size>2*1024*1024:f.seek(size-2*1024*1024)
+                raw=f.read(2*1024*1024)
+            text=raw.decode('utf-8',errors='replace')
+            lines=text.splitlines()[-limit:]
+            return {'kind':kind,'exists':True,'size':size,'lines':lines}
+        except OSError as ex:raise HTTPException(503,'Cannot read local runtime log: '+type(ex).__name__)
+
+    @app.get('/api/backup/status')
+    def backup_status(p:Principal=Depends(owner)):
+        try:
+            dbpath=Path(store.path) if store.path!=':memory:' else None
+            database_bytes=dbpath.stat().st_size if dbpath and dbpath.is_file() and not dbpath.is_symlink() else 0
+        except OSError:database_bytes=0
+        with store.lock:
+            managed=store.db.execute("SELECT COUNT(*) FROM managed_clients WHERE state!='deleted'").fetchone()[0]
+            audits=store.db.execute('SELECT COUNT(*) FROM live_audit').fetchone()[0]
+            groups=store.db.execute('SELECT COUNT(*) FROM client_groups').fetchone()[0] if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_groups'").fetchone() else 0
+        return {'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
+                'database_download':'/api/backup','full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
+                'restore_isolated':True}
+
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
         import tempfile
