@@ -102,3 +102,12 @@ CI شامل Repository Hygiene، Runtime Self-Test نصب‌کننده، Smoke �
 `SHA256SUMS` مربوط به snapshot انتشار قبلی است و پس از تثبیت release/tag بعدی باید دوباره تولید شود؛ برای وضعیت جاری شاخهٔ `main` به CI و commit SHA تکیه کنید.
 
 **Credential واقعی، private key، certificate، database یا log بدون سانسور را در مخزن و Issue منتشر نکنید.**
+
+
+## DARK XRAY 0.7 Lab workspace map
+
+The current standalone LAB line includes structured **Settings V2**, **Clients + Groups V2**, **Subscription V2** (Raw/Base64/DARK JSON/Clash-Mihomo), **Xray Control V2** (DNS, Outbounds, Routing, Balancers, Observatory), **Hosts V2**, **Operations V2** (real dashboard/logs/backup status), **Nodes V2** with dedicated HTTPS agent tokens, and **Inbounds V3** with the REALITY workflow.
+
+Runtime-sensitive panel changes are staged first and require the root-owned `darkxray settings-apply` boundary. Safe Update validates candidate source before service interruption and restores the previous source snapshot if activation fails. The online installer accepts `DARK_XRAY_REF` to pin a branch, tag, or commit.
+
+This repository is still a **LAB build**. CI uses isolated Xray/firewall doubles. Real VPS client connectivity, certificate renewal across providers, reboot recovery, nftables packet enforcement, production load, and distributed multi-node customer/traffic convergence require live validation before any production-ready claim.

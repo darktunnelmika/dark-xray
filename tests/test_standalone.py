@@ -116,7 +116,7 @@ def test_subscription_is_generated_locally(env):
 
 def test_unknown_sub_format_not_silently_changed(env):
     _,_,_,_,c=env;r=create(c)
-    assert c.get(r['subscription_url']+'?format=clash').status_code==400
+    assert c.get(r['subscription_url']+'?format=singbox').status_code==400
 
 def test_hwid_is_local_and_transactional(env):
     _,_,_,_,c=env;r=create(c,extra={'limitHwid':1})

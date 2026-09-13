@@ -7,7 +7,7 @@
   "source_import_complete": true,
   "installable_from_repository_for_lab_testing": true,
   "production_ready": false,
-  "baseline_version": "0.6.0-standalone-lab",
+  "baseline_version": "0.7.0-standalone-lab",
   "original_archive": {
     "name": "DARK-XRAY-v0.6-GitHub-Ready.zip",
     "sha256": "d234a1bd2a6314905bce17dd5e7c6b13ed9594727c42542a0b3a126a632082f7",
@@ -29,7 +29,6 @@
     "web_direction_default": "ltr",
     "cyber_ui_layer": "web/cyber.css",
     "language_layer": "web/i18n-en.js",
-    "browser_policy_bridge": null,
     "account_password_min_characters": 8,
     "account_password_max_characters": 512,
     "encrypted_backup_passphrase_min_characters": 12,
@@ -58,17 +57,39 @@
     ],
     "online_installer": "install-online.sh",
     "installer_progress_scale": "001-100",
-    "installer_states": ["clean", "partial", "installed"],
-    "installer_profiles": ["domain_tls", "ip_ssh_tunnel", "advanced"],
+    "installer_states": [
+      "clean",
+      "partial",
+      "installed"
+    ],
+    "installer_profiles": [
+      "domain_tls",
+      "ip_ssh_tunnel",
+      "advanced"
+    ],
     "partial_install_recovery": true,
     "safe_update_with_source_snapshot": true,
     "xray_core_reuse_or_quarantine": true,
     "tls_failure_is_non_destructive": true,
-    "terminal_manager_command": "darkxray"
+    "terminal_manager_command": "darkxray",
+    "inbounds_workspace": "V3",
+    "settings_workspace": "V2",
+    "clients_groups_workspace": "V2",
+    "subscription_workspace": "V2 raw/base64/json/clash",
+    "xray_control_workspace": "V2 DNS/outbounds/routing/balancers/observatory",
+    "hosts_workspace": "V2 client-facing endpoint overrides",
+    "operations_workspace": "V2 dashboard/logs/backup",
+    "nodes_workspace": "V2 HTTPS agent health/inventory/core-control",
+    "node_agent_token_prefix": "dkn_",
+    "safe_update_real_source_rollback": true,
+    "pinned_installer_source_ref_env": "DARK_XRAY_REF"
   },
   "ci": {
     "runs_on_push_to_main": true,
-    "python_versions": ["3.12", "3.13"],
+    "python_versions": [
+      "3.12",
+      "3.13"
+    ],
     "checks": [
       "repository_hygiene",
       "installer_runtime_selftest",
@@ -89,7 +110,9 @@
     "certificate_renewal_verified_across_providers": false,
     "reboot_recovery_verified_across_providers": false,
     "production_load_verified": false,
-    "global_multi_node_ip_limit_complete": false
+    "global_multi_node_ip_limit_complete": false,
+    "distributed_client_traffic_convergence_complete": false,
+    "remote_node_https_probe_verified_on_real_vps": false
   },
   "checksum_note": "SHA256SUMS is regenerated only after the stabilized main snapshot is finalized; production readiness still requires live VPS validation."
 }
