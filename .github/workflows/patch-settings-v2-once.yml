@@ -25,10 +25,11 @@ jobs:
           grep -q "/api/runtime-config" backend/server.py
           grep -q "/assets/settings-v2.js" web/index.html
           grep -q "session_seconds" backend/auth.py
-      - name: Commit patch
+      - name: Commit application code
         run: |
+          git checkout -- .github/workflows/ci.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/core.py backend/server.py backend/auth.py darkxray tools/menu.py web/live.js web/index.html tests/test_settings_v2.py tests/run-tests.sh .github/workflows/ci.yml
+          git add backend/core.py backend/server.py backend/auth.py darkxray tools/menu.py web/live.js web/index.html tests/test_settings_v2.py tests/run-tests.sh
           git commit -m 'Wire Settings V2 across web backend and terminal manager'
           git push
