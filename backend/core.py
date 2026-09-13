@@ -169,9 +169,9 @@ class CoreEngine:
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
         if not r:return copy.deepcopy(defaults[name])
-        saved=json.loads(r[0]);base=copy.deepcopy(defaults[name])
-        if isinstance(base,dict) and isinstance(saved,dict):
-            base.update(saved);return base
+        saved=json.loads(r[0])
+        if name in {'panel','runtime','subscription','ipguard'} and isinstance(saved,dict):
+            base=copy.deepcopy(defaults[name]);base.update(saved);return base
         return saved
 
     @serialized
