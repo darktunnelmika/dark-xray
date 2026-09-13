@@ -14,7 +14,7 @@ jobs:
         with:
           persist-credentials: true
       - name: Apply Subscription V2 migration
-        run: python tools/patch_subscription_v2_once.py
+        run: python tools/run_subscription_v2_patch.py
       - name: Smoke Subscription V2
         run: |
           python -m py_compile backend/core.py backend/server.py
