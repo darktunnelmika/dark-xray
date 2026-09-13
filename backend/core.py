@@ -163,8 +163,9 @@ class CoreEngine:
                   'runtime':{'access_mode':access_mode,'bind_port':self.config.bind_port,'public_address':self.config.public_address,
                              'poll_seconds':self.config.poll_seconds,'core_autostart':self.config.core_autostart,
                              'domain':(origin.hostname or '') if access_mode=='domain_tls' else '','acme_email':''},
-                  'subscription':{'enabled':True,'default_format':'base64','profile_update_interval_hours':6,
-                                  'remark_template':'{remark} | {email}','support_url':''},
+                  'subscription':{'enabled':True,'default_format':'base64','auto_detect':True,'profile_update_interval_hours':6,
+                                  'remark_template':'{remark} | {email}','support_url':'','profile_title':'DARK XRAY',
+                                  'profile_url':'','announce':''},
                   'ipguard':{'mode':'observe','window_seconds':self.config.ip_window_seconds,
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
@@ -216,20 +217,23 @@ class CoreEngine:
                 if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise CoreError('Domain + TLS mode requires a valid ACME email')
             elif domain or email:raise CoreError('Domain and ACME email must be empty in SSH mode')
         if name=='subscription':
-            allowed={'enabled','default_format','profile_update_interval_hours','remark_template','support_url'}
+            allowed={'enabled','default_format','auto_detect','profile_update_interval_hours','remark_template','support_url','profile_title','profile_url','announce'}
             if set(value)!=allowed:raise CoreError('Subscription settings shape is incomplete or contains unknown fields')
-            if type(value['enabled']) is not bool or value['default_format'] not in ('raw','base64'):raise CoreError('Invalid subscription mode')
+            if type(value['enabled']) is not bool or type(value['auto_detect']) is not bool or value['default_format'] not in ('raw','base64','json','clash'):raise CoreError('Invalid subscription mode')
             if type(value['profile_update_interval_hours']) is not int or not 1<=value['profile_update_interval_hours']<=168:raise CoreError('Invalid subscription update interval')
             tmpl=value['remark_template']
             if not isinstance(tmpl,str) or not 1<=len(tmpl)<=200:raise CoreError('Invalid remark template')
             if any(x not in {'remark','email','protocol'} for x in re.findall(r'{([^{}]+)}',tmpl)):raise CoreError('Unknown remark-template variable')
-            support=value['support_url']
-            if not isinstance(support,str) or len(support)>500:raise CoreError('Invalid subscription support URL')
-            if support:
-                u=urlsplit(support)
-                if u.scheme not in ('http','https') or not u.hostname or u.username or u.password:raise CoreError('Subscription support URL must be http/https without credentials')
-                try:support.encode('ascii')
-                except UnicodeEncodeError:raise CoreError('Subscription support URL must be ASCII/punycode')
+            for key in ('support_url','profile_url'):
+                val=value[key]
+                if not isinstance(val,str) or len(val)>500:raise CoreError('Invalid subscription URL')
+                if val:
+                    u=urlsplit(val)
+                    if u.scheme not in ('http','https') or not u.hostname or u.username or u.password:raise CoreError('Subscription URL must be http/https without credentials')
+                    try:val.encode('ascii')
+                    except UnicodeEncodeError:raise CoreError('Subscription URL must be ASCII/punycode')
+            if not isinstance(value['profile_title'],str) or not 1<=len(value['profile_title'])<=120:raise CoreError('Invalid subscription profile title')
+            if not isinstance(value['announce'],str) or len(value['announce'])>2000:raise CoreError('Invalid subscription announcement')
         if name=='ipguard':
             if set(value)-{'mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
             if value.get('mode') not in ('observe','enforce'): raise CoreError('Invalid IP Guard mode')
@@ -840,19 +844,85 @@ class CoreEngine:
                 links.append({'inboundId':i,'remark':label,'uri':uri})
         return {'links':links,'warnings':warnings,'formats':['raw','base64']}
 
+    @staticmethod
+    def _clash_proxy(uri:str,name:str)->dict:
+        from urllib.parse import urlsplit,parse_qs,unquote
+        if uri.startswith('vmess://'):
+            raw=uri[8:];doc=json.loads(base64.b64decode(raw+'='*((4-len(raw)%4)%4)).decode())
+            out={'name':name,'type':'vmess','server':doc['add'],'port':int(doc['port']),'uuid':doc['id'],'alterId':int(doc.get('aid',0)),'cipher':doc.get('scy','auto'),'udp':True}
+            net=doc.get('net','tcp');out['network']=net
+            if doc.get('tls'):out['tls']=True
+            if doc.get('sni'):out['servername']=doc['sni']
+            if net=='ws':out['ws-opts']={'path':doc.get('path','/'),'headers':{'Host':doc.get('host','')}}
+            if net=='grpc':out['grpc-opts']={'grpc-service-name':doc.get('path','')}
+            return out
+        p=urlsplit(uri);q={k:v[-1] for k,v in parse_qs(p.query).items()};proto=p.scheme
+        if proto=='ss':
+            user=p.username or ''
+            try:creds=base64.urlsafe_b64decode(user+'='*((4-len(user)%4)%4)).decode();method,password=creds.split(':',1)
+            except Exception:raise CoreError('Cannot convert Shadowsocks link to Clash')
+            return {'name':name,'type':'ss','server':p.hostname,'port':p.port,'cipher':method,'password':password,'udp':True}
+        if proto not in ('vless','trojan'):raise CoreError('Unsupported Clash proxy protocol')
+        out={'name':name,'type':proto,'server':p.hostname,'port':p.port,'udp':True}
+        if proto=='vless':out['uuid']=unquote(p.username or '')
+        else:out['password']=unquote(p.username or '')
+        net=q.get('type','tcp');sec=q.get('security','none');out['network']=net
+        if sec in ('tls','reality'):out['tls']=True
+        if q.get('sni'):out['servername']=q['sni']
+        if q.get('flow'):out['flow']=q['flow']
+        if q.get('fp'):out['client-fingerprint']=q['fp']
+        if sec=='reality':out['reality-opts']={'public-key':q.get('pbk',''),'short-id':q.get('sid','')}
+        if net=='ws':out['ws-opts']={'path':q.get('path','/'),'headers':{'Host':q.get('host','')}}
+        if net=='grpc':out['grpc-opts']={'grpc-service-name':q.get('serviceName','')}
+        if net=='xhttp':out['xhttp-opts']={'path':q.get('path','/'),'mode':q.get('mode','auto')}
+        return out
+
+    @staticmethod
+    def _yaml(value,level:int=0)->str:
+        pad='  '*level
+        if isinstance(value,dict):
+            lines=[]
+            for k,v in value.items():
+                key=json.dumps(str(k),ensure_ascii=False)
+                if isinstance(v,(dict,list)):lines.append(f'{pad}{key}:\n'+CoreEngine._yaml(v,level+1))
+                else:lines.append(f'{pad}{key}: {CoreEngine._yaml(v,0).strip()}')
+            return '\n'.join(lines)
+        if isinstance(value,list):
+            lines=[]
+            for v in value:
+                if isinstance(v,(dict,list)):
+                    nested=CoreEngine._yaml(v,level+1).splitlines();lines.append(pad+'- '+nested[0].lstrip());lines.extend(nested[1:])
+                else:lines.append(pad+'- '+CoreEngine._yaml(v,0).strip())
+            return '\n'.join(lines)
+        if value is True:return 'true'
+        if value is False:return 'false'
+        if value is None:return 'null'
+        if isinstance(value,(int,float)):return str(value)
+        return json.dumps(str(value),ensure_ascii=False)
+
     def subscription(self,email:str,fmt:str)->tuple[bytes,dict]:
-        if fmt not in ('raw','base64'):raise CoreError('This release exports raw/base64; other formats are not silently substituted',status=400)
-        settings=self.section('subscription')
-        result=self.links(email)
+        if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported subscription format',status=400)
+        settings=self.section('subscription');result=self.links(email)
         if result['warnings']:raise CoreError('Subscription would be incomplete: '+'; '.join(result['warnings']),status=422)
-        body='\n'.join(r['uri'] for r in result['links']).encode()
-        if not body:raise CoreError('No enabled supported connection',status=503)
-        if fmt=='base64':body=base64.b64encode(body)
+        links=[r['uri'] for r in result['links']]
+        if not links:raise CoreError('No enabled supported connection',status=503)
+        content_type='text/plain; charset=utf-8'
+        if fmt in ('raw','base64'):
+            body='\n'.join(links).encode();body=base64.b64encode(body) if fmt=='base64' else body
+        elif fmt=='json':
+            body=json.dumps({'version':1,'title':settings.get('profile_title','DARK XRAY'),'client':email,'announce':settings.get('announce',''),'links':result['links']},ensure_ascii=False,indent=2).encode();content_type='application/json; charset=utf-8'
+        else:
+            proxies=[]
+            for item in result['links']:proxies.append(self._clash_proxy(item['uri'],item['remark']))
+            names=[p['name'] for p in proxies];doc={'proxies':proxies,'proxy-groups':[{'name':'DARK AUTO','type':'select','proxies':names}], 'rules':['MATCH,DARK AUTO']}
+            body=(self._yaml(doc)+'\n').encode();content_type='application/yaml; charset=utf-8'
         with self.store.lock:r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
-        c=json.loads(r['body']);headers={'Content-Type':'text/plain; charset=utf-8','profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
+        c=json.loads(r['body']);headers={'Content-Type':content_type,'profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
+            'profile-title':settings.get('profile_title','DARK XRAY'),
             'subscription-userinfo':f"upload={r['up']}; download={r['down']}; total={c.get('totalGB',0)}; expire={max(0,c.get('expiryTime',0)//1000)}"}
-        support=settings.get('support_url','')
+        support=settings.get('support_url','');profile=settings.get('profile_url','')
         if support:headers['support-url']=support
+        if profile:headers['profile-web-page-url']=profile
         return body,headers
 
     def close(self):

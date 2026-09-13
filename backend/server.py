@@ -469,7 +469,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         engine.check_device(row['email'],request.headers.get('x-hwid',''),request.headers.get('x-device-os',''),request.headers.get('x-device-model',''))
         sub=engine.section('subscription')
         if not sub.get('enabled',True):raise HTTPException(404)
-        fmt=request.query_params.get('format') or sub.get('default_format','base64')
+        fmt=request.query_params.get('format')
+        if not fmt:
+            ua=request.headers.get('user-agent','').lower()
+            if sub.get('auto_detect',True) and any(x in ua for x in ('clash','mihomo')):fmt='clash'
+            else:fmt=sub.get('default_format','base64')
         body,headers=engine.subscription(row['email'],fmt)
         return Response(body,headers=headers)
 
