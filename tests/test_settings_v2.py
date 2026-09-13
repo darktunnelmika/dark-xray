@@ -104,3 +104,25 @@ def test_settings_apply_plan_is_pure(tmp_path):
     plan=mod.build_plan(current,valid)
     assert plan['pending']['bind_port']=={'from':2087,'to':2443}
     assert plan['requires_acme'] is False
+
+
+def test_legacy_panel_section_is_hydrated(env):
+    store,engine,c=env
+    with store.transaction() as db:
+        db.execute("INSERT INTO core_sections(name,body) VALUES('panel',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",(json.dumps({'title':'OLD DARK','support_url':''}),))
+    value=c.get('/api/settings/panel').json()['value']
+    assert value['title']=='OLD DARK'
+    assert value['language']=='en'
+    assert value['session_max_age_minutes']==480
+
+
+def test_database_session_expiry_matches_setting(env):
+    store,_,c=env
+    panel=c.get('/api/settings/panel').json()['value'];panel['session_max_age_minutes']=60
+    assert c.put('/api/settings/panel',json={'value':panel}).status_code==200
+    c.post('/api/auth/logout',json={})
+    before=time.time()
+    r=c.post('/api/auth/login',json={'username':'dark','password':'Test!OnlyPassword123'});assert r.status_code==200
+    with store.lock:
+        expiry=store.db.execute('SELECT MAX(expires_at) FROM live_sessions').fetchone()[0]
+    assert 3590 <= expiry-before <= 3610

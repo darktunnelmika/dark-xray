@@ -30,7 +30,7 @@ EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
 TAG_RE = re.compile(r'^[A-Za-z0-9_.-]{1,128}$')
 PROTOCOLS = {'vless','vmess','trojan','shadowsocks','socks','http','dokodemo-door','tunnel'}
-SECTIONS = {'outbounds','routing','dns','policy','observatory','hosts','panel','ipguard'}
+SECTIONS = {'outbounds','routing','dns','policy','observatory','hosts','panel','runtime','subscription','ipguard'}
 
 class CoreError(RuntimeError):
     def __init__(self, message: str, *, uncertain: bool=False, status: int=422):
@@ -154,13 +154,25 @@ class CoreEngine:
 
     def section(self,name:str):
         if name not in SECTIONS: raise CoreError('Unknown settings section',status=404)
+        origin=urlsplit(self.config.public_origin);access_mode='domain_tls' if origin.scheme=='https' else 'ssh'
         defaults={'outbounds':[{'tag':'direct','protocol':'freedom','settings':{}},{'tag':'block','protocol':'blackhole','settings':{}}],
                   'routing':{'domainStrategy':'AsIs','rules':[]},'dns':{'servers':['1.1.1.1']},'policy':{},
-                  'observatory':{},'hosts':[],'panel':{'title':'DARK XRAY','support_url':''},
+                  'observatory':{},'hosts':[],
+                  'panel':{'title':'DARK XRAY','support_url':'','language':'en','timezone':'UTC','page_size':50,
+                           'session_max_age_minutes':480,'datepicker':'gregorian','density':'comfortable','reduced_motion':False},
+                  'runtime':{'access_mode':access_mode,'bind_port':self.config.bind_port,'public_address':self.config.public_address,
+                             'poll_seconds':self.config.poll_seconds,'core_autostart':self.config.core_autostart,
+                             'domain':(origin.hostname or '') if access_mode=='domain_tls' else '','acme_email':''},
+                  'subscription':{'enabled':True,'default_format':'base64','profile_update_interval_hours':6,
+                                  'remark_template':'{remark} | {email}','support_url':''},
                   'ipguard':{'mode':'observe','window_seconds':self.config.ip_window_seconds,
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
-        return json.loads(r[0]) if r else copy.deepcopy(defaults[name])
+        if not r:return copy.deepcopy(defaults[name])
+        saved=json.loads(r[0]);base=copy.deepcopy(defaults[name])
+        if isinstance(base,dict) and isinstance(saved,dict):
+            base.update(saved);return base
+        return saved
 
     @serialized
     def save_section(self,name:str,value:Any):
@@ -168,6 +180,56 @@ class CoreEngine:
         if name not in SECTIONS: raise CoreError('Unknown settings section',status=404)
         if not isinstance(value,list if name in ('hosts','outbounds') else dict): raise CoreError('Wrong settings shape')
         if len(json.dumps(value))>500000: raise CoreError('Settings too large')
+        if name=='panel':
+            allowed={'title','support_url','language','timezone','page_size','session_max_age_minutes','datepicker','density','reduced_motion'}
+            if set(value)!=allowed:raise CoreError('Panel settings shape is incomplete or contains unknown fields')
+            if not isinstance(value['title'],str) or not 1<=len(value['title'])<=80:raise CoreError('Invalid panel title')
+            support=value['support_url']
+            if not isinstance(support,str) or len(support)>500:raise CoreError('Invalid support URL')
+            if support:
+                u=urlsplit(support)
+                if u.scheme not in ('http','https') or not u.hostname or u.username or u.password:raise CoreError('Support URL must be http/https without credentials')
+            if value['language'] not in ('en','fa'):raise CoreError('Unsupported panel language')
+            if value['datepicker'] not in ('gregorian','jalalian'):raise CoreError('Unsupported calendar')
+            if value['density'] not in ('comfortable','compact') or type(value['reduced_motion']) is not bool:raise CoreError('Invalid appearance settings')
+            for key,low,high in [('page_size',10,1000),('session_max_age_minutes',60,525600)]:
+                if type(value[key]) is not int or not low<=value[key]<=high:raise CoreError('Invalid '+key)
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(value['timezone'])
+            except Exception:raise CoreError('Invalid IANA timezone')
+        if name=='runtime':
+            allowed={'access_mode','bind_port','public_address','poll_seconds','core_autostart','domain','acme_email'}
+            if set(value)!=allowed:raise CoreError('Runtime settings shape is incomplete or contains unknown fields')
+            if value['access_mode'] not in ('ssh','domain_tls'):raise CoreError('Invalid access mode')
+            for key,low,high in [('bind_port',1024,65535),('poll_seconds',1,3600)]:
+                if type(value[key]) is not int or not low<=value[key]<=high:raise CoreError('Invalid '+key)
+            if type(value['core_autostart']) is not bool:raise CoreError('core_autostart must be boolean')
+            addr=value['public_address']
+            if not isinstance(addr,str) or not addr or len(addr)>253 or any(c in addr for c in '/?#@ \r\n\t'):raise CoreError('Invalid public proxy address')
+            reserved=(set(self.config.protected_ports)-{self.config.bind_port})|{22,self.config.xray_api_port}
+            if value['bind_port'] in reserved or any(i['port']==value['bind_port'] for i in self.inbounds()):raise CoreError('Panel port collides with a protected or data port')
+            domain=value['domain'];email=value['acme_email']
+            if not isinstance(domain,str) or len(domain)>253 or not isinstance(email,str) or len(email)>254:raise CoreError('Invalid domain/ACME values')
+            if value['access_mode']=='domain_tls':
+                if not re.fullmatch(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}',domain):raise CoreError('Domain + TLS mode requires a valid ASCII domain')
+                if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise CoreError('Domain + TLS mode requires a valid ACME email')
+            elif domain or email:raise CoreError('Domain and ACME email must be empty in SSH mode')
+        if name=='subscription':
+            allowed={'enabled','default_format','profile_update_interval_hours','remark_template','support_url'}
+            if set(value)!=allowed:raise CoreError('Subscription settings shape is incomplete or contains unknown fields')
+            if type(value['enabled']) is not bool or value['default_format'] not in ('raw','base64'):raise CoreError('Invalid subscription mode')
+            if type(value['profile_update_interval_hours']) is not int or not 1<=value['profile_update_interval_hours']<=168:raise CoreError('Invalid subscription update interval')
+            tmpl=value['remark_template']
+            if not isinstance(tmpl,str) or not 1<=len(tmpl)<=200:raise CoreError('Invalid remark template')
+            if any(x not in {'remark','email','protocol'} for x in re.findall(r'{([^{}]+)}',tmpl)):raise CoreError('Unknown remark-template variable')
+            support=value['support_url']
+            if not isinstance(support,str) or len(support)>500:raise CoreError('Invalid subscription support URL')
+            if support:
+                u=urlsplit(support)
+                if u.scheme not in ('http','https') or not u.hostname or u.username or u.password:raise CoreError('Subscription support URL must be http/https without credentials')
+                try:support.encode('ascii')
+                except UnicodeEncodeError:raise CoreError('Subscription support URL must be ASCII/punycode')
         if name=='ipguard':
             if set(value)-{'mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
             if value.get('mode') not in ('observe','enforce'): raise CoreError('Invalid IP Guard mode')
@@ -239,7 +301,9 @@ class CoreEngine:
                     if key in host and (not isinstance(host[key],str) or len(host[key])>4096):raise CoreError('Invalid host '+key)
         with self.store.transaction() as db:
             db.execute('INSERT INTO core_sections VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',(name,json.dumps(value)))
-        return {'saved':True,'applied':False,'runtime':self.runtime_state()}
+        result={'saved':True,'applied':False,'runtime':self.runtime_state()}
+        if name=='runtime':result.update(requires_root_apply=True,apply_command='sudo darkxray settings-apply')
+        return result
 
     def inbounds(self)->list[dict]:
         with self.store.lock:rows=self.store.db.execute('SELECT id,body FROM core_inbounds ORDER BY id').fetchall()
@@ -730,8 +794,10 @@ class CoreEngine:
             configured=[h for h in self.section('hosts') if h['inboundId']==i]
             hs=[h for h in configured if h.get('enable',True)] if configured else [{}]
             for host in hs:
-                address=host.get('address',self.config.public_address);port=host.get('port',ib['port']);label=host.get('remark',ib['remark'])+' | '+email
-                proto=ib['protocol'];st=ib['streamSettings'];net=st.get('network','tcp');sec=st.get('security','none')
+                address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
+                proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
+                label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
+                st=ib['streamSettings'];net=st.get('network','tcp');sec=st.get('security','none')
                 q={'type':net,'security':sec};security=st.get('realitySettings' if sec=='reality' else 'tlsSettings',{})
                 sni=host.get('sni') or security.get('serverName') or next(iter(security.get('serverNames',[])),'')
                 if sni:q['sni']=sni
@@ -776,14 +842,17 @@ class CoreEngine:
 
     def subscription(self,email:str,fmt:str)->tuple[bytes,dict]:
         if fmt not in ('raw','base64'):raise CoreError('This release exports raw/base64; other formats are not silently substituted',status=400)
+        settings=self.section('subscription')
         result=self.links(email)
         if result['warnings']:raise CoreError('Subscription would be incomplete: '+'; '.join(result['warnings']),status=422)
         body='\n'.join(r['uri'] for r in result['links']).encode()
         if not body:raise CoreError('No enabled supported connection',status=503)
         if fmt=='base64':body=base64.b64encode(body)
         with self.store.lock:r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
-        c=json.loads(r['body']);headers={'Content-Type':'text/plain; charset=utf-8','profile-update-interval':'6',
+        c=json.loads(r['body']);headers={'Content-Type':'text/plain; charset=utf-8','profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
             'subscription-userinfo':f"upload={r['up']}; download={r['down']}; total={c.get('totalGB',0)}; expire={max(0,c.get('expiryTime',0)//1000)}"}
+        support=settings.get('support_url','')
+        if support:headers['support-url']=support
         return body,headers
 
     def close(self):

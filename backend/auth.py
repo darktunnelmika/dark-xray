@@ -82,7 +82,8 @@ class Auth:
             db.execute('INSERT OR IGNORE INTO owners(id) VALUES(?)',(username,))
             db.execute("INSERT INTO owner_profiles(id,name) VALUES(?,?)",(username,'DARK OWNER'))
 
-    def login(self,username: str,password: str,otp: str,source: str)->tuple[str,Principal]:
+    def login(self,username: str,password: str,otp: str,source: str,session_seconds: int=8*3600)->tuple[str,Principal]:
+        if type(session_seconds) is not int or not 3600<=session_seconds<=525600*60:raise PolicyError('Invalid session lifetime')
         now=time.time();bucket=digest(source)
         with self.store.transaction() as db:
             r=db.execute('SELECT * FROM auth_attempts WHERE bucket=?',(bucket,)).fetchone()
@@ -100,7 +101,7 @@ class Auth:
             if mfa and mfa['enabled']:self._verify_mfa(db,mfa,otp,consume=True)
             token=secrets.token_urlsafe(48);csrf=secrets.token_urlsafe(32)
             db.execute('DELETE FROM live_sessions WHERE expires_at<=?',(now,))
-            db.execute('INSERT INTO live_sessions VALUES(?,?,?,?)',(digest(token),username,csrf,now+8*3600))
+            db.execute('INSERT INTO live_sessions VALUES(?,?,?,?)',(digest(token),username,csrf,now+session_seconds))
             db.execute('DELETE FROM auth_attempts WHERE bucket=?',(bucket,))
         return token,Principal(Actor(row['id'],row['role'],json.loads(row['permissions'])),digest(token),csrf)
 

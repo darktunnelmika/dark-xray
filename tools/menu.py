@@ -153,6 +153,7 @@ def settings_menu():
   3) Change public proxy address
   4) Reset owner password
   5) Show access URL / SSH tunnel
+  6) Preview / apply staged Web Settings
   0) Back''')
         x=ask('DARK')
         if x=='0':return
@@ -189,6 +190,11 @@ def settings_menu():
             if user and confirm('Reset owner password and revoke current sessions?'):run([COMMAND,'reset-password','--username',user]);pause()
         elif x=='5':
             port=c.get('bind_port',2087);print('Panel URL:',endpoint(c));print(f'SSH tunnel: ssh -L {port}:127.0.0.1:{port} root@SERVER -p SSH_PORT');pause()
+        elif x=='6':
+            run([COMMAND,'settings-apply','--dry-run'])
+            if need_root() and confirm('Apply the staged Web Settings and restart services if required?'):
+                run([COMMAND,'settings-apply'])
+            pause()
 
 def tls_menu():
     while True:

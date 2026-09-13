@@ -11,6 +11,7 @@ case "${1:-menu}" in
  doctor) shift; exec "$PY" "$ROOT/tools/doctor.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
  guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
+ settings-apply) shift; exec "$PY" "$ROOT/tools/settings_apply.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  selftest) shift; exec "$PY" "$ROOT/tools/smoke-real.py" "$@" ;;
  update) shift; exec "$PY" "$ROOT/tools/update.py" "$@" ;;
  *) exec "$PY" "$ROOT/backend/server.py" --config "$CONFIG" --data "$DATA" "$@" ;;

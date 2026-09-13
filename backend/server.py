@@ -162,9 +162,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
     @app.post('/api/auth/login')
     def login(body:Login,request:Request):
-        token,p=auth.login(body.username,body.password,body.otp,request.client.host if request.client else 'unknown')
+        session_minutes=int(engine.section('panel').get('session_max_age_minutes',480))
+        token,p=auth.login(body.username,body.password,body.otp,request.client.host if request.client else 'unknown',session_minutes*60)
         response=JSONResponse({'id':p.actor.id,'role':p.actor.role,'csrf':p.csrf,'permissions':p.actor.permissions})
-        response.set_cookie(COOKIE,token,max_age=8*3600,httponly=True,secure=config.secure_cookie,samesite='strict',path='/')
+        response.set_cookie(COOKIE,token,max_age=session_minutes*60,httponly=True,secure=config.secure_cookie,samesite='strict',path='/')
         manager.audit(p.actor,p.actor.id,'auth.login',p.actor.id)
         return response
     @app.get('/api/me')
@@ -172,7 +173,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:mfa=store.db.execute('SELECT enabled FROM mfa WHERE admin_id=?',(p.actor.id,)).fetchone()
         return {'id':p.actor.id,'role':p.actor.role,'permissions':p.actor.permissions,'csrf':p.csrf,
             'totp_enabled':bool(mfa and mfa[0]),'version':VERSION,'writes_enabled':config.writes_enabled,
-            'poll_seconds':config.poll_seconds,'engine_version':engine.version,'independent':True,'test_engine':config.test_engine}
+            'poll_seconds':config.poll_seconds,'engine_version':engine.version,'independent':True,'test_engine':config.test_engine,
+            'ui':engine.section('panel')}
     @app.post('/api/auth/logout')
     def logout(p:Principal=Depends(current)):
         with store.transaction() as db:db.execute('DELETE FROM live_sessions WHERE digest=?',(p.session_id,))
@@ -391,7 +393,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if store.client_reasons(row['email']) or row['external_disabled']:raise HTTPException(403,'Subscription suspended')
         if row['state']!='applied':raise HTTPException(503,'Customer configuration has not been saved to the runtime')
         engine.check_device(row['email'],request.headers.get('x-hwid',''),request.headers.get('x-device-os',''),request.headers.get('x-device-model',''))
-        fmt=request.query_params.get('format','base64')
+        sub=engine.section('subscription')
+        if not sub.get('enabled',True):raise HTTPException(404)
+        fmt=request.query_params.get('format') or sub.get('default_format','base64')
         body,headers=engine.subscription(row['email'],fmt)
         return Response(body,headers=headers)
 
@@ -431,8 +435,21 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def put_setting(section:str,body:dict,p:Principal=Depends(owner)):
         writable()
         if set(body)!={'value'}:raise HTTPException(400,'Expected one value field')
-        result=engine.save_section(section,body['value']);manager.tick(suppress=True)
+        result=engine.save_section(section,body['value'])
+        if section in {'outbounds','routing','dns','policy','observatory','hosts','ipguard'}:manager.tick(suppress=True)
         manager.audit(p.actor,p.actor.id,'settings.update',section);return result
+
+    @app.get('/api/runtime-config')
+    def runtime_config(p:Principal=Depends(owner)):
+        desired=engine.section('runtime');origin=urlsplit(config.public_origin);mode='domain_tls' if origin.scheme=='https' else 'ssh'
+        actual={'access_mode':mode,'bind_host':config.bind_host,'bind_port':config.bind_port,'public_address':config.public_address,
+                'public_origin':config.public_origin,'poll_seconds':config.poll_seconds,'core_autostart':config.core_autostart,
+                'domain':(origin.hostname or '') if mode=='domain_tls' else '','tls_enabled':bool(config.tls_certificate and config.tls_private_key),
+                'tls_certificate':config.tls_certificate,'secure_cookie':config.secure_cookie,'xray_api_port':config.xray_api_port,
+                'direct_source_verified':config.direct_source_verified,'guard_socket':config.guard_socket}
+        compare=('access_mode','bind_port','public_address','poll_seconds','core_autostart','domain')
+        pending={k:{'from':actual.get(k),'to':desired.get(k)} for k in compare if actual.get(k)!=desired.get(k)}
+        return {'actual':actual,'desired':desired,'pending':pending,'apply_command':'sudo darkxray settings-apply'}
 
     @app.get('/api/core/state')
     def core_state(p:Principal=Depends(owner)):return engine.runtime_state()
