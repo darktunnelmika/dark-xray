@@ -1,4 +1,4 @@
-name: Apply REALITY routes once
+name: Apply Inbounds V3 core wiring once
 on:
   push:
     branches: [main]
@@ -12,33 +12,42 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: true
-      - name: Patch server routes
+      - name: Patch core and slim inbound list
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          p=Path('backend/server.py')
-          s=p.read_text()
-          imp="from reality_scan import RealityScanError,scan_target,search_targets\n"
-          if imp not in s:
-              needle="from core import CoreEngine,CoreError,Config,SUB_RE\n"
+
+          core=Path('backend/core.py')
+          s=core.read_text()
+          old="allowed={'remark','protocol','listen','port','enable','tag','settings','streamSettings','sniffing','id'}"
+          new="allowed={'remark','protocol','listen','port','enable','tag','settings','streamSettings','sniffing','panelMeta','id'}"
+          if old in s:
+              s=s.replace(old,new,1)
+          needle="""        for key in ('settings','streamSettings','sniffing'):\n            v.setdefault(key,{});\n            if not isinstance(v[key],dict):raise CoreError(key+' must be an object')\n"""
+          repl=needle+"""        v.setdefault('panelMeta',{})\n        if not isinstance(v['panelMeta'],dict):raise CoreError('panelMeta must be an object')\n        if len(json.dumps(v['panelMeta']))>20000:raise CoreError('panelMeta too large')\n"""
+          if "panelMeta must be an object" not in s:
               assert needle in s
-              s=s.replace(needle,needle+imp,1)
-          models="""\n\nclass RealityProbe(Model):\n    target:str=Field(min_length=1,max_length=300)\nclass RealitySearch(Model):\n    targets:list[str]=Field(default_factory=list,max_length=20)\n"""
-          if 'class RealityProbe(Model):' not in s:
-              needle="class Password(Model):\n    old_password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)\n    new_password:str=Field(min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)\n"
-              assert needle in s
-              s=s.replace(needle,needle+models,1)
-          routes="""\n\n    @app.post('/api/reality/scan')\n    def reality_scan(body:RealityProbe,p:Principal=Depends(owner)):\n        try:result=scan_target(body.target)\n        except RealityScanError as ex:raise HTTPException(400,str(ex))\n        manager.audit(p.actor,p.actor.id,'reality.scan',body.target[:300])\n        return result\n\n    @app.post('/api/reality/search')\n    def reality_search(body:RealitySearch,p:Principal=Depends(owner)):\n        try:items=search_targets(body.targets or None)\n        except RealityScanError as ex:raise HTTPException(400,str(ex))\n        manager.audit(p.actor,p.actor.id,'reality.search',str(len(body.targets or [])))\n        return {'items':items,'source':'server-tls-probe','cidr_scan':False}\n"""
-          if "@app.post('/api/reality/scan')" not in s:
-              marker="\n    @app.post('/api/ip/unban')\n"
-              assert marker in s
-              s=s.replace(marker,routes+marker,1)
-          p.write_text(s)
+              s=s.replace(needle,repl,1)
+          oldfp="q['sid']=next(iter(security.get('shortIds',[])),'');q['fp']=host.get('fingerprint','chrome')"
+          newfp="""q['sid']=next(iter(security.get('shortIds',[])),'')\n                    meta=ib.get('panelMeta',{}).get('reality',{}) if isinstance(ib.get('panelMeta',{}),dict) else {}\n                    q['fp']=host.get('fingerprint') or meta.get('fingerprint','chrome')\n                    spider=meta.get('spiderX','')\n                    if spider:q['spx']=spider"""
+          if oldfp in s:
+              s=s.replace(oldfp,newfp,1)
+          core.write_text(s)
+
+          server=Path('backend/server.py')
+          s=server.read_text()
+          old="""        keys={'id','remark','protocol','port','listen','enable','tag','nodeId','up','down','total','expiryTime'}\n        return [{k:v for k,v in r.items() if k in keys} for r in rows if allowed is None or r['id'] in allowed]\n"""
+          new="""        keys={'id','remark','protocol','port','listen','enable','tag','nodeId','up','down','total','expiryTime'}\n        out=[]\n        for r in rows:\n            if allowed is not None and r['id'] not in allowed:continue\n            item={k:v for k,v in r.items() if k in keys}\n            stream=r.get('streamSettings',{}) if isinstance(r.get('streamSettings',{}),dict) else {}\n            item['network']=stream.get('network','tcp')\n            item['security']=stream.get('security','none')\n            out.append(item)\n        return out\n"""
+          if old in s:
+              s=s.replace(old,new,1)
+          server.write_text(s)
           PY
-          python -m py_compile backend/server.py backend/reality_scan.py
+          python -m py_compile backend/core.py backend/server.py backend/reality_scan.py
+          grep -q "panelMeta must be an object" backend/core.py
+          grep -q "item\['network'\]" backend/server.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add backend/server.py
-          git diff --cached --quiet || git commit -m 'Wire REALITY target scan routes into DARK API'
+          git add backend/core.py backend/server.py
+          git diff --cached --quiet || git commit -m 'Wire Inbounds V3 metadata and list transport state'
           git push
