@@ -29,6 +29,7 @@ from auth import Auth,Principal,DEFAULTS,PERMISSIONS,digest
 from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
+from reality_scan import RealityScanError,scan_target,search_targets
 
 VERSION='0.6.0-standalone-lab'
 ROOT=Path(__file__).resolve().parents[1]
@@ -90,6 +91,12 @@ class MFADisable(MFASetup):code:str=Field(min_length=6,max_length=64)
 class Password(Model):
     old_password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
     new_password:str=Field(min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
+
+
+class RealityProbe(Model):
+    target:str=Field(min_length=1,max_length=300)
+class RealitySearch(Model):
+    targets:list[str]=Field(default_factory=list,max_length=20)
 
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
@@ -434,6 +441,21 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'privateKey':base64.urlsafe_b64encode(key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())).decode().rstrip('='),
             'publicKey':base64.urlsafe_b64encode(key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode().rstrip('='),
             'shortId':secrets.token_hex(8)}
+
+
+    @app.post('/api/reality/scan')
+    def reality_scan(body:RealityProbe,p:Principal=Depends(owner)):
+        try:result=scan_target(body.target)
+        except RealityScanError as ex:raise HTTPException(400,str(ex))
+        manager.audit(p.actor,p.actor.id,'reality.scan',body.target[:300])
+        return result
+
+    @app.post('/api/reality/search')
+    def reality_search(body:RealitySearch,p:Principal=Depends(owner)):
+        try:items=search_targets(body.targets or None)
+        except RealityScanError as ex:raise HTTPException(400,str(ex))
+        manager.audit(p.actor,p.actor.id,'reality.search',str(len(body.targets or [])))
+        return {'items':items,'source':'server-tls-probe','cidr_scan':False}
 
     @app.post('/api/ip/unban')
     def ip_unban(body:UnbanIP,p:Principal=Depends(owner)):
