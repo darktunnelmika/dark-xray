@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import time
 from pathlib import Path
 
 import pytest
@@ -52,6 +54,7 @@ def test_panel_and_runtime_validation(env):
     status=c.get('/api/runtime-config').json()
     assert status['pending']['bind_port']['to']==2443
     assert status['apply_command']=='sudo darkxray settings-apply'
+    assert c.post('/api/inbounds',json=IB).status_code==200
     runtime['bind_port']=19444
     assert c.put('/api/settings/runtime',json={'value':runtime}).status_code==422
 
