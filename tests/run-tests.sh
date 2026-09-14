@@ -15,6 +15,7 @@ python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscripti
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
+python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
 python -m pytest tests/test_reality_scan.py -q --junitxml=qa/junit/reality.xml
 node --test tests/form-models.test.cjs
 node --test tests/inbounds-models.test.cjs
