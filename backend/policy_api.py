@@ -7,7 +7,7 @@ and HTTP routing independently reviewable. This is not the Xray panel runtime.
 import argparse, sqlite3
 from pathlib import Path
 from dark_policy import PolicyError, Store
-from policy_auth import (CAPABILITIES, ALLOWED_PERMISSIONS, DEFAULT_PERMISSIONS, password_hash, verify_password, permissions_for, create_admin, bootstrap, StrictModel, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, Credit, Usage, Refund)
+from policy_auth import (CAPABILITIES, ALLOWED_PERMISSIONS, DEFAULT_PERMISSIONS, PASSWORD_MIN_LENGTH, password_hash, verify_password, permissions_for, create_admin, bootstrap, StrictModel, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, Credit, Usage, Refund)
 from policy_routes import create_app
 
 def main():
@@ -19,7 +19,7 @@ def main():
     try:
         if args.init_owner:
             from getpass import getpass
-            password=getpass('New owner password (12+ characters): ')
+            password=getpass(f'New owner password ({PASSWORD_MIN_LENGTH}+ characters): ')
             if password!=getpass('Repeat password: '):raise PolicyError('Passwords do not match')
             bootstrap(store,args.init_owner,password);print('Owner created. No default credentials exist.');return
         if not 1024<=args.port<=65535:raise PolicyError('Choose a nonprivileged port, 1024..65535')
