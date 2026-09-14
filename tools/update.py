@@ -5,6 +5,12 @@ The updater preserves /etc and /var/lib, validates candidate source before stopp
 the service, snapshots the currently installed application source, and restores
 that snapshot if the new application cannot become active. The virtualenv is
 reused; requirements are reinstalled after both forward update and rollback.
+
+Candidate clones may intentionally live below a root-private (umask 077) temporary
+directory. We therefore NEVER preserve candidate checkout permissions into the
+installed application tree. Installed source permissions are normalized after
+copy/rollback so the unprivileged ``darkxray`` service account can read source and
+web assets without making application files writable to it.
 """
 from __future__ import annotations
 import argparse, os, shutil, subprocess, sys, tarfile, tempfile, time
@@ -63,18 +69,50 @@ def clear_installed_source():
         dst=APP/name
         if dst.exists() or dst.is_symlink():dst.unlink(missing_ok=True)
 
+def normalize_source_permissions(root:Path=APP):
+    """Make installed application source readable/traversable by the service user.
+
+    The application source remains root-owned. Only read/traverse bits are opened;
+    source files are not made writable to group/other. The virtualenv and runtime
+    state are deliberately outside this normalization scope.
+    """
+    if not root.is_dir() or root.is_symlink():
+        raise RuntimeError('Installed application root must be a real directory')
+    os.chmod(root,0o755)
+    for name in COPY_DIRS:
+        base=root/name
+        if not base.exists():continue
+        if base.is_symlink() or not base.is_dir():raise RuntimeError('Installed source directory has an unsafe shape: '+name)
+        os.chmod(base,0o755)
+        for path in base.rglob('*'):
+            if path.is_symlink():
+                # Repository hygiene should already reject unexpected links; do not
+                # follow one here while repairing permissions.
+                continue
+            if path.is_dir():os.chmod(path,0o755)
+            elif path.is_file():os.chmod(path,0o644)
+    for name in COPY_FILES:
+        path=root/name
+        if not path.exists():continue
+        if path.is_symlink() or not path.is_file():raise RuntimeError('Installed source file has an unsafe shape: '+name)
+        os.chmod(path,0o755 if name=='darkxray' else 0o644)
+
 def copy_source(src:Path):
     clear_installed_source()
     for name in COPY_DIRS:
         shutil.copytree(src/name,APP/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     for name in COPY_FILES:
         if (src/name).exists():shutil.copy2(src/name,APP/name)
-    os.chmod(APP/'darkxray',0o755)
+    # install-online.sh intentionally runs with umask 077. A git checkout below its
+    # private temporary directory can therefore contain mode 600/700 files. Never
+    # preserve those private checkout modes into /opt/dark-xray.
+    normalize_source_permissions(APP)
 
 def install_runtime_files():
     run([APP/'.venv/bin/python','-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
     for unit in ('dark-xray.service','dark-xray-guard.service'):
         shutil.copy2(APP/'deploy'/unit,Path('/etc/systemd/system')/unit)
+        os.chmod(Path('/etc/systemd/system')/unit,0o644)
     write_wrapper();run(['systemctl','daemon-reload']);run(['systemctl','enable','dark-xray.service'])
 
 def activate():
@@ -92,7 +130,9 @@ def rollback(snapshot:Path,guard_was_active:bool)->bool:
                 target=(APP/member.name).resolve()
                 if APP.resolve() not in target.parents and target!=APP.resolve():raise RuntimeError('Unsafe rollback archive member')
             tf.extractall(APP,filter='data')
-        os.chmod(APP/'darkxray',0o755)
+        # A snapshot may originate from an older updater that had already copied
+        # private checkout modes. Repair permissions during rollback too.
+        normalize_source_permissions(APP)
         install_runtime_files();activate()
         if guard_was_active:quiet(['systemctl','restart','dark-xray-guard.service'])
         print('Previous DARK XRAY source restored and service is active.',file=sys.stderr)
