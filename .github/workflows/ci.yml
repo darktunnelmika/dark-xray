@@ -40,10 +40,11 @@ jobs:
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
           grep -q 'DARK_XRAY_REF' install-online.sh
           grep -q 'restoring previous DARK XRAY source' tools/update.py
+          grep -q 'backend/owner_recovery.py' darkxray
           python -m py_compile \
             tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py \
-            backend/manager.py backend/reality_scan.py backend/nodes.py
+            backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
           grep -q 'MAIN MENU' /tmp/dark-menu-smoke.txt
           grep -q 'settings-apply' darkxray
