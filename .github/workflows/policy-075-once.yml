@@ -20,6 +20,16 @@ jobs:
           node-version: '22'
       - name: Apply policy patch
         run: python tools/policy_075_once.py
+      - name: Fix generated SQL quoting
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('backend/manager.py');s=p.read_text()
+          bad="rows=self.store.db.execute('SELECT m.inbounds,c.limit_ip,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'',(owner,)).fetchall()"
+          good='rows=self.store.db.execute("SELECT m.inbounds,c.limit_ip,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!=\'deleted\'",(owner,)).fetchall()'
+          if bad not in s:raise SystemExit('generated SQL quote anchor missing')
+          p.write_text(s.replace(bad,good,1))
+          PY
       - name: Static smoke
         run: |
           python -m py_compile backend/core.py backend/manager.py tests/test_policy_consistency.py
