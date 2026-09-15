@@ -5,7 +5,9 @@ clients are never claimed by name prefix. CoreEngine shared inbounds are never
 switched off by a reseller quota. Side effects happen outside DB transactions.
 """
 from __future__ import annotations
+import calendar
 import copy
+import datetime
 import hashlib
 import json
 import re
@@ -15,6 +17,7 @@ import threading
 import time
 import uuid
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dark_policy import Actor, Store, PolicyError, PermissionDenied, MAX_INT, integer, NAME_RE
 from core import CoreEngine, CoreError, EMAIL_RE, MANAGED_CLIENT_PROTOCOLS
@@ -55,7 +58,8 @@ class Manager:
             CREATE INDEX IF NOT EXISTS live_audit_owner ON live_audit(owner,id);
             CREATE TABLE IF NOT EXISTS client_cycles(
               email TEXT PRIMARY KEY,days INTEGER NOT NULL,next_at REAL NOT NULL,
-              completed INTEGER NOT NULL DEFAULT 0,max_resets INTEGER NOT NULL DEFAULT 0);
+              completed INTEGER NOT NULL DEFAULT 0,max_resets INTEGER NOT NULL DEFAULT 0,
+              mode TEXT NOT NULL DEFAULT 'interval',reset_day INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS live_orders(
               id TEXT PRIMARY KEY,owner TEXT NOT NULL,email TEXT NOT NULL,kind TEXT NOT NULL,
               price INTEGER NOT NULL,at REAL NOT NULL);
@@ -64,6 +68,9 @@ class Manager:
               created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,name));
             CREATE INDEX IF NOT EXISTS client_groups_owner ON client_groups(owner,name);
             ''')
+            cycle_cols={r[1] for r in store.db.execute('PRAGMA table_info(client_cycles)')}
+            if 'mode' not in cycle_cols:store.db.execute("ALTER TABLE client_cycles ADD COLUMN mode TEXT NOT NULL DEFAULT 'interval'")
+            if 'reset_day' not in cycle_cols:store.db.execute("ALTER TABLE client_cycles ADD COLUMN reset_day INTEGER NOT NULL DEFAULT 0")
 
     def audit(self, actor: Actor, owner: str, action: str, target: str, detail: str = ''):
         # Caller-controlled payloads/credentials are never copied into the audit log.
@@ -187,8 +194,16 @@ class Manager:
             if key in out: integer(out[key],0,MAX_INT)
         if 'reset' in out: integer(out['reset'],0,3650)
         if 'resetCount' in out: integer(out['resetCount'],0,100000)
-        for key in ('resetDay','resetTraffic','resetTrafficDay'):
-            if out.get(key): raise PolicyError('Only fixed-day quota reset cycles are supported in this release')
+        if out.get('resetDay'):raise PolicyError('Legacy resetDay is not used by DARK; use resetTrafficDay for monthly traffic reset')
+        if 'resetTraffic' in out:
+            if not isinstance(out['resetTraffic'],str) or out['resetTraffic'] not in ('','never','hourly','daily','weekly','monthly'):
+                raise PolicyError('resetTraffic must be never, hourly, daily, weekly or monthly')
+            out['resetTraffic']=out['resetTraffic'] or 'never'
+        if 'resetTrafficDay' in out:integer(out['resetTrafficDay'],0,31)
+        mode=out.get('resetTraffic','never');days=int(out.get('reset',0) or 0);day=int(out.get('resetTrafficDay',0) or 0)
+        if mode!='never' and days:raise PolicyError('Choose either a calendar traffic reset or a custom day interval, not both')
+        if mode=='monthly' and not 1<=day<=31:raise PolicyError('Monthly traffic reset requires resetTrafficDay from 1 to 31')
+        if mode!='monthly' and day:raise PolicyError('resetTrafficDay is only valid for monthly traffic reset')
         if 'expiryTime' in out:
             if type(out['expiryTime'])is not int or not 0<=out['expiryTime']<=MAX_INT:
                 raise PolicyError('Invalid expiryTime')
@@ -225,7 +240,8 @@ class Manager:
                 now=time.time()
                 with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
             for k,v in {'flow':'','security':'auto','limitIp':1,'limitHwid':0,'totalGB':0,
-                        'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0}.items():data.setdefault(k,v)
+                        'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0,
+                        'resetTraffic':'never','resetTrafficDay':0,'resetCount':0}.items():data.setdefault(k,v)
             ceiling=self.profile(owner)['max_client_ips']
             # max_client_ips is the mandatory per-user IP cap; 0 means owner leaves choice open.
             if ceiling and (data['limitIp']==0 or data['limitIp']>ceiling):
@@ -410,25 +426,60 @@ class Manager:
         with self.store.transaction() as db:
             db.execute("UPDATE managed_clients SET op='none',state='applied',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
 
-    def _schedule_cycles(self):
-        """Schedule at most one reset for missed periods; persist the next deadline.
+    @staticmethod
+    def _schedule_spec(desired:dict)->tuple[str,int,int]|None:
+        mode=str(desired.get('resetTraffic','never') or 'never')
+        days=int(desired.get('reset',0) or 0);day=int(desired.get('resetTrafficDay',0) or 0)
+        if mode=='never':return ('interval',days,0) if days else None
+        return mode,0,day
 
-        Expiry and manual/owner blocks remain independent. Completion advances
-        the schedule only after a successful reset; crash-uncertain resets are
-        deliberately not replayed.
+    def _monthly_next_at(self,day:int,now:float)->float:
+        try:zone=ZoneInfo(str(self.engine.section('panel').get('timezone','UTC')))
+        except Exception:zone=ZoneInfo('UTC')
+        current=datetime.datetime.fromtimestamp(now,zone)
+        year,month=current.year,current.month
+        for _ in range(14):
+            last=calendar.monthrange(year,month)[1];target=min(max(1,day),last)
+            candidate=datetime.datetime(year,month,target,0,0,0,tzinfo=zone)
+            if candidate.timestamp()>now:return candidate.timestamp()
+            month+=1
+            if month>12:month=1;year+=1
+        raise PolicyError('Could not calculate next monthly traffic reset')
+
+    @staticmethod
+    def _period_seconds(mode:str,days:int)->int:
+        return {'hourly':3600,'daily':86400,'weekly':604800,'interval':days*86400}.get(mode,0)
+
+    def _initial_cycle_at(self,mode:str,days:int,reset_day:int,now:float)->float:
+        if mode=='monthly':return self._monthly_next_at(reset_day,now)
+        period=self._period_seconds(mode,days)
+        if period<=0:raise PolicyError('Invalid traffic reset schedule')
+        return now+period
+
+    def _schedule_cycles(self):
+        """Schedule one destructive reset at a time with durable deadlines.
+
+        Hourly/daily/weekly/custom intervals are deadline based. Monthly uses the
+        panel IANA timezone and clamps day 29-31 to that month's last day. Missed
+        periods collapse into one reset; crash-uncertain resets are never replayed.
         """
         now=time.time()
         with self.store.transaction() as db:
             metas=db.execute("SELECT * FROM managed_clients WHERE state!='deleted'").fetchall()
             for meta in metas:
-                desired=json.loads(meta['desired']);days=desired.get('reset',0)
-                if not days:
+                desired=json.loads(meta['desired']);spec=self._schedule_spec(desired)
+                if not spec:
                     db.execute('DELETE FROM client_cycles WHERE email=?',(meta['email'],));continue
+                mode,days,reset_day=spec;cap=int(desired.get('resetCount',0) or 0)
                 row=db.execute('SELECT * FROM client_cycles WHERE email=?',(meta['email'],)).fetchone()
-                cap=desired.get('resetCount',0)
-                if not row or row['days']!=days:
-                    db.execute('INSERT INTO client_cycles(email,days,next_at,completed,max_resets) VALUES(?,?,?,0,?) ON CONFLICT(email) DO UPDATE SET days=excluded.days,next_at=excluded.next_at,completed=0,max_resets=excluded.max_resets',
-                               (meta['email'],days,now+days*86400,cap));continue
+                changed=not row or row['mode']!=mode or row['days']!=days or row['reset_day']!=reset_day
+                if changed:
+                    next_at=self._initial_cycle_at(mode,days,reset_day,now)
+                    db.execute('''INSERT INTO client_cycles(email,days,next_at,completed,max_resets,mode,reset_day)
+                        VALUES(?,?,?,0,?,?,?) ON CONFLICT(email) DO UPDATE SET days=excluded.days,
+                        next_at=excluded.next_at,completed=0,max_resets=excluded.max_resets,
+                        mode=excluded.mode,reset_day=excluded.reset_day''',
+                        (meta['email'],days,next_at,cap,mode,reset_day));continue
                 db.execute('UPDATE client_cycles SET max_resets=? WHERE email=?',(cap,meta['email']))
                 if cap and row['completed']>=cap:continue
                 if row['next_at']<=now and meta['op']=='none' and meta['state']=='applied':
@@ -436,11 +487,13 @@ class Manager:
 
     def _complete_cycle(self,email):
         with self.store.transaction() as db:
-            row=db.execute('SELECT * FROM client_cycles WHERE email=?',(email,)).fetchone()
-            now=time.time()
+            row=db.execute('SELECT * FROM client_cycles WHERE email=?',(email,)).fetchone();now=time.time()
             if row and row['next_at']<=now:
-                period=row['days']*86400
-                next_at=row['next_at']+(int((now-row['next_at'])//period)+1)*period
+                if row['mode']=='monthly':next_at=self._monthly_next_at(row['reset_day'],now)
+                else:
+                    period=self._period_seconds(row['mode'],row['days'])
+                    if period<=0:raise PolicyError('Invalid persisted traffic reset schedule')
+                    next_at=row['next_at']+(int((now-row['next_at'])//period)+1)*period
                 db.execute('UPDATE client_cycles SET next_at=?,completed=completed+1 WHERE email=?',(next_at,email))
 
     def tick(self,*,suppress: bool=False):
