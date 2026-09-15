@@ -36,6 +36,8 @@ port_busy(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$1$"; }
 public_ipv4(){ curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}'; }
 ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '/^port /{print $2;exit}'; else echo 22; fi; }
 valid_source_ref(){ [[ -n "$1" && ${#1} -le 200 && "$1" != -* && "$1" =~ ^[A-Za-z0-9._/@+-]+$ ]]; }
+supported_arch(){ case "$(uname -m 2>/dev/null || true)" in x86_64|amd64|aarch64|arm64) return 0;; *) return 1;; esac; }
+free_root_kb(){ df -Pk / 2>/dev/null | awk 'NR==2{print $4}'; }
 fetch_source(){
   local dest="$1" ref="$SOURCE_REF"
   valid_source_ref "$ref" || fail "Invalid DARK_XRAY_REF"
@@ -128,6 +130,9 @@ elif [[ "$STATE" == partial ]]; then
   case "$choice" in 1) repair_partial_install; STATE="clean" ;; 2) exit 0 ;; *) exit 0 ;; esac
 fi
 
+supported_arch || fail "Fresh install supports Linux amd64/x86_64 and arm64/aarch64 only."
+ROOT_FREE_KB="$(free_root_kb || true)"; [[ "$ROOT_FREE_KB" =~ ^[0-9]+$ ]] || fail "Could not determine free disk space"
+(( ROOT_FREE_KB >= 524288 )) || fail "Fresh install requires at least 512 MiB free on the root filesystem"
 progress 5 "Detecting server network and SSH"
 DETECTED_IP="$(public_ipv4 || true)"; DETECTED_SSH="$(ssh_port || true)"; DETECTED_SSH="${DETECTED_SSH:-22}"
 printf "  Public IP : %s\n  SSH port   : %s\n\n" "${DETECTED_IP:-not detected}" "$DETECTED_SSH"
@@ -163,6 +168,9 @@ progress 10 "Updating package index"; apt-get update -qq
 progress 18 "Installing system prerequisites"
 apt-get install -y -q git curl ca-certificates python3 python3-venv unzip openssl iproute2 >/dev/null
 [[ "$MODE" == 1 ]] && apt-get install -y -q certbot >/dev/null
+python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' || fail "Python 3.11+ is required (Ubuntu 24.04 / Debian 12 or equivalent)."
+command -v ss >/dev/null 2>&1 || fail "iproute2/ss is required for port safety checks"
+port_busy "$PANEL_PORT" && fail "Panel port $PANEL_PORT became occupied during prerequisite installation"
 
 TMP="$(mktemp -d /tmp/dark-xray-install.XXXXXX)"
 progress 25 "Fetching DARK XRAY source"; FETCHED_SHA="$(fetch_source "$TMP/src")"; printf '  Source commit: %s\n' "$FETCHED_SHA"
@@ -210,7 +218,12 @@ SYSCTL
   sysctl --system >/dev/null 2>&1 || warn "BBR sysctl could not be fully applied"
 fi
 
-progress 97 "Running final doctor"; /usr/local/bin/darkxray doctor || warn "Doctor reported warnings; review them before production use"
+progress 97 "Running final doctor"
+DOCTOR_JSON="$(/usr/local/bin/darkxray doctor)" || fail "Final Doctor command failed"
+printf '%s
+' "$DOCTOR_JSON"
+printf '%s
+' "$DOCTOR_JSON" | python3 -c 'import json,sys; c=json.load(sys.stdin).get("checks",{}); r=c.get("panel_route",{}); raise SystemExit(0 if c.get("configuration")=="ok" and c.get("database")=="ok" and isinstance(r,dict) and r.get("ok") is True else 1)' || fail "Final Doctor critical checks failed: configuration/database/panel route must be healthy"
 progress 100 "DARK XRAY installation complete"
 printf "\n${C_GREEN}╔════════════════ INSTALL COMPLETE ════════════════╗${C_RESET}\n"
 if (( TLS_READY )); then
