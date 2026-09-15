@@ -36,7 +36,7 @@ def test_settings_v2_defaults(env):
     runtime=c.get('/api/settings/runtime').json()['value']
     sub=c.get('/api/settings/subscription').json()['value']
     assert panel['language']=='en' and panel['session_max_age_minutes']==480
-    assert runtime['access_mode']=='ssh' and runtime['bind_port']==2087
+    assert runtime['access_mode']=='ssh' and runtime['bind_port']==2087 and runtime['panel_path']=='/'
     assert sub['enabled'] is True and sub['default_format']=='base64'
 
 
@@ -49,10 +49,11 @@ def test_panel_and_runtime_validation(env):
     assert c.put('/api/settings/panel',json={'value':bad}).status_code==422
 
     runtime=c.get('/api/settings/runtime').json()['value']
-    runtime.update(bind_port=2443,public_address='edge.example.test',poll_seconds=9,core_autostart=True)
+    runtime.update(bind_port=2443,public_address='edge.example.test',panel_path='/dark-admin',poll_seconds=9,core_autostart=True)
     r=c.put('/api/settings/runtime',json={'value':runtime});assert r.status_code==200,r.text
     status=c.get('/api/runtime-config').json()
     assert status['pending']['bind_port']['to']==2443
+    assert status['pending']['panel_path']['to']=='/dark-admin'
     assert status['apply_command']=='sudo darkxray settings-apply'
     assert c.post('/api/inbounds',json=IB).status_code==200
     runtime['bind_port']=19444
@@ -102,7 +103,7 @@ def test_settings_apply_plan_is_pure(tmp_path):
     spec=importlib.util.spec_from_file_location('settings_apply',path);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
     current={'public_origin':'http://127.0.0.1:2087','bind_port':2087,'public_address':'1.2.3.4','poll_seconds':5,'core_autostart':False,
              'xray_api_port':10085,'tls_certificate':'','tls_private_key':''}
-    desired={'access_mode':'ssh','bind_port':2443,'public_address':'edge.example.com','poll_seconds':10,'core_autostart':True,'domain':'','acme_email':''}
+    desired={'access_mode':'ssh','bind_port':2443,'public_address':'edge.example.com','panel_path':'/dark-admin','poll_seconds':10,'core_autostart':True,'domain':'','acme_email':''}
     valid=mod.validate_desired(desired,current,set())
     plan=mod.build_plan(current,valid)
     assert plan['pending']['bind_port']=={'from':2087,'to':2443}
@@ -129,3 +130,22 @@ def test_database_session_expiry_matches_setting(env):
     with store.lock:
         expiry=store.db.execute('SELECT MAX(expires_at) FROM live_sessions').fetchone()[0]
     assert 3590 <= expiry-before <= 3610
+
+
+
+def test_panel_uri_path_scopes_ui_api_and_cookie(tmp_path):
+    store=Store(tmp_path/'dark.sqlite3')
+    config=Config(xray_binary=str(tmp_path/'missing-xray'),xray_assets=str(tmp_path),public_address='vpn.example.test',panel_path='/dark-admin',test_engine=True)
+    engine=CoreEngine(config,store,tmp_path/'runtime');manager=Manager(store,engine);auth=Auth(store,tmp_path/'secret.key')
+    auth.bootstrap('dark','Test!OnlyPassword123');manager.owner_put(OWNER,'dark',name='DARK',allowed=[])
+    app=make_app(manager,auth,background=False)
+    with TestClient(app,base_url=config.public_origin,follow_redirects=False) as c:
+        assert c.get('/').status_code==404
+        r=c.get('/dark-admin');assert r.status_code==307 and r.headers['location']=='/dark-admin/'
+        assert c.get('/dark-admin/').status_code==200
+        assert c.get('/dark-admin/assets/style.css').status_code==200
+        assert c.post('/api/auth/login',json={'username':'dark','password':'Test!OnlyPassword123'}).status_code==404
+        r=c.post('/dark-admin/api/auth/login',json={'username':'dark','password':'Test!OnlyPassword123'});assert r.status_code==200
+        assert 'Path=/dark-admin' in r.headers.get('set-cookie','')
+        assert c.get('/health').status_code==200
+    store.close()

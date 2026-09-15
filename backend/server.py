@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 import psutil
 from fastapi import FastAPI,Depends,HTTPException,Request
-from fastapi.responses import JSONResponse,FileResponse,Response
+from fastapi.responses import JSONResponse,FileResponse,Response,RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel,ConfigDict,Field,StrictInt
 
@@ -146,10 +146,21 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
-    public=urlsplit(config.public_origin)
+    public=urlsplit(config.public_origin);panel_path=config.panel_path
 
     @app.middleware('http')
     async def security(request:Request,call_next):
+        raw_path=request.scope.get('path','/') or '/'
+        stable_public=(raw_path=='/health' or raw_path.startswith('/sub/') or raw_path.startswith('/node/api/'))
+        if panel_path!='/' and not stable_public:
+            if raw_path==panel_path:
+                target=panel_path+'/'
+                if request.url.query:target+='?'+request.url.query
+                return RedirectResponse(target,status_code=307)
+            if not raw_path.startswith(panel_path+'/'):
+                return JSONResponse({'detail':'Not Found'},404)
+            request.scope['root_path']=panel_path
+            request.scope['path']=raw_path[len(panel_path):] or '/'
         if request.headers.get('host','').lower()!=public.netloc.lower():
             return JSONResponse({'detail':'Unexpected Host'},400)
         origin=request.headers.get('origin')
@@ -203,7 +214,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         session_minutes=int(engine.section('panel').get('session_max_age_minutes',480))
         token,p=auth.login(body.username,body.password,body.otp,request.client.host if request.client else 'unknown',session_minutes*60)
         response=JSONResponse({'id':p.actor.id,'role':p.actor.role,'csrf':p.csrf,'permissions':p.actor.permissions})
-        response.set_cookie(COOKIE,token,max_age=session_minutes*60,httponly=True,secure=config.secure_cookie,samesite='strict',path='/')
+        response.set_cookie(COOKIE,token,max_age=session_minutes*60,httponly=True,secure=config.secure_cookie,samesite='strict',path=panel_path)
         manager.audit(p.actor,p.actor.id,'auth.login',p.actor.id)
         return response
     @app.get('/api/me')
@@ -211,12 +222,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:mfa=store.db.execute('SELECT enabled FROM mfa WHERE admin_id=?',(p.actor.id,)).fetchone()
         return {'id':p.actor.id,'role':p.actor.role,'permissions':p.actor.permissions,'csrf':p.csrf,
             'totp_enabled':bool(mfa and mfa[0]),'version':VERSION,'writes_enabled':config.writes_enabled,
-            'poll_seconds':config.poll_seconds,'engine_version':engine.version,'independent':True,'test_engine':config.test_engine,
+            'poll_seconds':config.poll_seconds,'engine_version':engine.version,'independent':True,'test_engine':config.test_engine,'panel_path':panel_path,
             'ui':engine.section('panel')}
     @app.post('/api/auth/logout')
     def logout(p:Principal=Depends(current)):
         with store.transaction() as db:db.execute('DELETE FROM live_sessions WHERE digest=?',(p.session_id,))
-        response=JSONResponse({'revoked':True});response.delete_cookie(COOKIE,path='/');return response
+        response=JSONResponse({'revoked':True});response.delete_cookie(COOKIE,path=panel_path);return response
     @app.post('/api/auth/password')
     def password(body:Password,p:Principal=Depends(current)):
         auth.change_password(p,body.old_password,body.new_password)
@@ -652,11 +663,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def runtime_config(p:Principal=Depends(owner)):
         desired=engine.section('runtime');origin=urlsplit(config.public_origin);mode='domain_tls' if origin.scheme=='https' else 'ssh'
         actual={'access_mode':mode,'bind_host':config.bind_host,'bind_port':config.bind_port,'public_address':config.public_address,
-                'public_origin':config.public_origin,'poll_seconds':config.poll_seconds,'core_autostart':config.core_autostart,
+                'public_origin':config.public_origin,'panel_path':config.panel_path,'panel_url':config.public_origin+(config.panel_path if config.panel_path!='/' else '')+'/',
+                'poll_seconds':config.poll_seconds,'core_autostart':config.core_autostart,
                 'domain':(origin.hostname or '') if mode=='domain_tls' else '','tls_enabled':bool(config.tls_certificate and config.tls_private_key),
                 'tls_certificate':config.tls_certificate,'secure_cookie':config.secure_cookie,'xray_api_port':config.xray_api_port,
                 'direct_source_verified':config.direct_source_verified,'guard_socket':config.guard_socket}
-        compare=('access_mode','bind_port','public_address','poll_seconds','core_autostart','domain')
+        compare=('access_mode','bind_port','public_address','panel_path','poll_seconds','core_autostart','domain')
         pending={k:{'from':actual.get(k),'to':desired.get(k)} for k in compare if actual.get(k)!=desired.get(k)}
         return {'actual':actual,'desired':desired,'pending':pending,'apply_command':'sudo darkxray settings-apply'}
 

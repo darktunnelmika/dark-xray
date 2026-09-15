@@ -78,3 +78,16 @@ def test_owner_security_recovery_actions(tmp_path):
     result=disable_owner_totp(data/'dark.sqlite3','dark');assert result['totp_disabled'] and result['sessions_revoked']
     status=owner_status(data/'dark.sqlite3','dark');assert status['active_sessions']==0 and status['active_api_keys']==0 and not status['totp_enabled']
     close_runtime(store,engine,manager)
+
+
+
+def test_create_owner_login_from_existing_profile(tmp_path):
+    data,store,engine,manager,auth=make_runtime(tmp_path)
+    auth.bootstrap('dark','OwnerPass8')
+    manager.owner_put(OWNER if 'OWNER' in globals() else __import__('dark_policy').Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
+    result=create_owner_account(data/'dark.sqlite3','Mika','MikaPass88')
+    assert result['created'] is True and result['role']=='owner'
+    with store.lock:
+        row=store.db.execute("SELECT role,password_hash FROM api_admins WHERE id='Mika'").fetchone()
+    assert row['role']=='owner' and verify_password('MikaPass88',row['password_hash'])
+    close_runtime(store,engine,manager)

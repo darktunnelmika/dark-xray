@@ -34,12 +34,19 @@ def owner_password()->str:
         return first
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--core-archive',type=Path);p.add_argument('--core-sha256');p.add_argument('--core-version',default='v26.3.27');p.add_argument('--username',default='dark');p.add_argument('--port',type=int,default=2087);p.add_argument('--ssh-port',type=int,action='append',default=[]);p.add_argument('--public-address',default='127.0.0.1',help='Proxy data IP/DNS; the panel itself remains loopback until TLS setup');p.add_argument('--install-os-packages',action='store_true',help='Explicitly permit apt installation of python3-venv and ca-certificates');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--core-archive',type=Path);p.add_argument('--core-sha256');p.add_argument('--core-version',default='v26.3.27')
+    p.add_argument('--username',default='dark')
+    p.add_argument('--port',type=int,default=2087)
+    p.add_argument('--panel-path',default='/')
+    p.add_argument('--ssh-port',type=int,action='append',default=[]);p.add_argument('--public-address',default='127.0.0.1',help='Proxy data IP/DNS; the panel itself remains loopback until TLS setup');p.add_argument('--install-os-packages',action='store_true',help='Explicitly permit apt installation of python3-venv and ca-certificates');a=p.parse_args()
     if os.geteuid()!=0 or sys.platform!='linux':raise SystemExit('Linux root is required only for provisioning')
     if sys.version_info<(3,11):raise SystemExit('Python 3.11+ required')
     if not Path('/run/systemd/system').exists():raise SystemExit('A systemd host is required; use install.sh for local development')
     if not re.fullmatch('[A-Za-z0-9_.@+-]{1,128}',a.username):raise SystemExit('Invalid username')
     if not 1024<=a.port<=65535 or any(not 1<=x<=65535 for x in a.ssh_port):raise SystemExit('Invalid port')
+    if a.panel_path!='/' and a.panel_path.endswith('/'):a.panel_path=a.panel_path.rstrip('/')
+    if a.panel_path!='/' and (len(a.panel_path)>200 or not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',a.panel_path)):
+        raise SystemExit('Invalid panel URI path')
     if bool(a.core_archive)!=bool(a.core_sha256):raise SystemExit('Offline core requires both --core-archive and --core-sha256')
     if not re.fullmatch(r'v\d+\.\d+\.\d+',a.core_version):raise SystemExit('Invalid core version')
     if any(c in a.public_address for c in '/?#@ \r\n') or not a.public_address:raise SystemExit('Use a plain public IP or DNS name')
@@ -65,7 +72,8 @@ def main():
         else:run([py,APP/'tools/fetch-core.py','--version',a.core_version,'--destination',core])
     run([core/'xray','version'])
     CONF.mkdir(mode=0o750);os.chmod(CONF,0o750);os.chown(CONF,0,account.pw_gid);DATA.mkdir(mode=0o700);os.chown(DATA,account.pw_uid,account.pw_gid)
-    cfg=json.loads((ROOT/'config.example.json').read_text());cfg.update(public_origin=f'http://127.0.0.1:{a.port}',public_address=a.public_address,bind_port=a.port,xray_binary=str(core/'xray'),xray_assets=str(core),core_autostart=True,protected_ports=sorted(set([22,a.port,cfg['xray_api_port']]+a.ssh_port)))
+    cfg=json.loads((ROOT/'config.example.json').read_text())
+    cfg.update(public_origin=f'http://127.0.0.1:{a.port}',panel_path=a.panel_path,public_address=a.public_address,bind_port=a.port,xray_binary=str(core/'xray'),xray_assets=str(core),core_autostart=True,protected_ports=sorted(set([22,a.port,cfg['xray_api_port']]+a.ssh_port)))
     path=CONF/'config.json';path.write_text(json.dumps(cfg,indent=2));os.chmod(path,0o640);os.chown(path,0,account.pw_gid)
     for path in APP.rglob('*'):
         if path.is_symlink():continue
@@ -84,7 +92,7 @@ def main():
 set -Eeuo pipefail
 export DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray
 case "${1:-menu}" in
-  init|reset-password|account|check|serve|backup|doctor)
+  init|reset-password|account|stage-panel-path|check|serve|backup|doctor)
     if [[ $EUID -eq 0 ]]; then
       exec runuser -u darkxray -- env DARK_CONFIG="$DARK_CONFIG" DARK_DATA="$DARK_DATA" /opt/dark-xray/darkxray "$@"
     fi ;;
@@ -92,6 +100,9 @@ esac
 exec /opt/dark-xray/darkxray "$@"
 ''');os.chmod(wrapper,0o755)
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray.service'])
-    print('\nDARK XRAY installed independently. Default web access is loopback only.');print(f'From your own computer: ssh -L {a.port}:127.0.0.1:{a.port} root@YOUR_SERVER -p YOUR_SSH_PORT');print(f'Open http://127.0.0.1:{a.port} after forwarding. No firewall was enabled.');print('Next: darkxray doctor; for TLS: darkxray domain --help; for reviewed IP enforcement: darkxray guard-enable --help')
+    print('\nDARK XRAY installed independently. Default web access is loopback only.');print(f'From your own computer: ssh -L {a.port}:127.0.0.1:{a.port} root@YOUR_SERVER -p YOUR_SSH_PORT')
+    suffix=(a.panel_path if a.panel_path!='/' else '')+'/'
+    print(f'Open http://127.0.0.1:{a.port}{suffix} after forwarding. No firewall was enabled.')
+    print('Next: darkxray doctor; for TLS: darkxray domain --help; for reviewed IP enforcement: darkxray guard-enable --help')
 
 if __name__=='__main__':main()

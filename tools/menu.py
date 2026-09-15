@@ -60,7 +60,16 @@ def metrics():
         return f'{psutil.cpu_percent(interval=.12):.0f}%',f'{human(vm.used)}/{human(vm.total)} ({vm.percent:.0f}%)',f'{human(ds.used)}/{human(ds.total)} ({ds.percent:.0f}%)'
     except Exception:return 'n/a','n/a','n/a'
 
-def endpoint(c):return str(c.get('public_origin') or f"http://{c.get('bind_host','127.0.0.1')}:{c.get('bind_port',2087)}")
+def endpoint(c):
+    origin=str(c.get('public_origin') or f"http://{c.get('bind_host','127.0.0.1')}:{c.get('bind_port',2087)}").rstrip('/')
+    path=str(c.get('panel_path','/') or '/').strip()
+    if path!='/' and path.endswith('/'):path=path.rstrip('/')
+    return origin+(path if path!='/' else '')+'/'
+
+def valid_panel_path(value):
+    value=str(value or '/').strip()
+    if value!='/' and value.endswith('/'):value=value.rstrip('/')
+    return len(value)<=200 and (value=='/' or bool(__import__('re').fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',value)))
 
 def header(title='CONTROL CENTER',sub=''):
     clear();w=76
@@ -117,10 +126,32 @@ def owner_usernames():
             return [r[0] for r in db.execute("SELECT id FROM api_admins WHERE role='owner' ORDER BY id")]
     except Exception:return []
 
+def owner_profiles_without_login():
+    path=db_path()
+    if not path.is_file():return []
+    try:
+        with sqlite3.connect(f'file:{path}?mode=ro',uri=True) as db:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_profiles'").fetchone():return []
+            logins={r[0] for r in db.execute("SELECT id FROM api_admins WHERE role='owner'")}
+            return [r[0] for r in db.execute('SELECT id FROM owner_profiles ORDER BY id') if r[0] not in logins]
+    except Exception:return []
+
+
 def choose_owner():
-    owners=owner_usernames();default=owners[0] if owners else 'dark'
-    if len(owners)>1:print(f'{GY}Owners:{R} '+', '.join(owners))
-    return ask('Owner username',default)
+    owners=owner_usernames()
+    if not owners:
+        print(f'{RE}No login Owner exists. Use Create owner login first.{R}')
+        return ''
+    if len(owners)==1:
+        print(f'{GY}Selected login Owner:{R} {owners[0]}')
+        return owners[0]
+    print(f'{GY}Login Owners:{R}')
+    for i,name in enumerate(owners,1):print(f'  [{i}] {name}')
+    raw=ask('Select owner','1')
+    if raw.isdigit() and 1<=int(raw)<=len(owners):return owners[int(raw)-1]
+    print(f'{RE}Invalid Owner selection. Type the number shown in the list.{R}')
+    return ''
+
 
 def inbound_ports():
     path=db_path();out=set()
@@ -189,39 +220,48 @@ def dashboard():
 
 def account_menu():
     while True:
-        owners=owner_usernames();summary='Owners: '+(', '.join(owners) if owners else 'unavailable')
+        owners=owner_usernames();profiles=owner_profiles_without_login()
+        summary='Login Owners: '+(', '.join(owners) if owners else 'none')
+        if profiles:summary+=' | Profiles without login: '+', '.join(profiles)
         header('ACCOUNT & ACCESS',summary)
-        title_row('OWNER ACCOUNT')
+        title_row('OWNER LOGIN ACCOUNTS')
         item(1,'Account security status','sessions · API keys · TOTP')
-        item(2,'Change owner username','live-safe · sessions revoked')
-        item(3,'Change owner password','live-safe · TOTP preserved')
-        item(4,'Revoke all owner sessions','force logout browsers')
+        item(2,'Create owner login','separate from owner/reseller profile')
+        item(3,'Change owner username','select existing login owner')
+        item(4,'Change owner password','select existing login owner')
+        item(5,'Revoke all owner sessions','force logout browsers')
         title_row('SECURITY RECOVERY')
-        item(5,'Revoke all owner API keys','robot/API tokens')
-        item(6,'Reset / disable owner TOTP','emergency recovery')
-        item(7,'Show Web Account & Security URL')
+        item(6,'Revoke all owner API keys','robot/API tokens')
+        item(7,'Reset / disable owner TOTP','emergency recovery')
+        item(8,'Show Web Account & Security URL')
         back();x=ask('DARK')
         if x=='0':return
-        user=choose_owner() if x in {'1','2','3','4','5','6'} else ''
+        if x=='2':
+            print(f'{GY}This creates a real panel LOGIN Owner. An owner profile alone cannot sign in.{R}')
+            user=ask('New owner login username')
+            if user and confirm(f'Create a full Owner login named {user}?','CREATE'):
+                run([COMMAND,'account','--username',user,'--action','create-owner']);pause()
+            continue
+        user=choose_owner() if x in {'1','3','4','5','6','7'} else ''
         if x=='1' and user:run([COMMAND,'account','--username',user,'--action','status']);pause()
-        elif x=='2' and user:
+        elif x=='3' and user:
             new=ask('New owner username')
             if new and confirm(f'Rename owner {user} → {new}? Active sessions will be revoked.','RENAME'):
                 run([COMMAND,'account','--username',user,'--action','rename','--new-username',new]);pause()
-        elif x=='3' and user:
-            if confirm(f'Change password for owner {user}? Active sessions will be revoked.'):
-                run([COMMAND,'reset-password','--username',user]);pause()
         elif x=='4' and user:
+            if confirm(f'Change password for login Owner {user}? Active sessions will be revoked.'):
+                run([COMMAND,'reset-password','--username',user]);pause()
+        elif x=='5' and user:
             if confirm(f'Force logout every active session for {user}?','LOGOUT'):
                 run([COMMAND,'account','--username',user,'--action','revoke-sessions']);pause()
-        elif x=='5' and user:
+        elif x=='6' and user:
             if confirm(f'Revoke every active API key owned by {user}?','REVOKE'):
                 run([COMMAND,'account','--username',user,'--action','revoke-api-keys']);pause()
-        elif x=='6' and user:
+        elif x=='7' and user:
             print(f'{YE}This removes TOTP enrollment. Re-enroll 2FA from the Web panel afterwards.{R}')
             if confirm(f'Disable TOTP for {user} and revoke browser sessions?','DISABLE2FA'):
                 run([COMMAND,'account','--username',user,'--action','disable-totp']);pause()
-        elif x=='7':show_access();print('  Open the panel, then Account & Security.');pause()
+        elif x=='8':show_access();print('  Open the panel, then Account & Security.');pause()
 
 
 def panel_network_menu():
@@ -231,14 +271,15 @@ def panel_network_menu():
         item(1,'Safe configuration summary')
         item(2,'Change panel port',str(c.get('bind_port',2087)))
         item(3,'Change public proxy address',str(c.get('public_address','')))
-        item(4,'Show panel URL / SSH tunnel')
+        item(4,'Change panel URI path',str(c.get('panel_path','/')))
+        item(5,'Show panel URL / SSH tunnel')
         title_row('WEB SETTINGS')
-        item(5,'Preview staged Web Settings')
-        item(6,'Apply staged Web Settings','root boundary')
+        item(6,'Preview staged Web Settings')
+        item(7,'Apply staged Web Settings','root boundary')
         title_row('NETWORK')
-        item(7,'Listening TCP ports')
-        item(8,'System resources / uptime')
-        item(9,'Enable BBR','fq + bbr')
+        item(8,'Listening TCP ports')
+        item(9,'System resources / uptime')
+        item(10,'Enable BBR','fq + bbr')
         back();x=ask('DARK')
         if x=='0':return
         if x=='1':safe_config_summary();pause()
@@ -265,17 +306,28 @@ def panel_network_menu():
                 c['public_address']=v
                 if atomic_config(c):run(['systemctl','restart','dark-xray.service'])
             pause()
-        elif x=='4':show_access();pause()
-        elif x=='5':run([COMMAND,'settings-apply','--dry-run']);pause()
-        elif x=='6':
-            if need_root() and confirm('Apply staged Web Settings and restart services if required?'):run([COMMAND,'settings-apply'])
-            pause()
-        elif x=='7':run(['ss','-lntp']);pause()
-        elif x=='8':run(['uptime']);run(['free','-h']);run(['df','-h','/']);pause()
-        elif x=='9':
+        elif x=='4':
+            v=ask('Panel URI path (example /dark-admin)',str(c.get('panel_path','/'))).strip() or '/'
+            if v!='/' and v.endswith('/'):v=v.rstrip('/')
+            if not valid_panel_path(v):print(f'{RE}Invalid URI path. Use / or /letters-numbers_-/segments.{R}');pause();continue
+            if confirm(f'Stage panel URI path {c.get("panel_path","/")} → {v}?'):
+                run([COMMAND,'stage-panel-path','--panel-path',v])
+                print(f'{YE}URI path is staged. Apply it now to restart the panel on the new path.{R}')
+                if need_root() and confirm('Apply staged URI path now?'):
+                    run([COMMAND,'settings-apply'])
+                    print(f'{GR}New panel URL: {endpoint(cfg())}{R}')
+                pause()
+        elif x=='5':show_access();pause()
+        elif x=='6':run([COMMAND,'settings-apply','--dry-run']);pause()
+        elif x=='7':
+            if need_root() and confirm('Apply staged Web Settings? Listener changes may restart the panel.'):
+                run([COMMAND,'settings-apply']);pause()
+        elif x=='8':run(['ss','-lntp']);pause()
+        elif x=='9':run(['uptime']);run(['free','-h']);run(['df','-h','/']);pause()
+        elif x=='10':
             if need_root() and confirm('Apply persistent fq + BBR sysctl?'):
-                Path('/etc/sysctl.d/99-dark-xray-bbr.conf').write_text('net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n');run(['sysctl','--system'])
-            pause()
+                Path('/etc/sysctl.d/99-dark-xray-bbr.conf').write_text('net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n')
+                run(['sysctl','--system']);pause()
 
 
 def domain_tls_menu():

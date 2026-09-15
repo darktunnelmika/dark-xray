@@ -1,5 +1,6 @@
 {
   "public_origin": "http://127.0.0.1:2087",
+  "panel_path": "/",
   "public_address": "127.0.0.1",
   "xray_binary": "/usr/local/lib/dark-xray/xray",
   "xray_assets": "/usr/local/lib/dark-xray",

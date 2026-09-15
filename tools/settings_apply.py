@@ -22,10 +22,10 @@ from urllib.parse import urlsplit
 
 DOMAIN_RE = re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}')
 EMAIL_RE = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
-RUNTIME_KEYS = {'access_mode','bind_port','public_address','poll_seconds','core_autostart','domain','acme_email'}
+RUNTIME_KEYS = {'access_mode','bind_port','public_address','panel_path','poll_seconds','core_autostart','domain','acme_email'}
 
 
-def _runtime_row(db_path: Path) -> dict:
+def _runtime_row(db_path: Path, current: dict) -> dict:
     with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as db:
         row = db.execute("SELECT body FROM core_sections WHERE name='runtime'").fetchone()
     if not row:
@@ -33,6 +33,9 @@ def _runtime_row(db_path: Path) -> dict:
     value = json.loads(row[0])
     if not isinstance(value, dict) or set(value) - RUNTIME_KEYS:
         raise SystemExit('Staged runtime settings have an invalid shape')
+    # Backward-compatible hydration for installations that saved Settings V2 before
+    # panel_path existed. The next save persists the full shape.
+    value.setdefault('panel_path',str(current.get('panel_path','/')))
     return value
 
 
@@ -58,6 +61,12 @@ def validate_desired(value: dict, current: dict, inbound_ports: set[int]) -> dic
             raise ValueError('Invalid '+key)
     if type(v.get('core_autostart')) is not bool:
         raise ValueError('core_autostart must be boolean')
+    panel_path=str(v.get('panel_path','/')).strip()
+    if panel_path!='/' and panel_path.endswith('/'):panel_path=panel_path.rstrip('/')
+    if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):
+        raise ValueError('Invalid panel URI path')
+    if len(panel_path)>200:raise ValueError('Panel URI path is too long')
+    v['panel_path']=panel_path
     address = v.get('public_address','')
     if not isinstance(address,str) or not address or any(c in address for c in '/?#@ \r\n\t'):
         raise ValueError('public_address must be a plain IP or DNS name')
@@ -89,6 +98,7 @@ def build_plan(current: dict, desired: dict) -> dict:
         'access_mode':actual_mode,
         'bind_port':int(current.get('bind_port',2087)),
         'public_address':str(current.get('public_address','')),
+        'panel_path':str(current.get('panel_path','/')),
         'poll_seconds':int(current.get('poll_seconds',5)),
         'core_autostart':bool(current.get('core_autostart',False)),
         'domain':current_domain if actual_mode=='domain_tls' else '',
@@ -130,7 +140,7 @@ def _sync_guard(config: dict, old_panel_port: int, new_panel_port: int) -> None:
 def apply_settings(config_path: Path, db_path: Path, desired: dict, plan: dict) -> None:
     current=json.loads(config_path.read_text())
     old_port=int(current.get('bind_port',2087));new_port=desired['bind_port']
-    current.update(public_address=desired['public_address'],poll_seconds=desired['poll_seconds'],core_autostart=desired['core_autostart'])
+    current.update(public_address=desired['public_address'],panel_path=desired['panel_path'],poll_seconds=desired['poll_seconds'],core_autostart=desired['core_autostart'])
     if desired['access_mode']=='ssh':
         current.update(public_origin=f'http://127.0.0.1:{new_port}',bind_host='127.0.0.1',bind_port=new_port,
                        secure_cookie=False,tls_certificate='',tls_private_key='')
@@ -160,7 +170,7 @@ def main() -> None:
     p.add_argument('--dry-run',action='store_true')
     args=p.parse_args();db_path=args.data/'dark.sqlite3'
     current=json.loads(args.config.read_text())
-    desired=validate_desired(_runtime_row(db_path),current,_inbound_ports(db_path))
+    desired=validate_desired(_runtime_row(db_path,current),current,_inbound_ports(db_path))
     plan=build_plan(current,desired);print(json.dumps(plan,indent=2))
     if args.dry_run:return
     if os.geteuid()!=0:raise SystemExit('Root is required to apply staged runtime settings')

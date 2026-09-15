@@ -31,6 +31,7 @@ yesno(){ local prompt="$1" def="${2:-y}" a; read -r -p "$prompt [${def^^}/$([[ $
 valid_port(){ [[ "$1" =~ ^[0-9]+$ ]] && (( 1 <= 10#$1 && 10#$1 <= 65535 )); }
 valid_user(){ [[ "$1" =~ ^[A-Za-z0-9_.@+-]{1,128}$ ]]; }
 valid_domain(){ [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; }
+valid_panel_path(){ [[ "$1" == / || ( ${#1} -le 200 && "$1" =~ ^/([A-Za-z0-9_-]{1,64})(/[A-Za-z0-9_-]{1,64})*$ ) ]]; }
 port_busy(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$1$"; }
 public_ipv4(){ curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}'; }
 ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '/^port /{print $2;exit}'; else echo 22; fi; }
@@ -136,6 +137,7 @@ echo "  2) IP + SSH tunnel     (no public panel listener)"
 echo "  3) Advanced            (custom panel/core settings)"
 MODE="$(ask 'Choose profile' '1')"; [[ "$MODE" =~ ^[123]$ ]] || fail "Invalid install profile"
 OWNER="$(ask 'Owner username' 'dark')"; valid_user "$OWNER" || fail "Invalid owner username"
+URI_PATH="$(ask 'Panel URI path' '/')"; [[ "$URI_PATH" != / ]] && URI_PATH="${URI_PATH%/}"; valid_panel_path "$URI_PATH" || fail "Invalid panel URI path"
 PANEL_PORT="$(ask 'Panel port' '2087')"; valid_port "$PANEL_PORT" || fail "Invalid panel port"
 (( PANEL_PORT >= 1024 )) || fail "Panel port must be >= 1024"
 [[ "$PANEL_PORT" != "$DETECTED_SSH" && "$PANEL_PORT" != "10085" ]] || fail "Panel port conflicts with SSH/Xray API"
@@ -150,7 +152,7 @@ if [[ "$MODE" == 1 ]]; then
 fi
 
 echo; printf "${C_PURPLE}INSTALL PLAN${C_RESET}\n"
-printf "  Owner        : %s\n  Panel port   : %s\n  Proxy address: %s\n  Xray core    : %s\n" "$OWNER" "$PANEL_PORT" "$PUBLIC_ADDRESS" "$CORE_VERSION"
+printf "  Owner        : %s\n  Panel port   : %s\n  URI path     : %s\n  Proxy address: %s\n  Xray core    : %s\n" "$OWNER" "$PANEL_PORT" "$URI_PATH" "$PUBLIC_ADDRESS" "$CORE_VERSION"
 [[ -n "$DOMAIN" ]] && printf "  Domain       : %s\n  HTTPS URL    : https://%s:%s\n" "$DOMAIN" "$DOMAIN" "$PANEL_PORT"
 printf "  SSH port     : %s\n  Source ref   : %s\n" "$DETECTED_SSH" "$SOURCE_REF"
 yesno "Start installation?" y || exit 0
@@ -167,7 +169,7 @@ cd "$TMP/src"
 progress 35 "Checking source before provisioning"; python3 tools/repo-check.py >/dev/null || fail "Repository hygiene check failed"
 progress 45 "Provisioning isolated service account and application"
 # Prerequisites are already installed above; avoid a second apt pass here.
-bash setup.sh --public-address "$PUBLIC_ADDRESS" --ssh-port "$DETECTED_SSH" --username "$OWNER" --port "$PANEL_PORT" --core-version "$CORE_VERSION"
+bash setup.sh --public-address "$PUBLIC_ADDRESS" --ssh-port "$DETECTED_SSH" --username "$OWNER" --port "$PANEL_PORT" --panel-path "$URI_PATH" --core-version "$CORE_VERSION"
 
 progress 65 "Verifying systemd services and Xray core"
 systemctl is-enabled dark-xray.service >/dev/null || fail "dark-xray service is not enabled"
@@ -211,11 +213,13 @@ progress 97 "Running final doctor"; /usr/local/bin/darkxray doctor || warn "Doct
 progress 100 "DARK XRAY installation complete"
 printf "\n${C_GREEN}╔════════════════ INSTALL COMPLETE ════════════════╗${C_RESET}\n"
 if (( TLS_READY )); then
-  printf "${C_GREEN}║${C_RESET} Panel: https://%s:%s\n" "$DOMAIN" "$PANEL_PORT"
+  SUFFIX="$([[ "$URI_PATH" == / ]] && echo / || echo "$URI_PATH/")"
+  printf "${C_GREEN}║${C_RESET} Panel: https://%s:%s%s\n" "$DOMAIN" "$PANEL_PORT" "$SUFFIX"
 else
   printf "${C_GREEN}║${C_RESET} Panel is installed; public TLS is not active yet.\n"
   printf "${C_GREEN}║${C_RESET} Local: ssh -L %s:127.0.0.1:%s root@SERVER -p %s\n" "$PANEL_PORT" "$PANEL_PORT" "$DETECTED_SSH"
-  printf "${C_GREEN}║${C_RESET} Open: http://127.0.0.1:%s\n" "$PANEL_PORT"
+  SUFFIX="$([[ "$URI_PATH" == / ]] && echo / || echo "$URI_PATH/")"
+  printf "${C_GREEN}║${C_RESET} Open: http://127.0.0.1:%s%s\n" "$PANEL_PORT" "$SUFFIX"
   [[ "$MODE" == 1 ]] && printf "${C_GREEN}║${C_RESET} TLS retry: darkxray → Domain / TLS\n"
 fi
 printf "${C_GREEN}║${C_RESET} Manager: darkxray\n"

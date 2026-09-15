@@ -68,6 +68,31 @@ def _revoke_sessions_tx(db: sqlite3.Connection, username: str) -> int:
     return removed
 
 
+def create_owner_account(db_path: Path, username: str, password: str) -> dict:
+    """Create a real login owner, optionally attaching an existing owner profile."""
+    if not NAME_RE.fullmatch(username):raise PolicyError('Invalid owner username')
+    hashed=password_hash(password)
+    db=_connect(db_path)
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        if db.execute('SELECT 1 FROM api_admins WHERE id=?',(username,)).fetchone():raise PolicyError('A login account with this username already exists')
+        db.execute('INSERT INTO api_admins(id,role,password_hash,permissions,disabled) VALUES(?,?,?,?,0)',(username,'owner',hashed,'{}'))
+        if _table_exists(db,'owners'):db.execute('INSERT OR IGNORE INTO owners(id) VALUES(?)',(username,))
+        if _table_exists(db,'owner_profiles'):
+            row=db.execute('SELECT 1 FROM owner_profiles WHERE id=?',(username,)).fetchone()
+            if not row:
+                allowed=[]
+                if _table_exists(db,'core_inbounds'):allowed=[r[0] for r in db.execute('SELECT id FROM core_inbounds ORDER BY id')]
+                db.execute('INSERT INTO owner_profiles(id,name,allowed) VALUES(?,?,?)',(username,username,json.dumps(allowed)))
+        db.execute('COMMIT')
+        return {'username':username,'created':True,'role':'owner','profile_attached':True}
+    except BaseException:
+        try:db.execute('ROLLBACK')
+        except sqlite3.Error:pass
+        raise
+    finally:db.close()
+
+
 def reset_owner_password(db_path: Path, username: str, password: str) -> dict:
     """Replace an existing owner's password and revoke interactive sessions."""
     hashed=password_hash(password)  # canonical policy validation before write lock
@@ -179,11 +204,12 @@ def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--data',type=Path,default=Path(os.environ.get('DARK_DATA','./data')))
     p.add_argument('--username',required=True)
-    p.add_argument('--action',choices=('password','rename','revoke-sessions','revoke-api-keys','disable-totp','status'),default='password')
+    p.add_argument('--action',choices=('create-owner','password','rename','revoke-sessions','revoke-api-keys','disable-totp','status'),default='password')
     p.add_argument('--new-username')
     args=p.parse_args();db=args.data/'dark.sqlite3'
     try:
-        if args.action=='password':result=reset_owner_password(db,args.username,_read_password())
+        if args.action=='create-owner':result=create_owner_account(db,args.username,_read_password())
+        elif args.action=='password':result=reset_owner_password(db,args.username,_read_password())
         elif args.action=='rename':
             if not args.new_username:raise PolicyError('--new-username is required for rename')
             result=rename_owner_username(db,args.username,args.new_username)

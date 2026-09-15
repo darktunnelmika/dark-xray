@@ -76,6 +76,6 @@ fi
     subprocess.run(['systemctl','enable','--now','certbot.timer'],check=True)
     if guard.exists():subprocess.run(['systemctl','restart','dark-xray-guard.service'],check=True)
     subprocess.run(['systemctl','restart','dark-xray.service'],check=True)
-    print('Panel TLS enabled:',config['public_origin'])
+    panel_path=str(config.get('panel_path','/'));print('Panel TLS enabled:',config['public_origin']+(panel_path if panel_path!='/' else '')+'/')
     print('Renewal hook installed. Renewal restarts DARK and can interrupt Xray sessions.')
 if __name__=='__main__':main()

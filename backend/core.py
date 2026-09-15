@@ -40,6 +40,7 @@ class CoreError(RuntimeError):
 @dataclass
 class Config:
     public_origin: str = 'http://127.0.0.1:2087'
+    panel_path: str = '/'
     xray_binary: str = '/usr/local/lib/dark-xray/xray'
     xray_assets: str = '/usr/local/lib/dark-xray'
     xray_api_port: int = 10085
@@ -67,6 +68,12 @@ class Config:
         port=p.port or (443 if p.scheme=='https' else 80)
         if not 1<=port<=65535: raise ValueError('Invalid panel port')
         self.public_origin=self.public_origin.rstrip('/')
+        panel_path=str(self.panel_path or '/').strip()
+        if panel_path!='/' and panel_path.endswith('/'):panel_path=panel_path.rstrip('/')
+        if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):
+            raise ValueError('panel_path must be / or slash-prefixed alphanumeric/_/- segments')
+        if len(panel_path)>200:raise ValueError('panel_path is too long')
+        self.panel_path=panel_path
         if p.scheme=='https' and not self.secure_cookie: raise ValueError('HTTPS requires secure_cookie=true')
         if p.scheme=='http':
             try: local=ipaddress.ip_address(p.hostname).is_loopback
@@ -161,7 +168,7 @@ class CoreEngine:
                   'panel':{'title':'DARK XRAY','support_url':'','language':'en','timezone':'UTC','page_size':50,
                            'session_max_age_minutes':480,'datepicker':'gregorian','density':'comfortable','reduced_motion':False},
                   'runtime':{'access_mode':access_mode,'bind_port':self.config.bind_port,'public_address':self.config.public_address,
-                             'poll_seconds':self.config.poll_seconds,'core_autostart':self.config.core_autostart,
+                             'panel_path':self.config.panel_path,'poll_seconds':self.config.poll_seconds,'core_autostart':self.config.core_autostart,
                              'domain':(origin.hostname or '') if access_mode=='domain_tls' else '','acme_email':''},
                   'subscription':{'enabled':True,'default_format':'base64','auto_detect':True,'profile_update_interval_hours':6,
                                   'remark_template':'{remark} | {email}','support_url':'','profile_title':'DARK XRAY',
@@ -200,12 +207,17 @@ class CoreEngine:
                 ZoneInfo(value['timezone'])
             except Exception:raise CoreError('Invalid IANA timezone')
         if name=='runtime':
-            allowed={'access_mode','bind_port','public_address','poll_seconds','core_autostart','domain','acme_email'}
+            allowed={'access_mode','bind_port','public_address','panel_path','poll_seconds','core_autostart','domain','acme_email'}
             if set(value)!=allowed:raise CoreError('Runtime settings shape is incomplete or contains unknown fields')
             if value['access_mode'] not in ('ssh','domain_tls'):raise CoreError('Invalid access mode')
             for key,low,high in [('bind_port',1024,65535),('poll_seconds',1,3600)]:
                 if type(value[key]) is not int or not low<=value[key]<=high:raise CoreError('Invalid '+key)
             if type(value['core_autostart']) is not bool:raise CoreError('core_autostart must be boolean')
+            panel_path=str(value.get('panel_path','')).strip()
+            if panel_path!='/' and panel_path.endswith('/'):panel_path=panel_path.rstrip('/')
+            if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):raise CoreError('Invalid panel URI path')
+            if len(panel_path)>200:raise CoreError('Panel URI path is too long')
+            value['panel_path']=panel_path
             addr=value['public_address']
             if not isinstance(addr,str) or not addr or len(addr)>253 or any(c in addr for c in '/?#@ \r\n\t'):raise CoreError('Invalid public proxy address')
             reserved=(set(self.config.protected_ports)-{self.config.bind_port})|{22,self.config.xray_api_port}
