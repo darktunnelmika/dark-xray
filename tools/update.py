@@ -1,36 +1,38 @@
 #!/usr/bin/env python3
-"""Transactional-ish DARK XRAY source updater.
+"""Rollback-safe DARK XRAY source updater.
 
-The updater preserves /etc and /var/lib, validates candidate source before stopping
-the service, snapshots the currently installed application source, and restores
-that snapshot if the new application cannot become active. The virtualenv is
-reused; requirements are reinstalled after both forward update and rollback.
+The updater validates the candidate before downtime, checks the live installation,
+creates independent source + SQLite rollback snapshots, then activates the new
+source. A successful systemd restart is not enough: the local Doctor must also
+confirm configuration, SQLite integrity, panel route and a real web asset.
 
-Candidate clones may intentionally live below a root-private (umask 077) temporary
-directory. We therefore NEVER preserve candidate checkout permissions into the
-installed application tree. Installed source permissions are normalized after
-copy/rollback so the unprivileged ``darkxray`` service account can read source and
-web assets without making application files writable to it.
+If activation fails after the new code has touched the database, both source and
+database are restored before the previous service is reactivated.
 """
 from __future__ import annotations
-import argparse, os, shutil, subprocess, sys, tarfile, tempfile, time
+import argparse,json,os,re,shutil,sqlite3,subprocess,sys,tarfile,tempfile,time
 from pathlib import Path
 
 APP=Path('/opt/dark-xray'); CONF=Path('/etc/dark-xray'); DATA=Path('/var/lib/dark-xray')
+DB=DATA/'dark.sqlite3'
 REPO='https://github.com/darktunnelmika/dark-xray.git'
 COPY_DIRS=('backend','web','tools','deploy')
 COPY_FILES=('darkxray','requirements.txt','LICENSE','THIRD-PARTY-NOTICES.md','VERSION')
 SNAPSHOT_FILES=COPY_DIRS+('darkxray','requirements.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md')
+MIB=1024*1024
+
 
 def run(args, **kw):
     return subprocess.run([str(x) for x in args], check=True, **kw)
 
+
 def quiet(args):
     return subprocess.run([str(x) for x in args],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
+
 def write_wrapper():
     wrapper=Path('/usr/local/bin/darkxray')
-    wrapper.write_text('''#!/usr/bin/env bash
+    wrapper.write_text("""#!/usr/bin/env bash
 set -Eeuo pipefail
 export DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray
 case "${1:-menu}" in
@@ -40,19 +42,78 @@ case "${1:-menu}" in
     fi ;;
 esac
 exec /opt/dark-xray/darkxray "$@"
-''')
+""")
     os.chmod(wrapper,0o755)
+
 
 def source_commit(src:Path)->str:
     cp=subprocess.run(['git','-C',str(src),'rev-parse','HEAD'],capture_output=True,text=True,check=False)
     return cp.stdout.strip() if cp.returncode==0 else 'local-source'
 
+
+def source_version(src:Path)->str:
+    path=src/'VERSION'
+    if not path.is_file():raise SystemExit('Invalid update source: VERSION is missing')
+    value=path.read_text(encoding='utf-8').strip()
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?',value):raise SystemExit('Invalid update source: malformed VERSION')
+    return value
+
+
 def validate_source(src:Path):
-    required=[src/'backend/server.py',src/'backend/core.py',src/'backend/owner_recovery.py',src/'tools/repo-check.py',src/'deploy/dark-xray.service',src/'darkxray',src/'requirements.txt']
-    if any(not p.is_file() for p in required):raise SystemExit('Invalid update source: required application files are missing')
+    if src.is_symlink() or not src.is_dir():raise SystemExit('Invalid update source directory')
+    required=[src/'backend/server.py',src/'backend/core.py',src/'backend/owner_recovery.py',src/'tools/repo-check.py',src/'tools/doctor.py',src/'deploy/dark-xray.service',src/'darkxray',src/'requirements.txt',src/'VERSION']
+    if any(not p.is_file() or p.is_symlink() for p in required):raise SystemExit('Invalid update source: required application files are missing or unsafe')
+    source_version(src)
     run([sys.executable,src/'tools/repo-check.py'],stdout=subprocess.DEVNULL)
-    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/owner_recovery.py',src/'tools/menu.py',src/'tools/settings_apply.py'])
+    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py'])
     run(['bash','-n',src/'darkxray',src/'setup.sh',src/'install-online.sh'])
+
+
+def _snapshot_tree_bytes()->int:
+    total=0
+    for name in SNAPSHOT_FILES:
+        item=APP/name
+        if not item.exists() or item.is_symlink():continue
+        if item.is_file():
+            total+=item.stat().st_size;continue
+        for path in item.rglob('*'):
+            if path.is_file() and not path.is_symlink():
+                try:total+=path.stat().st_size
+                except OSError:pass
+    return total
+
+
+def database_preflight(path:Path=DB)->dict:
+    if path.is_symlink() or not path.is_file():raise SystemExit('DARK database is missing or unsafe; update refused')
+    try:
+        with sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=10) as db:
+            quick=db.execute('PRAGMA quick_check').fetchone()[0]
+            version=int(db.execute('PRAGMA user_version').fetchone()[0])
+    except sqlite3.Error as ex:raise SystemExit('DARK database cannot be opened safely: '+type(ex).__name__) from ex
+    if quick!='ok':raise SystemExit('DARK database quick_check failed; repair/backup before update')
+    return {'quick_check':quick,'user_version':version,'bytes':path.stat().st_size}
+
+
+def disk_preflight(db_info:dict)->dict:
+    # Source snapshot + SQLite rollback copy + restore scratch + safety headroom.
+    need=max(160*MIB,_snapshot_tree_bytes()+2*int(db_info['bytes'])+96*MIB)
+    free_data=shutil.disk_usage(DATA).free
+    free_tmp=shutil.disk_usage(tempfile.gettempdir()).free
+    if free_data<need:raise SystemExit(f'Insufficient free space for safe rollback snapshots: need about {need//MIB} MiB on {DATA}')
+    if free_tmp<160*MIB:raise SystemExit('Insufficient /tmp space for isolated dependency preflight (need at least 160 MiB)')
+    return {'required_data_bytes':need,'free_data_bytes':free_data,'free_tmp_bytes':free_tmp}
+
+
+def dependency_preflight(src:Path,work:Path):
+    venv=work/'candidate-venv'
+    current_py=APP/'.venv/bin/python'
+    run([current_py,'-m','venv',venv])
+    py=venv/'bin/python'
+    run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',src/'requirements.txt'])
+    run([py,'-m','pip','check'],stdout=subprocess.DEVNULL)
+    # Imports the candidate application without opening the live database/config.
+    run([py,src/'backend/server.py','--help'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+
 
 def source_snapshot(path:Path):
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -60,6 +121,39 @@ def source_snapshot(path:Path):
         for name in SNAPSHOT_FILES:
             item=APP/name
             if item.exists():tf.add(item,arcname=name,recursive=True)
+    os.chmod(path,0o600)
+
+
+def database_snapshot(path:Path,source:Path=DB):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if path.exists():path.unlink()
+    with sqlite3.connect(source.resolve().as_uri()+'?mode=ro',uri=True,timeout=30) as src, sqlite3.connect(path) as dst:
+        src.backup(dst)
+        if dst.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise RuntimeError('Rollback database snapshot failed integrity check')
+    os.chmod(path,0o600)
+
+
+def restore_database(snapshot:Path,target:Path=DB):
+    if snapshot.is_symlink() or not snapshot.is_file():raise RuntimeError('Rollback database snapshot is unsafe')
+    with sqlite3.connect(snapshot.resolve().as_uri()+'?mode=ro',uri=True,timeout=10) as db:
+        if db.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise RuntimeError('Rollback database snapshot is corrupt')
+    old=target.stat() if target.exists() else None
+    target.parent.mkdir(parents=True,exist_ok=True)
+    fd,name=tempfile.mkstemp(prefix='.dark-db-restore-',dir=target.parent);os.close(fd);tmp=Path(name)
+    try:
+        shutil.copyfile(snapshot,tmp)
+        os.chmod(tmp,(old.st_mode&0o777) if old else 0o600)
+        if old and os.geteuid()==0:os.chown(tmp,old.st_uid,old.st_gid)
+        with tmp.open('rb+') as f:f.flush();os.fsync(f.fileno())
+        os.replace(tmp,target)
+        for suffix in ('-wal','-shm'):Path(str(target)+suffix).unlink(missing_ok=True)
+        dfd=os.open(target.parent,os.O_RDONLY)
+        try:os.fsync(dfd)
+        finally:os.close(dfd)
+    finally:
+        tmp.unlink(missing_ok=True)
+    database_preflight(target)
+
 
 def clear_installed_source():
     for name in COPY_DIRS:
@@ -69,8 +163,8 @@ def clear_installed_source():
         dst=APP/name
         if dst.exists() or dst.is_symlink():dst.unlink(missing_ok=True)
 
+
 def normalize_source_permissions(root:Path=APP):
-    """Make installed application source readable/traversable by the service user."""
     if not root.is_dir() or root.is_symlink():raise RuntimeError('Installed application root must be a real directory')
     os.chmod(root,0o755)
     for name in COPY_DIRS:
@@ -88,6 +182,7 @@ def normalize_source_permissions(root:Path=APP):
         if path.is_symlink() or not path.is_file():raise RuntimeError('Installed source file has an unsafe shape: '+name)
         os.chmod(path,0o755 if name=='darkxray' else 0o644)
 
+
 def copy_source(src:Path):
     clear_installed_source()
     for name in COPY_DIRS:shutil.copytree(src/name,APP/name,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
@@ -95,30 +190,62 @@ def copy_source(src:Path):
         if (src/name).exists():shutil.copy2(src/name,APP/name)
     normalize_source_permissions(APP)
 
+
 def install_runtime_files():
-    run([APP/'.venv/bin/python','-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
+    py=APP/'.venv/bin/python'
+    run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
+    run([py,'-m','pip','check'],stdout=subprocess.DEVNULL)
     for unit in ('dark-xray.service','dark-xray-guard.service'):
         shutil.copy2(APP/'deploy'/unit,Path('/etc/systemd/system')/unit);os.chmod(Path('/etc/systemd/system')/unit,0o644)
     write_wrapper();run(['systemctl','daemon-reload']);run(['systemctl','enable','dark-xray.service'])
 
+
+def _doctor_once()->tuple[bool,str]:
+    cp=subprocess.run([APP/'.venv/bin/python',APP/'tools/doctor.py','--config',CONF/'config.json','--data',DATA],capture_output=True,text=True,check=False,timeout=15)
+    if cp.returncode:return False,'doctor exit '+str(cp.returncode)
+    try:doc=json.loads(cp.stdout);checks=doc.get('checks',{})
+    except Exception:return False,'doctor returned invalid JSON'
+    route=checks.get('panel_route') if isinstance(checks.get('panel_route'),dict) else {}
+    ok=checks.get('configuration')=='ok' and checks.get('database')=='ok' and route.get('ok') is True
+    detail='config='+str(checks.get('configuration'))+', db='+str(checks.get('database'))+', panel='+str(route)
+    return ok,detail
+
+
+def require_live_panel(timeout:float=10.0):
+    deadline=time.monotonic()+timeout;last='not checked'
+    while time.monotonic()<deadline:
+        try:
+            ok,last=_doctor_once()
+            if ok:return
+        except Exception as ex:last=type(ex).__name__+': '+str(ex)[:200]
+        time.sleep(.35)
+    raise RuntimeError('Local DARK panel health verification failed: '+last)
+
+
 def activate():
     run(['systemctl','restart','dark-xray.service']);run(['systemctl','is-active','--quiet','dark-xray.service'])
+    require_live_panel(12.0)
 
-def rollback(snapshot:Path,guard_was_active:bool)->bool:
-    print('Update activation failed; restoring previous DARK XRAY source...',file=sys.stderr);quiet(['systemctl','stop','dark-xray.service'])
+
+def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
+    print('Update activation failed; restoring previous DARK XRAY source + database...',file=sys.stderr)
+    quiet(['systemctl','stop','dark-xray.service'])
     try:
         clear_installed_source()
-        with tarfile.open(snapshot,'r:gz') as tf:
+        with tarfile.open(source_backup,'r:gz') as tf:
             for member in tf.getmembers():
                 target=(APP/member.name).resolve()
                 if APP.resolve() not in target.parents and target!=APP.resolve():raise RuntimeError('Unsafe rollback archive member')
             tf.extractall(APP,filter='data')
-        normalize_source_permissions(APP);install_runtime_files();activate()
-        if guard_was_active:quiet(['systemctl','restart','dark-xray-guard.service'])
-        print('Previous DARK XRAY source restored and service is active.',file=sys.stderr);return True
+        normalize_source_permissions(APP)
+        restore_database(db_backup)
+        install_runtime_files();activate()
+        if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
+        print('Previous DARK XRAY source and database restored; panel route is healthy.',file=sys.stderr);return True
     except Exception as ex:
-        print('CRITICAL: rollback could not reactivate previous source: '+type(ex).__name__,file=sys.stderr)
+        print('CRITICAL: rollback could not reactivate previous installation: '+type(ex).__name__+': '+str(ex)[:300],file=sys.stderr)
         quiet(['systemctl','status','dark-xray.service','--no-pager','-l']);return False
+
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -126,28 +253,50 @@ def main():
     p.add_argument('--ref',default=os.environ.get('DARK_UPDATE_REF','main'),help='Git branch/tag/commit when --source is omitted')
     p.add_argument('--non-interactive',action='store_true');a=p.parse_args()
     if os.geteuid()!=0:raise SystemExit('Root is required for update')
-    if not APP.is_dir() or not (APP/'.venv/bin/python').exists():raise SystemExit('DARK XRAY application path is incomplete; use installer repair mode')
-    if not (CONF/'config.json').is_file() or not DATA.exists():raise SystemExit('Configuration/data paths are incomplete; use installer repair mode')
-    temp=None;src=a.source.resolve() if a.source else None
-    if src is None:
-        temp=Path(tempfile.mkdtemp(prefix='dark-xray-update.'));src=temp/'src'
-        run(['git','clone','--filter=blob:none','--no-checkout',REPO,src],stdout=subprocess.DEVNULL)
-        run(['git','-C',src,'fetch','--depth','1','origin',a.ref],stdout=subprocess.DEVNULL)
-        run(['git','-C',src,'checkout','--detach','FETCH_HEAD'],stdout=subprocess.DEVNULL)
-    validate_source(src);candidate=source_commit(src);print('Candidate source:',candidate)
-    stamp=time.strftime('%Y%m%d-%H%M%S');snapshot=DATA/'backups'/f'pre-update-source-{stamp}.tar.gz'
-    source_snapshot(snapshot);print('Rollback source snapshot:',snapshot)
-    guard_was_active=quiet(['systemctl','is-active','--quiet','dark-xray-guard.service']).returncode==0
-    run([APP/'.venv/bin/python','-m','pip','install','-q','--disable-pip-version-check','-r',src/'requirements.txt'])
-    quiet(['systemctl','stop','dark-xray.service'])
+    if APP.is_symlink() or not APP.is_dir() or not (APP/'.venv/bin/python').is_file():raise SystemExit('DARK XRAY application path is incomplete or unsafe; use installer repair mode')
+    if CONF.is_symlink() or DATA.is_symlink() or not (CONF/'config.json').is_file() or not DATA.is_dir():raise SystemExit('Configuration/data paths are incomplete or unsafe; use installer repair mode')
+    database_info=database_preflight(DB)
+    try:require_live_panel(5.0)
+    except Exception as ex:raise SystemExit('Current DARK panel is not healthy enough for a rollback-safe update; run darkxray doctor/repair first: '+str(ex))
+
+    temp=None;preflight=Path(tempfile.mkdtemp(prefix='dark-xray-preflight.'));src=a.source.resolve() if a.source else None
     try:
-        copy_source(src);install_runtime_files();activate()
-        if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
-    except Exception:
-        ok=rollback(snapshot,guard_was_active)
-        if not ok:raise SystemExit('Update failed and automatic rollback also failed; inspect systemd status and the rollback snapshot')
-        raise SystemExit('Update failed; previous source was restored successfully')
+        if src is None:
+            temp=Path(tempfile.mkdtemp(prefix='dark-xray-update.'));src=temp/'src'
+            run(['git','clone','--filter=blob:none','--no-checkout',REPO,src],stdout=subprocess.DEVNULL)
+            run(['git','-C',src,'fetch','--depth','1','origin',a.ref],stdout=subprocess.DEVNULL)
+            run(['git','-C',src,'checkout','--detach','FETCH_HEAD'],stdout=subprocess.DEVNULL)
+        validate_source(src);candidate=source_commit(src);candidate_version=source_version(src)
+        current_version=(APP/'VERSION').read_text(encoding='utf-8').strip() if (APP/'VERSION').is_file() else 'unknown'
+        print('Current version:',current_version);print('Candidate version:',candidate_version);print('Candidate source:',candidate)
+        space=disk_preflight(database_info)
+        print('Rollback preflight: database quick_check=ok; free data space=',space['free_data_bytes']//MIB,'MiB')
+        print('Dependency preflight: building isolated candidate environment...')
+        dependency_preflight(src,preflight);print('Dependency preflight: passed')
+
+        stamp=time.strftime('%Y%m%d-%H%M%S');backups=DATA/'backups'
+        source_backup=backups/f'pre-update-source-{stamp}.tar.gz';db_backup=backups/f'pre-update-db-{stamp}.sqlite3'
+        source_snapshot(source_backup);print('Rollback source snapshot:',source_backup)
+        guard_was_active=quiet(['systemctl','is-active','--quiet','dark-xray-guard.service']).returncode==0
+        quiet(['systemctl','stop','dark-xray.service'])
+        try:
+            # Capture SQLite after the old service has flushed traffic and closed the DB.
+            database_preflight(DB);database_snapshot(db_backup);print('Rollback database snapshot:',db_backup)
+        except Exception as ex:
+            # Source is still untouched here; restore availability immediately.
+            try:activate()
+            except Exception as restart_ex:raise SystemExit('Database snapshot failed and current panel could not be reactivated: '+str(restart_ex)) from ex
+            raise SystemExit('Database snapshot failed; current version was reactivated without changing source') from ex
+        try:
+            copy_source(src);install_runtime_files();activate()
+            if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
+        except Exception:
+            ok=rollback(source_backup,db_backup,guard_was_active)
+            if not ok:raise SystemExit('Update failed and automatic source/database rollback also failed; inspect systemd and rollback snapshots')
+            raise SystemExit('Update failed; previous source + database were restored successfully')
+        print('DARK XRAY updated successfully.');print('Installed source:',candidate);print('Local panel route/asset Doctor probe: passed');print('Run: darkxray')
     finally:
+        shutil.rmtree(preflight,ignore_errors=True)
         if temp:shutil.rmtree(temp,ignore_errors=True)
-    print('DARK XRAY updated successfully.');print('Installed source:',candidate);print('Run: darkxray')
+
 if __name__=='__main__':main()
