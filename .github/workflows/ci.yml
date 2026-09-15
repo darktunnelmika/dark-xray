@@ -42,10 +42,11 @@ jobs:
           grep -q 'restoring previous DARK XRAY source' tools/update.py
           grep -q 'backend/owner_recovery.py' darkxray
           grep -q 'account)' darkxray
-          grep -q 'reset-password|account' tools/update.py
-          grep -q 'reset-password|account' tools/provision.py
+          grep -q 'stage-panel-path)' darkxray
+          grep -q 'reset-password|account|stage-panel-path' tools/update.py
+          grep -q 'reset-password|account|stage-panel-path' tools/provision.py
           python -m py_compile \
-            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py \
+            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
@@ -54,6 +55,8 @@ jobs:
           grep -q 'Account & Access' /tmp/dark-menu-smoke.txt
           grep -q 'Update & Repair' /tmp/dark-menu-smoke.txt
           grep -q 'settings-apply' darkxray
+          grep -q 'Change panel URI path' tools/menu.py
+          grep -q 'Create owner login' tools/menu.py
       - name: Full cyber workspace smoke
         run: |
           for js in \
@@ -64,10 +67,14 @@ jobs:
           for asset in \
             cyber.css inbounds-v3.css settings-v2.css clients-v2.css xray-v2.css hosts-v2.css ops-v2.css nodes-v2.css \
             i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js xray-v2.js hosts-v2.js ops-v2.js nodes-v2.js; do
-            grep -q "/assets/$asset" web/index.html
+            grep -q "assets/$asset" web/index.html
           done
           ! grep -q '/assets/runtime-policy.js' web/index.html
           ! grep -q '/assets/inbounds-v2.js' web/index.html
+          grep -q 'PANEL_BASE' web/live.js
+          grep -q 'Panel URI path' web/settings-v2.js
+          grep -q 'panel_path' backend/core.py
+          grep -q 'panel_path' backend/server.py
           grep -q 'target-search' web/inbounds-v3.js
           grep -q 'realIpPreset' web/inbounds-v3.js
           grep -q 'maxTimeDiff' web/inbounds-v3.js
