@@ -290,7 +290,7 @@ def panel_network_menu():
         item(2,'Change panel port',str(c.get('bind_port',2087)))
         item(3,'Change public proxy address',str(c.get('public_address','')))
         item(4,'Change panel URI path',str(c.get('panel_path','/')))
-        item(11,'Generate random panel URI path','secure 96-bit path token')
+        item(11,'Generate random panel URI path','random 96-bit path token')
         item(5,'Show panel URL / SSH tunnel')
         title_row('WEB SETTINGS')
         item(6,'Preview staged Web Settings')
@@ -303,46 +303,47 @@ def panel_network_menu():
         if x=='0':return
         if x=='1':safe_config_summary();pause()
         elif x=='2':
-            if not need_root():continue
             val=ask('New panel port',str(c.get('bind_port',2087)))
             if not val.isdigit() or not 1024<=int(val)<=65535:print(f'{RE}Invalid nonprivileged port.{R}');pause();continue
             new=int(val);old=int(c.get('bind_port',2087));reserved={int(c.get('xray_api_port',10085)),22}|inbound_ports()
             if new in reserved:print(f'{RE}Port conflicts with SSH/Xray API/data inbound.{R}');pause();continue
             if new!=old and port_busy(new):print(f'{RE}Port is already listening.{R}');pause();continue
-            if not confirm(f'Change panel port {old} → {new} and restart?'):continue
-            c['bind_port']=new;c['protected_ports']=sorted((set(map(int,c.get('protected_ports',[])))-{old})|{new,22,int(c.get('xray_api_port',10085))})
-            origin=str(c.get('public_origin',''))
-            if origin.startswith('http://127.0.0.1:'):c['public_origin']=f'http://127.0.0.1:{new}'
-            elif origin.startswith('https://'):
-                host=origin.split('://',1)[1].split(':',1)[0];c['public_origin']=f'https://{host}:{new}'
-            if atomic_config(c):run(['systemctl','restart','dark-xray.service']);print(f'{GR}Port updated.{R}')
+            if run_action([COMMAND,'stage-runtime','--bind-port',str(new)],f'Panel port staged: {old} → {new}'):
+                print(f'{PU}Review ALL pending runtime changes before apply:{R}')
+                run([COMMAND,'settings-apply','--dry-run'])
+                if need_root() and confirm('Apply ALL staged settings shown above? Panel may restart.'):
+                    if run_action([COMMAND,'settings-apply'],'Staged runtime settings applied.'):
+                        print(f'{GR}Panel URL: {endpoint(cfg())}{R}')
             pause()
         elif x=='3':
-            if not need_root():continue
             v=ask('Public proxy IP/DNS',str(c.get('public_address','')))
             if not v or any(ch in v for ch in '/?#@ \r\n'):print(f'{RE}Invalid address.{R}');pause();continue
-            if confirm(f'Set public proxy address to {v}?'):
-                c['public_address']=v
-                if atomic_config(c):run(['systemctl','restart','dark-xray.service'])
+            if run_action([COMMAND,'stage-runtime','--public-address',v],f'Public proxy address staged: {v}'):
+                print(f'{PU}Review ALL pending runtime changes before apply:{R}')
+                run([COMMAND,'settings-apply','--dry-run'])
+                if need_root() and confirm('Apply ALL staged settings shown above? Panel may restart.'):
+                    run_action([COMMAND,'settings-apply'],'Staged runtime settings applied.')
             pause()
         elif x=='4':
             v=ask('Panel URI path (example /dark-admin)',str(c.get('panel_path','/'))).strip() or '/'
             if v!='/' and v.endswith('/'):v=v.rstrip('/')
             if not valid_panel_path(v):print(f'{RE}Invalid URI path. Use / or /letters-numbers_-/segments.{R}');pause();continue
             if confirm(f'Stage panel URI path {c.get("panel_path","/")} → {v}?'):
-                run([COMMAND,'stage-panel-path','--panel-path',v])
-                print(f'{YE}URI path is staged. Apply it now to restart the panel on the new path.{R}')
-                if need_root() and confirm('Apply staged URI path now?'):
-                    run([COMMAND,'settings-apply'])
-                    print(f'{GR}New panel URL: {endpoint(cfg())}{R}')
+                run_action([COMMAND,'stage-runtime','--panel-path',v],f'URI path staged: {v}')
+                print(f'{PU}Review ALL pending runtime changes before apply:{R}')
+                run([COMMAND,'settings-apply','--dry-run'])
+                if need_root() and confirm('Apply ALL staged settings shown above? Panel may restart.'):
+                    if run_action([COMMAND,'settings-apply'],'Staged runtime settings applied.'):
+                        print(f'{GR}New panel URL: {endpoint(cfg())}{R}')
                 pause()
         elif x=='11':
             v='/dark-'+secrets.token_hex(12)
-            if run_action([COMMAND,'stage-panel-path','--panel-path',v],f'Random URI path staged: {v}'):
-                print(f'{YE}Apply staged settings to activate the new URL.{R}')
-                if need_root() and confirm('Apply random URI path now?'):
-                    run_action([COMMAND,'settings-apply'],'Random URI path applied; panel service restarted.')
-                    print(f'{GR}Panel URL: {endpoint(cfg())}{R}')
+            if run_action([COMMAND,'stage-runtime','--panel-path',v],f'Random URI path staged: {v}'):
+                print(f'{PU}Review ALL pending runtime changes before apply:{R}')
+                run([COMMAND,'settings-apply','--dry-run'])
+                if need_root() and confirm('Apply ALL staged settings shown above? Panel may restart.'):
+                    if run_action([COMMAND,'settings-apply'],'Staged runtime settings applied.'):
+                        print(f'{GR}Panel URL: {endpoint(cfg())}{R}')
             pause()
         elif x=='5':show_access();pause()
         elif x=='6':run([COMMAND,'settings-apply','--dry-run']);pause()

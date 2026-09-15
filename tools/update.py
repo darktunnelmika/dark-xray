@@ -34,7 +34,7 @@ def write_wrapper():
 set -Eeuo pipefail
 export DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray
 case "${1:-menu}" in
-  init|reset-password|account|stage-panel-path|check|serve|backup|doctor)
+  init|reset-password|account|stage-runtime|stage-panel-path|check|serve|backup|doctor)
     if [[ $EUID -eq 0 ]]; then
       exec runuser -u darkxray -- env DARK_CONFIG="$DARK_CONFIG" DARK_DATA="$DARK_DATA" /opt/dark-xray/darkxray "$@"
     fi ;;

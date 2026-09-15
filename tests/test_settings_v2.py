@@ -161,3 +161,16 @@ def test_panel_uri_path_scopes_ui_api_and_cookie(tmp_path):
         assert 'Path=/dark-admin' in r.headers.get('set-cookie','')
         assert c.get('/health').status_code==200
     store.close()
+
+
+
+def test_runtime_stage_supports_port_address_and_path(tmp_path):
+    path=Path(__file__).resolve().parents[1]/'tools'/'runtime_stage.py'
+    spec=importlib.util.spec_from_file_location('runtime_stage',path);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+    base={'access_mode':'ssh','bind_port':2087,'public_address':'1.2.3.4','panel_path':'/','poll_seconds':5,'core_autostart':False,'domain':'','acme_email':''}
+    value,changed=mod.apply_overrides(base,panel_path='/dark-next',bind_port=2443,public_address='edge.example.com')
+    assert value['panel_path']=='/dark-next' and value['bind_port']==2443 and value['public_address']=='edge.example.com'
+    assert set(changed)=={'panel_path','bind_port','public_address'}
+    with pytest.raises(SystemExit):mod.apply_overrides(base,panel_path='/sub')
+    with pytest.raises(SystemExit):mod.apply_overrides(base,bind_port=80)
+    with pytest.raises(SystemExit):mod.apply_overrides(base,public_address='https://bad.example')

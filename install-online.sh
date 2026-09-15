@@ -13,8 +13,8 @@ repeat(){ local ch="$1" n="$2" i; for ((i=0;i<n;i++)); do printf '%s' "$ch"; don
 banner(){
   clear 2>/dev/null || true
   printf "${C_CYAN}╔"; repeat '═' 74; printf "╗${C_RESET}\n"
-  printf "${C_CYAN}║${C_RESET}${C_PURPLE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "D A R K   X R A Y"
-  printf "${C_CYAN}║${C_RESET}${C_BLUE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "100-STEP CYBER INSTALLER"
+  printf "${C_CYAN}║${C_RESET}${C_PURPLE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "D A R K   V P N"
+  printf "${C_CYAN}║${C_RESET}${C_BLUE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "DARK XRAY  •  100-STEP CYBER INSTALLER"
   printf "${C_CYAN}╚"; repeat '═' 74; printf "╝${C_RESET}\n"
   printf "${C_DIM}Standalone panel • Own DB/API/UI • Xray-core engine • No Sanayi runtime${C_RESET}\n\n"
 }
