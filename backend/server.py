@@ -204,6 +204,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if request.method not in ('GET','HEAD') and not p.key_id and request.url.path.startswith('/api/'):
             if not hmac.compare_digest(request.headers.get('x-dark-csrf',''),p.csrf):raise HTTPException(403,'Invalid CSRF token')
         return p
+    def interactive(p:Principal=Depends(current))->Principal:
+        if p.key_id:raise HTTPException(403,'Interactive session required')
+        return p
     def owner(p:Principal=Depends(current))->Principal:
         if p.actor.role!='owner' or p.key_id:raise HTTPException(403,'Interactive owner access required')
         return p
@@ -215,7 +218,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/auth/login')
     def login(body:Login,request:Request):
         session_minutes=int(engine.section('panel').get('session_max_age_minutes',480))
-        token,p=auth.login(body.username,body.password,body.otp,request.client.host if request.client else 'unknown',session_minutes*60)
+        token,p=auth.login(body.username,body.password,body.otp,request.client.host if request.client else 'unknown',session_minutes*60,request.headers.get('user-agent',''))
         response=JSONResponse({'id':p.actor.id,'role':p.actor.role,'csrf':p.csrf,'permissions':p.actor.permissions})
         response.set_cookie(COOKIE,token,max_age=session_minutes*60,httponly=True,secure=config.secure_cookie,samesite='strict',path=panel_path)
         manager.audit(p.actor,p.actor.id,'auth.login',p.actor.id)
@@ -231,6 +234,20 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def logout(p:Principal=Depends(current)):
         with store.transaction() as db:db.execute('DELETE FROM live_sessions WHERE digest=?',(p.session_id,))
         response=JSONResponse({'revoked':True});response.delete_cookie(COOKIE,path=panel_path);return response
+    @app.get('/api/auth/sessions')
+    def sessions(p:Principal=Depends(interactive)):
+        return auth.sessions(p)
+    @app.delete('/api/auth/sessions/{session_id}')
+    def revoke_session(session_id:str,p:Principal=Depends(interactive)):
+        result=auth.revoke_session(p,session_id);manager.audit(p.actor,p.actor.id,'auth.session.revoke',session_id)
+        response=JSONResponse(result)
+        if result['current']:response.delete_cookie(COOKIE,path=panel_path)
+        return response
+    @app.post('/api/auth/sessions/revoke-others')
+    def revoke_other_sessions(p:Principal=Depends(interactive)):
+        result=auth.revoke_other_sessions(p);manager.audit(p.actor,p.actor.id,'auth.sessions.revoke_others',p.actor.id,str(result['revoked_others']))
+        return result
+
     @app.post('/api/auth/password')
     def password(body:Password,p:Principal=Depends(current)):
         auth.change_password(p,body.old_password,body.new_password)

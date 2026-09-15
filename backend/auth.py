@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import struct
 import time
@@ -63,7 +64,8 @@ class Auth:
         with store.lock:
             store.db.executescript('''
             CREATE TABLE IF NOT EXISTS live_sessions(digest TEXT PRIMARY KEY,admin_id TEXT NOT NULL,
-              csrf TEXT NOT NULL,expires_at REAL NOT NULL);
+              csrf TEXT NOT NULL,expires_at REAL NOT NULL,public_id TEXT,
+              created_at REAL NOT NULL DEFAULT 0,source TEXT NOT NULL DEFAULT '',user_agent TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS robot_keys(id TEXT PRIMARY KEY,digest TEXT UNIQUE NOT NULL,
               admin_id TEXT NOT NULL,name TEXT NOT NULL,permissions TEXT NOT NULL,
               expires_at REAL NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,created_at REAL NOT NULL);
@@ -72,6 +74,13 @@ class Auth:
               last_step INTEGER NOT NULL DEFAULT -1,recovery TEXT NOT NULL DEFAULT '[]');
             CREATE TABLE IF NOT EXISTS auth_attempts(bucket TEXT PRIMARY KEY,start REAL NOT NULL,count INTEGER NOT NULL);
             ''')
+            cols={r[1] for r in store.db.execute('PRAGMA table_info(live_sessions)')}
+            for name,ddl in (
+                ('public_id','TEXT'),('created_at','REAL NOT NULL DEFAULT 0'),
+                ('source',"TEXT NOT NULL DEFAULT ''"),('user_agent',"TEXT NOT NULL DEFAULT ''")):
+                if name not in cols:store.db.execute(f'ALTER TABLE live_sessions ADD COLUMN {name} {ddl}')
+            store.db.execute("UPDATE live_sessions SET public_id=substr(digest,1,24) WHERE public_id IS NULL OR public_id='' ")
+            store.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS live_sessions_public_id ON live_sessions(public_id)')
 
     def bootstrap(self,username: str,password: str):
         if not NAME_RE.fullmatch(username):raise PolicyError('Invalid username')
@@ -82,8 +91,10 @@ class Auth:
             db.execute('INSERT OR IGNORE INTO owners(id) VALUES(?)',(username,))
             db.execute("INSERT INTO owner_profiles(id,name) VALUES(?,?)",(username,'DARK OWNER'))
 
-    def login(self,username: str,password: str,otp: str,source: str,session_seconds: int=8*3600)->tuple[str,Principal]:
+    def login(self,username: str,password: str,otp: str,source: str,session_seconds: int=8*3600,user_agent: str='')->tuple[str,Principal]:
         if type(session_seconds) is not int or not 3600<=session_seconds<=525600*60:raise PolicyError('Invalid session lifetime')
+        source=str(source or 'unknown').strip()[:128] or 'unknown'
+        user_agent=' '.join(str(user_agent or '').split())[:300]
         now=time.time();bucket=digest(source)
         with self.store.transaction() as db:
             r=db.execute('SELECT * FROM auth_attempts WHERE bucket=?',(bucket,)).fetchone()
@@ -99,11 +110,12 @@ class Auth:
             if not fresh or fresh['disabled'] or fresh['password_hash']!=row['password_hash']:raise PermissionDenied('Credentials changed')
             mfa=db.execute('SELECT * FROM mfa WHERE admin_id=?',(username,)).fetchone()
             if mfa and mfa['enabled']:self._verify_mfa(db,mfa,otp,consume=True)
-            token=secrets.token_urlsafe(48);csrf=secrets.token_urlsafe(32)
+            token=secrets.token_urlsafe(48);csrf=secrets.token_urlsafe(32);session_digest=digest(token);public_id=session_digest[:24]
             db.execute('DELETE FROM live_sessions WHERE expires_at<=?',(now,))
-            db.execute('INSERT INTO live_sessions VALUES(?,?,?,?)',(digest(token),username,csrf,now+session_seconds))
+            db.execute('''INSERT INTO live_sessions(digest,admin_id,csrf,expires_at,public_id,created_at,source,user_agent)
+                          VALUES(?,?,?,?,?,?,?,?)''',(session_digest,username,csrf,now+session_seconds,public_id,now,source,user_agent))
             db.execute('DELETE FROM auth_attempts WHERE bucket=?',(bucket,))
-        return token,Principal(Actor(row['id'],row['role'],json.loads(row['permissions'])),digest(token),csrf)
+        return token,Principal(Actor(row['id'],row['role'],json.loads(row['permissions'])),session_digest,csrf)
 
     def current(self,cookie: str|None,authorization: str|None)->Principal:
         with self.store.lock:
@@ -127,6 +139,32 @@ class Auth:
                 WHERE s.digest=? AND s.expires_at>? AND a.disabled=0''',(digest(cookie),time.time())).fetchone()
             if not r:raise PermissionDenied('Session expired or revoked')
         return Principal(Actor(r['id'],r['role'],json.loads(r['permissions'])),digest(cookie),r['csrf'])
+
+    def sessions(self,p:Principal)->list[dict]:
+        if p.key_id or not p.session_id:raise PermissionDenied('Interactive session required')
+        now=time.time()
+        with self.store.lock:
+            rows=self.store.db.execute('''SELECT digest,public_id,created_at,source,user_agent,expires_at
+                FROM live_sessions WHERE admin_id=? AND expires_at>? ORDER BY created_at DESC,expires_at DESC''',(p.actor.id,now)).fetchall()
+        return [{'id':r['public_id'] or r['digest'][:24],'current':r['digest']==p.session_id,
+                 'created_at':float(r['created_at'] or 0),'expires_at':float(r['expires_at']),
+                 'source':str(r['source'] or 'unknown')[:128],'user_agent':str(r['user_agent'] or '')[:300]} for r in rows]
+
+    def revoke_session(self,p:Principal,public_id:str)->dict:
+        if p.key_id or not p.session_id:raise PermissionDenied('Interactive session required')
+        if not re.fullmatch(r'[0-9a-f]{24}',str(public_id or '')):raise PolicyError('Invalid session ID')
+        with self.store.transaction() as db:
+            row=db.execute('SELECT digest FROM live_sessions WHERE public_id=? AND admin_id=?',(public_id,p.actor.id)).fetchone()
+            if not row:raise PolicyError('Session not found')
+            current=row['digest']==p.session_id
+            db.execute('DELETE FROM live_sessions WHERE digest=?',(row['digest'],))
+        return {'revoked':True,'current':current,'id':public_id}
+
+    def revoke_other_sessions(self,p:Principal)->dict:
+        if p.key_id or not p.session_id:raise PermissionDenied('Interactive session required')
+        with self.store.transaction() as db:
+            cur=db.execute('DELETE FROM live_sessions WHERE admin_id=? AND digest<>?',(p.actor.id,p.session_id))
+        return {'revoked_others':max(0,cur.rowcount)}
 
     def admin_create(self,actor: Actor,username: str,password: str,role: str,permissions: dict|None):
         if actor.role!='owner':raise PermissionDenied('Owner required')
@@ -156,7 +194,10 @@ class Auth:
             if disabled is not None:
                 db.execute('UPDATE api_admins SET disabled=? WHERE id=?',(int(disabled),username))
                 db.execute('UPDATE owners SET account_disabled=? WHERE id=?',(int(disabled),username))
-            if hashed:db.execute('UPDATE api_admins SET password_hash=? WHERE id=?',(hashed,username))
+            if hashed:
+                db.execute('UPDATE api_admins SET password_hash=? WHERE id=?',(hashed,username))
+                written=db.execute('SELECT password_hash FROM api_admins WHERE id=?',(username,)).fetchone()
+                if not written or not verify_password(password,written['password_hash']):raise PolicyError('Admin password verification failed; transaction rolled back')
             db.execute('DELETE FROM live_sessions WHERE admin_id=?',(username,))
 
     def change_password(self,p: Principal,old: str,new: str):
@@ -166,6 +207,8 @@ class Auth:
         hashed=password_hash(new)
         with self.store.transaction() as db:
             db.execute('UPDATE api_admins SET password_hash=? WHERE id=?',(hashed,p.actor.id))
+            written=db.execute('SELECT password_hash FROM api_admins WHERE id=?',(p.actor.id,)).fetchone()
+            if not written or not verify_password(new,written['password_hash']):raise PolicyError('Password verification failed; transaction rolled back')
             db.execute('DELETE FROM live_sessions WHERE admin_id=?',(p.actor.id,))
 
     def new_key(self,p: Principal,name: str,permissions: dict,days: int)->tuple[str,str]:
