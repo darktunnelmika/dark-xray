@@ -42,11 +42,11 @@ jobs:
           grep -q 'restoring previous DARK XRAY source' tools/update.py
           grep -q 'backend/owner_recovery.py' darkxray
           grep -q 'account)' darkxray
-          grep -q 'stage-panel-path)' darkxray
-          grep -q 'reset-password|account|stage-panel-path' tools/update.py
-          grep -q 'reset-password|account|stage-panel-path' tools/provision.py
+          grep -q 'stage-runtime|stage-panel-path)' darkxray
+          grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/update.py
+          grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/provision.py
           python -m py_compile \
-            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py \
+            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
@@ -56,7 +56,9 @@ jobs:
           grep -q 'Update & Repair' /tmp/dark-menu-smoke.txt
           grep -q 'settings-apply' darkxray
           grep -q 'Change panel URI path' tools/menu.py
+          grep -q 'Generate random panel URI path' tools/menu.py
           grep -q 'Create owner login' tools/menu.py
+          grep -q 'panel_route' tools/doctor.py
       - name: Full cyber workspace smoke
         run: |
           for js in \
@@ -73,6 +75,7 @@ jobs:
           ! grep -q '/assets/inbounds-v2.js' web/index.html
           grep -q 'PANEL_BASE' web/live.js
           grep -q 'Panel URI path' web/settings-v2.js
+          grep -q 'Generate random path' web/settings-v2.js
           grep -q 'panel_path' backend/core.py
           grep -q 'panel_path' backend/server.py
           grep -q 'target-search' web/inbounds-v3.js
