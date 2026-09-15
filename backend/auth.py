@@ -136,6 +136,13 @@ class Auth:
             if role=='reseller' and not db.execute('SELECT 1 FROM owner_profiles WHERE id=?',(username,)).fetchone():
                 raise PolicyError('Create a matching reseller profile first')
             db.execute('INSERT INTO api_admins VALUES(?,?,?,?,0)',(username,role,hashed,json.dumps(perms)))
+            if role=='owner':
+                db.execute('INSERT OR IGNORE INTO owners(id) VALUES(?)',(username,))
+                if not db.execute('SELECT 1 FROM owner_profiles WHERE id=?',(username,)).fetchone():
+                    allowed=[r[0] for r in db.execute('SELECT id FROM core_inbounds ORDER BY id')]
+                    db.execute('INSERT INTO owner_profiles(id,name,allowed) VALUES(?,?,?)',(username,username,json.dumps(allowed)))
+            written=db.execute('SELECT password_hash FROM api_admins WHERE id=?',(username,)).fetchone()
+            if not written or not verify_password(password,written['password_hash']):raise PolicyError('Admin password verification failed; transaction rolled back')
 
     def admin_edit(self,actor: Actor,username: str,*,disabled: bool|None=None,password: str|None=None,permissions: dict|None=None):
         if actor.role!='owner':raise PermissionDenied('Owner required')

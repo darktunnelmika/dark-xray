@@ -130,6 +130,27 @@ def test_hwid_is_local_and_transactional(env):
     assert c.delete('/api/clients/dark-test/devices').status_code==200
     assert c.get(url,headers={'x-hwid':'device-bbb'}).status_code==200
 
+
+
+def test_web_owner_creation_attaches_owner_profile(env):
+    store,engine,m,auth,c=env
+    assert c.post('/api/inbounds',json=IB).status_code==200
+    r=c.post('/api/admins',json={'username':'Mika','password':'MikaPass88','role':'owner','permissions':{}})
+    assert r.status_code==200,r.text
+    with store.lock:
+        admin=store.db.execute("SELECT role,password_hash FROM api_admins WHERE id='Mika'").fetchone()
+        owner=store.db.execute("SELECT id FROM owners WHERE id='Mika'").fetchone()
+        profile=store.db.execute("SELECT id,allowed FROM owner_profiles WHERE id='Mika'").fetchone()
+    assert admin['role']=='owner' and owner['id']=='Mika' and profile['id']=='Mika'
+    assert json.loads(profile['allowed'])==[1]
+    token,p=auth.login('Mika','MikaPass88','','127.0.0.9')
+    with TestClient(make_app(m,auth,background=False),base_url=engine.config.public_origin) as other:
+        other.cookies.set('dark_session',token);other.headers['X-Dark-CSRF']=p.csrf
+        me=other.get('/api/me');assert me.status_code==200 and me.json()['role']=='owner'
+        ids={x['id'] for x in other.get('/api/owners').json()}
+        assert 'Mika' in ids
+
+
 def test_reseller_scope_and_shared_inbound(env):
     store,engine,m,auth,c=env
     create(c,'dark-a')
