@@ -32,8 +32,8 @@ from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
 from nodes import NodeRegistry,token_digest
 
-VERSION='0.7.0-standalone-lab'
 ROOT=Path(__file__).resolve().parents[1]
+VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
 COOKIE='dark_session'
 PASSWORD_MIN_LENGTH=8
 PASSWORD_MAX_LENGTH=512

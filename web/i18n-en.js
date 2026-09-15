@@ -176,10 +176,25 @@ const exact=new Map(Object.entries({
  'تنظیمات مستقل':'Standalone Settings',
  'ذخیره شد؛ وضعیت اعمال هسته را بررسی کن.':'Saved. Check core apply state.',
  'اینباند در DARK ذخیره شد. وضعیت هسته را بررسی کن.':'Inbound saved in DARK. Check core state.',
- 'تأیید نشده':'Not verified'
+ 'تأیید نشده':'Not verified',
+ 'رمز حساب':'Account Password',
+ 'نشست‌های فعال':'Active Sessions',
+ 'خروج از همه نشست‌های دیگر':'Sign out all other sessions',
+ 'این نشست':'Current session',
+ 'نشست دیگر':'Other session',
+ 'زمان ساخت نامشخص':'Creation time unknown',
+ 'User-Agent نامشخص':'Unknown User-Agent',
+ 'ابطال':'Revoke',
+ 'نشست باطل شد.':'Session revoked.'
 }));
 
 const phrases=[
+ ['رمز، نشست، ورود دومرحله‌ای و کلید مستقل برای اتصال نرم‌افزارها.','Password, sessions, two-factor authentication, and independent API keys.'],
+ ['با تغییر رمز، تمام نشست‌های این حساب باطل می‌شوند.','Changing the password revokes all sessions for this account.'],
+ ['نشست فعال برای این حساب ثبت شده است.','active sessions are registered for this account.'],
+ ['این نشست فعال باطل شود؟','Revoke this active session?'],
+ ['از تمام نشست‌های دیگر این حساب خارج شود؟','Sign out all other sessions for this account?'],
+ ['نشست دیگر باطل شد.','other sessions were revoked.'],
  ['ارتباط با سرویس DARK برقرار نیست.','Cannot connect to the DARK service.'],
  ['پاسخ نامعتبر سرور','Invalid server response'],
  ['اطلاعات این بخش دریافت نشده؛ با دادهٔ نمونه جایگزین نشده است.','This section could not be loaded; no sample data was substituted.'],

@@ -132,6 +132,15 @@ def test_hwid_is_local_and_transactional(env):
 
 
 
+
+
+def test_api_version_uses_version_file(env):
+    store,engine,m,auth,c=env
+    expected=(Path(__file__).resolve().parents[1]/'VERSION').read_text().strip()
+    assert c.get('/health').json()['version']==expected
+    assert c.get('/api/me').json()['version']==expected
+
+
 def test_web_owner_creation_attaches_owner_profile(env):
     store,engine,m,auth,c=env
     assert c.post('/api/inbounds',json=IB).status_code==200
