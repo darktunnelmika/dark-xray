@@ -18,24 +18,72 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
-      - name: Repair helper quoting before execution
+      - name: Apply fresh-installer preflight patch
         run: |
           python - <<'PY'
           from pathlib import Path
-          p=Path('tools/stabilize_update_contract_once.py')
-          s=p.read_text()
-          s=s.replace("wrapper.write_text('''#!/usr/bin/env bash", 'wrapper.write_text("""#!/usr/bin/env bash', 1)
-          s=s.replace("\n''')\n    os.chmod(wrapper,0o755)", '\n""")\n    os.chmod(wrapper,0o755)', 1)
+          p=Path('install-online.sh');s=p.read_text()
+          def once(old,new):
+              global s
+              if old not in s: raise SystemExit('installer patch anchor missing: '+old[:100])
+              s=s.replace(old,new,1)
+          once(
+          '''valid_source_ref(){ [[ -n "$1" && ${#1} -le 200 && "$1" != -* && "$1" =~ ^[A-Za-z0-9._/@+-]+$ ]]; }
+          fetch_source(){''',
+          '''valid_source_ref(){ [[ -n "$1" && ${#1} -le 200 && "$1" != -* && "$1" =~ ^[A-Za-z0-9._/@+-]+$ ]]; }
+          supported_arch(){ case "$(uname -m 2>/dev/null || true)" in x86_64|amd64|aarch64|arm64) return 0;; *) return 1;; esac; }
+          free_root_kb(){ df -Pk / 2>/dev/null | awk 'NR==2{print $4}'; }
+          fetch_source(){''')
+          once(
+          '''  valid_source_ref main || fail "valid_source_ref rejected main"; valid_source_ref 0123456789abcdef || fail "valid_source_ref rejected commit"; ! valid_source_ref --upload-pack=x || fail "valid_source_ref accepted option injection"
+          ''',
+          '''  valid_source_ref main || fail "valid_source_ref rejected main"; valid_source_ref 0123456789abcdef || fail "valid_source_ref accepted option injection"; ! valid_source_ref --upload-pack=x || fail "valid_source_ref accepted option injection"
+          ''')
+          # Correct the intentionally simple positive commit-ref smoke wording after inserting helpers.
+          s=s.replace('valid_source_ref 0123456789abcdef || fail "valid_source_ref accepted option injection"','valid_source_ref 0123456789abcdef || fail "valid_source_ref rejected commit"',1)
+          once(
+          '''  case "$choice" in 1) repair_partial_install; STATE="clean" ;; 2) exit 0 ;; *) exit 0 ;; esac
+          fi
+
+          progress 5 "Detecting server network and SSH"''',
+          '''  case "$choice" in 1) repair_partial_install; STATE="clean" ;; 2) exit 0 ;; *) exit 0 ;; esac
+          fi
+
+          supported_arch || fail "Fresh install supports Linux amd64/x86_64 and arm64/aarch64 only."
+          ROOT_FREE_KB="$(free_root_kb || true)"; [[ "$ROOT_FREE_KB" =~ ^[0-9]+$ ]] || fail "Could not determine free disk space"
+          (( ROOT_FREE_KB >= 524288 )) || fail "Fresh install requires at least 512 MiB free on the root filesystem"
+          progress 5 "Detecting server network and SSH"''')
+          once(
+          '''apt-get install -y -q git curl ca-certificates python3 python3-venv unzip openssl iproute2 >/dev/null
+          [[ "$MODE" == 1 ]] && apt-get install -y -q certbot >/dev/null
+
+          TMP="$(mktemp -d /tmp/dark-xray-install.XXXXXX)"''',
+          '''apt-get install -y -q git curl ca-certificates python3 python3-venv unzip openssl iproute2 >/dev/null
+          [[ "$MODE" == 1 ]] && apt-get install -y -q certbot >/dev/null
+          python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' || fail "Python 3.11+ is required (Ubuntu 24.04 / Debian 12 or equivalent)."
+          command -v ss >/dev/null 2>&1 || fail "iproute2/ss is required for port safety checks"
+          port_busy "$PANEL_PORT" && fail "Panel port $PANEL_PORT became occupied during prerequisite installation"
+
+          TMP="$(mktemp -d /tmp/dark-xray-install.XXXXXX)"''')
+          once(
+          '''progress 97 "Running final doctor"; /usr/local/bin/darkxray doctor || warn "Doctor reported warnings; review them before production use"
+          progress 100 "DARK XRAY installation complete"''',
+          '''progress 97 "Running final doctor"
+          DOCTOR_JSON="$(/usr/local/bin/darkxray doctor)" || fail "Final Doctor command failed"
+          printf '%s\n' "$DOCTOR_JSON"
+          printf '%s\n' "$DOCTOR_JSON" | python3 -c 'import json,sys; c=json.load(sys.stdin).get("checks",{}); r=c.get("panel_route",{}); raise SystemExit(0 if c.get("configuration")=="ok" and c.get("database")=="ok" and isinstance(r,dict) and r.get("ok") is True else 1)' || fail "Final Doctor critical checks failed: configuration/database/panel route must be healthy"
+          progress 100 "DARK XRAY installation complete"''')
           p.write_text(s)
+          Path('VERSION').write_text('0.7.2-standalone-lab\n')
           PY
-      - name: Apply stabilization
-        run: python tools/stabilize_update_contract_once.py
       - name: Static smoke
         run: |
           python -m py_compile tools/update.py tests/test_update_transaction.py tests/test_web_contract.py
           bash -n install-online.sh tests/run-tests.sh darkxray
           bash install-online.sh --selftest >/tmp/dark-installer-selftest.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-selftest.txt
+          grep -q 'Fresh install requires at least 512 MiB' install-online.sh
+          grep -q 'Final Doctor critical checks failed' install-online.sh
           python tools/repo-check.py
       - name: Install tests
         run: python -m pip install -r requirements-dev.txt
@@ -43,10 +91,10 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: bash tests/run-tests.sh
-      - name: Publish application changes
+      - name: Publish installer/version changes
         run: |
           git config user.name darktunnelmika
           git config user.email mikakhadmi@gmail.com
-          git add tools/update.py install-online.sh tests VERSION
-          git commit -m 'Harden update rollback and web route contract'
+          git add install-online.sh VERSION
+          git commit -m 'Harden fresh install preflight and final health gate'
           git push origin HEAD:main
