@@ -18,6 +18,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+      - name: Align patch anchor with current core
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/subpath_081_once.py');s=p.read_text()
+          old="""            if type(value['enabled']) is not bool or type(value['auto_detect']) is not bool:raise CoreError('Invalid subscription toggles')
+                      if value['default_format'] not in ('raw','base64','json','clash'):raise CoreError('Unsupported default subscription format')"""
+          new="""            if type(value['enabled']) is not bool or type(value['auto_detect']) is not bool or value['default_format'] not in ('raw','base64','json','clash'):raise CoreError('Invalid subscription mode')"""
+          if old not in s:raise SystemExit('subscription validation helper anchor missing')
+          p.write_text(s.replace(old,new))
+          PY
       - name: Apply subscription path patch
         run: python tools/subpath_081_once.py
       - name: Static smoke
