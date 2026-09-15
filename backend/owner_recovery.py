@@ -17,7 +17,7 @@ from getpass import getpass
 from pathlib import Path
 
 from dark_policy import NAME_RE, PolicyError
-from policy_auth import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, password_hash
+from policy_auth import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, password_hash, verify_password
 
 _IDENT = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
@@ -77,6 +77,8 @@ def create_owner_account(db_path: Path, username: str, password: str) -> dict:
         db.execute('BEGIN IMMEDIATE')
         if db.execute('SELECT 1 FROM api_admins WHERE id=?',(username,)).fetchone():raise PolicyError('A login account with this username already exists')
         db.execute('INSERT INTO api_admins(id,role,password_hash,permissions,disabled) VALUES(?,?,?,?,0)',(username,'owner',hashed,'{}'))
+        written=db.execute('SELECT password_hash FROM api_admins WHERE id=?',(username,)).fetchone()
+        if not written or not verify_password(password,written['password_hash']):raise PolicyError('Owner password verification failed; transaction rolled back')
         if _table_exists(db,'owners'):db.execute('INSERT OR IGNORE INTO owners(id) VALUES(?)',(username,))
         if _table_exists(db,'owner_profiles'):
             row=db.execute('SELECT 1 FROM owner_profiles WHERE id=?',(username,)).fetchone()
@@ -85,7 +87,7 @@ def create_owner_account(db_path: Path, username: str, password: str) -> dict:
                 if _table_exists(db,'core_inbounds'):allowed=[r[0] for r in db.execute('SELECT id FROM core_inbounds ORDER BY id')]
                 db.execute('INSERT INTO owner_profiles(id,name,allowed) VALUES(?,?,?)',(username,username,json.dumps(allowed)))
         db.execute('COMMIT')
-        return {'username':username,'created':True,'role':'owner','profile_attached':True}
+        return {'username':username,'created':True,'role':'owner','profile_attached':True,'password_verified':True}
     except BaseException:
         try:db.execute('ROLLBACK')
         except sqlite3.Error:pass
@@ -100,8 +102,10 @@ def reset_owner_password(db_path: Path, username: str, password: str) -> dict:
     try:
         db.execute('BEGIN IMMEDIATE');_owner(db,username)
         db.execute('UPDATE api_admins SET password_hash=? WHERE id=?',(hashed,username))
+        written=db.execute('SELECT password_hash FROM api_admins WHERE id=?',(username,)).fetchone()
+        if not written or not verify_password(password,written['password_hash']):raise PolicyError('Owner password verification failed; transaction rolled back')
         _revoke_sessions_tx(db,username);db.execute('COMMIT')
-        return {'username':username,'sessions_revoked':True,'totp_preserved':True}
+        return {'username':username,'sessions_revoked':True,'totp_preserved':True,'password_verified':True}
     except BaseException:
         try:db.execute('ROLLBACK')
         except sqlite3.Error:pass

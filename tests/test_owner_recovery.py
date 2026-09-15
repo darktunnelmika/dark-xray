@@ -31,7 +31,7 @@ def test_live_safe_owner_reset_works_while_instance_lock_is_held(tmp_path):
     lock=(data/'instance.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     try:result=reset_owner_password(data/'dark.sqlite3','dark','NewPass88')
     finally:fcntl.flock(lock,fcntl.LOCK_UN);lock.close()
-    assert result=={'username':'dark','sessions_revoked':True,'totp_preserved':True}
+    assert result=={'username':'dark','sessions_revoked':True,'totp_preserved':True,'password_verified':True}
     with store.lock:
         row=store.db.execute("SELECT password_hash FROM api_admins WHERE id='dark'").fetchone();sessions=store.db.execute("SELECT COUNT(*) FROM live_sessions WHERE admin_id='dark'").fetchone()[0]
     assert verify_password('NewPass88',row['password_hash']);assert not verify_password('OldPass88',row['password_hash']);assert sessions==0
@@ -86,7 +86,7 @@ def test_create_owner_login_from_existing_profile(tmp_path):
     auth.bootstrap('dark','OwnerPass8')
     manager.owner_put(Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
     result=create_owner_account(data/'dark.sqlite3','Mika','MikaPass88')
-    assert result['created'] is True and result['role']=='owner'
+    assert result['created'] is True and result['role']=='owner' and result['password_verified'] is True
     with store.lock:
         row=store.db.execute("SELECT role,password_hash FROM api_admins WHERE id='Mika'").fetchone()
     assert row['role']=='owner' and verify_password('MikaPass88',row['password_hash'])

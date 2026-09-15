@@ -47,6 +47,8 @@ def main():
     if a.panel_path!='/' and a.panel_path.endswith('/'):a.panel_path=a.panel_path.rstrip('/')
     if a.panel_path!='/' and (len(a.panel_path)>200 or not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',a.panel_path)):
         raise SystemExit('Invalid panel URI path')
+    first_segment=a.panel_path.strip('/').split('/',1)[0].lower() if a.panel_path!='/' else ''
+    if first_segment in {'api','assets','sub','node','health'}:raise SystemExit('Panel URI path conflicts with a reserved DARK endpoint')
     if bool(a.core_archive)!=bool(a.core_sha256):raise SystemExit('Offline core requires both --core-archive and --core-sha256')
     if not re.fullmatch(r'v\d+\.\d+\.\d+',a.core_version):raise SystemExit('Invalid core version')
     if any(c in a.public_address for c in '/?#@ \r\n') or not a.public_address:raise SystemExit('Use a plain public IP or DNS name')

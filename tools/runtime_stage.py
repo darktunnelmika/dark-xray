@@ -6,12 +6,15 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 PATH_RE=re.compile(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*')
+RESERVED={'api','assets','sub','node','health'}
 
 def normalize(value:str)->str:
     value=str(value or '/').strip()
     if value!='/' and value.endswith('/'):value=value.rstrip('/')
     if value!='/' and not PATH_RE.fullmatch(value):raise SystemExit('URI path must be / or slash-prefixed alphanumeric/_/- segments')
     if len(value)>200:raise SystemExit('URI path is too long')
+    first=value.strip('/').split('/',1)[0].lower() if value!='/' else ''
+    if first in RESERVED:raise SystemExit('URI path conflicts with a reserved DARK endpoint')
     return value
 
 def defaults(config:dict)->dict:

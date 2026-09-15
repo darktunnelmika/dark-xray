@@ -66,6 +66,8 @@ def validate_desired(value: dict, current: dict, inbound_ports: set[int]) -> dic
     if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):
         raise ValueError('Invalid panel URI path')
     if len(panel_path)>200:raise ValueError('Panel URI path is too long')
+    first_segment=panel_path.strip('/').split('/',1)[0].lower() if panel_path!='/' else ''
+    if first_segment in {'api','assets','sub','node','health'}:raise ValueError('Panel URI path conflicts with a reserved DARK endpoint')
     v['panel_path']=panel_path
     address = v.get('public_address','')
     if not isinstance(address,str) or not address or any(c in address for c in '/?#@ \r\n\t'):

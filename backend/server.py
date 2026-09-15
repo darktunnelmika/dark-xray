@@ -587,7 +587,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             audits=store.db.execute('SELECT COUNT(*) FROM live_audit').fetchone()[0]
             groups=store.db.execute('SELECT COUNT(*) FROM client_groups').fetchone()[0] if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_groups'").fetchone() else 0
         return {'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
-                'database_download':'/api/backup','full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
+                'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup','full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
                 'restore_isolated':True}
 
     @app.get('/api/backup')

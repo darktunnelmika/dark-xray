@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DARK VPN / DARK XRAY cyber terminal control center."""
 from __future__ import annotations
-import json, os, shutil, socket, sqlite3, subprocess, sys, tempfile, time
+import json, os, secrets, shutil, socket, sqlite3, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -25,6 +25,14 @@ def run(args,capture=False,check=False):
             stdout=subprocess.PIPE if capture else None,stderr=subprocess.STDOUT if capture else None)
     except (FileNotFoundError,subprocess.CalledProcessError) as e:
         print(f'{RE}Command failed:{R} {args[0]}');return e
+
+def run_action(args,success):
+    cp=run(args)
+    if getattr(cp,'returncode',1)==0:
+        print(f'{GR}{success}{R}')
+        return True
+    print(f'{RE}Action failed. DARK did not assume the requested change succeeded.{R}')
+    return False
 
 def exists(name):return shutil.which(name) is not None
 
@@ -69,7 +77,9 @@ def endpoint(c):
 def valid_panel_path(value):
     value=str(value or '/').strip()
     if value!='/' and value.endswith('/'):value=value.rstrip('/')
-    return len(value)<=200 and (value=='/' or bool(__import__('re').fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',value)))
+    if len(value)>200 or not (value=='/' or bool(__import__('re').fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',value))):return False
+    first=value.strip('/').split('/',1)[0].lower() if value!='/' else ''
+    return first not in {'api','assets','sub','node','health'}
 
 def header(title='CONTROL CENTER',sub=''):
     clear();w=76
@@ -238,9 +248,17 @@ def account_menu():
         if x=='0':return
         if x=='2':
             print(f'{GY}This creates a real panel LOGIN Owner. An owner profile alone cannot sign in.{R}')
-            user=ask('New owner login username')
+            if profiles:
+                print(f'{GY}Profiles without login:{R}')
+                for i,name in enumerate(profiles,1):print(f'  [{i}] {name}')
+                print('  [0] Use a new username')
+                raw=ask('Select profile','1')
+                if raw=='0':user=ask('New owner login username')
+                elif raw.isdigit() and 1<=int(raw)<=len(profiles):user=profiles[int(raw)-1]
+                else:print(f'{RE}Invalid profile selection.{R}');pause();continue
+            else:user=ask('New owner login username')
             if user and confirm(f'Create a full Owner login named {user}?','CREATE'):
-                run([COMMAND,'account','--username',user,'--action','create-owner']);pause()
+                run_action([COMMAND,'account','--username',user,'--action','create-owner'],f'Owner login {user} created; password write verified.');pause()
             continue
         user=choose_owner() if x in {'1','3','4','5','6','7'} else ''
         if x=='1' and user:run([COMMAND,'account','--username',user,'--action','status']);pause()
@@ -250,7 +268,7 @@ def account_menu():
                 run([COMMAND,'account','--username',user,'--action','rename','--new-username',new]);pause()
         elif x=='4' and user:
             if confirm(f'Change password for login Owner {user}? Active sessions will be revoked.'):
-                run([COMMAND,'reset-password','--username',user]);pause()
+                run_action([COMMAND,'reset-password','--username',user],f'Password changed for {user}; password write verified and sessions revoked.');pause()
         elif x=='5' and user:
             if confirm(f'Force logout every active session for {user}?','LOGOUT'):
                 run([COMMAND,'account','--username',user,'--action','revoke-sessions']);pause()
@@ -272,6 +290,7 @@ def panel_network_menu():
         item(2,'Change panel port',str(c.get('bind_port',2087)))
         item(3,'Change public proxy address',str(c.get('public_address','')))
         item(4,'Change panel URI path',str(c.get('panel_path','/')))
+        item(11,'Generate random panel URI path','secure 96-bit path token')
         item(5,'Show panel URL / SSH tunnel')
         title_row('WEB SETTINGS')
         item(6,'Preview staged Web Settings')
@@ -317,6 +336,14 @@ def panel_network_menu():
                     run([COMMAND,'settings-apply'])
                     print(f'{GR}New panel URL: {endpoint(cfg())}{R}')
                 pause()
+        elif x=='11':
+            v='/dark-'+secrets.token_hex(12)
+            if run_action([COMMAND,'stage-panel-path','--panel-path',v],f'Random URI path staged: {v}'):
+                print(f'{YE}Apply staged settings to activate the new URL.{R}')
+                if need_root() and confirm('Apply random URI path now?'):
+                    run_action([COMMAND,'settings-apply'],'Random URI path applied; panel service restarted.')
+                    print(f'{GR}Panel URL: {endpoint(cfg())}{R}')
+            pause()
         elif x=='5':show_access();pause()
         elif x=='6':run([COMMAND,'settings-apply','--dry-run']);pause()
         elif x=='7':

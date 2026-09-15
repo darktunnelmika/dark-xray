@@ -73,6 +73,9 @@ class Config:
         if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):
             raise ValueError('panel_path must be / or slash-prefixed alphanumeric/_/- segments')
         if len(panel_path)>200:raise ValueError('panel_path is too long')
+        first_segment=panel_path.strip('/').split('/',1)[0].lower() if panel_path!='/' else ''
+        if first_segment in {'api','assets','sub','node','health'}:
+            raise ValueError('panel_path conflicts with a reserved DARK endpoint')
         self.panel_path=panel_path
         if p.scheme=='https' and not self.secure_cookie: raise ValueError('HTTPS requires secure_cookie=true')
         if p.scheme=='http':
@@ -217,6 +220,8 @@ class CoreEngine:
             if panel_path!='/' and panel_path.endswith('/'):panel_path=panel_path.rstrip('/')
             if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):raise CoreError('Invalid panel URI path')
             if len(panel_path)>200:raise CoreError('Panel URI path is too long')
+            first_segment=panel_path.strip('/').split('/',1)[0].lower() if panel_path!='/' else ''
+            if first_segment in {'api','assets','sub','node','health'}:raise CoreError('Panel URI path conflicts with a reserved DARK endpoint')
             value['panel_path']=panel_path
             addr=value['public_address']
             if not isinstance(addr,str) or not addr or len(addr)>253 or any(c in addr for c in '/?#@ \r\n\t'):raise CoreError('Invalid public proxy address')

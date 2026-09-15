@@ -60,6 +60,18 @@ def test_panel_and_runtime_validation(env):
     assert c.put('/api/settings/runtime',json={'value':runtime}).status_code==422
 
 
+
+
+def test_reserved_panel_uri_paths_are_rejected(env,tmp_path):
+    _,_,c=env
+    runtime=c.get('/api/settings/runtime').json()['value']
+    for path in ('/api','/assets','/sub','/node','/health','/sub/private'):
+        candidate=dict(runtime,panel_path=path)
+        assert c.put('/api/settings/runtime',json={'value':candidate}).status_code==422
+        with pytest.raises(ValueError):
+            Config(xray_binary=str(tmp_path/'xray'),xray_assets=str(tmp_path),panel_path=path,test_engine=True)
+
+
 def test_domain_mode_requires_domain_and_email(env):
     _,_,c=env
     runtime=c.get('/api/settings/runtime').json()['value']

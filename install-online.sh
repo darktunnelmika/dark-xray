@@ -31,7 +31,7 @@ yesno(){ local prompt="$1" def="${2:-y}" a; read -r -p "$prompt [${def^^}/$([[ $
 valid_port(){ [[ "$1" =~ ^[0-9]+$ ]] && (( 1 <= 10#$1 && 10#$1 <= 65535 )); }
 valid_user(){ [[ "$1" =~ ^[A-Za-z0-9_.@+-]{1,128}$ ]]; }
 valid_domain(){ [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; }
-valid_panel_path(){ [[ "$1" == / || ( ${#1} -le 200 && "$1" =~ ^/([A-Za-z0-9_-]{1,64})(/[A-Za-z0-9_-]{1,64})*$ ) ]]; }
+valid_panel_path(){ local v="$1" first; [[ "$v" == / ]] && return 0; [[ ${#v} -le 200 && "$v" =~ ^/([A-Za-z0-9_-]{1,64})(/[A-Za-z0-9_-]{1,64})*$ ]] || return 1; first="${v#/}"; first="${first%%/*}"; first="${first,,}"; [[ "$first" != api && "$first" != assets && "$first" != sub && "$first" != node && "$first" != health ]]; }
 port_busy(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$1$"; }
 public_ipv4(){ curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}'; }
 ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '/^port /{print $2;exit}'; else echo 22; fi; }
@@ -90,6 +90,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
   banner; progress 1 "Runtime helper self-test"; progress 100 "Progress renderer self-test"
   valid_port 2087 || fail "valid_port rejected 2087"; ! valid_port 70000 || fail "valid_port accepted 70000"
   valid_user dark || fail "valid_user rejected dark"; valid_domain panel.example.com || fail "valid_domain rejected panel.example.com"
+  valid_panel_path /dark-admin || fail "valid_panel_path rejected /dark-admin"; ! valid_panel_path /sub || fail "valid_panel_path accepted reserved /sub"
   valid_source_ref main || fail "valid_source_ref rejected main"; valid_source_ref 0123456789abcdef || fail "valid_source_ref rejected commit"; ! valid_source_ref --upload-pack=x || fail "valid_source_ref accepted option injection"
   [[ "$(state_from_flags 0 0 0 0 0)" == clean ]] || fail "clean-state classifier failed"
   [[ "$(state_from_flags 1 0 1 0 0)" == partial ]] || fail "partial-state classifier failed"
