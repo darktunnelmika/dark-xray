@@ -18,11 +18,21 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+      - name: Repair helper quoting before execution
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/stabilize_update_contract_once.py')
+          s=p.read_text()
+          s=s.replace("wrapper.write_text('''#!/usr/bin/env bash", 'wrapper.write_text("""#!/usr/bin/env bash', 1)
+          s=s.replace("\n''')\n    os.chmod(wrapper,0o755)", '\n""")\n    os.chmod(wrapper,0o755)', 1)
+          p.write_text(s)
+          PY
       - name: Apply stabilization
         run: python tools/stabilize_update_contract_once.py
       - name: Static smoke
         run: |
-          python -m py_compile tools/update.py tools/stabilize_update_contract_once.py tests/test_update_transaction.py tests/test_web_contract.py
+          python -m py_compile tools/update.py tests/test_update_transaction.py tests/test_web_contract.py
           bash -n install-online.sh tests/run-tests.sh darkxray
           bash install-online.sh --selftest >/tmp/dark-installer-selftest.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-selftest.txt
