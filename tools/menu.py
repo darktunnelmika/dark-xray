@@ -142,7 +142,7 @@ def owner_profiles_without_login():
     try:
         with sqlite3.connect(f'file:{path}?mode=ro',uri=True) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_profiles'").fetchone():return []
-            logins={r[0] for r in db.execute("SELECT id FROM api_admins WHERE role='owner'")}
+            logins={r[0] for r in db.execute("SELECT id FROM api_admins")}
             return [r[0] for r in db.execute('SELECT id FROM owner_profiles ORDER BY id') if r[0] not in logins]
     except Exception:return []
 
