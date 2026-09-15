@@ -146,6 +146,9 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,
               digest TEXT NOT NULL,device_os TEXT NOT NULL,model TEXT NOT NULL,first_seen REAL NOT NULL,last_seen REAL NOT NULL,
               UNIQUE(email,digest));
+            CREATE TABLE IF NOT EXISTS core_client_tombstones(
+              email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
+              up INTEGER NOT NULL,down INTEGER NOT NULL,deleted_at REAL NOT NULL);
             ''')
         self.validate_schema_only=True
 
@@ -455,13 +458,24 @@ class CoreEngine:
     @serialized
     def delete(self,email:str):
         self._write();self.collect_stats(force=True)
-        with self.store.lock:
-            r=self.store.db.execute('SELECT body,inbounds,up,down FROM core_clients WHERE email=?',(email,)).fetchone()
-            final=(json.loads(r['body'])|{'inboundIds':json.loads(r['inbounds']),'traffic':{'up':r['up'],'down':r['down']}}) if r else None
+        final=None
         with self.store.transaction() as db:
+            r=db.execute('SELECT body,inbounds,up,down FROM core_clients WHERE email=?',(email,)).fetchone()
+            if r:
+                final=json.loads(r['body'])|{'inboundIds':json.loads(r['inbounds']),'traffic':{'up':r['up'],'down':r['down']}}
+                db.execute('''INSERT INTO core_client_tombstones(email,body,inbounds,up,down,deleted_at)
+                    VALUES(?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET body=excluded.body,
+                    inbounds=excluded.inbounds,up=excluded.up,down=excluded.down,deleted_at=excluded.deleted_at''',
+                    (email,r['body'],r['inbounds'],r['up'],r['down'],time.time()))
             db.execute('DELETE FROM core_clients WHERE email=?',(email,));db.execute('DELETE FROM core_devices WHERE email=?',(email,))
         # Usernames remain reserved in managed_clients tombstones.
         return final
+
+    def deleted_client_snapshot(self,email:str)->dict|None:
+        with self.store.lock:r=self.store.db.execute('SELECT body,inbounds,up,down,deleted_at FROM core_client_tombstones WHERE email=?',(email,)).fetchone()
+        if not r:return None
+        return json.loads(r['body'])|{'inboundIds':json.loads(r['inbounds']),
+            'traffic':{'up':r['up'],'down':r['down']},'deletedAt':r['deleted_at']}
 
     @serialized
     def attach(self,email:str,ids:list[int]):

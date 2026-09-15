@@ -360,13 +360,22 @@ class Manager:
         email=meta['email'];op=meta['op'];desired=json.loads(meta['desired']);ids=json.loads(meta['inbounds'])
         existing=records.get(email)
         if op=='delete':
+            final=None
             if existing:
                 if existing.get('subId')!=desired.get('subId'):raise CoreError('Identity conflict: refusing to delete a different engine client',status=409)
                 final=self.engine.delete(email)
-                if final:self._charge_snapshot(self.meta(email),final)
-            self.store.delete_client(SYSTEM,email)
+            else:
+                # A prior process may have committed the core deletion and crashed
+                # before Manager charged/finalized it. Core keeps the final counters
+                # in a durable tombstone specifically for this recovery path.
+                final=self.engine.deleted_client_snapshot(email)
+                if final and final.get('subId')!=desired.get('subId'):
+                    raise CoreError('Deleted core snapshot identity conflict; refusing recovery',status=409)
+            if final:self._charge_snapshot(self.meta(email),final)
+            with self.store.lock:policy_exists=self.store.db.execute('SELECT 1 FROM clients WHERE id=?',(email,)).fetchone() is not None
+            if policy_exists:self.store.delete_client(SYSTEM,email)
             with self.store.transaction() as db:
-                db.execute("UPDATE managed_clients SET op='none',state='deleted',desired='{}',error='',updated_at=? WHERE email=?",(time.time(),email))
+                db.execute("UPDATE managed_clients SET op='none',state='deleted',desired='{}',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
             return
         if op=='reset':
             if not existing:raise CoreError('CoreEngine client missing; reset refused',status=409)
@@ -508,8 +517,9 @@ class Manager:
             self._charge_snapshot(meta,rec)
             with self.store.transaction() as db:
                 db.execute("UPDATE managed_clients SET op='none',state='applied',error='',retry_at=0,attempts=0 WHERE email=?",(email,))
+            self._complete_cycle(email)
             row=self.own_row(actor,email)
-            self.audit(actor,row['owner'],'reset.resolve_current',email,'Current engine counters accepted; destructive reset NOT replayed')
+            self.audit(actor,row['owner'],'reset.resolve_current',email,'Current engine counters accepted; destructive reset NOT replayed; due reset cycle advanced')
             self.tick(suppress=False)
             return self.detail(actor,email)
 
