@@ -20,7 +20,7 @@ jobs:
           node-version: '22'
       - name: Apply stability patch
         run: python tools/stability_073_once.py
-      - name: Repair stats restart test harness
+      - name: Repair regression harness and expiry floor
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -56,6 +56,11 @@ jobs:
           '''
           if old not in s:raise SystemExit('stats restart test anchor missing')
           p.write_text(s.replace(old,new,1))
+          p=Path('backend/server.py');s=p.read_text()
+          if "patch['expiryTime']=max(1,base+body.add_days*86400000)" not in s:raise SystemExit('expiry floor anchor missing')
+          p.write_text(s.replace("patch['expiryTime']=max(1,base+body.add_days*86400000)","patch['expiryTime']=max(1000,base+body.add_days*86400000)",1))
+          p=Path('tests/test_accounting_stability.py');s=p.read_text()
+          p.write_text(s.replace("assert d['client']['expiryTime']==1","assert d['client']['expiryTime']==1000",1))
           PY
       - name: Static smoke
         run: |
