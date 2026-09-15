@@ -18,6 +18,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
+      - name: Prepare auth session validator import
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('backend/auth.py');s=p.read_text()
+          if '\nimport re\n' not in s:
+              anchor='import json\nimport secrets\n'
+              if anchor not in s:raise SystemExit('auth import anchor missing')
+              s=s.replace(anchor,'import json\nimport re\nimport secrets\n',1)
+              p.write_text(s)
+          PY
       - name: Apply patch
         run: python tools/add_session_management_once.py
       - name: Syntax smoke
