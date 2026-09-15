@@ -337,8 +337,33 @@ class CoreEngine:
                     raise CoreError('Host address must be a plain IP/domain')
                 if type(host.get('port',0))is not int or not 1<=host['port']<=65535: raise CoreError('Invalid host port')
                 if 'enable' in host and type(host['enable'])is not bool:raise CoreError('Host enable must be boolean')
-                for key in ('remark','sni','host','path','alpn','fingerprint'):
-                    if key in host and (not isinstance(host[key],str) or len(host[key])>4096):raise CoreError('Invalid host '+key)
+                for key in ('remark','sni','host','path','alpn','fingerprint','security','finalMask','mihomoIpVersion'):
+                    if key in host and (not isinstance(host[key],str) or len(host[key])>8192):raise CoreError('Invalid host '+key)
+                security=host.get('security','same') or 'same'
+                if security not in ('same','tls','none'):raise CoreError('Host security override must be same, tls or none')
+                host['security']=security
+                for key in ('allowInsecure','overrideSniFromAddress','keepSniBlank'):
+                    if key in host and type(host[key]) is not bool:raise CoreError('Host '+key+' must be boolean')
+                    host.setdefault(key,False)
+                if host['overrideSniFromAddress'] and host['keepSniBlank']:raise CoreError('Host cannot both derive SNI from address and keep SNI blank')
+                excluded=host.get('excludeFromSubTypes',[])
+                if not isinstance(excluded,list) or len(excluded)>3 or any(x not in ('raw','json','clash') for x in excluded) or len(set(excluded))!=len(excluded):
+                    raise CoreError('Host format exclusions must contain unique raw/json/clash values')
+                host['excludeFromSubTypes']=excluded
+                ipver=host.get('mihomoIpVersion','')
+                if ipver not in ('','dual','ipv4','ipv6','ipv4-prefer','ipv6-prefer'):raise CoreError('Invalid Mihomo host IP version')
+                fm=host.get('finalMask','').strip()
+                if fm:
+                    try:fm_obj=json.loads(fm)
+                    except Exception:raise CoreError('Host FinalMask must be valid JSON')
+                    if not isinstance(fm_obj,dict) or not fm_obj:raise CoreError('Host FinalMask must be a nonempty JSON object')
+                    host['finalMask']=json.dumps(fm_obj,separators=(',',':'),ensure_ascii=False)
+                else:host['finalMask']=''
+                alpn=host.get('alpn','').strip()
+                if alpn:
+                    parts=[x.strip() for x in alpn.split(',') if x.strip()]
+                    if not parts or len(parts)>16 or any(len(x)>64 or any(ord(ch)<33 or ord(ch)>126 for ch in x) for x in parts):raise CoreError('Invalid host ALPN list')
+                    host['alpn']=','.join(dict.fromkeys(parts))
         with self.store.transaction() as db:
             db.execute('INSERT INTO core_sections VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',(name,json.dumps(value)))
         result={'saved':True,'applied':False,'runtime':self.runtime_state()}
@@ -850,20 +875,29 @@ class CoreEngine:
             if db.execute('SELECT COUNT(*) FROM core_devices WHERE email=?',(email,)).fetchone()[0]>=limit:raise CoreError('Subscription device limit reached',status=403)
             db.execute('INSERT INTO core_devices(email,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?)',(email,fingerprint,os_name[:80],model[:120],now,now))
 
-    def links(self,email:str)->dict:
+    def links(self,email:str,fmt:str='raw')->dict:
+        if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported link format',status=400)
+        host_format='raw' if fmt=='base64' else fmt
         d=self.client_detail(email);c=d['client'];links=[];warnings=[]
         for i in d['inboundIds']:
             ib=self.inbound(i)
             if not ib['enable']:continue
             configured=[h for h in self.section('hosts') if h['inboundId']==i]
-            hs=[h for h in configured if h.get('enable',True)] if configured else [{}]
+            hs=[h for h in configured if h.get('enable',True) and host_format not in h.get('excludeFromSubTypes',[])] if configured else [{}]
             for host in hs:
                 address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
                 proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
                 label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
-                st=ib['streamSettings'];net=st.get('network','tcp');sec=st.get('security','none')
-                q={'type':net,'security':sec};security=st.get('realitySettings' if sec=='reality' else 'tlsSettings',{})
-                sni=host.get('sni') or security.get('serverName') or next(iter(security.get('serverNames',[])),'')
+                st=ib['streamSettings'];net=st.get('network','tcp');base_sec=st.get('security','none')
+                force=host.get('security','same') or 'same';sec=base_sec if force=='same' else force
+                q={'type':net,'security':sec}
+                base_security=st.get('realitySettings' if base_sec=='reality' else 'tlsSettings',{}) if base_sec!='none' else {}
+                security=base_security if sec==base_sec else {}
+                sni=''
+                if not host.get('keepSniBlank',False) and sec!='none':
+                    if host.get('overrideSniFromAddress',False):sni=address
+                    elif host.get('sni'):sni=host['sni']
+                    elif sec==base_sec:sni=security.get('serverName') or next(iter(security.get('serverNames',[])),'')
                 if sni:q['sni']=sni
                 if sec=='reality':
                     key=security.get('privateKey','')
@@ -879,10 +913,16 @@ class CoreEngine:
                     q['fp']=host.get('fingerprint') or meta.get('fingerprint','chrome')
                     spider=meta.get('spiderX','')
                     if spider:q['spx']=spider
-                if sec=='tls' and host.get('alpn'):q['alpn']=host['alpn']
+                elif sec=='tls' and host.get('fingerprint'):
+                    q['fp']=host['fingerprint']
+                alpn=host.get('alpn','')
+                if not alpn and sec==base_sec and isinstance(security.get('alpn'),list):alpn=','.join(str(x) for x in security['alpn'] if x)
+                if sec!='none' and alpn:q['alpn']=alpn
+                if sec!='none' and host.get('allowInsecure',False):q['allowInsecure']='1'
+                if host.get('finalMask'):q['fm']=host['finalMask']
                 if net in ('ws','httpupgrade','xhttp'):
-                    ns=st.get(net+'Settings',{});q['path']=host.get('path',ns.get('path','/'))
-                    q['host']=host.get('host',ns.get('host',ns.get('headers',{}).get('Host','')))
+                    ns=st.get(net+'Settings',{});q['path']=host.get('path') or ns.get('path','/')
+                    q['host']=host.get('host') or ns.get('host',ns.get('headers',{}).get('Host',''))
                     if net=='xhttp':q['mode']=ns.get('mode','auto')
                 if net=='grpc':q['serviceName']=st.get('grpcSettings',{}).get('serviceName','')
                 hp=('['+address+']' if ':' in address else address)+':'+str(port)
@@ -894,6 +934,10 @@ class CoreEngine:
                 elif proto=='vmess':
                     ob={'v':'2','ps':label,'add':address,'port':str(port),'id':c['id'],'aid':'0','scy':c.get('security','auto'),
                         'net':net,'type':'none','host':q.get('host',''),'path':q.get('serviceName',q.get('path','')),'tls':sec if sec!='none' else '','sni':sni}
+                    if q.get('fp'):ob['fp']=q['fp']
+                    if q.get('alpn'):ob['alpn']=q['alpn']
+                    if q.get('allowInsecure'):ob['allowInsecure']=True
+                    if q.get('fm'):ob['fm']=q['fm']
                     uri='vmess://'+base64.b64encode(json.dumps(ob,separators=(',',':'),ensure_ascii=False).encode()).decode()
                 elif proto=='shadowsocks':
                     method=ib['settings'].get('method','aes-128-gcm')
@@ -901,27 +945,37 @@ class CoreEngine:
                         warnings.append('Shadowsocks transport/2022 export not yet supported');continue
                     user=base64.urlsafe_b64encode((method+':'+c['password']).encode()).decode().rstrip('=');uri='ss://'+user+'@'+hp+'#'+quote(label)
                 else:warnings.append('No subscription generator for '+proto);continue
-                links.append({'inboundId':i,'remark':label,'uri':uri})
+                meta={}
+                if host.get('mihomoIpVersion'):meta['mihomoIpVersion']=host['mihomoIpVersion']
+                links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta})
         return {'links':links,'warnings':warnings,'formats':['raw','base64','json','clash']}
 
     @staticmethod
-    def _clash_proxy(uri:str,name:str)->dict:
+    def _clash_proxy(uri:str,name:str,meta:dict|None=None)->dict:
         from urllib.parse import urlsplit,parse_qs,unquote
+        meta=meta if isinstance(meta,dict) else {}
+        def finish(out):
+            ipver=meta.get('mihomoIpVersion','')
+            if ipver:out['ip-version']=ipver
+            return out
         if uri.startswith('vmess://'):
             raw=uri[8:];doc=json.loads(base64.b64decode(raw+'='*((4-len(raw)%4)%4)).decode())
             out={'name':name,'type':'vmess','server':doc['add'],'port':int(doc['port']),'uuid':doc['id'],'alterId':int(doc.get('aid',0)),'cipher':doc.get('scy','auto'),'udp':True}
             net=doc.get('net','tcp');out['network']=net
             if doc.get('tls'):out['tls']=True
             if doc.get('sni'):out['servername']=doc['sni']
+            if doc.get('fp'):out['client-fingerprint']=doc['fp']
+            if doc.get('allowInsecure'):out['skip-cert-verify']=True
+            if doc.get('alpn'):out['alpn']=[x for x in str(doc['alpn']).split(',') if x]
             if net=='ws':out['ws-opts']={'path':doc.get('path','/'),'headers':{'Host':doc.get('host','')}}
             if net=='grpc':out['grpc-opts']={'grpc-service-name':doc.get('path','')}
-            return out
+            return finish(out)
         p=urlsplit(uri);q={k:v[-1] for k,v in parse_qs(p.query).items()};proto=p.scheme
         if proto=='ss':
             user=p.username or ''
             try:creds=base64.urlsafe_b64decode(user+'='*((4-len(user)%4)%4)).decode();method,password=creds.split(':',1)
             except Exception:raise CoreError('Cannot convert Shadowsocks link to Clash')
-            return {'name':name,'type':'ss','server':p.hostname,'port':p.port,'cipher':method,'password':password,'udp':True}
+            return finish({'name':name,'type':'ss','server':p.hostname,'port':p.port,'cipher':method,'password':password,'udp':True})
         if proto not in ('vless','trojan'):raise CoreError('Unsupported Clash proxy protocol')
         out={'name':name,'type':proto,'server':p.hostname,'port':p.port,'udp':True}
         if proto=='vless':out['uuid']=unquote(p.username or '')
@@ -931,11 +985,13 @@ class CoreEngine:
         if q.get('sni'):out['servername']=q['sni']
         if q.get('flow'):out['flow']=q['flow']
         if q.get('fp'):out['client-fingerprint']=q['fp']
+        if q.get('allowInsecure')=='1':out['skip-cert-verify']=True
+        if q.get('alpn'):out['alpn']=[x for x in q['alpn'].split(',') if x]
         if sec=='reality':out['reality-opts']={'public-key':q.get('pbk',''),'short-id':q.get('sid','')}
         if net=='ws':out['ws-opts']={'path':q.get('path','/'),'headers':{'Host':q.get('host','')}}
         if net=='grpc':out['grpc-opts']={'grpc-service-name':q.get('serviceName','')}
         if net=='xhttp':out['xhttp-opts']={'path':q.get('path','/'),'mode':q.get('mode','auto')}
-        return out
+        return finish(out)
 
     @staticmethod
     def _yaml(value,level:int=0)->str:
@@ -969,7 +1025,7 @@ class CoreEngine:
 
     def subscription(self,email:str,fmt:str)->tuple[bytes,dict]:
         if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported subscription format',status=400)
-        settings=self.section('subscription');result=self.links(email)
+        settings=self.section('subscription');result=self.links(email,'raw' if fmt=='base64' else fmt)
         if result['warnings']:raise CoreError('Subscription would be incomplete: '+'; '.join(result['warnings']),status=422)
         links=[r['uri'] for r in result['links']]
         if not links:raise CoreError('No enabled supported connection',status=503)
@@ -980,7 +1036,7 @@ class CoreEngine:
             body=json.dumps({'version':1,'title':settings.get('profile_title','DARK XRAY'),'client':email,'announce':settings.get('announce',''),'links':result['links']},ensure_ascii=False,indent=2).encode();content_type='application/json; charset=utf-8'
         else:
             proxies=[]
-            for item in result['links']:proxies.append(self._clash_proxy(item['uri'],item['remark']))
+            for item in result['links']:proxies.append(self._clash_proxy(item['uri'],item['remark'],item.get('hostMeta')))
             names=[p['name'] for p in proxies];doc={'proxies':proxies,'proxy-groups':[{'name':'DARK AUTO','type':'select','proxies':names}], 'rules':['MATCH,DARK AUTO']}
             body=(self._yaml(doc)+'\n').encode();content_type='application/yaml; charset=utf-8'
         with self.store.lock:r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
