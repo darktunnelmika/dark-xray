@@ -159,7 +159,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 return RedirectResponse(target,status_code=307)
             if not raw_path.startswith(panel_path+'/'):
                 return JSONResponse({'detail':'Not Found'},404)
-            request.scope['root_path']=panel_path
+            # Rewrite only the routing path. Setting root_path here makes Starlette
+            # StaticFiles apply the prefix a second time and turns valid prefixed
+            # assets into 404 responses. Browser/API URL generation is handled by
+            # the explicit panel base in the frontend.
             request.scope['path']=raw_path[len(panel_path):] or '/'
         if request.headers.get('host','').lower()!=public.netloc.lower():
             return JSONResponse({'detail':'Unexpected Host'},400)
