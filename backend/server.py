@@ -151,7 +151,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.middleware('http')
     async def security(request:Request,call_next):
         raw_path=request.scope.get('path','/') or '/'
-        stable_public=(raw_path=='/health' or raw_path.startswith('/sub/') or raw_path.startswith('/node/api/'))
+        try:subscription_path=str(engine.section('subscription').get('path','/sub'))
+        except Exception:subscription_path='/sub'
+        subscription_request=raw_path.startswith(subscription_path+'/')
+        if subscription_path!='/sub' and raw_path.startswith('/sub/'):
+            return JSONResponse({'detail':'Not Found'},404)
+        stable_public=(raw_path=='/health' or subscription_request or raw_path.startswith('/node/api/'))
+        if subscription_request and subscription_path!='/sub':
+            request.scope['path']='/sub'+raw_path[len(subscription_path):]
         if panel_path!='/' and not stable_public:
             if raw_path==panel_path:
                 target=panel_path+'/'

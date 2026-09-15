@@ -347,7 +347,7 @@ class Manager:
                 'used_bytes':row['used_bytes'],'block_reasons':reasons,'state':meta['state'],
                 'error':meta['error'],'observed_enable':engine.get('enable'),'last_seen_at':self.last_poll,
                 'data_plane_state':'running' if self.engine.running and not self.engine.runtime_state()['dirty'] else 'staged',
-                'subscription_url':self.engine.config.public_origin+'/sub/'+meta['public_token']
+                'subscription_url':self.engine.config.public_origin+self.engine.section('subscription').get('path','/sub')+'/'+meta['public_token']
                      if credentials and actor.can('clients','credentials',row['owner']) else None}
 
     def list(self,actor: Actor) -> list[dict]:

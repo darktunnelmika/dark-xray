@@ -180,7 +180,7 @@ class CoreEngine:
                              'domain':(origin.hostname or '') if access_mode=='domain_tls' else '','acme_email':''},
                   'subscription':{'enabled':True,'default_format':'base64','auto_detect':True,'profile_update_interval_hours':6,
                                   'remark_template':'{remark} | {email}','support_url':'','profile_title':'DARK XRAY',
-                                  'profile_url':'','announce':''},
+                                  'profile_url':'','announce':'','path':'/sub'},
                   'ipguard':{'mode':'observe','window_seconds':self.config.ip_window_seconds,
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
@@ -227,6 +227,9 @@ class CoreEngine:
             if len(panel_path)>200:raise CoreError('Panel URI path is too long')
             first_segment=panel_path.strip('/').split('/',1)[0].lower() if panel_path!='/' else ''
             if first_segment in {'api','assets','sub','node','health'}:raise CoreError('Panel URI path conflicts with a reserved DARK endpoint')
+            sub_path=str(self.section('subscription').get('path','/sub'))
+            if panel_path!='/' and (panel_path==sub_path or panel_path.startswith(sub_path+'/') or sub_path.startswith(panel_path+'/')):
+                raise CoreError('Panel URI path overlaps the subscription path')
             value['panel_path']=panel_path
             addr=value['public_address']
             if not isinstance(addr,str) or not addr or len(addr)>253 or any(c in addr for c in '/?#@ \r\n\t'):raise CoreError('Invalid public proxy address')
@@ -239,9 +242,17 @@ class CoreEngine:
                 if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email):raise CoreError('Domain + TLS mode requires a valid ACME email')
             elif domain or email:raise CoreError('Domain and ACME email must be empty in SSH mode')
         if name=='subscription':
-            allowed={'enabled','default_format','auto_detect','profile_update_interval_hours','remark_template','support_url','profile_title','profile_url','announce'}
+            allowed={'enabled','default_format','auto_detect','profile_update_interval_hours','remark_template','support_url','profile_title','profile_url','announce','path'}
             if set(value)!=allowed:raise CoreError('Subscription settings shape is incomplete or contains unknown fields')
             if type(value['enabled']) is not bool or type(value['auto_detect']) is not bool or value['default_format'] not in ('raw','base64','json','clash'):raise CoreError('Invalid subscription mode')
+            sub_path=str(value.get('path','/sub')).strip()
+            if sub_path!='/' and sub_path.endswith('/'):sub_path=sub_path.rstrip('/')
+            if sub_path=='/' or len(sub_path)>200 or not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',sub_path):raise CoreError('Invalid subscription URI path')
+            first=sub_path.strip('/').split('/',1)[0].lower()
+            if first in {'api','assets','node','health'}:raise CoreError('Subscription path conflicts with a reserved DARK endpoint')
+            panel_path=str(self.section('runtime').get('panel_path',self.config.panel_path))
+            if panel_path!='/' and (panel_path==sub_path or panel_path.startswith(sub_path+'/') or sub_path.startswith(panel_path+'/')):raise CoreError('Subscription path overlaps the panel URI path')
+            value['path']=sub_path
             if type(value['profile_update_interval_hours']) is not int or not 1<=value['profile_update_interval_hours']<=168:raise CoreError('Invalid subscription update interval')
             tmpl=value['remark_template']
             if not isinstance(tmpl,str) or not 1<=len(tmpl)<=200:raise CoreError('Invalid remark template')
