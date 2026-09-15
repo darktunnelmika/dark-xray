@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from getpass import getpass
 from pathlib import Path
 
@@ -122,6 +123,11 @@ def rename_owner_username(db_path: Path, username: str, new_username: str) -> di
         db.execute('BEGIN IMMEDIATE');_owner(db,username)
         if db.execute('SELECT 1 FROM api_admins WHERE id=?',(new_username,)).fetchone():
             raise PolicyError('New username already exists')
+        # A profile without a login is a separate ownership identity. Never merge it
+        # implicitly during an auth rename: that could reassign clients/ledgers.
+        for table in ('owners','owner_profiles'):
+            if _table_exists(db,table) and _column_exists(db,table,'id') and db.execute(f'SELECT 1 FROM "{table}" WHERE id=?',(new_username,)).fetchone():
+                raise PolicyError('Target owner profile already exists without this login; use Create owner login for that profile or choose another username')
         # Revoke interactive sessions first. API keys and TOTP remain attached to the
         # renamed owner by updating their admin_id references below.
         _revoke_sessions_tx(db,username)
@@ -186,10 +192,13 @@ def disable_owner_totp(db_path: Path, username: str) -> dict:
 def owner_status(db_path: Path, username: str) -> dict:
     db=_connect(db_path)
     try:
-        row=_owner(db,username);sessions=keys=0;totp=False
-        if _table_exists(db,'live_sessions'):sessions+=db.execute('SELECT COUNT(*) FROM live_sessions WHERE admin_id=?',(username,)).fetchone()[0]
-        if _table_exists(db,'sessions'):sessions+=db.execute('SELECT COUNT(*) FROM sessions WHERE admin_id=?',(username,)).fetchone()[0]
-        if _table_exists(db,'robot_keys'):keys=db.execute('SELECT COUNT(*) FROM robot_keys WHERE admin_id=? AND revoked=0',(username,)).fetchone()[0]
+        row=_owner(db,username);sessions=keys=0;totp=False;now=time.time()
+        if _table_exists(db,'live_sessions'):
+            sessions+=db.execute('SELECT COUNT(*) FROM live_sessions WHERE admin_id=? AND expires_at>?',(username,now)).fetchone()[0]
+        if _table_exists(db,'sessions'):
+            sessions+=db.execute('SELECT COUNT(*) FROM sessions WHERE admin_id=? AND expires_at>?',(username,now)).fetchone()[0]
+        if _table_exists(db,'robot_keys'):
+            keys=db.execute('SELECT COUNT(*) FROM robot_keys WHERE admin_id=? AND revoked=0 AND expires_at>?',(username,now)).fetchone()[0]
         if _table_exists(db,'mfa'):
             r=db.execute('SELECT enabled FROM mfa WHERE admin_id=?',(username,)).fetchone();totp=bool(r and r[0])
         return {'username':username,'role':row['role'],'disabled':bool(row['disabled']),'active_sessions':sessions,'active_api_keys':keys,'totp_enabled':totp}

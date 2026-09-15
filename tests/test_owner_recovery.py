@@ -91,3 +91,30 @@ def test_create_owner_login_from_existing_profile(tmp_path):
         row=store.db.execute("SELECT role,password_hash FROM api_admins WHERE id='Mika'").fetchone()
     assert row['role']=='owner' and verify_password('MikaPass88',row['password_hash'])
     close_runtime(store,engine,manager)
+
+
+
+def test_owner_status_excludes_expired_sessions_and_api_keys(tmp_path):
+    import time
+    data,store,engine,manager,auth=make_runtime(tmp_path);auth.bootstrap('dark','OwnerPass8')
+    token,principal=auth.login('dark','OwnerPass8','','127.0.0.1');auth.new_key(principal,'active',{},30)
+    with store.transaction() as db:
+        db.execute("INSERT INTO live_sessions(digest,admin_id,csrf,expires_at,public_id,created_at,source,user_agent) VALUES(?,?,?,?,?,?,?,?)",('expired-digest','dark','x',time.time()-10,'expired-public-id-000000',time.time()-100,'old','ua'))
+        db.execute("INSERT INTO robot_keys(id,digest,admin_id,name,permissions,expires_at,revoked,created_at) VALUES(?,?,?,?,?,?,0,?)",('expired-key','expired-digest-key','dark','expired','{}',time.time()-10,time.time()-100))
+    status=owner_status(data/'dark.sqlite3','dark')
+    assert status['active_sessions']==1 and status['active_api_keys']==1
+    close_runtime(store,engine,manager)
+
+
+def test_owner_rename_reports_existing_profile_collision_cleanly(tmp_path):
+    from dark_policy import Actor,PolicyError
+    data,store,engine,manager,auth=make_runtime(tmp_path);auth.bootstrap('dark','OwnerPass8')
+    manager.owner_put(Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
+    try:
+        rename_owner_username(data/'dark.sqlite3','dark','Mika');assert False
+    except PolicyError as exc:
+        assert 'Target owner profile already exists' in str(exc)
+    with store.lock:
+        assert store.db.execute("SELECT role FROM api_admins WHERE id='dark'").fetchone()[0]=='owner'
+        assert store.db.execute("SELECT 1 FROM owner_profiles WHERE id='Mika'").fetchone()
+    close_runtime(store,engine,manager)
