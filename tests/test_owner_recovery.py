@@ -2,9 +2,10 @@ import fcntl
 
 from auth import Auth
 from core import Config, CoreEngine
-from dark_policy import Store
+from dark_policy import Actor, Store
 from manager import Manager
 from owner_recovery import (
+    create_owner_account,
     disable_owner_totp,
     owner_status,
     rename_owner_username,
@@ -80,11 +81,10 @@ def test_owner_security_recovery_actions(tmp_path):
     close_runtime(store,engine,manager)
 
 
-
 def test_create_owner_login_from_existing_profile(tmp_path):
     data,store,engine,manager,auth=make_runtime(tmp_path)
     auth.bootstrap('dark','OwnerPass8')
-    manager.owner_put(OWNER if 'OWNER' in globals() else __import__('dark_policy').Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
+    manager.owner_put(Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
     result=create_owner_account(data/'dark.sqlite3','Mika','MikaPass88')
     assert result['created'] is True and result['role']=='owner'
     with store.lock:
