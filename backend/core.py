@@ -30,6 +30,7 @@ EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
 TAG_RE = re.compile(r'^[A-Za-z0-9_.-]{1,128}$')
 PROTOCOLS = {'vless','vmess','trojan','shadowsocks','socks','http','dokodemo-door','tunnel'}
+MANAGED_CLIENT_PROTOCOLS = {'vless','vmess','trojan','shadowsocks','socks','http'}
 SECTIONS = {'outbounds','routing','dns','policy','observatory','hosts','panel','runtime','subscription','ipguard'}
 
 class CoreError(RuntimeError):

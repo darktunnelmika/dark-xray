@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 from dark_policy import Actor, Store, PolicyError, PermissionDenied, MAX_INT, integer, NAME_RE
-from core import CoreEngine, CoreError, EMAIL_RE
+from core import CoreEngine, CoreError, EMAIL_RE, MANAGED_CLIENT_PROTOCOLS
 
 SYSTEM = Actor('_dark_system', 'owner', {})
 CLIENT_KEYS = {'id','password','auth','flow','security','reverse','limitIp','limitHwid',
@@ -98,9 +98,11 @@ class Manager:
                 if not set(allowed)<=known: raise PolicyError('Assigned inbound does not exist')
             # Restriction changes may not strand already-owned clients silently.
             with self.store.lock:
-                rows=self.store.db.execute('SELECT m.inbounds FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=?',(owner,)).fetchall()
+                rows=self.store.db.execute("SELECT m.inbounds,c.limit_ip,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'",(owner,)).fetchall()
             if any(not set(json.loads(r['inbounds']))<=set(allowed) for r in rows):
                 raise PolicyError('Detach or transfer affected clients before removing their inbound access')
+            if max_client_ips and any(r['limit_ip']==0 or r['limit_ip']>max_client_ips for r in rows):
+                raise PolicyError('Reduce existing client IP limits before lowering the owner max-client-IP policy')
             self.store.register_owner(actor,owner,quota_bytes,max_clients,manual)
             with self.store.transaction() as db:
                 db.execute('INSERT INTO owner_profiles VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,allowed=excluded.allowed,prefix=excluded.prefix,max_client_ips=excluded.max_client_ips',
@@ -168,8 +170,11 @@ class Manager:
         allowed=set(self.profile(owner)['allowed'])
         # The principal being the owner does not make a reseller's assignment unlimited.
         if not set(ids)<=allowed: raise PermissionDenied('Inbound is outside the client owner assignment')
-        known={i['id'] for i in self.engine.inbounds()}
+        inbounds={i['id']:i for i in self.engine.inbounds()}
+        known=set(inbounds)
         if not set(ids)<=known: raise PolicyError('Inbound no longer exists')
+        unsupported=[inbounds[i]['protocol'] for i in ids if inbounds[i]['protocol'] not in MANAGED_CLIENT_PROTOCOLS]
+        if unsupported:raise PolicyError('Managed clients require credential-bearing inbounds; unsupported: '+','.join(sorted(set(unsupported))))
 
     @staticmethod
     def validate_client(data: dict, *, partial: bool = False) -> dict:
@@ -375,6 +380,7 @@ class Manager:
             with self.store.lock:policy_exists=self.store.db.execute('SELECT 1 FROM clients WHERE id=?',(email,)).fetchone() is not None
             if policy_exists:self.store.delete_client(SYSTEM,email)
             with self.store.transaction() as db:
+                db.execute('DELETE FROM client_cycles WHERE email=?',(email,))
                 db.execute("UPDATE managed_clients SET op='none',state='deleted',desired='{}',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
             return
         if op=='reset':
