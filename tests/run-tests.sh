@@ -14,6 +14,7 @@ python -m pytest tests/test_runtime_apply.py -q --junitxml=qa/junit/runtime-appl
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
 python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscription-v2.xml
+python -m pytest tests/test_accounting_stability.py -q --junitxml=qa/junit/accounting-stability.xml
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml

@@ -7,7 +7,7 @@ state.groups=[];state.cv2={view:'clients',owner:'all',group:'all',status:'all',i
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 const pct=(used,total)=>total?Math.min(100,Math.max(0,100*Number(used||0)/Number(total))):0;
 load=async function(){await oldLoad();if(state.me&&state.page==='clients'){try{state.groups=await api('/api/groups');delete state.errors.groups;}catch(ex){state.groups=[];state.errors.groups=ex.message;}}};
-function statusOf(r){if(r.block_reasons?.length)return 'blocked';if(r.client?.enable===false||r.observed_enable===false)return 'disabled';return 'active';}
+function statusOf(r){const reasons=r.block_reasons||[];if(reasons.includes('client_manual'))return 'disabled';if(reasons.length)return 'blocked';if(r.client?.enable===false||r.observed_enable===false)return 'disabled';return 'active';}
 function filteredV2(){let rows=filtered(state.clients),f=state.cv2;if(f.owner!=='all')rows=rows.filter(x=>x.owner===f.owner);if(f.group!=='all')rows=rows.filter(x=>(x.client?.group||'')===f.group);if(f.status!=='all')rows=rows.filter(x=>statusOf(x)===f.status);if(f.inbound!=='all')rows=rows.filter(x=>x.inboundIds?.includes(Number(f.inbound)));return rows;}
 function chip(label,key,value,current){return `<button type="button" class="cv2-chip ${String(current)===String(value)?'active':''}" data-act="cv2filter" data-key="${e(key)}" data-value="${e(value)}">${e(label)}</button>`;}
 function miniAction(ic,title,act,id){return `<button class="cv2-icon" data-act="${act}" data-id="${e(id)}" title="${e(title)}" aria-label="${e(title)}">${icon(ic)}</button>`;}

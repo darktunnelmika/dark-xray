@@ -365,10 +365,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 if body.add_bytes:
                     current=int(c.get('totalGB',0))
                     if current==0:raise PolicyError('Unlimited quota is unchanged by add-bytes; set a quota explicitly per client')
-                    patch['totalGB']=max(0,min((1<<63)-1,current+body.add_bytes))
+                    adjusted=current+body.add_bytes
+                    if adjusted<=0:raise PolicyError('Bulk quota adjustment would become 0, but 0 means unlimited; choose a smaller reduction')
+                    patch['totalGB']=min((1<<63)-1,adjusted)
                 if body.add_days:
                     current=int(c.get('expiryTime',0));base=current if current>now_ms else now_ms
-                    patch['expiryTime']=max(0,base+body.add_days*86400000)
+                    # expiryTime=0 means NO EXPIRY. A negative bulk adjustment must
+                    # never accidentally turn an expiring client into unlimited.
+                    patch['expiryTime']=max(1000,base+body.add_days*86400000)
                 if body.group is not None:patch['group']=body.group
                 if body.limit_hwid is not None:patch['limitHwid']=body.limit_hwid
                 if not patch:raise PolicyError('No bulk adjustment requested')

@@ -127,6 +127,7 @@ class CoreEngine:
         self.version='';self.last_error='';self.stats_error='';self.applied_hash=''
         self.wants_running=config.core_autostart;self.last_samples:dict[str,tuple[int,int]]={}
         self.last_stats=0.;self.last_apply=0.;self.last_start=0.
+        self.last_exit_code=None;self.last_exit_at=0.;self.automatic_recoveries=0;self._observed_exit_pid=None
         self._access_inode=None;self._access_position=0;self._access_fragment=''
         access=self.runtime/'access.log'
         if access.exists():
@@ -245,12 +246,15 @@ class CoreEngine:
                 val=value[key]
                 if not isinstance(val,str) or len(val)>500:raise CoreError('Invalid subscription URL')
                 if val:
+                    if any(ord(ch)<32 or ord(ch)==127 for ch in val):raise CoreError('Subscription URL contains control characters')
                     u=urlsplit(val)
                     if u.scheme not in ('http','https') or not u.hostname or u.username or u.password:raise CoreError('Subscription URL must be http/https without credentials')
                     try:val.encode('ascii')
                     except UnicodeEncodeError:raise CoreError('Subscription URL must be ASCII/punycode')
             if not isinstance(value['profile_title'],str) or not 1<=len(value['profile_title'])<=120:raise CoreError('Invalid subscription profile title')
+            if any(ord(ch)<32 or ord(ch)==127 for ch in value['profile_title']):raise CoreError('Subscription profile title contains control characters')
             if not isinstance(value['announce'],str) or len(value['announce'])>2000:raise CoreError('Invalid subscription announcement')
+            if any(ch in value['announce'] for ch in ('\r','\n')) and len(value['announce'].splitlines())>100:raise CoreError('Subscription announcement has too many lines')
         if name=='ipguard':
             if set(value)-{'mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
             if value.get('mode') not in ('observe','enforce'): raise CoreError('Invalid IP Guard mode')
@@ -493,7 +497,14 @@ class CoreEngine:
         return a,b
 
     @property
-    def running(self):return bool(self.process is not None and self.process.poll() is None)
+    def running(self):
+        p=self.process
+        if p is None:return False
+        code=p.poll()
+        if code is None:return True
+        if self._observed_exit_pid!=p.pid:
+            self._observed_exit_pid=p.pid;self.last_exit_code=code;self.last_exit_at=time.time()
+        return False
 
     def build_config(self)->dict:
         # Read local tables directly; compiling never queries an external panel.
@@ -636,8 +647,11 @@ class CoreEngine:
     def flush(self):
         self.read_ip_log()
         if not self.wants_running:return
+        crashed=self.process is not None and not self.running
         if not self.running and time.time()-self.last_start<5:return
-        try:self.apply(start=True)
+        try:
+            self.apply(start=True)
+            if crashed and self.running:self.automatic_recoveries+=1
         except Exception as e:self.last_error=str(e)[:1500]
 
     def collect_stats(self,*,force:bool=False,strict:bool=False):
@@ -669,9 +683,12 @@ class CoreEngine:
     def runtime_state(self)->dict:
         try:dirty=self.config_hash(self.build_config())!=self.applied_hash
         except Exception:dirty=True
-        return {'running':self.running,'pid':self.process.pid if self.running else None,'core_binary_present':Path(self.config.xray_binary).is_file(),
-                'version':self.version,'dirty':dirty,'state':'running' if self.running else 'stopped','last_error':self.last_error,
+        running=self.running
+        return {'running':running,'pid':self.process.pid if running else None,'core_binary_present':Path(self.config.xray_binary).is_file(),
+                'version':self.version,'dirty':dirty,'state':'running' if running else 'stopped','last_error':self.last_error,
                 'statistics_error':self.stats_error,'applied_hash':self.applied_hash,'last_apply':self.last_apply,
+                'desired_running':bool(self.wants_running),'automatic_recoveries':self.automatic_recoveries,
+                'last_exit_code':self.last_exit_code,'last_exit_at':self.last_exit_at,
                 'independent':True,'restart_disconnects_existing_sessions':True}
 
     def system(self)->dict:
@@ -917,6 +934,13 @@ class CoreEngine:
         if isinstance(value,(int,float)):return str(value)
         return json.dumps(str(value),ensure_ascii=False)
 
+    @staticmethod
+    def _header_text(value:str)->str:
+        value=' '.join(str(value or '').splitlines()).strip()
+        if any(ord(ch)<32 or ord(ch)==127 for ch in value):raise CoreError('Unsafe subscription header value')
+        try:value.encode('ascii');return value
+        except UnicodeEncodeError:return 'base64:'+base64.b64encode(value.encode('utf-8')).decode('ascii')
+
     def subscription(self,email:str,fmt:str)->tuple[bytes,dict]:
         if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported subscription format',status=400)
         settings=self.section('subscription');result=self.links(email)
@@ -935,7 +959,7 @@ class CoreEngine:
             body=(self._yaml(doc)+'\n').encode();content_type='application/yaml; charset=utf-8'
         with self.store.lock:r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
         c=json.loads(r['body']);headers={'Content-Type':content_type,'profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
-            'profile-title':settings.get('profile_title','DARK XRAY'),
+            'profile-title':self._header_text(settings.get('profile_title','DARK XRAY')),
             'subscription-userinfo':f"upload={r['up']}; download={r['down']}; total={c.get('totalGB',0)}; expire={max(0,c.get('expiryTime',0)//1000)}"}
         support=settings.get('support_url','');profile=settings.get('profile_url','')
         if support:headers['support-url']=support
@@ -944,5 +968,10 @@ class CoreEngine:
 
     def close(self):
         with self.lock:
-            try:self.collect_stats(force=True)
-            finally:self._stop_child()
+            if self.running:
+                last=None
+                for _ in range(3):
+                    try:self.collect_stats(force=True,strict=True);last=None;break
+                    except CoreError as ex:last=ex;time.sleep(.1)
+                if last:self.stats_error=('Final traffic snapshot failed before core shutdown: '+str(last))[:500]
+            self._stop_child()

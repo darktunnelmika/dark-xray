@@ -85,3 +85,34 @@ def test_restart_failure_restores_previous_owned_config(engine):
     engine.save_section('outbounds',[{'tag':'direct','protocol':'freedom','settings':{'failTestStartup':True}}])
     with pytest.raises(CoreError):engine.command('restart')
     assert engine.running and engine.applied_hash==generation
+
+
+def test_unexpected_owned_core_exit_is_auto_recovered(engine):
+    engine.command('start');old_pid=engine.process.pid
+    engine.process.kill();engine.process.wait(timeout=3)
+    engine.last_start=0
+    engine.flush()
+    assert engine.running and engine.process.pid!=old_pid
+    state=engine.runtime_state()
+    assert state['automatic_recoveries']==1
+    assert state['last_exit_code'] is not None
+    assert state['desired_running'] is True
+
+
+def test_persisted_core_counters_continue_across_owned_restart(engine,monkeypatch):
+    import subprocess
+    raw={'value':100};real=subprocess.run
+    def run(args,**kw):
+        if len(args)>=3 and args[1:3]==['api','statsquery']:
+            body='{"stat":[{"name":"user>>>test>>>traffic>>>uplink","value":"%s"}]}'%raw['value']
+            return subprocess.CompletedProcess(args,0,body,'')
+        return real(args,**kw)
+    monkeypatch.setattr(subprocess,'run',run)
+    engine.create({'email':'test','id':'e02b3ba0-a9b8-4d0c-8bd1-93c6eae6afda','enable':True},[])
+    engine.command('start')
+    engine.collect_stats(force=True)
+    assert engine.clients()[0]['traffic']['up']==100
+    engine.command('restart')
+    raw['value']=20
+    engine.collect_stats(force=True)
+    assert engine.clients()[0]['traffic']['up']==120
