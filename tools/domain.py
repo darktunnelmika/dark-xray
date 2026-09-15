@@ -20,6 +20,7 @@ import ssl
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 CONF=Path('/etc/dark-xray');SOURCE=CONF/'tls-source.json';GUARD=CONF/'guard.json';TLS_DIR=CONF/'tls'
 DOMAIN_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}')
@@ -128,8 +129,19 @@ def _activate_tls(previous_config:dict,candidate:dict,previous_guard:dict|None,g
         raise SystemExit('TLS activation failed; previous DARK config, guard state and certificate pair were restored') from ex
 
 
+def _renewal_source_active(state:dict,config:dict)->bool:
+    try:origin=urlsplit(str(config.get('public_origin','')))
+    except Exception:return False
+    return bool(origin.scheme=='https' and origin.hostname==state.get('domain') and
+                str(config.get('tls_certificate',''))==str(TLS_DIR/'cert.pem') and
+                str(config.get('tls_private_key',''))==str(TLS_DIR/'key.pem'))
+
+
 def _renew():
-    state=json.loads(SOURCE.read_text());lineage=Path(state['lineage']);snapshot=_pair_snapshot()
+    if not SOURCE.is_file() or SOURCE.is_symlink():raise SystemExit('No trusted active DARK TLS renewal source is configured')
+    state=json.loads(SOURCE.read_text());config=json.loads((CONF/'config.json').read_text())
+    if not _renewal_source_active(state,config):raise SystemExit('Stored TLS renewal source is not the active DARK panel TLS domain')
+    lineage=Path(state['lineage']);snapshot=_pair_snapshot()
     try:
         copy_pair(lineage);_restart_checked('dark-xray.service')
     except Exception as ex:

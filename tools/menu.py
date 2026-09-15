@@ -527,8 +527,11 @@ def update_repair_menu():
             if not need_root():continue
             if confirm('Remove application/services but KEEP /etc/dark-xray and /var/lib/dark-xray?','UNINSTALL'):
                 run(['systemctl','disable','--now','dark-xray.service']);run(['systemctl','disable','--now','dark-xray-guard.service'])
-                for p in ('/etc/systemd/system/dark-xray.service','/etc/systemd/system/dark-xray-guard.service','/usr/local/bin/darkxray'):Path(p).unlink(missing_ok=True)
-                shutil.rmtree('/opt/dark-xray',ignore_errors=True);run(['systemctl','daemon-reload']);print('Application removed; config/data preserved.');raise SystemExit(0)
+                for p in ('/etc/systemd/system/dark-xray.service','/etc/systemd/system/dark-xray-guard.service','/usr/local/bin/darkxray'):
+                    Path(p).unlink(missing_ok=True)
+                hook=Path('/etc/letsencrypt/renewal-hooks/deploy/dark-xray-panel')
+                if hook.exists() or hook.is_symlink():hook.unlink()
+                shutil.rmtree('/opt/dark-xray',ignore_errors=True);run(['systemctl','daemon-reload']);print('Application removed; config/data/certificates preserved; DARK renewal hook removed.');raise SystemExit(0)
 
 
 def main():

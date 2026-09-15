@@ -24,6 +24,8 @@ DOMAIN_RE = re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z
 EMAIL_RE = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
 RUNTIME_KEYS = {'access_mode','bind_port','public_address','panel_path','poll_seconds','core_autostart','domain','acme_email'}
 GUARD_PATH = Path('/etc/dark-xray/guard.json')
+TLS_SOURCE_PATH = Path('/etc/dark-xray/tls-source.json')
+TLS_RENEW_HOOK = Path('/etc/letsencrypt/renewal-hooks/deploy/dark-xray-panel')
 
 
 def _runtime_row(db_path: Path, current: dict) -> dict:
@@ -137,6 +139,18 @@ def _guard_candidate(config:dict,old_panel_port:int,new_panel_port:int,guard_pat
     return value
 
 
+def _validate_tls_cleanup_targets(source:Path=TLS_SOURCE_PATH,hook:Path=TLS_RENEW_HOOK)->None:
+    for path in (source,hook):
+        if path.exists() and path.is_dir() and not path.is_symlink():
+            raise SystemExit('Refusing TLS cleanup: expected file path is a directory: '+str(path))
+
+
+def _deactivate_tls_renewal(source:Path=TLS_SOURCE_PATH,hook:Path=TLS_RENEW_HOOK)->None:
+    _validate_tls_cleanup_targets(source,hook)
+    for path in (hook,source):
+        if path.exists() or path.is_symlink():path.unlink()
+
+
 def _service_active(name:str)->bool:
     return subprocess.run(['systemctl','is-active','--quiet',name],check=False).returncode==0
 
@@ -187,8 +201,11 @@ def apply_settings(config_path: Path, db_path: Path, desired: dict, plan: dict) 
     if new_port!=old_port and not _port_available(new_port):
         raise SystemExit(f'Refusing apply: panel port {new_port} is already in use on this host')
     if desired['access_mode']=='ssh' or plan['tls_ready']:
+        if desired['access_mode']=='ssh':_validate_tls_cleanup_targets()
         candidate,guard_candidate=_candidate_from_desired(current,desired,plan)
-        _activate_candidate(config_path,current,candidate,guard_candidate);return
+        _activate_candidate(config_path,current,candidate,guard_candidate)
+        if desired['access_mode']=='ssh':_deactivate_tls_renewal()
+        return
 
     # First-time TLS issuance is delegated to the certbot boundary. Do not pre-write
     # staged values: if ACME fails the current on-disk/runtime panel remains intact.

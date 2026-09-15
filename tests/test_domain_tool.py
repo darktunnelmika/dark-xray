@@ -37,3 +37,15 @@ def test_guard_activation_filters_new_management_ports():
     result=mod._activation_guard(guard,candidate)
     assert result['protected_ports']==[22,2443,10085]
     assert result['allowed_ports']==[2020,3030]
+
+
+
+def test_renewal_source_must_match_active_https_config(tmp_path):
+    mod=load_module();old=mod.TLS_DIR;mod.TLS_DIR=tmp_path/'tls'
+    try:
+        state={'domain':'panel.example.com','lineage':'/x'}
+        good={'public_origin':'https://panel.example.com:2087','tls_certificate':str(mod.TLS_DIR/'cert.pem'),'tls_private_key':str(mod.TLS_DIR/'key.pem')}
+        assert mod._renewal_source_active(state,good) is True
+        assert mod._renewal_source_active(state,good|{'public_origin':'http://127.0.0.1:2087'}) is False
+        assert mod._renewal_source_active(state,good|{'public_origin':'https://old.example.com:2087'}) is False
+    finally:mod.TLS_DIR=old

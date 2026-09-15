@@ -57,3 +57,17 @@ def test_activation_failure_restores_previous_config(monkeypatch,tmp_path):
         mod._activate_candidate(config_path,previous,candidate,None)
     assert json.loads(config_path.read_text())==previous
     assert calls==['dark-xray.service','dark-xray.service']
+
+
+
+def test_tls_renewal_metadata_cleanup_removes_only_files(tmp_path):
+    mod=load_module();source=tmp_path/'tls-source.json';hook=tmp_path/'dark-xray-panel'
+    source.write_text('{}');hook.write_text('#!/bin/sh\n')
+    mod._deactivate_tls_renewal(source,hook)
+    assert not source.exists() and not hook.exists()
+
+
+def test_tls_renewal_cleanup_refuses_directory_shape(tmp_path):
+    mod=load_module();source=tmp_path/'source-dir';hook=tmp_path/'hook';source.mkdir()
+    try:mod._validate_tls_cleanup_targets(source,hook);assert False
+    except SystemExit as exc:assert 'expected file path is a directory' in str(exc)
