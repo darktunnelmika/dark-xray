@@ -20,6 +20,43 @@ jobs:
           node-version: '22'
       - name: Apply stability patch
         run: python tools/stability_073_once.py
+      - name: Repair stats restart test harness
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tests/test_supervisor.py');s=p.read_text()
+          old='''def test_persisted_core_counters_continue_across_owned_restart(engine):
+              engine.create({'email':'test','id':'e02b3ba0-a9b8-4d0c-8bd1-93c6eae6afda','enable':True},[])
+              engine.command('start')
+              (engine.runtime/'stats-fixture.json').write_text('{"stat":[{"name":"user>>>test>>>traffic>>>uplink","value":"100"}]}')
+              engine.collect_stats(force=True)
+              assert engine.clients()[0]['traffic']['up']==100
+              engine.command('restart')
+              (engine.runtime/'stats-fixture.json').write_text('{"stat":[{"name":"user>>>test>>>traffic>>>uplink","value":"20"}]}')
+              engine.collect_stats(force=True)
+              assert engine.clients()[0]['traffic']['up']==120
+          '''
+          new='''def test_persisted_core_counters_continue_across_owned_restart(engine,monkeypatch):
+              import subprocess
+              raw={'value':100};real=subprocess.run
+              def run(args,**kw):
+                  if len(args)>=3 and args[1:3]==['api','statsquery']:
+                      body='{"stat":[{"name":"user>>>test>>>traffic>>>uplink","value":"%s"}]}'%raw['value']
+                      return subprocess.CompletedProcess(args,0,body,'')
+                  return real(args,**kw)
+              monkeypatch.setattr(subprocess,'run',run)
+              engine.create({'email':'test','id':'e02b3ba0-a9b8-4d0c-8bd1-93c6eae6afda','enable':True},[])
+              engine.command('start')
+              engine.collect_stats(force=True)
+              assert engine.clients()[0]['traffic']['up']==100
+              engine.command('restart')
+              raw['value']=20
+              engine.collect_stats(force=True)
+              assert engine.clients()[0]['traffic']['up']==120
+          '''
+          if old not in s:raise SystemExit('stats restart test anchor missing')
+          p.write_text(s.replace(old,new,1))
+          PY
       - name: Static smoke
         run: |
           python -m py_compile backend/core.py backend/server.py tests/test_accounting_stability.py tests/test_supervisor.py
