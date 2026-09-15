@@ -46,11 +46,12 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: bash tests/run-tests.sh
 
-      - name: Commit stabilization
+      - name: Publish application stabilization
         run: |
+          git checkout -- .github/workflows/ci.yml
           git config user.name darktunnelmika
           git config user.email mikakhadmi@gmail.com
-          git rm .github/workflows/stabilize-runtime-once.yml tools/stabilize_runtime_once.py
-          git add -A
+          git add backend tools install-online.sh web tests
+          git reset tools/stabilize_runtime_once.py
           git commit -m 'Harden owner recovery and panel URI path'
           git push origin HEAD:main
