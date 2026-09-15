@@ -1,0 +1,75 @@
+name: Patch owner login and URI path once v6
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-owner-uri-path-once-v6.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+      - name: Normalize compatibility anchors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/menu.py');s=p.read_text()
+          old="def endpoint(c):return str(c.get('public_origin') or f\"http://{c.get('bind_host','127.0.0.1')}:{c.get('bind_port',2087)}\")"
+          new="def endpoint(c):\n    return str(c.get('public_origin') or f\"http://{c.get('bind_host','127.0.0.1')}:{c.get('bind_port',2087)}\")"
+          if old not in s: raise SystemExit('current menu endpoint anchor missing')
+          s=s.replace(old,new,1)
+          if 'def domain_tls_menu():' not in s: raise SystemExit('domain_tls_menu anchor missing')
+          p.write_text(s.replace('def domain_tls_menu():','def tls_menu():',1))
+
+          p=Path('tools/provision.py');s=p.read_text()
+          a=";p.add_argument('--username',default='dark');p.add_argument('--port',type=int,default=2087);"
+          b="\n    p.add_argument('--username',default='dark')\n    p.add_argument('--port',type=int,default=2087)\n    "
+          if a not in s: raise SystemExit('provision parser compact anchor missing')
+          s=s.replace(a,b,1)
+          a="cfg=json.loads((ROOT/'config.example.json').read_text());cfg.update("
+          b="cfg=json.loads((ROOT/'config.example.json').read_text())\n    cfg.update("
+          if a not in s: raise SystemExit('provision cfg compact anchor missing')
+          s=s.replace(a,b,1)
+          s=s.replace('init|reset-password|account|check|serve|backup|doctor)','init|reset-password|check|serve|backup|doctor)',1)
+          a=";print(f'Open http://127.0.0.1:{a.port} after forwarding. No firewall was enabled.');"
+          b="\n    print(f'Open http://127.0.0.1:{a.port} after forwarding. No firewall was enabled.')\n    "
+          if a not in s: raise SystemExit('provision open-url compact anchor missing')
+          s=s.replace(a,b,1)
+          p.write_text(s)
+
+          p=Path('tools/update.py');s=p.read_text()
+          s=s.replace('init|reset-password|account|check|serve|backup|doctor)','init|reset-password|check|serve|backup|doctor)',1)
+          p.write_text(s)
+          PY
+      - name: Apply owner login and URI path patch
+        run: python tools/patch_owner_uri_path_once.py
+      - name: Restore current terminal function name
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/menu.py');s=p.read_text()
+          if 'def tls_menu():' not in s: raise SystemExit('patched tls_menu missing')
+          p.write_text(s.replace('def tls_menu():','def domain_tls_menu():',1))
+          PY
+      - name: Syntax smoke
+        run: |
+          python -m py_compile backend/core.py backend/server.py backend/owner_recovery.py tools/menu.py tools/settings_apply.py tools/runtime_stage.py tools/provision.py tools/domain.py
+          bash -n darkxray install-online.sh setup.sh
+          node --check web/live.js
+          node --check web/settings-v2.js
+          node --check web/ops-v2.js
+          grep -q "panel_path" backend/core.py
+          grep -q "PANEL_BASE" web/live.js
+          grep -q "Change panel URI path" tools/menu.py
+          grep -q "Create owner login" tools/menu.py
+      - name: Commit application patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/core.py backend/server.py backend/owner_recovery.py tools/menu.py tools/settings_apply.py tools/runtime_stage.py tools/provision.py tools/update.py tools/domain.py darkxray install-online.sh config.example.json web/index.html web/live.js web/settings-v2.js web/ops-v2.js tests/test_settings_v2.py tests/test_owner_recovery.py
+          git commit -m 'Add panel URI path and strict owner login controls'
+          git push
