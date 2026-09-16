@@ -5,7 +5,7 @@ import psutil
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dark_policy import Actor, PermissionDenied, PolicyError, Store
-from policy_auth import (CAPABILITIES, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, Credit, Usage, Refund, create_admin, password_hash, verify_password, permissions_for)
+from policy_auth import (CAPABILITIES, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, Credit, Usage, Refund, create_admin, password_hash, verify_password, permissions_for, effective_permissions)
 
 def create_app(store: Store) -> FastAPI:
     app=FastAPI(title='DARK XRAY Policy API',version='0.3.0-dev',
@@ -26,7 +26,6 @@ def create_app(store: Store) -> FastAPI:
         if request.method in {'POST','PUT','PATCH'}:
             if 'application/json' not in request.headers.get('content-type','') and length not in (None,'0'):
                 return JSONResponse({'detail':'JSON required'},status_code=415)
-            # Bound chunked bodies too, not just the declared Content-Length.
             body=bytearray()
             async for chunk in request.stream():
                 body.extend(chunk)
@@ -59,7 +58,7 @@ def create_app(store: Store) -> FastAPI:
             row=store.db.execute('''SELECT a.* FROM sessions s JOIN api_admins a ON a.id=s.admin_id
                 WHERE s.digest=? AND s.expires_at>? AND a.disabled=0''',(digest,time.time())).fetchone()
         if not row:raise HTTPException(401,'Session expired or revoked',headers={'WWW-Authenticate':'Bearer'})
-        return Actor(row['id'],row['role'],json.loads(row['permissions']))
+        return Actor(row['id'],row['role'],effective_permissions(row['role'],json.loads(row['permissions'])))
 
     def owner_only(actor: Actor):
         if actor.role!='owner':raise PermissionDenied('Owner access required')
@@ -69,8 +68,6 @@ def create_app(store: Store) -> FastAPI:
 
     @app.post('/v1/auth/login')
     def login(data: Login,request: Request):
-        # Reserve the attempt before hashing. Parallel requests cannot bypass the cap.
-        # Key uses the actual TCP peer, never X-Forwarded-For.
         source=request.client.host if request.client else 'unknown';now=time.time()
         with store.transaction() as db:
             old=db.execute('SELECT * FROM login_attempts WHERE source=?',(source,)).fetchone()
@@ -84,7 +81,6 @@ def create_app(store: Store) -> FastAPI:
         if not row or not valid or row['disabled']:raise HTTPException(401,'Invalid credentials')
         token=secrets.token_urlsafe(48);expiry=now+8*3600
         with store.transaction() as db:
-            # Check credentials/state again to avoid issuing a session after concurrent disable/reset.
             fresh=db.execute('SELECT * FROM api_admins WHERE id=?',(data.username,)).fetchone()
             if not fresh or fresh['disabled'] or fresh['password_hash']!=row['password_hash']:raise HTTPException(401,'Credentials changed; log in again')
             db.execute('DELETE FROM login_attempts WHERE source=?',(source,))
@@ -149,8 +145,6 @@ def create_app(store: Store) -> FastAPI:
 
     @app.post('/v1/clients',status_code=201)
     def add_client(data: ClientCreate,actor: Annotated[Actor,Depends(current)]):
-        # Pricing must never be caller-controlled for an untrusted reseller.
-        # Until a server-side plan catalogue is wired, only owner may make paid orders.
         if data.price or data.order_id:owner_only(actor)
         created=store.register_client(actor,data.id,data.owner,data.limit_ip,data.quota_bytes,data.price,data.order_id)
         return {'created':created,'note':'Policy record only; not an Xray credential/listener'}
@@ -174,10 +168,12 @@ def create_app(store: Store) -> FastAPI:
 
     @app.post('/v1/owners/{owner_id}/credit')
     def credit_owner(owner_id: str,data: Credit,actor: Annotated[Actor,Depends(current)]):
+        owner_only(actor)
         return {'recorded':store.credit(actor,owner_id,data.amount,data.event_id)}
 
     @app.post('/v1/refunds')
     def refund(data: Refund,actor: Annotated[Actor,Depends(current)]):
+        owner_only(actor)
         return {'recorded':store.refund(actor,data.order_id,data.event_id)}
 
     @app.get('/v1/ledger/{kind}')
@@ -212,5 +208,4 @@ def create_app(store: Store) -> FastAPI:
                 'network_counters':{'sent_bytes':net.bytes_sent,'received_bytes':net.bytes_recv},
                 'xray_measured':False}
     return app
-
 
