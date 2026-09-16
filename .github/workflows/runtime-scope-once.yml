@@ -1,0 +1,41 @@
+name: Runtime scope hardening once
+on: [push]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: python tools/runtime_scope_hardening_once.py
+      - run: python -m py_compile backend/auth.py backend/server.py tests/test_sync_redaction.py
+      - run: node --check web/rbac-v2.js
+      - run: python -m pip install -q -r requirements-dev.txt
+      - id: targeted
+        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_rbac_hardening.py tests/test_sync_redaction.py tests/test_api_key_boundaries.py -q
+      - name: Publish successful hardening and self-clean
+        if: success()
+        run: |
+          git config user.name darktunnelmika
+          git config user.email mikakhadmi@gmail.com
+          git rm .github/workflows/runtime-scope-once.yml tools/runtime_scope_hardening_once.py
+          git add backend/auth.py backend/server.py web/rbac-v2.js tests/test_sync_redaction.py tests/run-tests.sh
+          git commit -m 'Redact reseller sync diagnostics and remove dead runtime IP scope'
+          git push origin HEAD:main
+      - name: Self-clean temporary files after failure
+        if: failure()
+        run: |
+          git reset --hard HEAD
+          git config user.name darktunnelmika
+          git config user.email mikakhadmi@gmail.com
+          git rm .github/workflows/runtime-scope-once.yml tools/runtime_scope_hardening_once.py
+          git commit -m 'Clean failed runtime scope one-shot files'
+          git push origin HEAD:main
