@@ -18,15 +18,15 @@ function build(){
  const content=new Element({id:'content'}), oldInput=new Element({id:'search',editable:true});oldInput.selectionStart=2;oldInput.selectionEnd=4;content.children.add(oldInput);
  const byId={content,search:oldInput};
  const doc={activeElement:oldInput,getElementById:id=>byId[id]||null,getElementsByName:()=>[],querySelectorAll:()=>[]};
- let refreshCalls=0,renderCalls=0,scroll=null;
- const ctx={console,Element,document:doc,window:{scrollX:11,scrollY:29,scrollTo:v=>{scroll=v;}},requestAnimationFrame:fn=>fn(),refresh:async()=>{refreshCalls++;},renderPage:async()=>{renderCalls++;const next=new Element({id:'search',editable:true});content.children=new Set([next]);byId.search=next;},};
+ let refreshCalls=0,renderCalls=0,loadCalls=0,scroll=null;
+ const ctx={console,Element,document:doc,state:{busy:false},load:async()=>{loadCalls++;},window:{scrollX:11,scrollY:29,scrollTo:v=>{scroll=v;}},requestAnimationFrame:fn=>fn(),refresh:async()=>{refreshCalls++;},renderPage:async()=>{renderCalls++;const next=new Element({id:'search',editable:true});content.children=new Set([next]);byId.search=next;},};
  vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'..','web','ui-stability.js'),'utf8'),ctx,{filename:'ui-stability.js'});
- return {ctx,doc,content,oldInput,byId,get refreshCalls(){return refreshCalls},get renderCalls(){return renderCalls},get scroll(){return scroll}};
+ return {ctx,doc,content,oldInput,byId,get refreshCalls(){return refreshCalls},get renderCalls(){return renderCalls},get loadCalls(){return loadCalls},get scroll(){return scroll}};
 }
 
-test('auto refresh does not destroy an actively edited control',async()=>{
- const t=build();await t.ctx.refresh();assert.equal(t.refreshCalls,0);
- t.doc.activeElement=t.content;await t.ctx.refresh();assert.equal(t.refreshCalls,1);
+test('active editor receives data-only refresh without destroying focused DOM',async()=>{
+ const t=build();await t.ctx.refresh();assert.equal(t.refreshCalls,0);assert.equal(t.loadCalls,1);assert.equal(t.doc.activeElement,t.oldInput);assert.equal(t.ctx.state.busy,false);
+ t.doc.activeElement=t.content;await t.ctx.refresh();assert.equal(t.refreshCalls,1);assert.equal(t.loadCalls,1);
 });
 
 test('render preserves focus, selection and scroll position',async()=>{
