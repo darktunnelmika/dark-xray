@@ -42,11 +42,12 @@ jobs:
           grep -q 'restoring previous DARK XRAY source' tools/update.py
           grep -q 'backend/owner_recovery.py' darkxray
           grep -q 'account)' darkxray
+          grep -q 'tools/check.py' darkxray
           grep -q 'stage-runtime|stage-panel-path)' darkxray
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/update.py
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/provision.py
           python -m py_compile \
-            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py \
+            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
           printf '0\n' | NO_COLOR=1 python tools/menu.py > /tmp/dark-menu-smoke.txt
