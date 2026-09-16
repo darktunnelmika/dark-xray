@@ -31,7 +31,7 @@ def visit(page,name):
     button=page.locator(f'.nav-btn[data-page="{name}"]')
     button.wait_for(state='visible',timeout=10000)
     button.click()
-    page.wait_for_function("p=>document.querySelector('.nav-btn.active')?.dataset.page===p",name,timeout=10000)
+    page.wait_for_function("p=>document.querySelector('.nav-btn.active')?.dataset.page===p",arg=name,timeout=10000)
     page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
     report['pages'].append(name)
 
