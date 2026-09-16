@@ -19,11 +19,14 @@ PERMISSIONS={
  'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials',
  'clients.ip','clients.attach','owners.read','owners.edit','owners.reset','finance.read','finance.credit',
  'finance.refund','ip.read','system.read','audit.read','api.manage','inbounds.read'}
-# Credit/refund mutate the operator's money ledger and therefore cannot be
-# delegated to reseller/readonly sessions. API keys also cannot manage their own
-# lifecycle or perform money-mint/refund operations, including legacy keys.
 NON_DELEGABLE={'finance.credit','finance.refund'}
 KEY_FORBIDDEN=NON_DELEGABLE|{'api.manage'}
+ROLE_ALLOWED={
+ 'reseller':{
+   'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach',
+   'owners.read','finance.read','ip.read','system.read','audit.read','api.manage','inbounds.read'},
+ 'readonly':{'clients.read','owners.read','finance.read','ip.read','system.read','audit.read','inbounds.read'},
+}
 DEFAULTS={
  'owner':{},
  'reseller':{k:'own' for k in ('clients.read','clients.create','clients.edit','clients.delete','clients.reset',
@@ -44,6 +47,9 @@ def valid_permissions(role: str,values: dict|None)->dict:
     if role=='owner':return {}
     p=DEFAULTS[role].copy() if values is None else values.copy()
     if any(k not in PERMISSIONS or v not in ('none','own','all') for k,v in p.items()):raise PolicyError('Invalid permission/scope')
+    allowed=ROLE_ALLOWED[role]
+    if any(v!='none' and k not in allowed for k,v in p.items()):
+        raise PolicyError('Permission exceeds the selected role ceiling')
     if any(p.get(k,'none')!='none' for k in NON_DELEGABLE):
         raise PolicyError('Credit/refund permissions are owner-only and cannot be delegated')
     return p
@@ -52,6 +58,8 @@ def valid_permissions(role: str,values: dict|None)->dict:
 def _session_permissions(role:str,raw:dict)->dict:
     value=dict(raw)
     if role!='owner':
+        allowed=ROLE_ALLOWED.get(role,set())
+        value={k:v for k,v in value.items() if k in allowed and v in ('own','all')}
         for key in NON_DELEGABLE:value.pop(key,None)
     return value
 
@@ -83,7 +91,7 @@ class Auth:
             CREATE TABLE IF NOT EXISTS robot_keys(id TEXT PRIMARY KEY,digest TEXT UNIQUE NOT NULL,
               admin_id TEXT NOT NULL,name TEXT NOT NULL,permissions TEXT NOT NULL,
               expires_at REAL NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,created_at REAL NOT NULL);
-            CREATE TABLE IF NOT EXISTS mfa(admin_id TEXT PRIMARY KEY,secret TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS mfa(admin_id TEXT PRIMARY KEY,secret TEXT NOT NULL DEFAULT '',
               pending TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 0,
               last_step INTEGER NOT NULL DEFAULT -1,recovery TEXT NOT NULL DEFAULT '[]');
             CREATE TABLE IF NOT EXISTS auth_attempts(bucket TEXT PRIMARY KEY,start REAL NOT NULL,count INTEGER NOT NULL);
@@ -148,7 +156,6 @@ class Auth:
                     if grant=='none':continue
                     effective[key]='own' if 'own' in (grant,val) else 'all'
                 for key in KEY_FORBIDDEN:effective.pop(key,None)
-                # A robot key is NEVER an owner bypass; explicit permissions apply.
                 return Principal(Actor(admin.id,'token',effective),key_id=r['id'])
             if not cookie or len(cookie)>256:raise PermissionDenied('Authentication required')
             r=self.store.db.execute('''SELECT a.*,s.csrf FROM live_sessions s JOIN api_admins a ON a.id=s.admin_id
