@@ -18,7 +18,7 @@ function context(){
   const ctx={
     console,
     financePage:async()=>'',runAction:async()=>{},renderPage:async()=>{},
-    state:{owners:[{id:'alpha',name:'Alpha',credit:100,used_bytes:15},{id:'beta',name:'Beta',credit:50,used_bytes:10}]},
+    state:{owners:[{id:'alpha',name:'Alpha',credit:100,used_bytes:15,lifetime_used_bytes:900},{id:'beta',name:'Beta',credit:50,used_bytes:10,lifetime_used_bytes:600}]},
     localStorage:{getItem:()=> 'en'},
     api:async url=>data[url]||[],
     e:v=>String(v??''),fa:v=>String(v),bytes:v=>`${v}B`,date:v=>`DATE:${v}`,
@@ -38,12 +38,20 @@ test('traffic ledger uses observed_at instead of money at field',async()=>{
   assert.match(html,/traffic-2/);
 });
 
-test('finance owner filter scopes both ledgers and summaries',async()=>{
+test('lifetime summary uses authoritative owner total, not the visible ledger window',async()=>{
+  const ctx=context();
+  const html=await ctx.financePage();
+  assert.match(html,/1500B/);
+  assert.doesNotMatch(html,/>25B</);
+});
+
+test('finance owner filter scopes both ledgers and authoritative summaries',async()=>{
   const ctx=context();
   await ctx.runAction('fv2filter',{dataset:{key:'owner',value:'alpha'}});
   const html=await ctx.financePage();
   assert.match(html,/credit-1/);
   assert.match(html,/traffic-1/);
+  assert.match(html,/900B/);
   assert.doesNotMatch(html,/sale-1/);
   assert.doesNotMatch(html,/traffic-2/);
 });
