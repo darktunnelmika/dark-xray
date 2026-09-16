@@ -21,6 +21,7 @@ PERMISSIONS={
  'finance.refund','ip.read','system.read','audit.read','api.manage','inbounds.read'}
 NON_DELEGABLE={'finance.credit','finance.refund'}
 KEY_FORBIDDEN=NON_DELEGABLE|{'api.manage'}
+GLOBAL_SCOPE_ONLY={'system.read'}
 ROLE_ALLOWED={
  'reseller':{
    'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach',
@@ -52,6 +53,8 @@ def valid_permissions(role: str,values: dict|None)->dict:
         raise PolicyError('Permission exceeds the selected role ceiling')
     if any(p.get(k,'none')!='none' for k in NON_DELEGABLE):
         raise PolicyError('Credit/refund permissions are owner-only and cannot be delegated')
+    if any(p.get(k)=='own' for k in GLOBAL_SCOPE_ONLY):
+        raise PolicyError('Global permissions use scope all, not own')
     return p
 
 
@@ -61,6 +64,8 @@ def _session_permissions(role:str,raw:dict)->dict:
         allowed=ROLE_ALLOWED.get(role,set())
         value={k:v for k,v in value.items() if k in allowed and v in ('own','all')}
         for key in NON_DELEGABLE:value.pop(key,None)
+        for key in GLOBAL_SCOPE_ONLY:
+            if value.get(key)=='own':value.pop(key,None)
     return value
 
 
@@ -91,7 +96,7 @@ class Auth:
             CREATE TABLE IF NOT EXISTS robot_keys(id TEXT PRIMARY KEY,digest TEXT UNIQUE NOT NULL,
               admin_id TEXT NOT NULL,name TEXT NOT NULL,permissions TEXT NOT NULL,
               expires_at REAL NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,created_at REAL NOT NULL);
-            CREATE TABLE IF NOT EXISTS mfa(admin_id TEXT PRIMARY KEY,secret TEXT NOT NULL DEFAULT '',
+            CREATE TABLE IF NOT EXISTS mfa(admin_id TEXT PRIMARY KEY,secret TEXT NOT NULL,
               pending TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 0,
               last_step INTEGER NOT NULL DEFAULT -1,recovery TEXT NOT NULL DEFAULT '[]');
             CREATE TABLE IF NOT EXISTS auth_attempts(bucket TEXT PRIMARY KEY,start REAL NOT NULL,count INTEGER NOT NULL);
@@ -156,6 +161,8 @@ class Auth:
                     if grant=='none':continue
                     effective[key]='own' if 'own' in (grant,val) else 'all'
                 for key in KEY_FORBIDDEN:effective.pop(key,None)
+                for key in GLOBAL_SCOPE_ONLY:
+                    if effective.get(key)=='own':effective.pop(key,None)
                 return Principal(Actor(admin.id,'token',effective),key_id=r['id'])
             if not cookie or len(cookie)>256:raise PermissionDenied('Authentication required')
             r=self.store.db.execute('''SELECT a.*,s.csrf FROM live_sessions s JOIN api_admins a ON a.id=s.admin_id
@@ -242,6 +249,8 @@ class Auth:
         if any(k not in PERMISSIONS or v not in ('none','own','all') for k,v in permissions.items()):raise PolicyError('Invalid key permissions')
         if any(permissions.get(k,'none')!='none' for k in KEY_FORBIDDEN):
             raise PolicyError('Robot keys cannot manage key lifecycle or mutate financial credit/refunds')
+        if any(permissions.get(k)=='own' for k in GLOBAL_SCOPE_ONLY):
+            raise PolicyError('Global permissions use scope all, not own')
         for k,v in permissions.items():
             grant='all' if p.actor.role=='owner' else p.actor.permissions.get(k,'none')
             if v!='none' and (grant=='none' or grant=='own' and v=='all'):raise PermissionDenied('A key cannot exceed its administrator permissions')
