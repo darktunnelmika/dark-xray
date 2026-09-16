@@ -19,6 +19,11 @@ PERMISSIONS={
  'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials',
  'clients.ip','clients.attach','owners.read','owners.edit','owners.reset','finance.read','finance.credit',
  'finance.refund','ip.read','system.read','audit.read','api.manage','inbounds.read'}
+# Credit/refund mutate the operator's money ledger and therefore cannot be
+# delegated to reseller/readonly sessions. API keys also cannot manage their own
+# lifecycle or perform money-mint/refund operations, including legacy keys.
+NON_DELEGABLE={'finance.credit','finance.refund'}
+KEY_FORBIDDEN=NON_DELEGABLE|{'api.manage'}
 DEFAULTS={
  'owner':{},
  'reseller':{k:'own' for k in ('clients.read','clients.create','clients.edit','clients.delete','clients.reset',
@@ -39,7 +44,16 @@ def valid_permissions(role: str,values: dict|None)->dict:
     if role=='owner':return {}
     p=DEFAULTS[role].copy() if values is None else values.copy()
     if any(k not in PERMISSIONS or v not in ('none','own','all') for k,v in p.items()):raise PolicyError('Invalid permission/scope')
+    if any(p.get(k,'none')!='none' for k in NON_DELEGABLE):
+        raise PolicyError('Credit/refund permissions are owner-only and cannot be delegated')
     return p
+
+
+def _session_permissions(role:str,raw:dict)->dict:
+    value=dict(raw)
+    if role!='owner':
+        for key in NON_DELEGABLE:value.pop(key,None)
+    return value
 
 
 @dataclass
@@ -115,7 +129,8 @@ class Auth:
             db.execute('''INSERT INTO live_sessions(digest,admin_id,csrf,expires_at,public_id,created_at,source,user_agent)
                           VALUES(?,?,?,?,?,?,?,?)''',(session_digest,username,csrf,now+session_seconds,public_id,now,source,user_agent))
             db.execute('DELETE FROM auth_attempts WHERE bucket=?',(bucket,))
-        return token,Principal(Actor(row['id'],row['role'],json.loads(row['permissions'])),session_digest,csrf)
+        perms=_session_permissions(row['role'],json.loads(row['permissions']))
+        return token,Principal(Actor(row['id'],row['role'],perms),session_digest,csrf)
 
     def current(self,cookie: str|None,authorization: str|None)->Principal:
         with self.store.lock:
@@ -125,23 +140,22 @@ class Auth:
                     JOIN api_admins a ON a.id=k.admin_id WHERE k.digest=? AND k.revoked=0 AND k.expires_at>?''',
                     (digest(authorization[7:]),time.time())).fetchone()
                 if not r or r['disabled']:raise PermissionDenied('API key expired or revoked')
-                admin=Actor(r['admin_id'],r['role'],json.loads(r['admin_permissions']))
+                admin=Actor(r['admin_id'],r['role'],_session_permissions(r['role'],json.loads(r['admin_permissions'])))
                 requested=json.loads(r['permissions']);effective={}
                 for key,val in requested.items():
                     if val=='none':continue
                     grant='all' if admin.role=='owner' else admin.permissions.get(key,'none')
                     if grant=='none':continue
                     effective[key]='own' if 'own' in (grant,val) else 'all'
-                # Key lifecycle is always interactive. Strip api.manage even from
-                # legacy keys that were created before this boundary existed.
-                effective.pop('api.manage',None)
+                for key in KEY_FORBIDDEN:effective.pop(key,None)
                 # A robot key is NEVER an owner bypass; explicit permissions apply.
                 return Principal(Actor(admin.id,'token',effective),key_id=r['id'])
             if not cookie or len(cookie)>256:raise PermissionDenied('Authentication required')
             r=self.store.db.execute('''SELECT a.*,s.csrf FROM live_sessions s JOIN api_admins a ON a.id=s.admin_id
                 WHERE s.digest=? AND s.expires_at>? AND a.disabled=0''',(digest(cookie),time.time())).fetchone()
             if not r:raise PermissionDenied('Session expired or revoked')
-        return Principal(Actor(r['id'],r['role'],json.loads(r['permissions'])),digest(cookie),r['csrf'])
+        perms=_session_permissions(r['role'],json.loads(r['permissions']))
+        return Principal(Actor(r['id'],r['role'],perms),digest(cookie),r['csrf'])
 
     def sessions(self,p:Principal)->list[dict]:
         if p.key_id or not p.session_id:raise PermissionDenied('Interactive session required')
@@ -219,8 +233,8 @@ class Auth:
         if p.key_id:raise PermissionDenied('Robot keys cannot mint other keys')
         if not 1<=days<=365 or not 1<=len(name)<=128:raise PolicyError('Invalid key metadata')
         if any(k not in PERMISSIONS or v not in ('none','own','all') for k,v in permissions.items()):raise PolicyError('Invalid key permissions')
-        if permissions.get('api.manage') not in (None,'none'):
-            raise PolicyError('Robot keys cannot receive api.manage; key lifecycle requires an interactive session')
+        if any(permissions.get(k,'none')!='none' for k in KEY_FORBIDDEN):
+            raise PolicyError('Robot keys cannot manage key lifecycle or mutate financial credit/refunds')
         for k,v in permissions.items():
             grant='all' if p.actor.role=='owner' else p.actor.permissions.get(k,'none')
             if v!='none' and (grant=='none' or grant=='own' and v=='all'):raise PermissionDenied('A key cannot exceed its administrator permissions')
