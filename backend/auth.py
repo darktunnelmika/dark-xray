@@ -262,10 +262,10 @@ class Auth:
             r=db.execute('SELECT * FROM mfa WHERE admin_id=?',(p.actor.id,)).fetchone()
             if not r or not r['pending'] or r['enabled']:raise PolicyError('No pending TOTP enrollment')
             secret=self.cipher.decrypt(r['pending'].encode()).decode();step=int(time.time()//30)
-            if not any(hmac.compare_digest(totp(secret,s),code) for s in (step-1,step,step+1)):
-                raise PermissionDenied('Invalid enrollment code')
+            matched=next((s for s in (step-1,step,step+1) if hmac.compare_digest(totp(secret,s),code)),None)
+            if matched is None:raise PermissionDenied('Invalid enrollment code')
             codes=[secrets.token_hex(8) for _ in range(8)]
-            db.execute("UPDATE mfa SET secret=pending,pending='',enabled=1,last_step=?,recovery=? WHERE admin_id=?",(step,json.dumps([digest(c) for c in codes]),p.actor.id))
+            db.execute("UPDATE mfa SET secret=pending,pending='',enabled=1,last_step=?,recovery=? WHERE admin_id=?",(matched,json.dumps([digest(c) for c in codes]),p.actor.id))
             db.execute('DELETE FROM live_sessions WHERE admin_id=?',(p.actor.id,))
         return codes
 
