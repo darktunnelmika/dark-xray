@@ -37,12 +37,12 @@ test('same-page render preserves focus, selection and scroll position',async()=>
  const t=build();await t.ctx.renderPage();assert.equal(t.renderCalls,1);
  const next=t.byId.search;assert.equal(t.doc.activeElement,next);assert.equal(next.focused,true);
  assert.equal(next.selectionStart,2);assert.equal(next.selectionEnd,4);
- assert.deepEqual(t.scroll,{left:11,top:29,behavior:'auto'});
+ assert.equal(t.scroll.left,11);assert.equal(t.scroll.top,29);assert.equal(t.scroll.behavior,'auto');
  assert.equal(t.content.attrs['aria-busy'],undefined);
 });
 
 test('page navigation starts at top and does not refocus a stale control',async()=>{
  const t=build();t.ctx.state.page='finance';await t.ctx.renderPage();
  const next=t.byId.search;assert.equal(next.focused,false);
- assert.deepEqual(t.scroll,{left:0,top:0,behavior:'auto'});
+ assert.equal(t.scroll.left,0);assert.equal(t.scroll.top,0);assert.equal(t.scroll.behavior,'auto');
 });
