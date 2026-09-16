@@ -97,6 +97,8 @@ jobs:
           grep -q 'panelMeta must be an object' backend/core.py
           grep -q 'session_seconds' backend/auth.py
           grep -q 'ROLE_ALLOWED' backend/auth.py
+          ! grep -q 'ip.read' backend/auth.py
+          grep -q 'test_sync_redaction.py' tests/run-tests.sh
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/policy_auth.py
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/server.py
           grep -q 'PASSWORD_MIN_LENGTH=8' tools/provision.py
