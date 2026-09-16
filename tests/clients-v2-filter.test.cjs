@@ -28,7 +28,7 @@ test('same group name from different resellers stays owner-scoped',()=>{
     {email:'beta-user',owner:'beta',client:{group:'Shared',enable:true},inboundIds:[],used_bytes:0,block_reasons:[]}
   ];
   ctx.state.groups=[{owner:'alpha',name:'Shared',client_count:1},{owner:'beta',name:'Shared',client_count:1}];
-  ctx.state.cv2={view:'clients',owner:'all',group:'Shared',groupOwner:'alpha',status:'all',inbound:'all'};
+  ctx.state.cv2={view:'clients',owner:'all',group:'Shared',groupOwner:'alpha',status:'all',inbound:'all',search:''};
   const html=ctx.clientsPage();
   assert.match(html,/alpha-user/);
   assert.doesNotMatch(html,/beta-user/);
@@ -47,4 +47,14 @@ test('group click captures owner, clears hidden selection and incompatible owner
   assert.equal(ctx.state.cv2.group,'all');
   assert.equal(ctx.state.cv2.groupOwner,'all');
   assert.equal(ctx.state.selected.size,0);
+});
+
+test('search change invalidates prior bulk selection before rendering rows',()=>{
+  const ctx=context();
+  ctx.state.clients=[{email:'alpha-user',owner:'alpha',client:{group:'',enable:true},inboundIds:[],used_bytes:0,block_reasons:[]}];
+  ctx.state.selected.add('alpha-user');
+  ctx.state.search='different';
+  ctx.clientsPage();
+  assert.equal(ctx.state.selected.size,0);
+  assert.equal(ctx.state.cv2.search,'different');
 });
