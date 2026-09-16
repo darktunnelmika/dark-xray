@@ -33,7 +33,8 @@ def test_new_robot_key_cannot_receive_key_management(env):
     _,_,c=env
     r=c.post('/api/keys',json={'name':'unsafe','permissions':{'api.manage':'all'},'days':30})
     assert r.status_code==400
-    assert 'interactive session' in r.json()['detail']
+    detail=r.json()['detail'].lower()
+    assert 'robot keys' in detail and ('key lifecycle' in detail or 'interactive session' in detail)
 
 
 def test_legacy_robot_key_loses_api_manage_at_authentication(env):
