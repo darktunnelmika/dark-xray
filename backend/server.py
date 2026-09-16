@@ -141,9 +141,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
     @contextlib.asynccontextmanager
     async def lifespan(app):
-        if background:manager.start()
+        if background:
+            manager.start();nodes.start()
         yield
-        manager.close();engine.close()
+        nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
     public=urlsplit(config.public_origin);panel_path=config.panel_path
