@@ -32,3 +32,4 @@ python -m pytest tests/test_web_contract.py -q --junitxml=qa/junit/web-contract.
 python -m pytest tests/test_reality_scan.py -q --junitxml=qa/junit/reality.xml
 node --test tests/form-models.test.cjs
 node --test tests/inbounds-models.test.cjs
+node --test tests/clients-v2-filter.test.cjs
