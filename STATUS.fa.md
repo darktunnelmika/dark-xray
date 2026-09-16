@@ -1,64 +1,116 @@
-# وضعیت DARK XRAY ۰.۶
+# وضعیت DARK XRAY 0.8.2
 
-تاریخ بررسی: ۱۲ سپتامبر ۲۰۲۶. برچسب نسخه: **standalone-lab / آزمایشی تک‌سرور**.
+تاریخ بازبینی: **16 سپتامبر 2026**  
+برچسب فعلی: **0.8.2-standalone-lab**
 
-## معنی وضعیت‌ها
+> این فایل وضعیت واقعی پروژه را توصیف می‌کند. «پیاده‌سازی‌شده» به معنی وجود کد، کنترل‌های سمت سرور و تست‌های خودکار مربوط است؛ تا زمانی که گیت‌های VPS واقعی پایین تکمیل نشوند، DARK XRAY به‌عنوان Production Ready اعلام نمی‌شود.
 
-«پیاده‌شده» یعنی کد و مسیر آن در این بسته وجود دارد؛ نه تضمین عملکرد زیر بار یا اتصال واقعی همهٔ پروتکل‌ها. «آزمودهٔ محلی» یعنی آزمون واقعیِ همان لایهٔ مشخص با SQLite/HTTP یا منطق برنامه اجرا شده است. شبیه‌ساز فرایند یا runner فرمان فایروال، در گزارش با هسته یا فایروال واقعی اشتباه گرفته نشده‌اند.
+## وضعیت کلی
 
-## آنچه ساخته شده است
+DARK XRAY اکنون یک پنل مستقل با دیتابیس، API، رابط وب و مدیریت مستقیم Xray-core است و برای اجرای اصلی به Sanayi/3x-ui وابسته نیست. تمرکز نسخه فعلی از «ساخت قابلیت‌ها» به **Hardening، قابلیت بازیابی، جداسازی نماینده‌ها، امنیت و UX پایدار** منتقل شده است.
 
-| بخش | وضعیت دقیق |
+| بخش | وضعیت فعلی |
 |---|---|
-| استقلال از سنایی | API، دیتابیس، ورود و صفحات مستقل؛ بدون نصب یا API سنایی و بدون iframe |
-| ورود، نشست، TOTP و API key | از پایهٔ مستقل حفظ شده؛ آزمون‌های امنیت و دسترسی محلی بازاجرا شده‌اند |
-| مشتری و مالک | یک مالک مشخص، اجازهٔ اینباند، سقف مشتری و کنترل سمت سرور |
-| چند نماینده روی اینباند مشترک | منطق قطع فقط مشتریان مشمول؛ هسته باید تغییر را با موفقیت اعمال کند |
-| سهمیه و دفتر مصرف | دفتر مستقل مصرف؛ حذف/ریست مشتری سوابق قبلی نماینده را کم نمی‌کند |
-| snapshot پیش از ریست/حذف | آخرین شمارنده‌های مشاهده‌شده پیش از عملیات، شارژ می‌شوند؛ وقفه یا خطای دریافت آمار همچنان باید پایش شود |
-| ریست دوره‌ای حجم | روز ثابت، تعداد دفعات و نگهداری deadline؛ تمدید انقضا و ماه تقویمی نیست |
-| اینباند و پورت ۴۴۳ | ذخیرهٔ پورت پایین مجاز شد، پورت‌های مدیریت ممنوع ماند؛ سرویس با CAP_NET_BIND_SERVICE تعریف شده است |
-| هاست | فرم بومی ساخت/ویرایش/کپی/ترتیب/حذف؛ هاست غیرفعال باعث نشت خروجی مستقیم جایگزین نمی‌شود |
-| اوتباند | فرم بومی direct/block و VLESS/VMess/Trojan/Shadowsocks/SOCKS/HTTP؛ JSON برای موارد پیشرفته و چندسرور باقی است |
-| روتینگ | فرم شرط‌ها و مقصد، ترتیب قواعد؛ کنترل ارجاع نامعتبر و چرخهٔ زنجیرهٔ اوتباند |
-| نگاشت gRPC و XHTTP | serviceName، authority و تعدادی فیلد پیشرفته حفظ می‌شوند؛ برابری کامل فرم‌ها هنوز نه |
-| آمار میزبان | CPU، RAM، دیسک و شبکه از میزبان همان سرویس؛ HTTP محلی واقعی آزموده شد |
-| مدیریت فرایند Xray | اعتبارسنجی پیش از تغییر، restart صریح و تلاش بازگشت به تنظیمات قبلی؛ با TEST DOUBLE آزموده شد |
-| ساب و لینک | تولید مستقل مسیر اشتراک و لینک‌های VLESS/VMess/Trojan/SS؛ پوشش همهٔ فرمت‌ها و پروتکل‌ها کامل نیست |
-| HWID | کنترل تراکنشی دریافت اشتراک و ثبت دستگاه؛ اثبات هویت سخت‌افزاری یا جلوگیری قطعی از کپی کانفیگ نیست |
-| IP Guard | سیاست مشتری بدون خروجی فایل دستی به کارگر مستقل متصل است؛ حالت مشاهده/اعمال، هش سیاست، خطا، رویداد و رفع مسدودی دارد |
-| کارگر فایروال | Unix socket با SO_PEERCRED و فهرست پورت تأییدشدهٔ root؛ nftables اختصاصی، بدون shell و بدون flush ruleset میزبان |
-| نصب اولیه | نصاب fresh systemd، دریافت هستهٔ قفل‌شده با SHA-256 و مسیر واردکردن آرشیو رسمی؛ روی VPS تازه اجرا نشده |
-| دامنه و گواهی | ابزار Certbot با HTTP-01 و hook تمدید؛ کد آماده است ولی صدور واقعی اجرا نشده |
-| بکاپ رمزدار | snapshot دیتابیس، کلید TOTP، تنظیمات و گواهی پنل؛ بازیابی فقط در مقصد جدید، با ابطال نشست‌ها |
-| ابزار ترمینال | status/start/stop/restart، doctor، بکاپ، بازیابی آفلاین رمز، راهنمای دامنه و IP |
+| استقلال پنل | مستقل؛ DB/API/UI و runtime متعلق به DARK |
+| Inbounds / REALITY | فرم‌های بومی، اعتبارسنجی و workflow اختصاصی DARK |
+| Clients V2 | فیلتر، Group، Bulk operations و جداسازی مالک/نماینده |
+| Groups | owner-scoped؛ گروه هم‌نام دو نماینده با هم قاطی نمی‌شود |
+| Reseller / RBAC | سقف نقش، scope سمت سرور، حذف grantهای legacy نامعتبر |
+| Session / TOTP | نشست‌های قابل ابطال، TOTP و جلوگیری از replay counter |
+| Robot API Keys | scope محدود؛ key lifecycle و mutation مالی به Robot Key واگذار نمی‌شود |
+| Settings V2 | تنظیمات ساختاریافته، stage/apply برای تغییرات privileged و rollback |
+| Panel URI path | مسیر سفارشی با جلوگیری از تداخل API/Assets/Subscription |
+| Domain / TLS | Certbot workflow و rollback-safe activation در کد |
+| Installer / Update | preflight، health check زنده، snapshot DB/source و rollback |
+| Finance / Ledger | event-id idempotency، Ledger ماندگار و Credit فقط توسط Owner تعاملی |
+| Finance V2 | دفتر مالی/مصرف با Owner filter، Event ID و lifetime totals معتبر |
+| Traffic accounting | مصرف دوره جاری از lifetime ledger جداست؛ reset تاریخچه را پاک نمی‌کند |
+| IP / HWID | policy و محدودیت دستگاه/IP در runtime مستقل DARK |
+| IP Guard | worker مجزا و مرز root برای اعمال firewall؛ تست packet واقعی هنوز گیت انتشار است |
+| Nodes V2 | token رمز‌شده، HTTPS اجباری، probe/deploy/core actions |
+| Node egress security | IP عمومی اجباری، DNS pinning، TLS hostname verification، redirect/proxy bypass بسته |
+| Node health | monitor پس‌زمینه برای نودهای فعال و ثبت latency/error |
+| Backup / Restore | DB و backup workflow با کنترل‌های ایمنی و تست‌های rollback |
+| UI stability | refresh هنگام تایپ DOM را خراب نمی‌کند؛ focus/caret/scroll همان صفحه حفظ می‌شود |
+| CI | Source/installer/workspace + تست‌های Python 3.12/3.13 و JavaScript |
 
-## محدودیت مهم IP
+## Hardeningهای اخیر
 
-مدل محدودیت «IP متمایز در پنجرهٔ فعالیت مبتنی بر لاگ اتصال» است؛ شمارش قطعی تمام سوکت‌های باز، آدم‌ها یا دستگاه‌ها نیست. پروتکل باید لاگ قابل انتساب به مشتری تولید کند و IP لاگ در همان میزبان با مبدأ بسته یکی باشد. نشست طولانیِ بدون لاگ تازه، NAT، چند IP یک دستگاه و مسیرهای تانلی باید در آزمون واقعی بررسی شوند.
+### Runtime و نصب
 
-فایروال روی IP/پورت اثر می‌گذارد؛ ممکن است حساب دیگری با همان IP و پورت هم متأثر شود. آماده‌بودن کارگر و پذیرش فرمان، به معنی آزمایش عبور یا مسدودی بسته نیست. روی تونل/CDN/پراکسی مبهم خودکار فعال نمی‌شود. فهرست پورت‌های مجاز فقط از root تغییر می‌کند. بعد از تأیید اولیه، تغییر سقف مشتری روی همان پورت‌ها خودکار همگام می‌شود.
+- `darkxray check` از سرویس زنده مستقل شده و با lock پروسه اصلی تداخل ندارد.
+- تغییرات privileged پورت/دامنه/Path ابتدا Stage می‌شوند و بعد از SSH اعمال می‌شوند.
+- تداخل Panel Path و Subscription Path هم در Web و هم CLI بسته شده است.
+- updater قبل از activation، source و SQLite snapshot می‌گیرد و بعد از restart فقط به وضعیت systemd اکتفا نمی‌کند؛ Doctor باید route و asset واقعی پنل را سالم ببیند.
 
-## چه چیزهایی هنوز مانده‌اند؟
+### Clients / Resellers
 
-**تأیید روی موتور واقعی:** دریافت باینری در این محیط موفق نشد. سناریوی آمادهٔ `selftest` باید با Xray واقعی روی سرور آزمایشی اجرا و اشکالات احتمالی همان نسخه رفع شوند. نتیجهٔ انتقال واقعی مشتری به سایت/سرور مقصد و قطع‌و‌وصل زیرمجموعهٔ نماینده در شبکهٔ واقعی هنوز نداریم.
+- Group filter با ترکیب Owner + Group کار می‌کند.
+- تغییر Search/Filter/Owner انتخاب‌های Bulk مخفی را invalidate می‌کند.
+- Backend برای عملیات Bulk دوباره ownership، permission و inbound assignment را بررسی می‌کند.
+- Runtime permission قدیمی `ip.read` از RBAC پنل حذف شده؛ سطح IP/Device پنل از `clients.ip` استفاده می‌کند.
+- `/api/sync` برای non-owner فقط وضعیت عمومی runtime را می‌دهد و diagnosticهای داخلی Owner را افشا نمی‌کند.
 
-**فایروال و استقرار واقعی:** قانون nftables در کرنل اعمال نشده، نصب systemd تازه و جریان Certbot آزمایش نشده‌اند. تست دو IP واقعی، TLS، ریبوت VPS و بازیابی روی نصب دوم هنوز لازم‌اند.
+### امنیت حساب و دسترسی
 
-**فرم‌ها و پروتکل‌های کامل:** تمام امکانات سنایی از جمله فرم‌های کامل WireGuard، AmneziaWG، Hysteria2، MTProto، FinalMask، رمزنگاری‌های پیشرفتهٔ VLESS، تمام جزئیات XHTTP/QUIC و همهٔ خروجی‌های کلاینت در این بسته مستقل تکمیل نشده‌اند. صرف پشتیبانی نام یک پروتکل توسط هسته، پشتیبانی کامل DARK نیست. ورودی‌های سادهٔ HTTP/SOCKS/Tunnel نیز هم‌سطح فرم و حسابداری پروتکل‌های اصلی تأیید نشده‌اند.
+- Role ceiling در زمان ذخیره و احراز هویت enforce می‌شود؛ رکورد legacy دستکاری‌شده privilege جدید نمی‌سازد.
+- `finance.credit` و `finance.refund` قابل delegation به reseller/readonly نیستند.
+- Robot Key نمی‌تواند `api.manage`، credit یا refund دریافت کند؛ grantهای legacy نیز هنگام auth حذف می‌شوند.
+- TOTP counter واقعیِ کدی که در پنجره ±1 match شده ذخیره می‌شود تا replay window ایجاد نشود.
 
-**نود، سرعت و مقیاس:** مدیریت دوردست نود، هماهنگی شمارش IP بین نودها، تست ظرفیت و رفتار هنگام قطع شبکه مانده‌اند. عدد تضمینی برای کاربران هم‌زمان نداریم. کنترل سرعت Mbps عمومی برای همهٔ پروتکل‌ها ساخته نشده است.
+### Finance / Accounting
 
-**فروش و اتصال‌ها:** اتصال آمادهٔ میرزا، فروشگاه و تسویهٔ جامع، Telegram/SMTP اجرایی، LDAP، WARP/NordVPN/PIA و اشتراک خودکار اوتباند هنوز کامل نیستند. دفتر پایهٔ مالی به معنی فروشگاه آماده نیست.
+- Credit در Runtime API فقط Interactive Owner است.
+- Retry همان `event_id` دوباره balance یا audit ایجاد نمی‌کند.
+- Event ID در Audit اولین ثبت واقعی قابل ردیابی است.
+- Reset دوره نماینده فقط meter دوره جاری را صفر می‌کند؛ lifetime traffic ledger حفظ می‌شود.
+- Finance V2 زمان Traffic را از `observed_at` واقعی می‌خواند و lifetime summary را از `owner.lifetime_used_bytes` معتبر می‌گیرد، نه از پنجره محدود آخرین رکوردهای Ledger.
 
-**نگهداری:** مهاجرت خودکار از سنایی، ارتقای نصب موجود، برنامهٔ بازیابی نصب فعال، تمدید ماه تقویمی، نگهداری بلندمدت لاگ و تغییر هسته بدون قطعی نشست‌ها مانده‌اند. نصب‌کنندهٔ این نسخه عمدی به‌جای ارتقا، روی مسیر موجود متوقف می‌شود.
+### Nodes
 
-**ظاهر:** فایل‌های HTML/CSS/JS واقعی به API خود DARK متصل‌اند، اما بازکردن صفحه در مرورگر محیط ساخت مسدود شد. آزمون نگاشت فرم‌ها و HTTP، جای بازبینی چیدمان و کارکرد واقعی تمام دکمه‌ها را نمی‌گیرد؛ اسکرین‌شات جدید به‌عنوان اثبات ارائه نشده است.
+- Node Origin باید HTTPS بدون credential/path/query باشد.
+- DNS باید فقط به IPهای globally routable resolve شود.
+- اتصال TCP مستقیماً به IP تأییدشده pin می‌شود و TLS همچنان hostname اصلی را verify می‌کند.
+- HTTP redirect دنبال نمی‌شود و proxy محیط سیستم در مسیر Node استفاده نمی‌شود.
+- request/response size limit و total request deadline وجود دارد.
+- تغییر Origin/Token/Enabled وضعیت Probe قدیمی را invalidate می‌کند.
+- monitor داخلی، نودهای فعال را دوره‌ای probe و error/latency را persist می‌کند.
 
-## آزمون‌های ثبت‌شده
+## وضعیت تست
 
-۱۷۵ تست Python موفق، ۱ تست اتصال واقعی Xray به علت نبود باینری skipped؛ ۱۴ تست مستقل JavaScript موفق. مجموع موفق‌ها ۱۸۹ است. دسته‌های Python در فرایندهای جدا اجرا شده‌اند؛ تست‌های deselected دوبار شمارش نشده‌اند. گزارش‌های JUnit هر دسته در `qa/junit/` و خروجی نگاشت فرم‌ها در `qa/form-models.tap` قرار دارند.
+CI اصلی روی **Python 3.12 و 3.13** اجرا می‌شود و شامل این دسته‌هاست:
 
-HTTP محلی واقعی، نشست و خواندن منابع آزموده شده‌اند. Unix socket و هویت peer هم واقعاً آزمایش شده‌اند؛ اما فرمان nft در این آزمون‌ها فقط runner آزمایشی داشته و کرنل تغییر نکرده است. `tests/fixtures/fake_xray.py` فقط شبیه‌ساز صریح فرایند است؛ هرگز به‌عنوان هستهٔ واقعی نصب نمی‌شود.
+- Policy / RBAC / API key / Session / TOTP
+- Accounting / Finance hardening
+- Clients / Groups / Subscription
+- Settings / Runtime apply / Domain
+- Update / Backup / destructive recovery
+- Nodes / Node monitor / SSRF boundaries
+- Web contract و JavaScript model tests
+- Finance V2 و UI stability browserless regressions
 
-هیچ سرور، پنل فعلی، حساب گیت‌هاب یا دیتابیس کاربر در این کار تغییر داده نشده است.
+تست‌های شبیه‌ساز Xray، HTTP محلی و runnerهای ایزوله به‌صراحت از تست Xray/firewall واقعی تفکیک شده‌اند. نتیجه موفق CI به‌تنهایی جای تست شبکه روی VPS واقعی را نمی‌گیرد.
+
+## گیت‌های اجباری قبل از Production Ready
+
+1. **Fresh install روی VPS تمیز** با systemd و مسیر نصب واقعی.
+2. **Xray-core واقعی**: ساخت inbound، create/update/delete client، restart و recovery با ترافیک واقعی.
+3. **Domain/TLS واقعی**: صدور Let’s Encrypt، تمدید Certbot، reboot و بررسی Secure Cookie/HSTS.
+4. **IP Guard واقعی**: nftables روی کرنل، دو IP واقعی، ban/unban و اطمینان از عدم آسیب به SSH/Panel ports.
+5. **Remote Node واقعی**: دو VPS با HTTPS معتبر، probe، deploy inbound، core validate/restart و قطع/وصل شبکه.
+6. **Reboot/Crash recovery**: قطع سرویس وسط update/reset و بررسی rollback و ledger integrity.
+7. **Load/Scale**: تعداد بالای client/inbound، polling، Bulk actions و SQLite contention با سناریوی اندازه‌گیری‌شده.
+8. **Browser QA**: دسکتاپ/موبایل، EN/FA، فرم‌ها، modalها، focus/refresh و عملیات طولانی.
+9. **Release hygiene**: VERSION/CHANGELOG/README/SHA256SUMS و بسته Release نهایی باید با همان commit تأییدشده هماهنگ شوند.
+
+## مواردی که نباید بیش از واقعیت ادعا شوند
+
+- IP limit شمارش قطعی «آدم/دستگاه هم‌زمان» نیست؛ مدل آن به منبع مشاهده و topology شبکه وابسته است.
+- وجود نام یک protocol در Xray به معنی برابری کامل فرم DARK با تمام قابلیت‌های آن protocol نیست.
+- Node monitor جای مانیتورینگ بیرونی دیتاسنتر یا آزمون packet-level را نمی‌گیرد.
+- Ledger مالی پایه، فروشگاه/درگاه پرداخت/تسویه جامع محسوب نمی‌شود.
+- تا تکمیل گیت‌های VPS واقعی بالا، برچسب پروژه **standalone-lab** باقی می‌ماند.
+
+## مسیر بعدی
+
+پس از سبزشدن CI آخرین `main`، مرحله بعد **Real-VPS Validation + Browser QA** است. هر باگی که در آن مرحله پیدا شود باید به regression test تبدیل شود تا دوباره برنگردد.
