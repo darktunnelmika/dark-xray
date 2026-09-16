@@ -61,6 +61,18 @@ def test_readonly_role_has_a_hard_write_ceiling_and_legacy_grants_are_stripped(e
     assert current.actor.permissions=={'clients.read':'all','audit.read':'all'}
 
 
+def test_global_system_permission_requires_all_scope_and_legacy_own_is_stripped(env):
+    store,_,_,auth=env
+    with pytest.raises(PolicyError,match='Global permissions'):
+        auth.admin_create(OWNER,'seller','SellerPass88','reseller',{'system.read':'own'})
+    auth.admin_create(OWNER,'seller','SellerPass88','reseller',{'system.read':'all'})
+    with store.transaction() as db:
+        db.execute('UPDATE api_admins SET permissions=? WHERE id=?',(json.dumps({'system.read':'own'}),'seller'))
+    token,p=auth.login('seller','SellerPass88','','127.0.0.2',3600,'test')
+    assert 'system.read' not in p.actor.permissions
+    assert 'system.read' not in auth.current(token,None).actor.permissions
+
+
 def test_reseller_can_still_receive_explicit_cross_owner_client_scope(env):
     _,_,_,auth=env
     auth.admin_create(OWNER,'seller','SellerPass88','reseller',{'clients.read':'all','clients.edit':'all','owners.read':'own'})
@@ -69,7 +81,7 @@ def test_reseller_can_still_receive_explicit_cross_owner_client_scope(env):
     assert p.actor.permissions['clients.edit']=='all'
 
 
-def test_robot_keys_cannot_mutate_money_or_manage_key_lifecycle(env):
+def test_robot_keys_cannot_mutate_money_manage_keys_or_use_own_global_scope(env):
     _,_,_,auth=env
     _,p=auth.login('dark','OwnerPass88','','127.0.0.1',3600,'test')
     with pytest.raises(PolicyError,match='cannot manage key lifecycle'):
@@ -78,6 +90,8 @@ def test_robot_keys_cannot_mutate_money_or_manage_key_lifecycle(env):
         auth.new_key(p,'bad-refund',{'finance.refund':'all'},30)
     with pytest.raises(PolicyError,match='cannot manage key lifecycle'):
         auth.new_key(p,'bad-key-admin',{'api.manage':'all'},30)
+    with pytest.raises(PolicyError,match='Global permissions'):
+        auth.new_key(p,'bad-system-scope',{'system.read':'own'},30)
 
 
 def test_owner_can_still_credit_reseller(env):
