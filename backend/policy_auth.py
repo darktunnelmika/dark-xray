@@ -66,6 +66,11 @@ def verify_password(password: str, encoded: str) -> bool:
         return hmac.compare_digest(actual,bytes.fromhex(target))
     except (ValueError,TypeError):return False
 
+def effective_permissions(role: str, raw: dict[str,str]) -> dict[str,str]:
+    if role=='owner':return {}
+    allowed=ROLE_ALLOWED.get(role,set())
+    return {k:v for k,v in dict(raw).items() if k in allowed and v in {'own','all'} and not (k in GLOBAL_SCOPE_ONLY and v=='own')}
+
 def permissions_for(role: str, overrides: dict[str,str] | None) -> dict[str,str]:
     if role not in DEFAULT_PERMISSIONS:raise PolicyError('Unknown role')
     if role=='owner':return {}
