@@ -13,6 +13,7 @@ import ipaddress
 import json
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 from typing import Any
@@ -89,6 +90,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
+        self.stop=threading.Event();self.thread:threading.Thread|None=None
         with store.lock:
             store.db.executescript('''
             CREATE TABLE IF NOT EXISTS remote_nodes(
@@ -213,15 +215,35 @@ class NodeRegistry:
         err=PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'No validated address'))
         self._request_failed(node_id,str(err));raise err from last_error
 
-    def probe(self,node_id:str)->dict:
+    def probe(self,node_id:str,*,timeout:float=8.0)->dict:
         now=time.time()
         try:
-            health,ms=self._request(node_id,'/node/api/health')
+            health,ms=self._request(node_id,'/node/api/health',timeout=timeout)
             if not isinstance(health,dict) or health.get('service')!='DARK XRAY NODE':raise PolicyError('Remote endpoint is not a DARK node agent')
             with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
             return {'node':self.get(node_id),'latency_ms':ms,'health':health}
         except PolicyError as ex:
             self._request_failed(node_id,str(ex));raise
+
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0):
+        if self.thread and self.thread.is_alive():return
+        if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
+        self.stop.clear()
+        def run():
+            if self.stop.wait(initial_delay):return
+            while not self.stop.is_set():
+                with self.store.lock:ids=[r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY id')]
+                for node_id in ids:
+                    if self.stop.is_set():return
+                    try:self.probe(node_id,timeout=5.0)
+                    except (PolicyError,OSError):pass
+                if self.stop.wait(interval):return
+        self.thread=threading.Thread(target=run,name='dark-node-health',daemon=True);self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:self.thread.join(timeout=6.0)
+        self.thread=None
 
     def remote_core(self,node_id:str,action:str)->dict:
         if action not in {'validate','restart','start','stop'}:raise PolicyError('Unsupported remote core action')
