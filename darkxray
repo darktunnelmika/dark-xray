@@ -10,6 +10,7 @@ case "${1:-menu}" in
  menu) exec "$PY" "$ROOT/tools/menu.py" ;;
  doctor) shift; exec "$PY" "$ROOT/tools/doctor.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  check) shift; exec "$PY" "$ROOT/tools/check.py" --config "$CONFIG" --data "$DATA" "$@" ;;
+ vps-verify) shift; exec "$PY" "$ROOT/tools/vps-verify.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
  guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
  settings-apply) shift; exec "$PY" "$ROOT/tools/settings_apply.py" --config "$CONFIG" --data "$DATA" "$@" ;;
