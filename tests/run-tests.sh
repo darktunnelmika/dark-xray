@@ -13,6 +13,7 @@ python -m pytest tests/test_settings_v2.py -q --junitxml=qa/junit/settings-v2.xm
 python -m pytest tests/test_runtime_apply.py -q --junitxml=qa/junit/runtime-apply.xml
 python -m pytest tests/test_runtime_path_safety.py -q --junitxml=qa/junit/runtime-path-safety.xml
 python -m pytest tests/test_live_check.py -q --junitxml=qa/junit/live-check.xml
+python -m pytest tests/test_production_gate.py -q --junitxml=qa/junit/production-gate.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
 python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscription-v2.xml
