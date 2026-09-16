@@ -32,6 +32,7 @@ def validate_origin(raw:str)->str:
         raise PolicyError('Node URL must be an HTTPS origin without credentials/path/query')
     try:port=p.port
     except ValueError as ex:raise PolicyError('Invalid node URL port') from ex
+    if port is not None and not 1<=port<=65535:raise PolicyError('Invalid node URL port')
     host=p.hostname
     try:
         infos=socket.getaddrinfo(host,port or 443,type=socket.SOCK_STREAM)
@@ -186,15 +187,19 @@ class NodeRegistry:
     def remote_core(self,node_id:str,action:str)->dict:
         if action not in {'validate','restart','start','stop'}:raise PolicyError('Unsupported remote core action')
         doc,ms=self._request(node_id,'/node/api/core/'+action,'POST',{})
+        if not isinstance(doc,dict) or 'engine' not in doc:
+            self._request_failed(node_id,'Invalid remote core response');raise PolicyError('Invalid remote core response')
         return {'latency_ms':ms,'result':doc}
 
     def remote_inbounds(self,node_id:str)->dict:
         doc,ms=self._request(node_id,'/node/api/inbounds')
-        if not isinstance(doc,list):raise PolicyError('Invalid node inbound response')
+        if not isinstance(doc,list):
+            self._request_failed(node_id,'Invalid node inbound response');raise PolicyError('Invalid node inbound response')
         return {'latency_ms':ms,'items':doc}
 
     def deploy_inbound(self,node_id:str,payload:dict)->dict:
         if not isinstance(payload,dict):raise PolicyError('Inbound payload must be an object')
         doc,ms=self._request(node_id,'/node/api/inbounds','POST',payload,12.0)
-        if not isinstance(doc,dict) or type(doc.get('id')) is not int:raise PolicyError('Invalid node inbound deploy response')
+        if not isinstance(doc,dict) or type(doc.get('id')) is not int:
+            self._request_failed(node_id,'Invalid node inbound deploy response');raise PolicyError('Invalid node inbound deploy response')
         return {'latency_ms':ms,'inbound':doc,'applied':False,'next':'validate/restart remote Xray'}
