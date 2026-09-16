@@ -26,12 +26,15 @@ def token_digest(value:str)->str:
 
 def validate_origin(raw:str)->str:
     if not isinstance(raw,str) or len(raw)>500:raise PolicyError('Invalid node URL')
-    p=urllib.parse.urlsplit(raw.strip())
+    try:p=urllib.parse.urlsplit(raw.strip())
+    except ValueError as ex:raise PolicyError('Invalid node URL') from ex
     if p.scheme!='https' or not p.hostname or p.username or p.password or p.query or p.fragment or p.path not in ('','/'):
         raise PolicyError('Node URL must be an HTTPS origin without credentials/path/query')
+    try:port=p.port
+    except ValueError as ex:raise PolicyError('Invalid node URL port') from ex
     host=p.hostname
     try:
-        infos=socket.getaddrinfo(host,p.port or 443,type=socket.SOCK_STREAM)
+        infos=socket.getaddrinfo(host,port or 443,type=socket.SOCK_STREAM)
     except OSError as ex:raise PolicyError('Node hostname does not resolve') from ex
     addresses={x[4][0].split('%')[0] for x in infos}
     if not addresses:raise PolicyError('Node hostname has no usable address')
@@ -39,8 +42,8 @@ def validate_origin(raw:str)->str:
         try:ip=ipaddress.ip_address(raw_ip)
         except ValueError:raise PolicyError('Node DNS returned an invalid address')
         if not ip.is_global:raise PolicyError('Node must resolve only to globally routable addresses')
-    port=p.port
-    return f'https://{host}' + (f':{port}' if port and port!=443 else '')
+    rendered='['+host+']' if ':' in host else host
+    return f'https://{rendered}' + (f':{port}' if port and port!=443 else '')
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -72,7 +75,7 @@ class NodeRegistry:
             r.pop('token_enc',None)
             try:r['health']=json.loads(r.pop('last_health','{}'))
             except Exception:r['health']={}
-            r['online']=bool(r['last_seen'] and time.time()-r['last_seen']<180 and not r['last_error'])
+            r['online']=bool(r['enabled'] and r['last_seen'] and time.time()-r['last_seen']<180 and not r['last_error'])
         return rows
 
     def get(self,node_id:str,*,secret:bool=False)->dict:
@@ -91,19 +94,30 @@ class NodeRegistry:
         origin=validate_origin(origin)
         if not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:raise PolicyError('Invalid DARK node token')
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
+        reset_probe=True
+        with self.store.lock:
+            old=self.store.db.execute('SELECT origin,token_enc,enabled FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            if old:
+                try:old_token=self.cipher.decrypt(old['token_enc'].encode()).decode()
+                except Exception:old_token=None
+                reset_probe=old['origin']!=origin or old_token!=token or bool(old['enabled'])!=enabled
         enc=self.cipher.encrypt(token.encode()).decode();now=time.time()
         with self.store.transaction() as db:
-            db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at)
-              VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
-              token_enc=excluded.token_enc,enabled=excluded.enabled,updated_at=excluded.updated_at''',
-              (node_id,name,origin,enc,int(enabled),now,now))
+            db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health)
+              VALUES(?,?,?,?,?,?,?,0,0,'','{}') ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
+              token_enc=excluded.token_enc,enabled=excluded.enabled,updated_at=excluded.updated_at,
+              last_seen=CASE WHEN ? THEN 0 ELSE remote_nodes.last_seen END,
+              last_latency_ms=CASE WHEN ? THEN 0 ELSE remote_nodes.last_latency_ms END,
+              last_error=CASE WHEN ? THEN '' ELSE remote_nodes.last_error END,
+              last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
+              (node_id,name,origin,enc,int(enabled),now,now,int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
         return self.get(node_id)
 
     def set_enabled(self,node_id:str,enabled:bool)->dict:
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
         with self.store.transaction() as db:
             if not db.execute('SELECT 1 FROM remote_nodes WHERE id=?',(node_id,)).fetchone():raise PolicyError('Node not found')
-            db.execute('UPDATE remote_nodes SET enabled=?,updated_at=? WHERE id=?',(int(enabled),time.time(),node_id))
+            db.execute("UPDATE remote_nodes SET enabled=?,updated_at=?,last_seen=0,last_latency_ms=0,last_error='',last_health='{}' WHERE id=?",(int(enabled),time.time(),node_id))
         return self.get(node_id)
 
     def delete(self,node_id:str)->dict:
@@ -112,18 +126,26 @@ class NodeRegistry:
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
 
+    def _request_ok(self,node_id:str,latency_ms:int):
+        now=time.time()
+        with self.store.transaction() as db:
+            db.execute("UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=? WHERE id=?",
+                       (now,max(1,int(latency_ms)),now,node_id))
+
+    def _request_failed(self,node_id:str,error:str):
+        now=time.time()
+        with self.store.transaction() as db:
+            db.execute('UPDATE remote_nodes SET last_error=?,updated_at=? WHERE id=?',(str(error)[:300],now,node_id))
+
     def _request(self,node_id:str,path:str,method:str='GET',body:dict|None=None,timeout:float=8.0)->tuple[dict,int]:
         node=self.get(node_id,secret=True)
         if not node['enabled']:raise PolicyError('Node is disabled')
-        # Resolve again immediately before every connection to reduce DNS-rebinding risk.
         origin=validate_origin(node['origin'])
         data=None if body is None else json.dumps(body).encode()
         req=urllib.request.Request(origin+path,data=data,method=method,headers={
             'Accept':'application/json','Authorization':'Bearer '+node['token'],
             **({'Content-Type':'application/json'} if data is not None else {})})
         start=time.monotonic()
-        # Do not inherit HTTP(S)_PROXY from the service environment and never
-        # follow redirects. Either behavior can bypass the validated node origin.
         opener=urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             _NoRedirect(),
@@ -131,17 +153,24 @@ class NodeRegistry:
         )
         try:
             with opener.open(req,timeout=timeout) as res:
-                raw=res.read(1024*1024)
+                raw=res.read(1024*1024+1)
+                if len(raw)>1024*1024:raise PolicyError('Node response exceeds 1 MiB limit')
                 if res.status<200 or res.status>=300:raise PolicyError('Node returned HTTP '+str(res.status))
         except urllib.error.HTTPError as ex:
             try:detail=json.loads(ex.read(65536).decode()).get('detail','')
             except Exception:detail=''
-            raise PolicyError(f'Node HTTP {ex.code}'+(': '+str(detail)[:200] if detail else '')) from ex
-        except (urllib.error.URLError,TimeoutError,OSError) as ex:raise PolicyError('Node connection failed: '+type(ex).__name__) from ex
+            err=PolicyError(f'Node HTTP {ex.code}'+(': '+str(detail)[:200] if detail else ''));self._request_failed(node_id,str(err));raise err from ex
+        except PolicyError as ex:
+            self._request_failed(node_id,str(ex));raise
+        except (urllib.error.URLError,TimeoutError,OSError) as ex:
+            err=PolicyError('Node connection failed: '+type(ex).__name__);self._request_failed(node_id,str(err));raise err from ex
         elapsed=max(1,int((time.monotonic()-start)*1000))
         try:doc=json.loads(raw.decode())
-        except Exception as ex:raise PolicyError('Node returned invalid JSON') from ex
-        if not isinstance(doc,dict) and not isinstance(doc,list):raise PolicyError('Unexpected node response shape')
+        except Exception as ex:
+            err=PolicyError('Node returned invalid JSON');self._request_failed(node_id,str(err));raise err from ex
+        if not isinstance(doc,dict) and not isinstance(doc,list):
+            err=PolicyError('Unexpected node response shape');self._request_failed(node_id,str(err));raise err
+        self._request_ok(node_id,elapsed)
         return doc,elapsed
 
     def probe(self,node_id:str)->dict:
@@ -152,8 +181,7 @@ class NodeRegistry:
             with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
             return {'node':self.get(node_id),'latency_ms':ms,'health':health}
         except PolicyError as ex:
-            with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET last_error=?,updated_at=? WHERE id=?',(str(ex)[:300],now,node_id))
-            raise
+            self._request_failed(node_id,str(ex));raise
 
     def remote_core(self,node_id:str,action:str)->dict:
         if action not in {'validate','restart','start','stop'}:raise PolicyError('Unsupported remote core action')
