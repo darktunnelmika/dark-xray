@@ -64,17 +64,18 @@ jobs:
         run: |
           for js in \
             web/i18n-en.js web/form-models.js web/inbounds-models.js web/inbounds-v3.js \
-            web/settings-v2.js web/clients-v2.js web/xray-v2.js web/hosts-v2.js \
+            web/rbac-v2.js web/settings-v2.js web/clients-v2.js web/xray-v2.js web/hosts-v2.js \
             web/ops-v2.js web/nodes-v2.js; do node --check "$js"; done
           grep -q '<html lang="en" dir="ltr">' web/index.html
           for asset in \
             cyber.css inbounds-v3.css settings-v2.css clients-v2.css xray-v2.css hosts-v2.css ops-v2.css nodes-v2.css \
-            i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js xray-v2.js hosts-v2.js ops-v2.js nodes-v2.js; do
+            i18n-en.js inbounds-models.js inbounds-v3.js rbac-v2.js settings-v2.js clients-v2.js xray-v2.js hosts-v2.js ops-v2.js nodes-v2.js; do
             grep -q "assets/$asset" web/index.html
           done
           ! grep -q '/assets/runtime-policy.js' web/index.html
           ! grep -q '/assets/inbounds-v2.js' web/index.html
           grep -q 'PANEL_BASE' web/live.js
+          grep -q 'role ceiling' web/rbac-v2.js
           grep -q 'Panel URI path' web/settings-v2.js
           grep -q 'Generate random path' web/settings-v2.js
           grep -q 'panel_path' backend/core.py
@@ -93,6 +94,7 @@ jobs:
           grep -q '/api/runtime-config' backend/server.py
           grep -q 'panelMeta must be an object' backend/core.py
           grep -q 'session_seconds' backend/auth.py
+          grep -q 'ROLE_ALLOWED' backend/auth.py
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/policy_auth.py
           grep -q 'PASSWORD_MIN_LENGTH=8' backend/server.py
           grep -q 'PASSWORD_MIN_LENGTH=8' tools/provision.py
