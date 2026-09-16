@@ -80,7 +80,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             form=page.locator('#iv3-editor');form.wait_for(state='visible',timeout=10000)
             form.locator('[name=remark]').fill('DARK Browser QA / VLESS')
             form.locator('[name=port]').fill('19443')
-            form.locator('button[type=submit]').click()
+            with page.expect_response(lambda r:r.request.method=='POST' and r.url.rstrip('/').endswith('/api/inbounds'),timeout=10000) as response_info:
+                form.locator('button[type=submit]').click()
+            save_response=response_info.value
+            if not save_response.ok:
+                try:detail=save_response.text()
+                except Exception:detail='response body unavailable'
+                raise RuntimeError(f'Inbound save HTTP {save_response.status}: {detail[:1000]}')
             form.wait_for(state='detached',timeout=10000)
             saved=[i for i in engine.inbounds() if i['port']==19443 and i.get('protocol')=='vless']
             assert saved and saved[0]['remark']=='DARK Browser QA / VLESS'
