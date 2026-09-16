@@ -67,11 +67,23 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.pinned_ip=pinned_ip
 
     def connect(self):
-        self.sock=socket.create_connection((self.pinned_ip,self.port),self.timeout,self.source_address)
-        if self._tunnel_host:
-            self._tunnel()
-        server_hostname=self._tunnel_host or self.host
-        self.sock=self._context.wrap_socket(self.sock,server_hostname=server_hostname)
+        ip=ipaddress.ip_address(self.pinned_ip)
+        family=socket.AF_INET6 if ip.version==6 else socket.AF_INET
+        sock=socket.socket(family,socket.SOCK_STREAM)
+        try:
+            sock.settimeout(self.timeout)
+            if self.source_address:sock.bind(self.source_address)
+            target=(ip.compressed,self.port,0,0) if ip.version==6 else (ip.compressed,self.port)
+            sock.connect(target)
+            self.sock=sock
+            if self._tunnel_host:self._tunnel()
+            server_hostname=self._tunnel_host or self.host
+            self.sock=self._context.wrap_socket(self.sock,server_hostname=server_hostname)
+        except BaseException:
+            try:sock.close()
+            except Exception:pass
+            self.sock=None
+            raise
 
 
 class NodeRegistry:
@@ -173,7 +185,7 @@ class NodeRegistry:
         if not node['enabled']:raise PolicyError('Node is disabled')
         if not isinstance(path,str) or not path.startswith('/node/api/') or any(ch in path for ch in '\r\n?#'):
             raise PolicyError('Invalid node API path')
-        origin,host,port,addresses=resolve_origin(node['origin'])
+        _origin,host,port,addresses=resolve_origin(node['origin'])
         data=None if body is None else json.dumps(body,separators=(',',':')).encode()
         if data is not None and len(data)>2*1024*1024:raise PolicyError('Node request exceeds 2 MiB limit')
         headers={'Accept':'application/json','Authorization':'Bearer '+node['token']}
