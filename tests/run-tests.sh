@@ -25,6 +25,7 @@ python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
+python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
 python -m pytest tests/test_sessions.py -q --junitxml=qa/junit/sessions.xml
 python -m pytest tests/test_api_key_boundaries.py -q --junitxml=qa/junit/api-key-boundaries.xml
