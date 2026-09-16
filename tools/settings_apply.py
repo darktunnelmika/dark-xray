@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 DOMAIN_RE = re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}')
 EMAIL_RE = re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
+PATH_RE = re.compile(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*')
 RUNTIME_KEYS = {'access_mode','bind_port','public_address','panel_path','poll_seconds','core_autostart','domain','acme_email'}
 GUARD_PATH = Path('/etc/dark-xray/guard.json')
 TLS_SOURCE_PATH = Path('/etc/dark-xray/tls-source.json')
@@ -40,6 +41,25 @@ def _runtime_row(db_path: Path, current: dict) -> dict:
     return value
 
 
+def _subscription_path(db_path: Path) -> str:
+    with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as db:
+        row = db.execute("SELECT body FROM core_sections WHERE name='subscription'").fetchone()
+    if not row:return '/sub'
+    try:value=json.loads(row[0])
+    except Exception as ex:raise SystemExit('Saved subscription settings are invalid') from ex
+    if not isinstance(value,dict):raise SystemExit('Saved subscription settings are invalid')
+    path=str(value.get('path','/sub')).strip()
+    if path!='/' and path.endswith('/'):path=path.rstrip('/')
+    if path=='/' or len(path)>200 or not PATH_RE.fullmatch(path):raise SystemExit('Saved subscription URI path is invalid')
+    first=path.strip('/').split('/',1)[0].lower()
+    if first in {'api','assets','node','health'}:raise SystemExit('Saved subscription URI path conflicts with a reserved DARK endpoint')
+    return path
+
+
+def _paths_overlap(panel_path:str,subscription_path:str)->bool:
+    return panel_path!='/' and (panel_path==subscription_path or panel_path.startswith(subscription_path+'/') or subscription_path.startswith(panel_path+'/'))
+
+
 def _inbound_ports(db_path: Path) -> set[int]:
     out: set[int] = set()
     with sqlite3.connect(f'file:{db_path}?mode=ro', uri=True) as db:
@@ -50,7 +70,7 @@ def _inbound_ports(db_path: Path) -> set[int]:
     return out
 
 
-def validate_desired(value: dict, current: dict, inbound_ports: set[int]) -> dict:
+def validate_desired(value: dict, current: dict, inbound_ports: set[int], subscription_path:str='/sub') -> dict:
     v = dict(value)
     if v.get('access_mode') not in ('ssh','domain_tls'):
         raise ValueError('access_mode must be ssh or domain_tls')
@@ -59,11 +79,15 @@ def validate_desired(value: dict, current: dict, inbound_ports: set[int]) -> dic
     if type(v.get('core_autostart')) is not bool: raise ValueError('core_autostart must be boolean')
     panel_path=str(v.get('panel_path','/')).strip()
     if panel_path!='/' and panel_path.endswith('/'): panel_path=panel_path.rstrip('/')
-    if panel_path!='/' and not re.fullmatch(r'/(?:[A-Za-z0-9_-]{1,64})(?:/[A-Za-z0-9_-]{1,64})*',panel_path):
+    if panel_path!='/' and not PATH_RE.fullmatch(panel_path):
         raise ValueError('Invalid panel URI path')
     if len(panel_path)>200: raise ValueError('Panel URI path is too long')
     first_segment=panel_path.strip('/').split('/',1)[0].lower() if panel_path!='/' else ''
     if first_segment in {'api','assets','sub','node','health'}: raise ValueError('Panel URI path conflicts with a reserved DARK endpoint')
+    subscription_path=str(subscription_path or '/sub').strip()
+    if subscription_path!='/' and subscription_path.endswith('/'):subscription_path=subscription_path.rstrip('/')
+    if subscription_path=='/' or len(subscription_path)>200 or not PATH_RE.fullmatch(subscription_path):raise ValueError('Invalid subscription URI path')
+    if _paths_overlap(panel_path,subscription_path):raise ValueError('Panel URI path overlaps the subscription path')
     v['panel_path']=panel_path
     address = v.get('public_address','')
     if not isinstance(address,str) or not address or len(address)>253 or any(c in address for c in '/?#@ \r\n\t'):
@@ -226,7 +250,7 @@ def main() -> None:
     p.add_argument('--data',type=Path,default=Path('/var/lib/dark-xray'))
     p.add_argument('--dry-run',action='store_true')
     args=p.parse_args();db_path=args.data/'dark.sqlite3';current=json.loads(args.config.read_text())
-    desired=validate_desired(_runtime_row(db_path,current),current,_inbound_ports(db_path));plan=build_plan(current,desired)
+    desired=validate_desired(_runtime_row(db_path,current),current,_inbound_ports(db_path),_subscription_path(db_path));plan=build_plan(current,desired)
     print(json.dumps(plan,indent=2))
     if args.dry_run:return
     if os.geteuid()!=0:raise SystemExit('Root is required to apply staged runtime settings')
