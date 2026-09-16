@@ -28,6 +28,7 @@ python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recov
 python -m pytest tests/test_sessions.py -q --junitxml=qa/junit/sessions.xml
 python -m pytest tests/test_api_key_boundaries.py -q --junitxml=qa/junit/api-key-boundaries.xml
 python -m pytest tests/test_totp_replay.py -q --junitxml=qa/junit/totp-replay.xml
+python -m pytest tests/test_rbac_hardening.py -q --junitxml=qa/junit/rbac-hardening.xml
 python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
 python -m pytest tests/test_update_transaction.py -q --junitxml=qa/junit/update-transaction.xml
 python -m pytest tests/test_web_contract.py -q --junitxml=qa/junit/web-contract.xml
