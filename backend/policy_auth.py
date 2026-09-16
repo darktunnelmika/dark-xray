@@ -33,9 +33,14 @@ CAPABILITIES={
 }
 ALLOWED_PERMISSIONS={
  'clients.read','clients.create','clients.edit','clients.delete','clients.reset',
- 'owners.read','owners.edit','owners.reset','finance.read','finance.credit','finance.refund',
- 'ip.read','system.read',
+ 'owners.read','owners.edit','owners.reset','finance.read','ip.read','system.read',
 }
+ROLE_ALLOWED={
+ 'reseller':{'clients.read','clients.create','clients.edit','clients.delete','clients.reset','owners.read','finance.read','ip.read','system.read'},
+ 'readonly':{'clients.read','owners.read','finance.read','ip.read','system.read'},
+ 'owner':set(),
+}
+GLOBAL_SCOPE_ONLY={'system.read'}
 DEFAULT_PERMISSIONS={
  'reseller':{f'clients.{p}':'own' for p in ('read','create','edit','delete','reset')}|{'owners.read':'own','finance.read':'own','ip.read':'own'},
  'readonly':{'clients.read':'all','owners.read':'all','finance.read':'all','ip.read':'all'},
@@ -62,9 +67,15 @@ def verify_password(password: str, encoded: str) -> bool:
     except (ValueError,TypeError):return False
 
 def permissions_for(role: str, overrides: dict[str,str] | None) -> dict[str,str]:
+    if role not in DEFAULT_PERMISSIONS:raise PolicyError('Unknown role')
+    if role=='owner':return {}
     result=dict(DEFAULT_PERMISSIONS[role] if overrides is None else overrides)
     if any(k not in ALLOWED_PERMISSIONS or v not in {'none','own','all'} for k,v in result.items()):
         raise PolicyError('Unrecognized permission or scope')
+    if any(v!='none' and k not in ROLE_ALLOWED[role] for k,v in result.items()):
+        raise PolicyError('Permission exceeds the selected role ceiling')
+    if any(result.get(k)=='own' for k in GLOBAL_SCOPE_ONLY):
+        raise PolicyError('Global permissions use scope all, not own')
     return result
 
 def create_admin(store: Store, actor: Actor, username: str, password: str,
@@ -132,4 +143,3 @@ class Usage(StrictModel):
 class Refund(StrictModel):
     order_id: str=Field(min_length=1,max_length=256)
     event_id: str=Field(min_length=1,max_length=256)
-
