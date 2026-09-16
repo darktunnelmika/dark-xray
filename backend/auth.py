@@ -18,20 +18,20 @@ from policy_api import password_hash,verify_password
 PERMISSIONS={
  'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials',
  'clients.ip','clients.attach','owners.read','owners.edit','owners.reset','finance.read','finance.credit',
- 'finance.refund','ip.read','system.read','audit.read','api.manage','inbounds.read'}
+ 'finance.refund','system.read','audit.read','api.manage','inbounds.read'}
 NON_DELEGABLE={'finance.credit','finance.refund'}
 KEY_FORBIDDEN=NON_DELEGABLE|{'api.manage'}
 GLOBAL_SCOPE_ONLY={'system.read'}
 ROLE_ALLOWED={
  'reseller':{
    'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach',
-   'owners.read','finance.read','ip.read','system.read','audit.read','api.manage','inbounds.read'},
- 'readonly':{'clients.read','owners.read','finance.read','ip.read','system.read','audit.read','inbounds.read'},
+   'owners.read','finance.read','system.read','audit.read','api.manage','inbounds.read'},
+ 'readonly':{'clients.read','owners.read','finance.read','system.read','audit.read','inbounds.read'},
 }
 DEFAULTS={
  'owner':{},
  'reseller':{k:'own' for k in ('clients.read','clients.create','clients.edit','clients.delete','clients.reset',
-    'clients.credentials','clients.ip','clients.attach','owners.read','finance.read','ip.read','audit.read','api.manage','inbounds.read')},
+    'clients.credentials','clients.ip','clients.attach','owners.read','finance.read','audit.read','api.manage','inbounds.read')},
  'readonly':{'clients.read':'all','owners.read':'all','inbounds.read':'all','system.read':'all','audit.read':'all'} }
 
 

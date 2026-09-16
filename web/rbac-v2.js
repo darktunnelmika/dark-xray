@@ -4,17 +4,17 @@
 if(typeof adminForm!=='function')return;
 
 const RPERMS={
- reseller:['clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach','owners.read','finance.read','ip.read','system.read','audit.read','api.manage','inbounds.read'],
- readonly:['clients.read','owners.read','finance.read','ip.read','system.read','audit.read','inbounds.read'],
+ reseller:['clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach','owners.read','finance.read','system.read','audit.read','api.manage','inbounds.read'],
+ readonly:['clients.read','owners.read','finance.read','system.read','audit.read','inbounds.read'],
  owner:[]
 };
 const RDEFAULTS={
- reseller:{'clients.read':'own','clients.create':'own','clients.edit':'own','clients.delete':'own','clients.reset':'own','clients.credentials':'own','clients.ip':'own','clients.attach':'own','owners.read':'own','finance.read':'own','ip.read':'own','audit.read':'own','api.manage':'own','inbounds.read':'own'},
+ reseller:{'clients.read':'own','clients.create':'own','clients.edit':'own','clients.delete':'own','clients.reset':'own','clients.credentials':'own','clients.ip':'own','clients.attach':'own','owners.read':'own','finance.read':'own','audit.read':'own','api.manage':'own','inbounds.read':'own'},
  readonly:{'clients.read':'all','owners.read':'all','inbounds.read':'all','system.read':'all','audit.read':'all'},
  owner:{}
 };
 const GLOBAL_ONLY=new Set(['system.read']);
-const ORDER=['clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach','owners.read','finance.read','ip.read','system.read','audit.read','api.manage','inbounds.read'];
+const ORDER=['clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach','owners.read','finance.read','system.read','audit.read','api.manage','inbounds.read'];
 const SCOPE={none:'بدون دسترسی',own:'فقط خود',all:'همه'};
 
 function permissionGrid(role,permissions=null){

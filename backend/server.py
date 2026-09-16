@@ -561,8 +561,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def sync(p:Principal=Depends(current)):
         with store.lock:
             rows=[dict(r) for r in store.db.execute('SELECT m.email,m.op,m.state,m.error,m.updated_at,c.owner FROM managed_clients m LEFT JOIN clients c ON c.id=m.email ORDER BY m.updated_at DESC LIMIT 250')]
+        runtime=engine.runtime_state()
+        if p.actor.role!='owner':
+            runtime={k:runtime.get(k) for k in ('state','running','dirty','desired_running')}
         return {'last_poll':manager.last_poll,'error':manager.last_error if p.actor.role=='owner' else ('CoreEngine synchronization unavailable' if manager.last_error else ''),
-                'writes_enabled':config.writes_enabled,'engine_version':engine.version,'runtime':engine.runtime_state(),
+                'writes_enabled':config.writes_enabled,'engine_version':engine.version,'runtime':runtime,
                 'items':[r for r in rows if p.actor.role=='owner' or p.actor.can('clients','read',r['owner'])]}
     @app.post('/api/sync')
     def force_sync(p:Principal=Depends(owner)):
