@@ -11,7 +11,8 @@ import argparse,base64,hashlib,http.cookiejar,http.server,json,os,socket,struct,
 from pathlib import Path
 from urllib.parse import urlsplit,parse_qs
 from urllib.request import Request,build_opener,HTTPCookieProcessor,ProxyHandler
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'backend'))
 from core import Config,CoreEngine
 from dark_policy import Store,Actor
 from auth import Auth
@@ -19,7 +20,8 @@ from manager import Manager
 from server import make_app
 import uvicorn
 
-MARKER=b'DARK-XRAY-REAL-E2E-v06\n'+b'x'*4096
+VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip() if (ROOT/'VERSION').is_file() else 'unknown'
+MARKER=(f'DARK-XRAY-REAL-E2E-{VERSION}\n').encode()+b'x'*4096
 
 class Target(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -56,7 +58,7 @@ def proxied_request(socks_port,target_port):
         return MARKER in data
 
 def run(binary:Path,report_path:Path):
-    report={'version':'0.6.0','real_xray_binary_executed':False,'live_proxy_connection_tested':False,
+    report={'version':VERSION,'real_xray_binary_executed':False,'live_proxy_connection_tested':False,
             'live_packet_firewall_tested':False,'checks':[],'passed':False,'error':None}
     if not binary.is_file() or not os.access(binary,os.X_OK):
         raise RuntimeError('Supply a verified real Xray binary using --binary')
@@ -157,5 +159,5 @@ if __name__=='__main__':
     try:
         result=run(a.binary,a.report);print(json.dumps(result,indent=2));raise SystemExit(0 if result['passed'] else 1)
     except Exception as ex:
-        result={'passed':False,'real_xray_binary_executed':False,'live_proxy_connection_tested':False,'error':str(ex)}
+        result={'version':VERSION,'passed':False,'real_xray_binary_executed':False,'live_proxy_connection_tested':False,'error':str(ex)}
         a.report.parent.mkdir(parents=True,exist_ok=True);a.report.write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2));raise SystemExit(1)
