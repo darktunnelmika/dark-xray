@@ -37,6 +37,16 @@ def test_bulk_create_adjust_and_inbounds(env):
  assert any(x["name"]=="ECO" for x in c.get("/api/groups").json())
  r=c.post("/api/clients/bulk-inbounds",json={"emails":emails,"inboundIds":[i],"mode":"detach"});assert r.status_code==200 and r.json()["changed"]==0
 
+def test_bulk_negative_days_preserves_no_expiry_semantics(env):
+ _,_,_,c=env;i=seed(c)
+ r=c.post("/api/clients",json={"owner":"dark","client":{"email":"no-expiry","totalGB":1073741824},"inboundIds":[i]});assert r.status_code==202
+ before=c.get("/api/clients/no-expiry").json();assert before["client"]["expiryTime"]==0
+ r=c.post("/api/clients/bulk-adjust",json={"emails":["no-expiry"],"add_days":-1});assert r.status_code==200
+ out=r.json();assert out["changed"]==0 and "no-expiry" in out["items"][0]["error"]
+ after=c.get("/api/clients/no-expiry").json();assert after["client"]["expiryTime"]==0
+ r=c.post("/api/clients/bulk-adjust",json={"emails":["no-expiry"],"add_days":1});assert r.status_code==200 and r.json()["changed"]==1
+ assert c.get("/api/clients/no-expiry").json()["client"]["expiryTime"]>0
+
 def test_groups_are_owner_scoped(env):
  store,eng,m,c=env;i=seed(c);assert c.put("/api/owners/arda",json={"name":"ARDA","allowed":[i]}).status_code==200
  assert c.post("/api/admins",json={"username":"arda","password":"AnotherTestOnly123","role":"reseller"}).status_code==200

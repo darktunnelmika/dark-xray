@@ -374,7 +374,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     if adjusted<=0:raise PolicyError('Bulk quota adjustment would become 0, but 0 means unlimited; choose a smaller reduction')
                     patch['totalGB']=min((1<<63)-1,adjusted)
                 if body.add_days:
-                    current=int(c.get('expiryTime',0));base=current if current>now_ms else now_ms
+                    current=int(c.get('expiryTime',0))
+                    if current==0 and body.add_days<0:
+                        raise PolicyError('A no-expiry client cannot be reduced with negative bulk days; set an explicit expiry or disable it instead')
+                    base=current if current>now_ms else now_ms
                     patch['expiryTime']=max(1000,base+body.add_days*86400000)
                 if body.group is not None:patch['group']=body.group
                 if body.limit_hwid is not None:patch['limitHwid']=body.limit_hwid
