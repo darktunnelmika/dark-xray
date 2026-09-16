@@ -36,3 +36,4 @@ python -m pytest tests/test_reality_scan.py -q --junitxml=qa/junit/reality.xml
 node --test tests/form-models.test.cjs
 node --test tests/inbounds-models.test.cjs
 node --test tests/clients-v2-filter.test.cjs
+node --test tests/ops-v2-cache.test.cjs
