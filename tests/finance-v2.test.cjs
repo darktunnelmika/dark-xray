@@ -41,8 +41,8 @@ test('traffic ledger uses observed_at instead of money at field',async()=>{
 test('lifetime summary uses authoritative owner total, not the visible ledger window',async()=>{
   const ctx=context();
   const html=await ctx.financePage();
-  assert.match(html,/1500B/);
-  assert.doesNotMatch(html,/>25B</);
+  assert.match(html,/Current-period traffic<\/small><b>25B<\/b>/);
+  assert.match(html,/Lifetime observed traffic<\/small><b>1500B<\/b>/);
 });
 
 test('finance owner filter scopes both ledgers and authoritative summaries',async()=>{
@@ -75,6 +75,6 @@ test('finance ledger without owners.read never renders unavailable profile total
   assert.match(html,/data-value="beta"/);
   assert.match(html,/credit-1/);
   assert.match(html,/traffic-2/);
-  // The two profile-only KPI values are unavailable rather than fabricated 0s.
+  // The profile-only KPI values are unavailable rather than fabricated 0s.
   assert.ok((html.match(/<b>—<\/b>/g)||[]).length>=3);
 });
