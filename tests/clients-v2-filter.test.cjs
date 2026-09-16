@@ -34,13 +34,17 @@ test('same group name from different resellers stays owner-scoped',()=>{
   assert.doesNotMatch(html,/beta-user/);
 });
 
-test('group click captures owner and incompatible owner filter clears group',async()=>{
+test('group click captures owner, clears hidden selection and incompatible owner clears group',async()=>{
   const ctx=context();
+  ctx.state.selected.add('hidden-user');
   await ctx.runAction('cv2filter',{dataset:{key:'group',value:'Shared',owner:'alpha'}});
   assert.equal(ctx.state.cv2.group,'Shared');
   assert.equal(ctx.state.cv2.groupOwner,'alpha');
+  assert.equal(ctx.state.selected.size,0);
+  ctx.state.selected.add('alpha-user');
   await ctx.runAction('cv2filter',{dataset:{key:'owner',value:'beta'}});
   assert.equal(ctx.state.cv2.owner,'beta');
   assert.equal(ctx.state.cv2.group,'all');
   assert.equal(ctx.state.cv2.groupOwner,'all');
+  assert.equal(ctx.state.selected.size,0);
 });
