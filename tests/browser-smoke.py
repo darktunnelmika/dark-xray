@@ -57,8 +57,9 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True,args=['--no-sandbox'])
             context=browser.new_context(viewport={'width':1440,'height':1000})
-            page=context.new_page();errors=[]
+            page=context.new_page();errors=[];inbound_responses=[]
             page.on('pageerror',lambda err:errors.append(str(err)))
+            page.on('response',lambda r:inbound_responses.append(r) if r.request.method=='POST' and r.url.rstrip('/').endswith('/api/inbounds') else None)
             page.goto(origin,wait_until='networkidle',timeout=20000)
             page.locator('#login-form [name=username]').fill('qa-owner')
             page.locator('#login-form [name=password]').fill('Temporary-QA-password-082')
@@ -80,9 +81,24 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             form=page.locator('#iv3-editor');form.wait_for(state='visible',timeout=10000)
             form.locator('[name=remark]').fill('DARK Browser QA / VLESS')
             form.locator('[name=port]').fill('19443')
-            with page.expect_response(lambda r:r.request.method=='POST' and r.url.rstrip('/').endswith('/api/inbounds'),timeout=10000) as response_info:
-                form.locator('button[type=submit]').click()
-            save_response=response_info.value
+            validity=form.evaluate("f=>({valid:f.checkValidity(),invalid:[...f.querySelectorAll(':invalid')].map(x=>({name:x.name,type:x.type,value:x.value,message:x.validationMessage}))})")
+            if not validity['valid']:raise RuntimeError('Inbound native form invalid: '+json.dumps(validity['invalid'],ensure_ascii=False))
+            try:
+                built=page.evaluate("()=>DarkInboundV3.buildBody(document.querySelector('#iv3-editor'),null)")
+            except Exception as ex:
+                raise RuntimeError('Inbound buildBody failed before submit: '+str(ex)) from ex
+            report['inbound_payload']={'protocol':built.get('protocol'),'port':built.get('port'),'network':built.get('streamSettings',{}).get('network'),'security':built.get('streamSettings',{}).get('security')}
+            before_errors=len(errors);before_responses=len(inbound_responses)
+            form.locator('button[type=submit]').click()
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline and form.count() and not inbound_responses[before_responses:]:
+                if len(errors)>before_errors:break
+                page.wait_for_timeout(100)
+            if len(errors)>before_errors:raise RuntimeError('Inbound submit JS error: '+errors[-1])
+            new_responses=inbound_responses[before_responses:]
+            if not new_responses:
+                raise RuntimeError('Inbound submit produced no POST; form_valid='+str(validity['valid'])+' payload='+json.dumps(report['inbound_payload']))
+            save_response=new_responses[-1]
             if not save_response.ok:
                 try:detail=save_response.text()
                 except Exception:detail='response body unavailable'
