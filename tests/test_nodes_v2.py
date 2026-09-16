@@ -40,34 +40,61 @@ def test_node_url_rejects_private_and_invalid_ports_and_normalizes_ipv6(env,monk
  assert nodes_mod.validate_origin('https://[2001:4860:4860::8888]:8443/')=='https://[2001:4860:4860::8888]:8443'
 
 
-def test_node_request_disables_redirects_environment_proxies_and_updates_state(env,monkeypatch):
+def test_node_request_pins_validated_address_and_preserves_tls_hostname(env,monkeypatch):
  _,_,app,c=env;token='dkn_'+('C'*60)
- r=c.post('/api/nodes',json={'id':'safe','name':'Safe','origin':'https://node.example.com','token':token,'enabled':True});assert r.status_code==200,r.text
- captured=[]
+ assert c.post('/api/nodes',json={'id':'safe','name':'Safe','origin':'https://node.example.com','token':token,'enabled':True}).status_code==200
+ dns_calls=[]
+ def resolve(*args,**kwargs):
+  dns_calls.append((args,kwargs))
+  if len(dns_calls)==1:return [(2,1,6,'',('93.184.216.34',443))]
+  return [(2,1,6,'',('127.0.0.1',443))]
+ monkeypatch.setattr(nodes_mod.socket,'getaddrinfo',resolve)
+ captured={}
  class Response:
   status=200
   def read(self,limit):return b'{"service":"DARK XRAY NODE"}'
-  def __enter__(self):return self
-  def __exit__(self,*args):return False
- class Opener:
-  def open(self,req,timeout=8.0):return Response()
- def build(*handlers):captured.extend(handlers);return Opener()
- monkeypatch.setattr(nodes_mod.urllib.request,'build_opener',build)
+ class Connection:
+  def __init__(self,host,port,pinned_ip,**kw):captured.update(host=host,port=port,pinned_ip=pinned_ip,context=kw.get('context'))
+  def request(self,method,path,body=None,headers=None):captured.update(method=method,path=path,headers=headers)
+  def getresponse(self):return Response()
+  def close(self):pass
+ monkeypatch.setattr(nodes_mod,'_PinnedHTTPSConnection',Connection)
  doc,_=app.state.nodes._request('safe','/node/api/health')
  assert doc['service']=='DARK XRAY NODE'
+ assert len(dns_calls)==1
+ assert captured['host']=='node.example.com' and captured['pinned_ip']=='93.184.216.34' and captured['port']==443
+ assert captured['path']=='/node/api/health' and captured['headers']['Authorization']=='Bearer '+token
+ assert captured['context'].check_hostname is True and captured['context'].verify_mode!=nodes_mod.ssl.CERT_NONE
  node=app.state.nodes.list()[0];assert node['online'] is True and node['last_latency_ms']>=1 and node['last_error']==''
- assert any(isinstance(h,nodes_mod._NoRedirect) for h in captured)
- proxies=[h for h in captured if isinstance(h,nodes_mod.urllib.request.ProxyHandler)]
- assert len(proxies)==1 and proxies[0].proxies=={}
- assert nodes_mod._NoRedirect().redirect_request(None,None,302,'Found',{},'https://127.0.0.1/') is None
+
+
+def test_node_redirect_is_rejected_without_followup_connection(env,monkeypatch):
+ _,_,app,c=env;token='dkn_'+('R'*60)
+ assert c.post('/api/nodes',json={'id':'redirect','name':'Redirect','origin':'https://node.example.com','token':token,'enabled':True}).status_code==200
+ opened=[]
+ class Response:
+  status=302
+  def read(self,limit):return b''
+ class Connection:
+  def __init__(self,*a,**k):opened.append(a)
+  def request(self,*a,**k):pass
+  def getresponse(self):return Response()
+  def close(self):pass
+ monkeypatch.setattr(nodes_mod,'_PinnedHTTPSConnection',Connection)
+ with pytest.raises(PolicyError,match='Node HTTP 302'):
+  app.state.nodes._request('redirect','/node/api/health')
+ assert len(opened)==1
+ node=app.state.nodes.list()[0];assert node['online'] is False and 'Node HTTP 302' in node['last_error']
 
 
 def test_failed_remote_request_is_persisted_and_marks_node_offline(env,monkeypatch):
  _,_,app,c=env;token='dkn_'+('D'*60)
  assert c.post('/api/nodes',json={'id':'fail','name':'Fail','origin':'https://node.example.com','token':token,'enabled':True}).status_code==200
- class Opener:
-  def open(self,*a,**k):raise nodes_mod.urllib.error.URLError('boom')
- monkeypatch.setattr(nodes_mod.urllib.request,'build_opener',lambda *a:Opener())
+ class Connection:
+  def __init__(self,*a,**k):pass
+  def request(self,*a,**k):raise OSError('boom')
+  def close(self):pass
+ monkeypatch.setattr(nodes_mod,'_PinnedHTTPSConnection',Connection)
  with pytest.raises(PolicyError,match='Node connection failed'):
   app.state.nodes._request('fail','/node/api/health')
  node=app.state.nodes.list()[0];assert node['online'] is False and 'Node connection failed' in node['last_error']
