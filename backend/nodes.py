@@ -31,8 +31,9 @@ def resolve_origin(raw:str)->tuple[str,str,int,tuple[str,...]]:
     except ValueError as ex:raise PolicyError('Invalid node URL') from ex
     if p.scheme!='https' or not p.hostname or p.username or p.password or p.query or p.fragment or p.path not in ('','/'):
         raise PolicyError('Node URL must be an HTTPS origin without credentials/path/query')
-    try:port=p.port or 443
+    try:parsed_port=p.port
     except ValueError as ex:raise PolicyError('Invalid node URL port') from ex
+    port=443 if parsed_port is None else parsed_port
     if not 1<=port<=65535:raise PolicyError('Invalid node URL port')
     host=p.hostname
     try:
