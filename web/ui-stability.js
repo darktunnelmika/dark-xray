@@ -1,7 +1,7 @@
 /* DARK XRAY UI Stability — preserve operator context across live refreshes. */
 (function(){
 'use strict';
-if(typeof refresh!=='function'||typeof renderPage!=='function')return;
+if(typeof refresh!=='function'||typeof renderPage!=='function'||typeof load!=='function')return;
 const baseRefresh=refresh,baseRenderPage=renderPage;
 const editable=el=>!!el&&el instanceof Element&&!!el.closest('input,textarea,select,[contenteditable="true"]');
 const keyFor=el=>{
@@ -46,9 +46,14 @@ renderPage=async function(){
 };
 refresh=async function(){
  const content=document.getElementById('content');
- // Timer refreshes should never destroy an actively edited control. Manual
- // refresh from the top bar moves focus to its button first and still proceeds.
- if(content&&content.contains(document.activeElement)&&editable(document.activeElement))return;
+ // Keep network state fresh while an operator is typing, but do not replace the
+ // focused DOM subtree. The next safe/manual render consumes the fresh state.
+ if(content&&content.contains(document.activeElement)&&editable(document.activeElement)){
+  if(state?.busy)return;
+  state.busy=true;
+  try{await load();}finally{state.busy=false;}
+  return;
+ }
  return baseRefresh();
 };
 })();
