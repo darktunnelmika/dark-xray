@@ -2,7 +2,8 @@
 (function(){
 'use strict';
 if(typeof refresh!=='function'||typeof renderPage!=='function'||typeof load!=='function')return;
-const baseRefresh=refresh,baseRenderPage=renderPage;
+const baseRefresh=refresh,baseRenderPage=renderPage,baseRunAction=typeof runAction==='function'?runAction:null;
+let renderedPage=state?.page||'',forceRefresh=false;
 const editable=el=>!!el&&el instanceof Element&&!!el.closest('input,textarea,select,[contenteditable="true"]');
 const keyFor=el=>{
  if(!el||!(el instanceof Element))return null;
@@ -34,21 +35,24 @@ function restore(snap){
  requestAnimationFrame(()=>window.scrollTo({left:snap.x,top:snap.y,behavior:'auto'}));
 }
 renderPage=async function(){
- const snap=capture();
+ const page=state?.page||'',samePage=page===renderedPage,snap=capture();
  const content=document.getElementById('content');
  if(content)content.setAttribute('aria-busy','true');
  try{return await baseRenderPage();}
  finally{
   const next=document.getElementById('content');
   if(next)next.removeAttribute('aria-busy');
-  restore(snap);
+  const stillSame=state?.page===page;
+  if(samePage&&stillSame)restore(snap);
+  else requestAnimationFrame(()=>window.scrollTo({left:0,top:0,behavior:'auto'}));
+  renderedPage=state?.page||page;
  }
 };
 refresh=async function(){
  const content=document.getElementById('content');
- // Keep network state fresh while an operator is typing, but do not replace the
- // focused DOM subtree. The next safe/manual render consumes the fresh state.
- if(content&&content.contains(document.activeElement)&&editable(document.activeElement)){
+ // Timer refreshes keep network state fresh while an operator is typing, but do
+ // not replace the focused DOM subtree. An explicit top-bar refresh is forced.
+ if(!forceRefresh&&content&&content.contains(document.activeElement)&&editable(document.activeElement)){
   if(state?.busy)return;
   state.busy=true;
   try{await load();}finally{state.busy=false;}
@@ -56,4 +60,12 @@ refresh=async function(){
  }
  return baseRefresh();
 };
+if(baseRunAction){
+ runAction=async function(act,el){
+  if(act!=='refresh')return baseRunAction(act,el);
+  forceRefresh=true;
+  try{return await baseRunAction(act,el);}
+  finally{forceRefresh=false;}
+ };
+}
 })();
