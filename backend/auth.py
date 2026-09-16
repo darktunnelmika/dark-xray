@@ -132,6 +132,9 @@ class Auth:
                     grant='all' if admin.role=='owner' else admin.permissions.get(key,'none')
                     if grant=='none':continue
                     effective[key]='own' if 'own' in (grant,val) else 'all'
+                # Key lifecycle is always interactive. Strip api.manage even from
+                # legacy keys that were created before this boundary existed.
+                effective.pop('api.manage',None)
                 # A robot key is NEVER an owner bypass; explicit permissions apply.
                 return Principal(Actor(admin.id,'token',effective),key_id=r['id'])
             if not cookie or len(cookie)>256:raise PermissionDenied('Authentication required')
@@ -216,6 +219,8 @@ class Auth:
         if p.key_id:raise PermissionDenied('Robot keys cannot mint other keys')
         if not 1<=days<=365 or not 1<=len(name)<=128:raise PolicyError('Invalid key metadata')
         if any(k not in PERMISSIONS or v not in ('none','own','all') for k,v in permissions.items()):raise PolicyError('Invalid key permissions')
+        if permissions.get('api.manage') not in (None,'none'):
+            raise PolicyError('Robot keys cannot receive api.manage; key lifecycle requires an interactive session')
         for k,v in permissions.items():
             grant='all' if p.actor.role=='owner' else p.actor.permissions.get(k,'none')
             if v!='none' and (grant=='none' or grant=='own' and v=='all'):raise PermissionDenied('A key cannot exceed its administrator permissions')
