@@ -1,13 +1,32 @@
 /* DARK XRAY Operations V2 — real dashboard, runtime logs and safe backup surface. */
 (function(){
 'use strict';
-if(typeof dashboard!=='function'||typeof load!=='function'||typeof enginePage!=='function'||typeof navItems!=='function'||typeof runAction!=='function')return;
-const baseLoad=load,baseEnginePage=enginePage,baseNavItems=navItems,baseRunAction=runAction;
+if(typeof dashboard!=='function'||typeof load!=='function'||typeof enginePage!=='function'||typeof navItems!=='function'||typeof runAction!=='function'||typeof go!=='function')return;
+const baseLoad=load,baseEnginePage=enginePage,baseNavItems=navItems,baseRunAction=runAction,baseGo=go;
 state.ov2={audit:[],ip:null,core:null,logKind:'process'};
 enginePages.logs=['Logs'];enginePages.backup=['Backup'];
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 navItems=function(){let n=baseNavItems();if(isOwner()){let at=n.findIndex(x=>x[0]==='sync');let extras=[['logs','Logs','terminal'],['backup','Backup','download']];if(at<0)n.push(...extras);else n.splice(at,0,...extras);}return n;};
-load=async function(){await baseLoad();if(!state.me)return;try{state.ov2.core=await api('/api/core/state');}catch{state.ov2.core=null;}if(can('audit.read')){try{state.ov2.audit=await api('/api/audit');}catch{state.ov2.audit=[];}}if(can('clients.ip')){try{state.ov2.ip=await api('/api/ip/events');}catch{state.ov2.ip=null;}}};
+load=async function(){
+ await baseLoad();
+ if(!state.me){state.ov2.audit=[];state.ov2.ip=null;state.ov2.core=null;return;}
+ // Never retain privileged data in the in-memory dashboard cache after an
+ // account/permission change. This matters on shared browsers after logout/login.
+ if(!isOwner())state.ov2.core=null;
+ if(!can('audit.read'))state.ov2.audit=[];
+ if(!can('clients.ip'))state.ov2.ip=null;
+ // Audit/IP payloads can be large. Fetch them only while the operations dashboard
+ // is visible instead of adding three extra requests to every 12-second refresh.
+ if(state.page!=='dashboard')return;
+ let jobs=[];
+ if(isOwner())jobs.push((async()=>{try{state.ov2.core=await api('/api/core/state');}catch{state.ov2.core=null;}})());
+ if(can('audit.read'))jobs.push((async()=>{try{state.ov2.audit=await api('/api/audit');}catch{state.ov2.audit=[];}})());
+ if(can('clients.ip'))jobs.push((async()=>{try{state.ov2.ip=await api('/api/ip/events');}catch{state.ov2.ip=null;}})());
+ await Promise.all(jobs);
+};
+// `go()` renders immediately without loading. Refresh once when entering the
+// dashboard so heavy operational data is fresh instead of waiting for the timer.
+go=async function(page){await baseGo(page);if(page==='dashboard'&&state.me)await refresh();};
 function kpi(label,value,sub=''){return `<div class="ov2-kpi"><small>${e(label)}</small><b>${e(value)}</b>${sub?`<span class="cv2-muted">${e(sub)}</span>`:''}</div>`;}
 function eventFeed(){let rows=(state.ov2.audit||[]).slice(0,8);return rows.length?`<div class="ov2-feed">${rows.map(r=>`<div class="ov2-event"><time>${date(r.at)}</time><span>${e(r.actor)}</span><b>${e(r.action)} · ${e(r.target)}</b></div>`).join('')}</div>`:empty(L('No recent audit events.','رویداد اخیر وجود ندارد.'));}
 dashboard=function(){let n=state.system?.engine||{},core=state.ov2.core||state.sync?.runtime||{},clients=state.clients||[],active=clients.filter(x=>x.client?.enable!==false&&!x.block_reasons?.length).length,blocked=clients.filter(x=>x.block_reasons?.length).length,total=clients.reduce((a,x)=>a+Number(x.used_bytes||0),0),bans=state.ov2.ip?.bans?.length||0;return heading(L('Operations overview','نمای کلی عملیات'),L('Only live DARK/Xray data; missing sources stay visibly missing.','فقط داده واقعی DARK/Xray؛ منبع ناموجود با داده ساختگی پر نمی‌شود.'),isOwner()?button(L('Reconcile now','همگام‌سازی'),'syncnow','refresh'):'')+notices()+`<div class="ov2"><div class="ov2-grid">${kpi('CPU',n.cpu===undefined?'—':Number(n.cpu).toFixed(1)+'%','LOCAL HOST')}${kpi('RAM',percent(n.mem),`${bytes(n.mem?.current)} / ${bytes(n.mem?.total)}`)}${kpi(L('Active clients','کاربران فعال'),fa(active),`${clients.length} total`)}${kpi(L('Observed traffic','مصرف ثبت‌شده'),bytes(total),`${blocked} blocked`)}</div><div class="ov2-grid">${kpi('Xray',core.state||'—',core.version||'')}${kpi(L('Config state','وضعیت کانفیگ'),core.dirty?L('Pending apply','در انتظار اعمال'):L('Applied','اعمال‌شده'))}${kpi('IP Guard',state.ov2.ip?`${bans} ${L('active bans','بن فعال')}`:'—')}${kpi(L('Last reconcile','آخرین همگام‌سازی'),state.sync?.last_poll?date(state.sync.last_poll):'—')}</div><div class="ov2-hero"><article class="panel"><div class="panel-head"><h2>${L('Recent admin activity','آخرین عملیات ادمین')}</h2>${button(L('Audit','گزارش'),'all-audit','log')}</div><div class="panel-body">${eventFeed()}</div></article><article class="panel"><div class="panel-head"><h2>${L('Runtime health','سلامت Runtime')}</h2></div><div class="panel-body"><div class="ov2-health ${core.last_error?'warn':''}"><i></i><b>${core.last_error?L('Needs attention','نیاز به بررسی'):L('No runtime error','بدون خطای Runtime')}</b></div>${core.last_error?`<div class="notice error" style="margin-top:12px">${e(core.last_error)}</div>`:''}<div class="xv2-kv" style="margin-top:12px"><div><span>PID</span><b>${e(core.pid||'—')}</b></div><div><span>${L('Statistics','آمار')}</span><b>${e(core.statistics_error||L('OK','سالم'))}</b></div><div><span>${L('Uptime','آپ‌تایم')}</span><b>${n.uptime===undefined?'—':Math.floor(n.uptime/3600)+' h'}</b></div></div></div></article></div><div class="ov2-grid">${kpi(L('Inbounds','اینباندها'),fa(state.inbounds.length))}${kpi(L('Owners / resellers','مالک / نماینده'),fa(state.owners.length))}${kpi(L('Blocked clients','کاربران محدود'),fa(blocked))}${kpi(L('Network RX/s','دریافت شبکه'),bytes(n.netIO?.down))}</div></div>`;};
