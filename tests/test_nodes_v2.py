@@ -33,6 +33,27 @@ def test_node_url_rejects_private_resolution(env,monkeypatch):
  r=c.post('/api/nodes',json={'id':'bad','name':'Bad','origin':'https://bad.example','token':'dkn_'+('B'*60),'enabled':True});assert r.status_code==400
 
 
+def test_node_request_disables_redirects_and_environment_proxies(env,monkeypatch):
+ _,_,app,c=env;token='dkn_'+('C'*60)
+ r=c.post('/api/nodes',json={'id':'safe','name':'Safe','origin':'https://node.example.com','token':token,'enabled':True});assert r.status_code==200,r.text
+ captured=[]
+ class Response:
+  status=200
+  def read(self,limit):return b'{"service":"DARK XRAY NODE"}'
+  def __enter__(self):return self
+  def __exit__(self,*args):return False
+ class Opener:
+  def open(self,req,timeout=8.0):return Response()
+ def build(*handlers):captured.extend(handlers);return Opener()
+ monkeypatch.setattr(nodes_mod.urllib.request,'build_opener',build)
+ doc,_=app.state.nodes._request('safe','/node/api/health')
+ assert doc['service']=='DARK XRAY NODE'
+ assert any(isinstance(h,nodes_mod._NoRedirect) for h in captured)
+ proxies=[h for h in captured if isinstance(h,nodes_mod.urllib.request.ProxyHandler)]
+ assert len(proxies)==1 and proxies[0].proxies=={}
+ assert nodes_mod._NoRedirect().redirect_request(None,None,302,'Found',{},'https://127.0.0.1/') is None
+
+
 def test_agent_can_stage_inbound_without_copying_clients(env):
  store,eng,_,c=env;r=c.post('/api/node-agent/tokens',json={'name':'central-stage','days':10});token=r.json()['token']
  ib={"remark":"REMOTE","listen":"127.0.0.1","port":19831,"protocol":"vless","enable":True,"tag":"remote-stage","settings":{"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"},"sniffing":{}}
