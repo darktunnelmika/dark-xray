@@ -187,14 +187,17 @@ class NodeRegistry:
         if not node['enabled']:raise PolicyError('Node is disabled')
         if not isinstance(path,str) or not path.startswith('/node/api/') or any(ch in path for ch in '\r\n?#'):
             raise PolicyError('Invalid node API path')
+        if not .2<=timeout<=30:raise PolicyError('Invalid node timeout')
         _origin,host,port,addresses=resolve_origin(node['origin'])
         data=None if body is None else json.dumps(body,separators=(',',':')).encode()
         if data is not None and len(data)>2*1024*1024:raise PolicyError('Node request exceeds 2 MiB limit')
         headers={'Accept':'application/json','Authorization':'Bearer '+node['token']}
         if data is not None:headers['Content-Type']='application/json'
-        context=ssl.create_default_context();last_error=None;start=time.monotonic()
+        context=ssl.create_default_context();last_error=None;start=time.monotonic();deadline=start+timeout
         for address in addresses:
-            conn=_PinnedHTTPSConnection(host,port,address,timeout=timeout,context=context)
+            remaining=deadline-time.monotonic()
+            if remaining<=0:break
+            conn=_PinnedHTTPSConnection(host,port,address,timeout=max(.2,remaining),context=context)
             try:
                 conn.request(method,path,body=data,headers=headers)
                 res=conn.getresponse();raw=res.read(1024*1024+1)
@@ -212,7 +215,7 @@ class NodeRegistry:
             finally:
                 try:conn.close()
                 except Exception:pass
-        err=PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'No validated address'))
+        err=PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'Timeout'))
         self._request_failed(node_id,str(err));raise err from last_error
 
     def probe(self,node_id:str,*,timeout:float=8.0)->dict:
