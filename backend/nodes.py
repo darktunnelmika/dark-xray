@@ -43,6 +43,12 @@ def validate_origin(raw:str)->str:
     return f'https://{host}' + (f':{port}' if port and port!=443 else '')
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow remote-node redirects; every target must pass validate_origin."""
+    def redirect_request(self,req,fp,code,msg,headers,newurl):
+        return None
+
+
 class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
@@ -116,8 +122,15 @@ class NodeRegistry:
             'Accept':'application/json','Authorization':'Bearer '+node['token'],
             **({'Content-Type':'application/json'} if data is not None else {})})
         start=time.monotonic()
+        # Do not inherit HTTP(S)_PROXY from the service environment and never
+        # follow redirects. Either behavior can bypass the validated node origin.
+        opener=urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirect(),
+            urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+        )
         try:
-            with urllib.request.urlopen(req,timeout=timeout,context=ssl.create_default_context()) as res:
+            with opener.open(req,timeout=timeout) as res:
                 raw=res.read(1024*1024)
                 if res.status<200 or res.status>=300:raise PolicyError('Node returned HTTP '+str(res.status))
         except urllib.error.HTTPError as ex:
