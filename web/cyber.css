@@ -1,4 +1,4 @@
-/* DARK XRAY v0.6 — cyber visual layer. Loaded last; no business logic lives here. */
+/* DARK XRAY v0.8.2 — cyber visual layer. Loaded last; no business logic lives here. */
 :root{
   --dx-bg:#020406;
   --dx-bg2:#050a0f;
@@ -184,7 +184,7 @@ table td{border-color:rgba(255,255,255,.045)!important}
 .boot .brand-mark{animation:dx-pulse 1.8s ease-in-out infinite}
 
 .cyber-lang-switch{
-  position:fixed;right:14px;bottom:14px;z-index:10020;
+  position:fixed;right:14px;bottom:14px;z-index:90;
   border:1px solid rgba(53,255,174,.26);background:rgba(2,8,11,.88);color:#9fffd6;
   font:10px var(--mono);letter-spacing:.08em;border-radius:7px;padding:8px 11px;backdrop-filter:blur(10px);
   box-shadow:0 0 24px rgba(53,255,174,.07)
