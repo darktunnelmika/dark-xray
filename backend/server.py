@@ -166,10 +166,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 return RedirectResponse(target,status_code=307)
             if not raw_path.startswith(panel_path+'/'):
                 return JSONResponse({'detail':'Not Found'},404)
-            # Rewrite only the routing path. Setting root_path here makes Starlette
-            # StaticFiles apply the prefix a second time and turns valid prefixed
-            # assets into 404 responses. Browser/API URL generation is handled by
-            # the explicit panel base in the frontend.
             request.scope['path']=raw_path[len(panel_path):] or '/'
         if request.headers.get('host','').lower()!=public.netloc.lower():
             return JSONResponse({'detail':'Unexpected Host'},400)
@@ -315,9 +311,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.owner_put(p.actor,owner_id,**body.model_dump())
         return {'saved':True,'engine_error':manager.last_error or None}
     @app.post('/api/owners/{owner_id}/credit')
-    def credit(owner_id:str,body:Credit,p:Principal=Depends(current)):
+    def credit(owner_id:str,body:Credit,p:Principal=Depends(owner)):
         result=store.credit(p.actor,owner_id,body.amount,body.event_id)
-        manager.audit(p.actor,owner_id,'finance.credit',owner_id,str(body.amount))
+        if result:
+            manager.audit(p.actor,owner_id,'finance.credit',owner_id,f'amount={body.amount}; event={body.event_id}')
         return {'recorded':result}
     @app.post('/api/owners/{owner_id}/reset-period')
     def reset_period(owner_id:str,p:Principal=Depends(owner)):
@@ -377,8 +374,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     patch['totalGB']=min((1<<63)-1,adjusted)
                 if body.add_days:
                     current=int(c.get('expiryTime',0));base=current if current>now_ms else now_ms
-                    # expiryTime=0 means NO EXPIRY. A negative bulk adjustment must
-                    # never accidentally turn an expiring client into unlimited.
                     patch['expiryTime']=max(1000,base+body.add_days*86400000)
                 if body.group is not None:patch['group']=body.group
                 if body.limit_hwid is not None:patch['limitHwid']=body.limit_hwid
@@ -487,8 +482,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/node/api/inbounds')
     def node_inbound_add(body:dict,token_id:str=Depends(node_agent)):
         writable()
-        # Agent tokens can provision validated data-plane inbounds, but they do not
-        # mutate reseller ownership/client records. Core apply remains a separate action.
         result=engine.save_inbound(body)
         return result
     @app.post('/node/api/core/{action}')
@@ -595,7 +588,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not path.exists():return {'kind':kind,'exists':False,'lines':[]}
         try:
             size=path.stat().st_size
-            # Read at most the newest 2 MiB; logs are operational surfaces, not bulk download endpoints.
             with path.open('rb') as f:
                 if size>2*1024*1024:f.seek(size-2*1024*1024)
                 raw=f.read(2*1024*1024)
@@ -718,7 +710,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'privateKey':base64.urlsafe_b64encode(key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())).decode().rstrip('='),
             'publicKey':base64.urlsafe_b64encode(key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode().rstrip('='),
             'shortId':secrets.token_hex(8)}
-
 
     @app.post('/api/reality/scan')
     def reality_scan(body:RealityProbe,p:Principal=Depends(owner)):
