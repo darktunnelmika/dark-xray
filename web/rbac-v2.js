@@ -8,14 +8,19 @@ const RPERMS={
  readonly:['clients.read','owners.read','finance.read','ip.read','system.read','audit.read','inbounds.read'],
  owner:[]
 };
+const RDEFAULTS={
+ reseller:{'clients.read':'own','clients.create':'own','clients.edit':'own','clients.delete':'own','clients.reset':'own','clients.credentials':'own','clients.ip':'own','clients.attach':'own','owners.read':'own','finance.read':'own','ip.read':'own','audit.read':'own','api.manage':'own','inbounds.read':'own'},
+ readonly:{'clients.read':'all','owners.read':'all','inbounds.read':'all','system.read':'all','audit.read':'all'},
+ owner:{}
+};
 const ORDER=['clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach','owners.read','finance.read','ip.read','system.read','audit.read','api.manage','inbounds.read'];
 const SCOPE={none:'بدون دسترسی',own:'فقط خود',all:'همه'};
 
-function permissionGrid(role,permissions={}){
- const allowed=new Set(RPERMS[role]||[]);
+function permissionGrid(role,permissions=null){
+ const allowed=new Set(RPERMS[role]||[]),source=permissions===null?(RDEFAULTS[role]||{}):permissions;
  if(role==='owner')return '<div class="notice warning">مالک اصلی به همه بخش‌های مدیریتی دسترسی دارد؛ Credit/Refund و تنظیمات سیستمی قابل واگذاری نیستند.</div>';
  return `<div class="notice">سقف نقش روی سرور enforce می‌شود. گزینه‌های خاکستری عمداً قابل اعطا نیستند؛ Credit/Refund همیشه Owner-only است.</div><div class="permission-grid">${ORDER.map(k=>{
-   const ok=allowed.has(k),value=ok?(permissions[k]||'none'):'none';
+   const ok=allowed.has(k),value=ok?(source[k]||'none'):'none';
    return `<label class="${ok?'':'muted'}">${e(k)}${ok?'':' · locked'}</label><select name="perm:${e(k)}" ${ok?'':'disabled'}>${['none','own','all'].map(v=>`<option value="${v}" ${v===value?'selected':''}>${SCOPE[v]}</option>`).join('')}</select>`;
  }).join('')}</div>`;
 }
@@ -32,7 +37,7 @@ adminForm=async function(id=null){
    ${id?field('نقش','role',role,'text','readonly'):select('نقش پایه','role',[['reseller','نماینده'],['readonly','مشاهده‌گر'],['owner','مالک اصلی']],role)}
    ${id?select('وضعیت حساب','disabled',[['false','فعال'],['true','غیرفعال']],String(!!a.disabled)):''}
    <div class="span-2 notice">نماینده به Owner Profile همنام نیاز دارد. Scope «همه» فقط برای نقش نماینده و با تصمیم مالک می‌تواند دسترسی بین نماینده‌ها بدهد.</div>
-   <div class="span-2" id="rbac-permissions">${permissionGrid(role,a?.permissions||{})}</div>
+   <div class="span-2" id="rbac-permissions">${permissionGrid(role,id?(a?.permissions||{}):null)}</div>
  </div>`,async f=>{
    const selectedRole=id?role:f.get('role');
    if(id){
@@ -47,7 +52,7 @@ adminForm=async function(id=null){
  });
  if(!id){
    const roleSelect=document.querySelector('#dialog-form select[name="role"]');
-   roleSelect?.addEventListener('change',()=>{const box=document.querySelector('#rbac-permissions');if(box)box.innerHTML=permissionGrid(roleSelect.value,{});});
+   roleSelect?.addEventListener('change',()=>{const box=document.querySelector('#rbac-permissions');if(box)box.innerHTML=permissionGrid(roleSelect.value,null);});
  }
 };
 })();
