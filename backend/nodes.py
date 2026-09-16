@@ -1,20 +1,20 @@
 """DARK XRAY remote node registry.
 
 Central node credentials are encrypted at rest with the existing DARK Fernet key.
-Remote node requests require HTTPS and resolve only to globally routable addresses
-so a panel operator cannot accidentally turn the node feature into a private-network
-SSRF primitive. Remote agents authenticate dedicated dkn_ tokens, never owner sessions.
+Remote node requests require HTTPS and resolve only to globally routable addresses.
+Connections are pinned to the exact address set that passed validation while TLS
+still verifies the original hostname, closing redirect/proxy/DNS-rebinding SSRF paths.
+Remote agents authenticate dedicated dkn_ tokens, never owner sessions.
 """
 from __future__ import annotations
 import hashlib
+import http.client
 import ipaddress
 import json
 import socket
 import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 from dark_policy import PolicyError, NAME_RE, Store
@@ -24,33 +24,54 @@ def token_digest(value:str)->str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def validate_origin(raw:str)->str:
+def resolve_origin(raw:str)->tuple[str,str,int,tuple[str,...]]:
     if not isinstance(raw,str) or len(raw)>500:raise PolicyError('Invalid node URL')
     try:p=urllib.parse.urlsplit(raw.strip())
     except ValueError as ex:raise PolicyError('Invalid node URL') from ex
     if p.scheme!='https' or not p.hostname or p.username or p.password or p.query or p.fragment or p.path not in ('','/'):
         raise PolicyError('Node URL must be an HTTPS origin without credentials/path/query')
-    try:port=p.port
+    try:port=p.port or 443
     except ValueError as ex:raise PolicyError('Invalid node URL port') from ex
-    if port is not None and not 1<=port<=65535:raise PolicyError('Invalid node URL port')
+    if not 1<=port<=65535:raise PolicyError('Invalid node URL port')
     host=p.hostname
     try:
-        infos=socket.getaddrinfo(host,port or 443,type=socket.SOCK_STREAM)
+        literal=ipaddress.ip_address(host)
+        host=literal.compressed
+    except ValueError:
+        try:host=host.encode('idna').decode('ascii').lower()
+        except UnicodeError as ex:raise PolicyError('Invalid node hostname') from ex
+    try:infos=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
     except OSError as ex:raise PolicyError('Node hostname does not resolve') from ex
-    addresses={x[4][0].split('%')[0] for x in infos}
-    if not addresses:raise PolicyError('Node hostname has no usable address')
-    for raw_ip in addresses:
+    addresses=[]
+    for info in infos:
+        raw_ip=info[4][0].split('%')[0]
         try:ip=ipaddress.ip_address(raw_ip)
         except ValueError:raise PolicyError('Node DNS returned an invalid address')
         if not ip.is_global:raise PolicyError('Node must resolve only to globally routable addresses')
+        canonical=ip.compressed
+        if canonical not in addresses:addresses.append(canonical)
+    if not addresses:raise PolicyError('Node hostname has no usable address')
     rendered='['+host+']' if ':' in host else host
-    return f'https://{rendered}' + (f':{port}' if port and port!=443 else '')
+    origin=f'https://{rendered}' + (f':{port}' if port!=443 else '')
+    return origin,host,port,tuple(addresses)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow remote-node redirects; every target must pass validate_origin."""
-    def redirect_request(self,req,fp,code,msg,headers,newurl):
-        return None
+def validate_origin(raw:str)->str:
+    return resolve_origin(raw)[0]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that never resolves the hostname after policy validation."""
+    def __init__(self,host:str,port:int,pinned_ip:str,*,timeout:float,context:ssl.SSLContext):
+        super().__init__(host,port=port,timeout=timeout,context=context)
+        self.pinned_ip=pinned_ip
+
+    def connect(self):
+        self.sock=socket.create_connection((self.pinned_ip,self.port),self.timeout,self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+        server_hostname=self._tunnel_host or self.host
+        self.sock=self._context.wrap_socket(self.sock,server_hostname=server_hostname)
 
 
 class NodeRegistry:
@@ -138,41 +159,47 @@ class NodeRegistry:
         with self.store.transaction() as db:
             db.execute('UPDATE remote_nodes SET last_error=?,updated_at=? WHERE id=?',(str(error)[:300],now,node_id))
 
+    @staticmethod
+    def _response_error(status:int,raw:bytes)->PolicyError:
+        detail=''
+        try:
+            parsed=json.loads(raw[:65536].decode())
+            if isinstance(parsed,dict):detail=str(parsed.get('detail',''))[:200]
+        except Exception:pass
+        return PolicyError(f'Node HTTP {status}'+(': '+detail if detail else ''))
+
     def _request(self,node_id:str,path:str,method:str='GET',body:dict|None=None,timeout:float=8.0)->tuple[dict,int]:
         node=self.get(node_id,secret=True)
         if not node['enabled']:raise PolicyError('Node is disabled')
-        origin=validate_origin(node['origin'])
-        data=None if body is None else json.dumps(body).encode()
-        req=urllib.request.Request(origin+path,data=data,method=method,headers={
-            'Accept':'application/json','Authorization':'Bearer '+node['token'],
-            **({'Content-Type':'application/json'} if data is not None else {})})
-        start=time.monotonic()
-        opener=urllib.request.build_opener(
-            urllib.request.ProxyHandler({}),
-            _NoRedirect(),
-            urllib.request.HTTPSHandler(context=ssl.create_default_context()),
-        )
-        try:
-            with opener.open(req,timeout=timeout) as res:
-                raw=res.read(1024*1024+1)
+        if not isinstance(path,str) or not path.startswith('/node/api/') or any(ch in path for ch in '\r\n?#'):
+            raise PolicyError('Invalid node API path')
+        origin,host,port,addresses=resolve_origin(node['origin'])
+        data=None if body is None else json.dumps(body,separators=(',',':')).encode()
+        if data is not None and len(data)>2*1024*1024:raise PolicyError('Node request exceeds 2 MiB limit')
+        headers={'Accept':'application/json','Authorization':'Bearer '+node['token']}
+        if data is not None:headers['Content-Type']='application/json'
+        context=ssl.create_default_context();last_error=None;start=time.monotonic()
+        for address in addresses:
+            conn=_PinnedHTTPSConnection(host,port,address,timeout=timeout,context=context)
+            try:
+                conn.request(method,path,body=data,headers=headers)
+                res=conn.getresponse();raw=res.read(1024*1024+1)
                 if len(raw)>1024*1024:raise PolicyError('Node response exceeds 1 MiB limit')
-                if res.status<200 or res.status>=300:raise PolicyError('Node returned HTTP '+str(res.status))
-        except urllib.error.HTTPError as ex:
-            try:detail=json.loads(ex.read(65536).decode()).get('detail','')
-            except Exception:detail=''
-            err=PolicyError(f'Node HTTP {ex.code}'+(': '+str(detail)[:200] if detail else ''));self._request_failed(node_id,str(err));raise err from ex
-        except PolicyError as ex:
-            self._request_failed(node_id,str(ex));raise
-        except (urllib.error.URLError,TimeoutError,OSError) as ex:
-            err=PolicyError('Node connection failed: '+type(ex).__name__);self._request_failed(node_id,str(err));raise err from ex
-        elapsed=max(1,int((time.monotonic()-start)*1000))
-        try:doc=json.loads(raw.decode())
-        except Exception as ex:
-            err=PolicyError('Node returned invalid JSON');self._request_failed(node_id,str(err));raise err from ex
-        if not isinstance(doc,dict) and not isinstance(doc,list):
-            err=PolicyError('Unexpected node response shape');self._request_failed(node_id,str(err));raise err
-        self._request_ok(node_id,elapsed)
-        return doc,elapsed
+                if res.status<200 or res.status>=300:raise self._response_error(res.status,raw)
+                try:doc=json.loads(raw.decode())
+                except Exception as ex:raise PolicyError('Node returned invalid JSON') from ex
+                if not isinstance(doc,(dict,list)):raise PolicyError('Unexpected node response shape')
+                elapsed=max(1,int((time.monotonic()-start)*1000));self._request_ok(node_id,elapsed)
+                return doc,elapsed
+            except PolicyError as ex:
+                self._request_failed(node_id,str(ex));raise
+            except (ssl.SSLError,http.client.HTTPException,TimeoutError,OSError) as ex:
+                last_error=ex
+            finally:
+                try:conn.close()
+                except Exception:pass
+        err=PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'No validated address'))
+        self._request_failed(node_id,str(err));raise err from last_error
 
     def probe(self,node_id:str)->dict:
         now=time.time()
