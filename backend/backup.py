@@ -19,6 +19,13 @@ from dark_policy import PolicyError
 MAGIC = b'DARK-XRAY-BACKUP-1\x00'
 LIMIT = 256 * 1024 * 1024
 ALLOWED = {'manifest.json', 'data/dark.sqlite3', 'data/secret.key', 'config.json', 'tls/cert.pem', 'tls/key.pem'}
+ROOT = Path(__file__).resolve().parents[1]
+
+def project_version() -> str:
+    path=ROOT/'VERSION'
+    try:value=path.read_text(encoding='utf-8').strip()
+    except OSError:return 'unknown'
+    return value if value and len(value)<=128 else 'unknown'
 
 def derive(password: str, salt: bytes) -> bytes:
     if not isinstance(password, str) or len(password) < 12:
@@ -31,22 +38,33 @@ def private_write(path: Path, raw: bytes):
         f.write(raw); f.flush(); os.fsync(f.fileno())
 
 def create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
-    data, config, output = data.resolve(), config.resolve(), output.absolute()
+    data,config,output=Path(data),Path(config),Path(output)
+    # These are privileged runtime inputs. Refuse indirection before resolve() so
+    # a replaced config/database symlink cannot smuggle unrelated host files into
+    # a backup archive.
+    if data.is_symlink() or config.is_symlink():raise PolicyError('DARK data/config symlinks are not accepted for backup')
+    data,config,output=data.resolve(),config.resolve(),output.absolute()
+    if not data.is_dir() or not config.is_file() or config.stat().st_size>1024*1024:
+        raise PolicyError('DARK data/config paths are missing or unsafe')
     if output.exists() or output.is_symlink():
         raise PolicyError('Backup target already exists')
     dbfile, secret = data/'dark.sqlite3', data/'secret.key'
-    if not dbfile.is_file() or not secret.is_file() or secret.is_symlink():
-        raise PolicyError('An initialized DARK database and original secret.key are required')
-    cfg = json.loads(config.read_text())
+    if dbfile.is_symlink() or secret.is_symlink() or not dbfile.is_file() or not secret.is_file():
+        raise PolicyError('An initialized non-symlink DARK database and original secret.key are required')
+    try:cfg=json.loads(config.read_text(encoding='utf-8'))
+    except (OSError,UnicodeError,json.JSONDecodeError) as ex:raise PolicyError('Panel configuration is not valid JSON') from ex
+    if not isinstance(cfg,dict):raise PolicyError('Panel configuration must be a JSON object')
     files = {'config.json': config.read_bytes(), 'data/secret.key': secret.read_bytes()}
     with tempfile.TemporaryDirectory() as temp:
         snapshot = Path(temp)/'snapshot.sqlite3'
-        source = sqlite3.connect(dbfile.as_uri()+'?mode=ro', uri=True, timeout=30)
+        source = sqlite3.connect(dbfile.resolve().as_uri()+'?mode=ro', uri=True, timeout=30)
         dest = sqlite3.connect(snapshot)
         try:
             source.backup(dest)
             if dest.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise PolicyError('Database consistency check failed')
+        except sqlite3.Error as ex:
+            raise PolicyError('Database snapshot could not be created safely') from ex
         finally:
             dest.close(); source.close()
         if snapshot.stat().st_size > LIMIT:
@@ -58,7 +76,7 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
             if not path.is_file() or path.stat().st_size > 1024*1024:
                 raise PolicyError('Configured panel TLS file missing or too large')
             files[name] = path.read_bytes()
-    manifest = {'schema': 1, 'project': 'DARK XRAY', 'version': '0.6.0',
+    manifest = {'schema': 1, 'project': 'DARK XRAY', 'version': project_version(),
                 'files': {name: hashlib.sha256(raw).hexdigest() for name,raw in files.items()},
                 'excluded': ['Xray binary and geo assets','external inbound certificates',
                              'root firewall allowlist','systemd service definitions'],
@@ -77,6 +95,7 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
     return manifest
 
 def restore_backup(archive: Path, destination: Path, password: str) -> dict:
+    archive,destination=Path(archive),Path(destination)
     if archive.is_symlink() or not archive.is_file() or archive.stat().st_size > LIMIT:
         raise PolicyError('Invalid backup archive')
     dest = destination.absolute()
@@ -103,17 +122,22 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
         raise PolicyError('Invalid backup contents') from exc
     try:
         manifest = json.loads(files['manifest.json'])
-        if manifest.get('project') != 'DARK XRAY' or manifest.get('schema') != 1:
+        if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') != 1:
             raise PolicyError('Unknown backup schema')
-        if set(manifest['files']) != set(files)-{'manifest.json'}:
+        manifest_files=manifest.get('files')
+        excluded=manifest.get('excluded')
+        if not isinstance(manifest_files,dict) or not isinstance(excluded,list) or not all(isinstance(x,str) for x in excluded):
+            raise PolicyError('Invalid backup manifest')
+        if set(manifest_files) != set(files)-{'manifest.json'}:
             raise PolicyError('Incomplete backup manifest')
-        for name, expected in manifest['files'].items():
-            if hashlib.sha256(files[name]).hexdigest() != expected:
+        for name, expected in manifest_files.items():
+            if not isinstance(expected,str) or hashlib.sha256(files[name]).hexdigest() != expected:
                 raise PolicyError('Backup hash mismatch')
         for name in ('data/dark.sqlite3','data/secret.key','config.json'):
             if not files[name]:raise PolicyError('Required backup member empty')
         cfg = json.loads(files['config.json'])
-    except (KeyError,ValueError,TypeError) as exc:
+        if not isinstance(cfg,dict):raise PolicyError('Panel configuration must be a JSON object')
+    except (KeyError,ValueError,TypeError,AttributeError) as exc:
         raise PolicyError('Invalid required backup members') from exc
     dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix='.dark-restore-',dir=dest.parent) as tmp:
@@ -121,18 +145,22 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
         for name, content in files.items():
             out = staging/name;out.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
             private_write(out, content)
-        db = sqlite3.connect(staging/'data/dark.sqlite3')
+        try:db = sqlite3.connect(staging/'data/dark.sqlite3')
+        except sqlite3.Error as ex:raise PolicyError('Restored database cannot be opened') from ex
         try:
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':raise PolicyError('Restored database is invalid')
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {'clients','owners','api_admins','core_clients'} <= tables:raise PolicyError('Not a standalone DARK database')
-            # Stolen old session cookies must not survive recovery.
-            db.execute('DELETE FROM live_sessions');db.commit()
+            # Stolen old session cookies must not survive recovery. Older lab
+            # snapshots without live_sessions remain restorable.
+            if 'live_sessions' in tables:db.execute('DELETE FROM live_sessions')
+            db.commit()
+        except sqlite3.Error as ex:raise PolicyError('Restored database validation failed') from ex
         finally:db.close()
         for key,name in [('tls_certificate','tls/cert.pem'),('tls_private_key','tls/key.pem')]:
             if name in files:cfg[key]=str(dest/name)
         cfg['core_autostart'] = False
-        (staging/'config.json').write_text(json.dumps(cfg,indent=2))
+        (staging/'config.json').write_text(json.dumps(cfg,indent=2),encoding='utf-8')
         os.rename(staging,dest)
     return {'restored':True,'destination':str(dest),'core_autostart':False,
-            'sessions_revoked':True,'mfa_key_restored':True,'excluded':manifest['excluded']}
+            'sessions_revoked':True,'mfa_key_restored':True,'excluded':excluded,'backup_version':manifest.get('version','unknown')}
