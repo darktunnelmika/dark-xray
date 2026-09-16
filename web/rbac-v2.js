@@ -13,15 +13,16 @@ const RDEFAULTS={
  readonly:{'clients.read':'all','owners.read':'all','inbounds.read':'all','system.read':'all','audit.read':'all'},
  owner:{}
 };
+const GLOBAL_ONLY=new Set(['system.read']);
 const ORDER=['clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials','clients.ip','clients.attach','owners.read','finance.read','ip.read','system.read','audit.read','api.manage','inbounds.read'];
 const SCOPE={none:'بدون دسترسی',own:'فقط خود',all:'همه'};
 
 function permissionGrid(role,permissions=null){
  const allowed=new Set(RPERMS[role]||[]),source=permissions===null?(RDEFAULTS[role]||{}):permissions;
  if(role==='owner')return '<div class="notice warning">مالک اصلی به همه بخش‌های مدیریتی دسترسی دارد؛ Credit/Refund و تنظیمات سیستمی قابل واگذاری نیستند.</div>';
- return `<div class="notice">سقف نقش روی سرور enforce می‌شود. گزینه‌های خاکستری عمداً قابل اعطا نیستند؛ Credit/Refund همیشه Owner-only است.</div><div class="permission-grid">${ORDER.map(k=>{
-   const ok=allowed.has(k),value=ok?(source[k]||'none'):'none';
-   return `<label class="${ok?'':'muted'}">${e(k)}${ok?'':' · locked'}</label><select name="perm:${e(k)}" ${ok?'':'disabled'}>${['none','own','all'].map(v=>`<option value="${v}" ${v===value?'selected':''}>${SCOPE[v]}</option>`).join('')}</select>`;
+ return `<div class="notice">سقف نقش روی سرور enforce می‌شود. گزینه‌های خاکستری عمداً قابل اعطا نیستند؛ Credit/Refund همیشه Owner-only است و System فقط Scope سراسری دارد.</div><div class="permission-grid">${ORDER.map(k=>{
+   const ok=allowed.has(k),value=ok?(source[k]||'none'):'none',scopes=GLOBAL_ONLY.has(k)?['none','all']:['none','own','all'];
+   return `<label class="${ok?'':'muted'}">${e(k)}${ok?'':' · locked'}</label><select name="perm:${e(k)}" ${ok?'':'disabled'}>${scopes.map(v=>`<option value="${v}" ${v===value?'selected':''}>${SCOPE[v]}</option>`).join('')}</select>`;
  }).join('')}</div>`;
 }
 function delegated(role,f){
