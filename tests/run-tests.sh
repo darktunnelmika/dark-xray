@@ -41,3 +41,4 @@ node --test tests/inbounds-models.test.cjs
 node --test tests/clients-v2-filter.test.cjs
 node --test tests/ops-v2-cache.test.cjs
 node --test tests/finance-v2.test.cjs
+node --test tests/ui-stability.test.cjs
