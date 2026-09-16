@@ -11,6 +11,7 @@ python -m pytest tests/test_supervisor.py -k 'explicit_restart or restart_failur
 python -m pytest tests/test_v06.py -q --junitxml=qa/junit/v06.xml
 python -m pytest tests/test_settings_v2.py -q --junitxml=qa/junit/settings-v2.xml
 python -m pytest tests/test_runtime_apply.py -q --junitxml=qa/junit/runtime-apply.xml
+python -m pytest tests/test_runtime_path_safety.py -q --junitxml=qa/junit/runtime-path-safety.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
 python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscription-v2.xml
