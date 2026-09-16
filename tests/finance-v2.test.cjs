@@ -55,3 +55,26 @@ test('finance owner filter scopes both ledgers and authoritative summaries',asyn
   assert.doesNotMatch(html,/sale-1/);
   assert.doesNotMatch(html,/traffic-2/);
 });
+
+test('money event filter also scopes the financial net summary',async()=>{
+  const ctx=context();
+  await ctx.runAction('fv2filter',{dataset:{key:'kind',value:'sale'}});
+  const html=await ctx.financePage();
+  assert.match(html,/Filtered ledger net/);
+  assert.match(html,/>-25</);
+  assert.match(html,/sale-1/);
+  assert.doesNotMatch(html,/credit-1/);
+});
+
+test('finance ledger without owners.read never renders unavailable profile totals as zero',async()=>{
+  const ctx=context();
+  ctx.state.owners=[];
+  const html=await ctx.financePage();
+  assert.match(html,/Owner profile stats unavailable/);
+  assert.match(html,/data-value="alpha"/);
+  assert.match(html,/data-value="beta"/);
+  assert.match(html,/credit-1/);
+  assert.match(html,/traffic-2/);
+  // The two profile-only KPI values are unavailable rather than fabricated 0s.
+  assert.ok((html.match(/<b>—<\/b>/g)||[]).length>=3);
+});
