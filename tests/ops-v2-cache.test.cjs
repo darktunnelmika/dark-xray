@@ -35,7 +35,8 @@ test('restricted account clears stale privileged Operations cache without heavy 
  ctx.state.page='clients';ctx.state.me={id:'seller',role:'reseller',permissions:{}};
  await ctx.load();
  assert.equal(ctx.state.ov2.core,null);
- assert.deepEqual(ctx.state.ov2.audit,[]);
+ assert.equal(Array.isArray(ctx.state.ov2.audit),true);
+ assert.equal(ctx.state.ov2.audit.length,0);
  assert.equal(ctx.state.ov2.ip,null);
  assert.deepEqual(calls,[]);
 });
