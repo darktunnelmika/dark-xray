@@ -2,9 +2,9 @@
   "project": "DARK XRAY",
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
-  "date": "2026-09-17",
+  "date": "2026-09-18",
   "status": "release_candidate_target_vps_validation",
-  "current_version": "0.9.0-rc3",
+  "current_version": "0.9.0-rc4",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -13,7 +13,7 @@
     "optional_web_language": "fa",
     "web_direction_default": "ltr",
     "inbounds_workspace": "V3",
-    "clients_groups_workspace": "V2",
+    "clients_groups_workspace": "V3 real-activity presence / per-config QR",
     "settings_workspace": "V2",
     "finance_workspace": "V2",
     "subscription_workspace": "V2 raw/base64/dark-json/clash-mihomo",
@@ -39,7 +39,14 @@
     "safe_update_source_and_sqlite_rollback": true,
     "online_installer": "install-online.sh",
     "pinned_official_xray_ci_version": "v26.3.27",
-    "legacy_doctor_safe_update_compat": true
+    "legacy_doctor_safe_update_compat": true,
+    "reality_target_compat_guard": true,
+    "client_presence_activity_sources": [
+      "traffic_ledger",
+      "verified_access_observation",
+      "device_activity"
+    ],
+    "vision_transport_compat_enforced": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -116,10 +123,10 @@
     "readmes_current_for_rc": true,
     "status_current_for_rc": true,
     "validation_doc_path_current": true,
-    "source_sha256sums_regenerated_for_rc": true,
+    "source_sha256sums_regenerated_for_rc": false,
     "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "RC2 source checksums will be regenerated after the compatibility hotfix is finalized; release asset checksums are generated with the prerelease.",
+  "checksum_note": "RC4 source/release checksums must be regenerated after the final tested snapshot is fixed; existing older-RC checksum files are not promoted as RC4 evidence.",
   "release_candidate": true,
   "control_center_v2": true
 }
