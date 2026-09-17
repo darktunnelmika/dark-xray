@@ -8,7 +8,8 @@ p=Path('tools/menu.py');s=p.read_text(encoding='utf-8')
 def replace_func(name,next_name,new):
     global s
     pat=rf'^def {re.escape(name)}\(.*?(?=^def {re.escape(next_name)}\()'
-    s2,n=re.subn(pat,new.rstrip()+'\n\n',s,count=1,flags=re.M|re.S)
+    replacement=new.rstrip()+'\n\n'
+    s2,n=re.subn(pat,lambda _m:replacement,s,count=1,flags=re.M|re.S)
     if n!=1:raise SystemExit(f'{name} boundary mismatch')
     s=s2
 
