@@ -147,18 +147,21 @@ def owner_profiles_without_login():
     except Exception:return []
 
 
-def choose_owner():
+def choose_owner(action='manage'):
     owners=owner_usernames()
     if not owners:
         print(f'{RE}No login Owner exists. Use Create owner login first.{R}')
         return ''
-    if len(owners)==1:
-        print(f'{GY}Selected login Owner:{R} {owners[0]}')
-        return owners[0]
-    print(f'{GY}Login Owners:{R}')
+    print(f'{GY}Login Owners — choose account to {action}:{R}')
     for i,name in enumerate(owners,1):print(f'  [{i}] {name}')
-    raw=ask('Select owner','1')
-    if raw.isdigit() and 1<=int(raw)<=len(owners):return owners[int(raw)-1]
+    profiles=owner_profiles_without_login()
+    if profiles:
+        print(f'{YE}Profiles without login/password (not selectable):{R} '+', '.join(profiles))
+    raw=ask('Select login Owner','1')
+    if raw.isdigit() and 1<=int(raw)<=len(owners):
+        selected=owners[int(raw)-1]
+        print(f'{GY}Selected login Owner:{R} {selected}')
+        return selected
     print(f'{RE}Invalid Owner selection. Type the number shown in the list.{R}')
     return ''
 
@@ -260,7 +263,15 @@ def account_menu():
             if user and confirm(f'Create a full Owner login named {user}?','CREATE'):
                 run_action([COMMAND,'account','--username',user,'--action','create-owner'],f'Owner login {user} created; password write verified.');pause()
             continue
-        user=choose_owner() if x in {'1','3','4','5','6','7'} else ''
+        owner_actions={
+            '1':'view security status for',
+            '3':'rename',
+            '4':'change password for',
+            '5':'revoke sessions for',
+            '6':'revoke API keys for',
+            '7':'reset TOTP for',
+        }
+        user=choose_owner(owner_actions.get(x,'manage')) if x in owner_actions else ''
         if x=='1' and user:run([COMMAND,'account','--username',user,'--action','status']);pause()
         elif x=='3' and user:
             new=ask('New owner username')
