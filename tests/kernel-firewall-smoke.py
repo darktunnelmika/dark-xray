@@ -2,7 +2,8 @@
 """Real Linux kernel/nftables packet smoke in disposable network namespaces.
 
 This test never edits the host namespace ruleset. It proves the exact NftFirewall
-rules against real TCP/UDP packets, native nft timeouts and explicit unban.
+rules against real TCP/UDP packets, native nft timeouts, explicit unban and
+foreign-table ownership refusal.
 """
 from __future__ import annotations
 
@@ -28,7 +29,11 @@ MGMT_PORT=2222
 
 
 def run(args:list[str],check:bool=True,**kw):
-    return subprocess.run([str(x) for x in args],check=check,text=True,capture_output=True,**kw)
+    cp=subprocess.run([str(x) for x in args],check=False,text=True,capture_output=True,**kw)
+    if check and cp.returncode:
+        detail=(cp.stderr or cp.stdout or '').strip()[-1000:]
+        raise RuntimeError(f"command failed rc={cp.returncode}: {' '.join(map(str,args))}: {detail}")
+    return cp
 
 
 def nft_path()->str:
@@ -62,8 +67,8 @@ def inner(action:str)->int:
         print(json.dumps({'action':'unban','result':out,'status':fw.status()}))
         return 0
     if action=='foreign':
-        # The caller creates a same-name table with a foreign marker first.
-        try:fw.bootstrap()
+        try:
+            fw.bootstrap()
         except PolicyError as ex:
             if 'foreign table' not in str(ex):raise
             print(json.dumps({'action':'foreign','refused':True,'error':str(ex)}))
@@ -74,7 +79,6 @@ def inner(action:str)->int:
 
 SERVER=r'''import socket,sys,threading
 ip=sys.argv[1];data=int(sys.argv[2]);mgmt=int(sys.argv[3])
-
 def tcp(port):
  s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((ip,port));s.listen(20)
  while True:
@@ -82,7 +86,6 @@ def tcp(port):
   try:c.recv(64);c.sendall(b'OK')
   except OSError:pass
   finally:c.close()
-
 def udp(port):
  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind((ip,port))
  while True:
@@ -132,7 +135,7 @@ def outer(report:Path)->int:
     proc=None
     result={'kernel_packet_tested':True,'host_namespace_rules_modified':False,'tcp_drop_verified':False,
             'udp_drop_verified':False,'management_port_preserved':False,'native_timeout_verified':False,
-            'explicit_unban_verified':False,'foreign_table_refused':False,'passed':False,'checks':[]}
+            'explicit_unban_verified':False,'foreign_table_refused':False,'passed':False,'checks':[],'error':None}
     try:
         setup_ns(src,dst,a,b)
         proc=subprocess.Popen(['ip','netns','exec',dst,sys.executable,'-c',SERVER,DST_IP,str(DATA_PORT),str(MGMT_PORT)],
@@ -155,17 +158,21 @@ def outer(report:Path)->int:
         result['checks'] += [probe(src,DATA_PORT,'tcp',True),probe(src,DATA_PORT,'udp',True)]
         result['explicit_unban_verified']=True
 
-        deleted=run(['ip','netns','exec',dst,nft_path(),'delete','table','inet',TABLE],check=False)
-        if deleted.returncode:
-            raise RuntimeError('Could not remove DARK test table before foreign-owner check: '+(deleted.stderr or deleted.stdout)[-500:])
-        script=f'add table inet {TABLE} {{ comment "FOREIGN TEST TABLE"; }}\n'
-        created=run(['ip','netns','exec',dst,nft_path(),'-f','-'],check=False,input=script)
-        if created.returncode:
-            raise RuntimeError('Could not create foreign-owner nft test table: '+(created.stderr or created.stdout)[-500:])
+        run(['ip','netns','exec',dst,nft_path(),'delete','table','inet',TABLE])
+        # Use normal nft ruleset syntax here; this deliberately creates the DARK
+        # table name with a non-DARK owner marker and no rules.
+        script=f'''table inet {TABLE} {{\n comment "FOREIGN TEST TABLE"\n}}\n'''
+        run(['ip','netns','exec',dst,nft_path(),'-f','-'],input=script)
+        foreign=run(['ip','netns','exec',dst,nft_path(),'-j','list','table','inet',TABLE])
+        doc=json.loads(foreign.stdout)
+        marker=next((x.get('table',{}).get('comment') for x in doc.get('nftables',[]) if x.get('table',{}).get('name')==TABLE),None)
+        if marker!='FOREIGN TEST TABLE':raise RuntimeError('Foreign marker was not persisted by nftables: '+repr(marker))
         run(['ip','netns','exec',dst,sys.executable,str(Path(__file__).resolve()),'--inner','foreign'])
         result['foreign_table_refused']=True
         result['passed']=all(result[k] for k in ('tcp_drop_verified','udp_drop_verified','management_port_preserved',
                                                   'native_timeout_verified','explicit_unban_verified','foreign_table_refused'))
+    except Exception as ex:
+        result['error']=type(ex).__name__+': '+str(ex)[:1500]
     finally:
         if proc and proc.poll() is None:
             proc.terminate()
