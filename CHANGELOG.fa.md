@@ -1,5 +1,15 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc4 — Clients V3 + REALITY Guard
+
+- Clients V3 صفحه کاربران را به workspace سازمان‌یافته با Summary، Owner/Inbound/Status/Presence filters، Sort، Group sidebar و Detail view ارتقا می‌دهد.
+- وضعیت Online/Idle/Offline از activity واقعی Traffic Ledger / access observation / device activity گرفته می‌شود؛ Enabled بودن اکانت به‌تنهایی Online محسوب نمی‌شود.
+- indicator سایبری Online شامل نقطه Pulse، خط Signal و فلش متحرک است و Reduced Motion را رعایت می‌کند.
+- QR/Share کامل شد: Subscription و هر Config تولیدشده QR مستقل دارند، Copy و Download SVG هم اضافه شد.
+- REALITY target guard برای Xray pin‌شده v26.3.27 اضافه شد؛ `www.microsoft.com` به‌دلیل مشکل شناخته‌شده TLS Certificate record بزرگ‌تر از parser limit fail-closed رد می‌شود و `www.bing.com:443` پیش‌فرض پیشنهادی است.
+- Scanner و Inbounds V3 compatibility/advisory را نمایش می‌دهند و target مسدود قابل انتخاب/ذخیره نیست.
+- XTLS Vision روی VLESS gRPC/XHTTP دیگر وارد config/share-link نمی‌شود و backend اتصال Client با Flow ناسازگار را رد می‌کند.
+
 ## 0.9.0-rc3 — Control Center V2 audit
 
 - منوی ترمینال از نظر Backup/Restore، Guard، Update/Ref، Validation gates و عملیات systemd audit و بازطراحی شد.
