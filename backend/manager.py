@@ -218,46 +218,90 @@ class Manager:
         if not partial and not EMAIL_RE.fullmatch(str(out.get('email',''))): raise PolicyError('Invalid email/identity')
         return out
 
-    def create(self, actor: Actor, owner: str, client: dict, ids: list[int]) -> dict:
+    def _creation_sets_locked(self) -> tuple[set[str],set[str]]:
+        """Snapshot identity reservations once for a create/bulk-create operation.
+
+        The caller holds ``self.lock``. Managed tombstones intentionally remain
+        reserved; policy-only rows are also treated as reserved so a partial old
+        operation cannot become an unhandled SQLite UNIQUE failure.
+        """
+        existing={r['email'].lower() for r in self.engine.clients()}
+        with self.store.lock:
+            reserved={str(r[0]).lower() for r in self.store.db.execute('SELECT email FROM managed_clients')}
+            reserved.update(str(r[0]).lower() for r in self.store.db.execute('SELECT id FROM clients'))
+        return existing,reserved
+
+    def _stage_create_locked(self,actor:Actor,owner:str,client:dict,ids:list[int],
+                             existing:set[str],reserved:set[str],*,inbounds_checked:bool=False)->str:
         actor.require('clients','create',owner)
-        if not self.engine.config.writes_enabled: raise PolicyError('CoreEngine writes are disabled')
-        data=self.validate_client(client)
-        email=data['email'].lower()
+        if not self.engine.config.writes_enabled:raise PolicyError('CoreEngine writes are disabled')
+        data=self.validate_client(client);email=data['email'].lower()
+        if not inbounds_checked:self.check_inbounds(actor,owner,ids)
+        if email in existing:raise PolicyError('Client already exists in engine; adopt explicitly instead of overwriting')
+        if email in reserved:raise PolicyError('Identity is already reserved (including historical tombstones)')
+        data['email']=email;data['id']=data.get('id') or str(uuid.uuid4());data['password']=data.get('password') or secrets.token_urlsafe(24)
+        data['auth']=data.get('auth') or secrets.token_urlsafe(24);data['subId']=secrets.token_hex(16)
+        if data.get('group'):
+            group=self._group_name(data['group']);data['group']=group;now=time.time()
+            with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
+        for k,v in {'flow':'','security':'auto','limitIp':1,'limitHwid':0,'totalGB':0,
+                    'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0,
+                    'resetTraffic':'never','resetTrafficDay':0,'resetCount':0}.items():data.setdefault(k,v)
+        ceiling=self.profile(owner)['max_client_ips']
+        if ceiling and (data['limitIp']==0 or data['limitIp']>ceiling):raise PolicyError('Requested IP limit exceeds the owner policy')
+        try:self.store.register_client(actor,email,owner,data['limitIp'],data['totalGB'])
+        except sqlite3.IntegrityError as ex:raise PolicyError('Identity is already reserved') from ex
+        try:
+            self.store.edit_client(SYSTEM,email,manual=not data['enable'],expires_at=max(0,data['expiryTime']//1000))
+            with self.store.transaction() as db:
+                db.execute('INSERT INTO managed_clients(email,desired,inbounds,public_token,created_at,updated_at) VALUES(?,?,?,?,?,?)',
+                           (email,json.dumps(data),json.dumps(ids),secrets.token_urlsafe(32),time.time(),time.time()))
+        except Exception:
+            self.store.delete_client(SYSTEM,email);raise
+        self.audit(actor,owner,'client.create',email,'CoreEngine synchronization requested')
+        existing.add(email);reserved.add(email)
+        return email
+
+    def create(self, actor: Actor, owner: str, client: dict, ids: list[int]) -> dict:
         with self.lock:
             self.check_inbounds(actor,owner,ids)
-            existing={r['email'].lower() for r in self.engine.clients()}
-            if email in existing: raise PolicyError('Client already exists in engine; adopt explicitly instead of overwriting')
-            with self.store.lock:
-                if self.store.db.execute('SELECT 1 FROM managed_clients WHERE email=?',(email,)).fetchone():
-                    raise PolicyError('Identity is already reserved (including historical tombstones)')
-            data['email']=email
-            data['id']=data.get('id') or str(uuid.uuid4())
-            data['password']=data.get('password') or secrets.token_urlsafe(24)
-            data['auth']=data.get('auth') or secrets.token_urlsafe(24)
-            data['subId']=secrets.token_hex(16)  # never accept a reseller's public credential
-            if data.get('group'):
-                group=self._group_name(data['group']);data['group']=group
-                now=time.time()
-                with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
-            for k,v in {'flow':'','security':'auto','limitIp':1,'limitHwid':0,'totalGB':0,
-                        'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0,
-                        'resetTraffic':'never','resetTrafficDay':0,'resetCount':0}.items():data.setdefault(k,v)
-            ceiling=self.profile(owner)['max_client_ips']
-            # max_client_ips is the mandatory per-user IP cap; 0 means owner leaves choice open.
-            if ceiling and (data['limitIp']==0 or data['limitIp']>ceiling):
-                raise PolicyError('Requested IP limit exceeds the owner policy')
-            self.store.register_client(actor,email,owner,data['limitIp'],data['totalGB'])
-            try:
-                self.store.edit_client(SYSTEM,email,manual=not data['enable'],expires_at=max(0,data['expiryTime']//1000))
-                with self.store.transaction() as db:
-                    db.execute('INSERT INTO managed_clients(email,desired,inbounds,public_token,created_at,updated_at) VALUES(?,?,?,?,?,?)',
-                               (email,json.dumps(data),json.dumps(ids),secrets.token_urlsafe(32),time.time(),time.time()))
-            except Exception:
-                self.store.delete_client(SYSTEM,email)
-                raise
-            self.audit(actor,owner,'client.create',email,'CoreEngine synchronization requested')
+            existing,reserved=self._creation_sets_locked()
+            email=self._stage_create_locked(actor,owner,client,ids,existing,reserved,inbounds_checked=True)
             self.tick(suppress=True)
             return self.detail(actor,email)
+
+    def create_batch(self,actor:Actor,owner:str,clients:list[dict],ids:list[int])->dict:
+        """Stage up to 500 independent creates, then reconcile the runtime once.
+
+        This preserves per-item best-effort results while avoiding the previous
+        O(N²)-like behavior where every item rescanned and reconciled all clients.
+        """
+        if not isinstance(clients,list) or not 1<=len(clients)<=500:raise PolicyError('Bulk create requires 1..500 clients')
+        with self.lock:
+            try:
+                actor.require('clients','create',owner);self.check_inbounds(actor,owner,ids)
+                existing,reserved=self._creation_sets_locked();preflight_error=''
+            except (PolicyError,CoreError) as ex:
+                existing,reserved=set(),set();preflight_error=str(ex)[:300]
+            out=[];staged=[]
+            for raw in clients:
+                label=str(raw.get('email',''))[:128] if isinstance(raw,dict) else ''
+                if preflight_error:
+                    out.append({'email':label,'error':preflight_error});continue
+                try:
+                    email=self._stage_create_locked(actor,owner,raw,ids,existing,reserved,inbounds_checked=True)
+                    staged.append(email);out.append({'email':email,'_staged':True})
+                except (PolicyError,CoreError,sqlite3.IntegrityError) as ex:
+                    out.append({'email':label,'error':str(ex)[:300]})
+            if staged:self.tick(suppress=True)
+            for item in out:
+                if not item.pop('_staged',False):continue
+                try:item['result']=self.detail(actor,item['email'])
+                except (PolicyError,CoreError) as ex:
+                    # The durable record was created. Surface reconciliation state
+                    # rather than misreporting it as a failed identity reservation.
+                    meta=self.meta(item['email']);item['result']={'email':item['email'],'state':meta['state'],'error':str(ex)[:300]}
+            return {'requested':len(clients),'created':len(staged),'items':out}
 
     def adopt(self, actor: Actor, owner: str, email: str) -> dict:
         if actor.role!='owner': raise PermissionDenied('Only the primary owner can adopt a engine client')
@@ -282,7 +326,7 @@ class Manager:
             self.tick(suppress=True)
             return self.detail(actor,email)
 
-    def update(self, actor: Actor,email: str,patch: dict,ids: list[int]|None=None) -> dict:
+    def update(self, actor: Actor,email: str,patch: dict,ids: list[int]|None=None,*,reconcile:bool=True) -> dict:
         patch=self.validate_client(patch,partial=True)
         if 'email' in patch or 'subId' in patch: raise PolicyError('Identity/subId changes use a separate rotation workflow')
         with self.lock:
@@ -311,7 +355,7 @@ class Manager:
                 db.execute("UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?",
                   (json.dumps(desired),json.dumps(ids),time.time(),'enable' in patch,email))
             self.audit(actor,row['owner'],'client.update',email,','.join(sorted(patch)))
-            self.tick(suppress=True)
+            if reconcile:self.tick(suppress=True)
             return self.detail(actor,email)
 
     def action(self,actor: Actor,email: str,action: str) -> dict:
