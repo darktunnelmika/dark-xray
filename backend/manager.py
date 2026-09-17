@@ -197,6 +197,29 @@ class Manager:
         if bad:
             raise PolicyError('XTLS Vision flow is only valid on VLESS TCP/RAW with TLS/REALITY; incompatible inbound(s): '+', '.join(bad[:8]))
 
+    def _presence_row(self, at:float|int|None, source:str='none') -> dict:
+        try:value=float(at or 0)
+        except (TypeError,ValueError):value=0.0
+        if value<=0:return {'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}
+        age=max(0,int(time.time()-value))
+        return {'activity_at':value,'presence_state':'online' if age<=60 else 'idle' if age<=300 else 'offline',
+                'presence_age_seconds':age,'presence_source':source}
+
+    def _activity_for(self,email:str) -> dict:
+        try:self.engine.read_ip_log()
+        except Exception:pass
+        best=(0.0,'none')
+        with self.store.lock:
+            row=self.store.db.execute('SELECT MAX(observed_at) FROM traffic_ledger WHERE client_id=?',(email,)).fetchone()
+            if row and row[0]:best=(float(row[0]),'traffic')
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone():
+                row=self.store.db.execute('SELECT MAX(last_seen) FROM observations WHERE client_id=?',(email,)).fetchone()
+                if row and row[0] and float(row[0])>best[0]:best=(float(row[0]),'access')
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_devices'").fetchone():
+                row=self.store.db.execute('SELECT MAX(last_seen) FROM core_devices WHERE email=?',(email,)).fetchone()
+                if row and row[0] and float(row[0])>best[0]:best=(float(row[0]),'device')
+        return self._presence_row(*best)
+
     def _activity_map(self) -> dict[str,dict]:
         # Presence means recent verified application traffic/activity, not merely
         # an enabled account. It intentionally exposes no source IP.
@@ -218,12 +241,7 @@ class Manager:
             if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_devices'").fetchone():
                 for email,at in self.store.db.execute('SELECT email,MAX(last_seen) FROM core_devices GROUP BY email'):
                     keep(email,at,'device')
-        now=time.time();out={}
-        for email,(at,source) in latest.items():
-            age=max(0,int(now-at))
-            state='online' if age<=60 else 'idle' if age<=300 else 'offline'
-            out[email]={'activity_at':at,'presence_state':state,'presence_age_seconds':age,'presence_source':source}
-        return out
+        return {email:self._presence_row(at,source) for email,(at,source) in latest.items()}
 
 
     @staticmethod
@@ -434,7 +452,7 @@ class Manager:
             client={k:v for k,v in client.items() if k not in {'id','uuid','password','auth','subId','reverse','encryption'}}
         reasons=self.store.client_reasons(email)
         if meta['external_disabled']:reasons.append('engine_manual_or_external_disable')
-        activity=activity or self._activity_map().get(email) or {'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}
+        activity=self._activity_for(email) if activity is None else activity
         return {'email':email,'owner':row['owner'],'client':client,'inboundIds':json.loads(meta['inbounds']),
                 'used_bytes':row['used_bytes'],'block_reasons':reasons,'state':meta['state'],
                 'error':meta['error'],'observed_enable':engine.get('enable'),
