@@ -6,6 +6,7 @@
 - updater در این حالت فقط به یک probe محلی سخت‌گیرانه fallback می‌کند: UI و `assets/style.css` هر دو باید HTTP 200 بدهند.
 - اگر Doctor جدید `panel_route` دارد ولی آن را fail اعلام کند، هیچ fallbackی انجام نمی‌شود و Update همچنان fail-closed می‌ماند.
 - regression برای شکل دقیق legacy Doctor اضافه شد.
+- Account & Access قبل از تغییر رمز/نام، revoke session/API key یا TOTP reset همیشه فهرست شماره‌دار Login Ownerها را نشان می‌دهد؛ حتی اگر فقط یک Login Owner وجود داشته باشد. Profileهای بدون Login/Password جدا و غیرقابل انتخاب نمایش داده می‌شوند.
 
 ## 0.9.0-rc1 — Release Candidate برای تست VPS
 
