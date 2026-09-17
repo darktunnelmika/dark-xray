@@ -11,7 +11,7 @@
 
 پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، نماینده و سطح دسترسی، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
-**نسخه آزمایشی برای تست VPS:** `0.9.0-rc3`
+**نسخه آزمایشی برای تست VPS:** `0.9.0-rc4`
 
 > [!CAUTION]
 > DARK XRAY در وضعیت **Release Candidate** است و هنوز Production Ready اعلام نشده. Browser، Xray رسمی، nftables packet-level، systemd recovery و Load/Scale هزار کلاینت در CI سبزند؛ اما نصب روی VPS هدف، reboot واقعی ماشین، TLS/renewal دیتاسنتر موردنظر و دو VPS واقعی Node هنوز گیت نهایی هستند.
@@ -30,7 +30,9 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 قابلیت‌های اصلی فعلی:
 
 - **Inbounds V3** با VLESS/VMess/Trojan/Shadowsocks، Transportهای اصلی، TLS/REALITY، Sniffing، Fallback و Advanced JSON.
-- **Clients + Groups V2** با مالکیت نماینده، Bulk operations، محدودیت IP/HWID، دوره/حجم و Groupهای owner-scoped.
+- **Clients + Groups V3** با Workspace سازمان‌یافته، Owner/Inbound/Status/Presence filters، Bulk operations، محدودیت IP/HWID، Groupهای owner-scoped و Online/Idle/Offline مبتنی بر activity واقعی.
+- **QR / Share V3** با QR مستقل برای Subscription و هر Config، Copy و Download SVG.
+- **REALITY Guard** برای Xray pin‌شده: تارگت‌های شناخته‌شده ناسازگار مثل `www.microsoft.com` fail-closed رد می‌شوند و Target Search مسیر پیشنهادی سالم می‌دهد.
 - **Reseller / RBAC** با role ceiling، permissionهای سمت سرور و جلوگیری از privilege escalation رکوردهای legacy.
 - **Account Security** شامل Session، TOTP ضد replay و API Key با محدودیت Robot scope.
 - **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
@@ -110,7 +112,7 @@ sudo darkxray production-gate --json-only
 - ظرفیت‌سنجی روی سخت‌افزار/پلن VPS هدف؛ CI فعلی smoke هزار Client و SQLite contention را پاس کرده است.
 - rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
-بنابراین این build با برچسب **`0.9.0-rc3`** برای تست VPS منتشر می‌شود؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
+بنابراین این build با برچسب **`0.9.0-rc4`** برای تست VPS منتشر می‌شود؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
 
 ## مستندات
 
