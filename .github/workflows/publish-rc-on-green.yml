@@ -1,0 +1,81 @@
+name: Publish DARK XRAY RC on green CI
+on:
+  workflow_run:
+    workflows: ["Source checks and isolated tests"]
+    types: [completed]
+permissions:
+  contents: write
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      RC_SHA: e06f1905124e660f88167ebe419dca4fd33050e0
+      TAG: v0.9.0-rc1
+      VERSION: 0.9.0-rc1
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Prove CI tested only the release trigger on top of RC
+        run: |
+          test "$(git show "$RC_SHA:VERSION" | tr -d '\r\n')" = "$VERSION"
+          git cat-file -e "$RC_SHA^{commit}"
+          mapfile -t changed < <(git diff --name-only "$RC_SHA" "${{ github.event.workflow_run.head_sha }}")
+          printf 'Files above RC tested by CI:\n%s\n' "${changed[*]:-none}"
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = '.github/workflows/publish-rc-on-green.yml'
+      - name: Checkout exact RC source and verify snapshot checksums
+        run: |
+          git checkout --detach "$RC_SHA"
+          sha256sum -c SHA256SUMS
+          python tools/repo-check.py
+          test "$(cat VERSION)" = "$VERSION"
+      - name: Build deterministic source archives
+        run: |
+          mkdir -p dist
+          PREFIX="DARK-XRAY-${VERSION}/"
+          git archive --format=tar.gz --prefix="$PREFIX" -o "dist/DARK-XRAY-${VERSION}.tar.gz" "$RC_SHA"
+          git archive --format=zip --prefix="$PREFIX" -o "dist/DARK-XRAY-${VERSION}.zip" "$RC_SHA"
+          cp SHA256SUMS dist/SHA256SUMS.source
+          printf '%s\n' "$RC_SHA" > dist/RC-COMMIT.txt
+          (cd dist && sha256sum "DARK-XRAY-${VERSION}.tar.gz" "DARK-XRAY-${VERSION}.zip" > SHA256SUMS.release)
+      - name: Publish prerelease if absent
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it unchanged."
+            exit 0
+          fi
+          cat > /tmp/notes.md <<'EOF'
+          # DARK XRAY 0.9.0-rc1
+
+          Release Candidate for real-VPS validation. This is **not yet a Production Ready declaration**.
+
+          Automated gates are green for Python 3.12/3.13, Chromium UI, official Xray v26.3.27 real data-plane, packet-level nftables, systemd crash recovery and a 1000-client/SQLite-contention smoke.
+
+          Before Stable promotion, validate the target VPS/provider: fresh install, real reboot, Let's Encrypt issue/renewal, real IP-Guard topology, two-VPS Node behavior and exact-artifact update/rollback rehearsal.
+
+          Persian test checklist: `TESTING-RC.fa.md`.
+          EOF
+          gh release create "$TAG" \
+            --target "$RC_SHA" \
+            --title "DARK XRAY 0.9.0-rc1" \
+            --notes-file /tmp/notes.md \
+            --prerelease \
+            "dist/DARK-XRAY-${VERSION}.tar.gz" \
+            "dist/DARK-XRAY-${VERSION}.zip" \
+            "dist/SHA256SUMS.release" \
+            "dist/SHA256SUMS.source" \
+            "dist/RC-COMMIT.txt"
+      - name: Remove one-shot publisher from main
+        run: |
+          git checkout main
+          git pull --ff-only origin main
+          git config user.name darktunnelmika
+          git config user.email mikakhadmi@gmail.com
+          git rm .github/workflows/publish-rc-on-green.yml
+          git commit -m 'Remove one-shot RC publisher'
+          git push origin HEAD:main
