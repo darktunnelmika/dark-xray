@@ -6,6 +6,7 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 REPORT="$ROOT/qa/systemd-recovery.json"
 PASS=0
+PHASE=bootstrap
 FIRST_PID=0
 SECOND_PID=0
 THIRD_PID=0
@@ -18,7 +19,28 @@ cleanup(){
   rm -rf /opt/dark-xray /etc/dark-xray /var/lib/dark-xray /usr/local/lib/dark-xray
   if getent passwd darkxray >/dev/null 2>&1; then userdel darkxray >/dev/null 2>&1 || true; fi
 }
-trap cleanup EXIT
+finish(){
+  local rc=$?
+  trap - EXIT
+  if (( rc != 0 )) && [[ ! -f "$REPORT" ]]; then
+    mkdir -p "$ROOT/qa"
+    python3 - "$REPORT" "$rc" "$PHASE" <<'PY'
+import json,sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+  'real_systemd_tested':True,
+  'passed':False,
+  'failure_phase':sys.argv[3],
+  'exit_code':int(sys.argv[2]),
+  'real_machine_reboot_tested':False
+},indent=2),encoding='utf-8')
+PY
+    chmod 0644 "$REPORT" || true
+  fi
+  cleanup
+  exit "$rc"
+}
+trap finish EXIT
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'root required' >&2; exit 1; }
 [[ -d /run/systemd/system ]] || { echo 'real systemd host required' >&2; exit 1; }
@@ -26,6 +48,7 @@ for p in /opt/dark-xray /etc/dark-xray /var/lib/dark-xray /usr/local/lib/dark-xr
   [[ ! -e "$p" ]] || { echo "refusing pre-existing $p" >&2; exit 1; }
 done
 
+PHASE=install-tree
 mkdir -p "$ROOT/qa"
 useradd --system --home-dir /var/lib/dark-xray --shell /usr/sbin/nologin darkxray
 UID_DARK="$(id -u darkxray)"; GID_DARK="$(id -g darkxray)"
@@ -73,11 +96,13 @@ cat >/etc/dark-xray/config.json <<'JSON'
 JSON
 chown root:"$GID_DARK" /etc/dark-xray/config.json; chmod 0640 /etc/dark-xray/config.json
 
+PHASE=owner-init
 printf 'Temporary-CI-Owner-Password-082\nTemporary-CI-Owner-Password-082\n' | \
   runuser -u darkxray -- env DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray \
   /opt/dark-xray/.venv/bin/python /opt/dark-xray/backend/server.py \
   --config /etc/dark-xray/config.json --data /var/lib/dark-xray init --username ci-owner --password-stdin >/tmp/dark-init.log
 
+PHASE=service-start
 cp /opt/dark-xray/deploy/dark-xray.service /etc/systemd/system/dark-xray.service
 cp /opt/dark-xray/deploy/dark-xray-guard.service /etc/systemd/system/dark-xray-guard.service
 chmod 0644 /etc/systemd/system/dark-xray*.service
@@ -96,18 +121,23 @@ raise SystemExit(0 if c.get('configuration')=='ok' and c.get('database')=='ok' a
 PY
 }
 
+PHASE=initial-health
 for _ in {1..40}; do healthy && break; sleep .25; done
 healthy
 FIRST_PID="$(systemctl show -p MainPID --value dark-xray.service)"
 [[ "$FIRST_PID" =~ ^[1-9][0-9]*$ ]]
 [[ "$(ps -o user= -p "$FIRST_PID" | xargs)" == darkxray ]]
 systemctl is-enabled --quiet dark-xray.service
-python3 /opt/dark-xray/tools/vps-verify.py --config /etc/dark-xray/config.json --data /var/lib/dark-xray --json-only >/tmp/dark-vps-verify.json
+
+PHASE=vps-verify
+/opt/dark-xray/.venv/bin/python /opt/dark-xray/tools/vps-verify.py \
+  --config /etc/dark-xray/config.json --data /var/lib/dark-xray --json-only >/tmp/dark-vps-verify.json
 python3 - <<'PY'
 import json
 x=json.load(open('/tmp/dark-vps-verify.json'));assert x['ready'] is True,(x['failures'],x['warnings'])
 PY
 
+PHASE=sigkill-restart
 # Kill only the main panel process: systemd must finish cgroup cleanup and restart it.
 systemctl kill --kill-who=main -s SIGKILL dark-xray.service
 for _ in {1..80}; do
@@ -118,6 +148,7 @@ done
 [[ "$SECOND_PID" =~ ^[1-9][0-9]*$ && "$SECOND_PID" != "$FIRST_PID" ]]
 healthy
 
+PHASE=stop-start
 # Normal stop/start models the service boundary used across boot; enablement must persist.
 systemctl stop dark-xray.service
 [[ "$(systemctl is-active dark-xray.service 2>/dev/null || true)" == inactive ]]
@@ -128,10 +159,12 @@ healthy
 THIRD_PID="$(systemctl show -p MainPID --value dark-xray.service)"
 [[ "$THIRD_PID" =~ ^[1-9][0-9]*$ && "$THIRD_PID" != "$SECOND_PID" ]]
 
+PHASE=xray-child-count
 # No duplicate owned Xray process should survive crash/stop transitions.
 XRAY_COUNT="$(pgrep -u darkxray -f '/usr/local/lib/dark-xray/v26.3.27/xray' | wc -l | xargs)"
 [[ "$XRAY_COUNT" == 1 ]]
 PASS=1
+PHASE=done
 
 python3 - "$REPORT" "$FIRST_PID" "$SECOND_PID" "$THIRD_PID" "$XRAY_COUNT" <<'PY'
 import json,sys
