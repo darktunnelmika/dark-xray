@@ -16,3 +16,10 @@ test('Inbound editor submit failures are surfaced to the operator',()=>{
   assert.ok(src.includes("try{await saveEditor(form,id);}catch(ex){toast(ex?.message"));
   assert.ok(!src.includes("ev.preventDefault();await saveEditor(form,id);"));
 });
+
+
+test('REALITY UI no longer suggests the known-bad Microsoft target',()=>{
+  assert.ok(src.includes('placeholder="www.bing.com:443"'));
+  assert.ok(src.includes("www.microsoft.com is blocked as a REALITY target"));
+  assert.ok(src.includes("use-suggested-target"));
+});
