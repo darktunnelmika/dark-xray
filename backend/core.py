@@ -25,6 +25,7 @@ import time
 import uuid
 import psutil
 from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line, render_fail2ban
+from reality_scan import reality_target_policy
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
@@ -440,11 +441,14 @@ class CoreEngine:
                 names=rt.get('serverNames');ids=rt.get('shortIds')
                 if not isinstance(names,list) or not names or any(not isinstance(n,str) or not n for n in names):raise ValueError()
                 if not isinstance(ids,list) or not ids:raise ValueError()
-                if not isinstance(rt.get('target') or rt.get('dest'),str):raise ValueError()
+                target=rt.get('target') or rt.get('dest')
+                if not isinstance(target,str):raise ValueError()
                 raw=base64.urlsafe_b64decode(key+'='*((4-len(key)%4)%4))
-                if len(raw)!=32 or not rt.get('serverNames') or not (rt.get('target') or rt.get('dest')): raise ValueError()
+                if len(raw)!=32 or not rt.get('serverNames') or not target: raise ValueError()
                 if any(not isinstance(x,str) or not re.fullmatch(r'(?:[0-9a-fA-F]{2}){0,8}',x) for x in rt.get('shortIds',[])): raise ValueError()
             except (ValueError,TypeError): raise CoreError('REALITY needs a 32-byte private key, target, server names and hexadecimal short IDs')
+            policy=reality_target_policy(target)
+            if not policy['compatible']:raise CoreError(policy['advisory'])
         if sec=='tls':
             certs=st.get('tlsSettings',{}).get('certificates',[])
             if not isinstance(certs,list) or not certs or any(not isinstance(c,dict) for c in certs):raise CoreError('TLS inbound requires a certificate list')
@@ -570,7 +574,10 @@ class CoreEngine:
                 p={'email':c['email'],'level':0}
                 if proto in ('vless','vmess'):
                     p['id']=c['id']
-                    if proto=='vless' and c.get('flow'):p['flow']=c['flow']
+                    if proto=='vless' and c.get('flow'):
+                        net=r.get('streamSettings',{}).get('network','tcp')
+                        sec=r.get('streamSettings',{}).get('security','none')
+                        if net in ('tcp','raw') and sec in ('tls','reality'):p['flow']=c['flow']
                 elif proto in ('trojan','shadowsocks'):
                     p['password']=c['password']
                     if proto=='shadowsocks' and not settings.get('method','').startswith('2022-'):
@@ -928,7 +935,7 @@ class CoreEngine:
                 hp=('['+address+']' if ':' in address else address)+':'+str(port)
                 if proto=='vless':
                     q['encryption']=c.get('encryption') or 'none'
-                    if c.get('flow'):q['flow']=c['flow']
+                    if c.get('flow') and net in ('tcp','raw') and sec in ('tls','reality'):q['flow']=c['flow']
                     uri='vless://'+c['id']+'@'+hp+'?'+urlencode(q)+'#'+quote(label)
                 elif proto=='trojan':uri='trojan://'+quote(c['password'],safe='')+'@'+hp+'?'+urlencode(q)+'#'+quote(label)
                 elif proto=='vmess':
