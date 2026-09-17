@@ -2,117 +2,114 @@
   "project": "DARK XRAY",
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
-  "date": "2026-09-13",
+  "date": "2026-09-17",
   "status": "active_standalone_lab",
-  "source_import_complete": true,
-  "installable_from_repository_for_lab_testing": true,
+  "current_version": "0.8.2-standalone-lab",
   "production_ready": false,
-  "baseline_version": "0.7.0-standalone-lab",
-  "original_archive": {
-    "name": "DARK-XRAY-v0.6-GitHub-Ready.zip",
-    "sha256": "d234a1bd2a6314905bce17dd5e7c6b13ed9594727c42542a0b3a126a632082f7",
-    "file_count": 67
-  },
-  "source_import_notes": {
-    "guard_bridge_original_blob": "1f71a17f2551bb4dfaae151a7dd3e91af4d95bec",
-    "guardd_original_blob": "bee9b1c80e371c718689014d4dc1a5d6b516a4bc",
-    "policy_api_split": [
-      "backend/policy_auth.py",
-      "backend/policy_routes.py",
-      "backend/policy_api.py"
-    ],
-    "policy_api_split_reason": "The original monolithic policy API was split into smaller reviewable modules while preserving compatibility."
-  },
+  "installable_from_repository_for_lab_testing": true,
+  "runtime_independent_of_other_panels": true,
   "current_main_features": {
     "default_web_language": "en",
     "optional_web_language": "fa",
     "web_direction_default": "ltr",
-    "cyber_ui_layer": "web/cyber.css",
-    "language_layer": "web/i18n-en.js",
-    "account_password_min_characters": 8,
-    "account_password_max_characters": 512,
-    "encrypted_backup_passphrase_min_characters": 12,
-    "inbounds_ui": "v3",
-    "reality_server_side_target_scan": true,
-    "settings_ui": "v2",
-    "settings_tabs": [
-      "general",
-      "security",
-      "network",
-      "domain_tls",
-      "subscription",
-      "ip_guard",
-      "appearance",
-      "system"
-    ],
-    "root_runtime_settings_staging": true,
-    "root_runtime_apply_command": "sudo darkxray settings-apply",
-    "session_lifetime_policy_applies_to_cookie_and_database_session": true,
-    "subscription_runtime_settings": [
-      "enabled",
-      "default_format_raw_or_base64",
-      "profile_update_interval",
-      "remark_template",
-      "support_url"
-    ],
-    "online_installer": "install-online.sh",
-    "installer_progress_scale": "001-100",
-    "installer_states": [
-      "clean",
-      "partial",
-      "installed"
-    ],
-    "installer_profiles": [
-      "domain_tls",
-      "ip_ssh_tunnel",
-      "advanced"
-    ],
-    "partial_install_recovery": true,
-    "safe_update_with_source_snapshot": true,
-    "xray_core_reuse_or_quarantine": true,
-    "tls_failure_is_non_destructive": true,
-    "terminal_manager_command": "darkxray",
     "inbounds_workspace": "V3",
-    "settings_workspace": "V2",
     "clients_groups_workspace": "V2",
-    "subscription_workspace": "V2 raw/base64/json/clash",
-    "xray_control_workspace": "V2 DNS/outbounds/routing/balancers/observatory",
-    "hosts_workspace": "V2 client-facing endpoint overrides",
-    "operations_workspace": "V2 dashboard/logs/backup",
-    "nodes_workspace": "V2 HTTPS agent health/inventory/core-control",
-    "node_agent_token_prefix": "dkn_",
-    "safe_update_real_source_rollback": true,
-    "pinned_installer_source_ref_env": "DARK_XRAY_REF"
+    "settings_workspace": "V2",
+    "finance_workspace": "V2",
+    "subscription_workspace": "V2 raw/base64/dark-json/clash-mihomo",
+    "xray_control_workspace": "V2 dns/outbounds/routing/balancers/observatory",
+    "hosts_workspace": "V2",
+    "operations_workspace": "V2",
+    "nodes_workspace": "V2 https-agent",
+    "role_ceiling_enforced_server_side": true,
+    "totp_replay_counter_hardened": true,
+    "robot_sensitive_scope_ceiling": true,
+    "owner_scoped_groups": true,
+    "bulk_hidden_selection_invalidation": true,
+    "finance_event_idempotency": true,
+    "lifetime_traffic_ledger_preserved_across_period_reset": true,
+    "node_dns_pinning": true,
+    "node_tls_hostname_verification": true,
+    "node_redirect_and_environment_proxy_bypass_blocked": true,
+    "node_health_monitor": true,
+    "privileged_runtime_staging": true,
+    "root_runtime_apply_command": "sudo darkxray settings-apply",
+    "read_only_vps_gate": "sudo darkxray vps-verify",
+    "combined_production_gate": "sudo darkxray production-gate",
+    "safe_update_source_and_sqlite_rollback": true,
+    "online_installer": "install-online.sh",
+    "pinned_official_xray_ci_version": "v26.3.27"
   },
   "ci": {
     "runs_on_push_to_main": true,
-    "python_versions": [
-      "3.12",
-      "3.13"
+    "python_versions": ["3.12", "3.13"],
+    "gates": {
+      "application_test_matrix": true,
+      "browser_chromium": true,
+      "official_xray_real_data_plane": true,
+      "linux_kernel_nftables_packet_path": true,
+      "systemd_sigkill_and_stop_start_recovery": true
+    },
+    "real_xray_data_plane_scope": [
+      "socks_to_vless_to_http",
+      "generated_subscription_credentials",
+      "two_clients_shared_inbound",
+      "traffic_metering",
+      "reseller_quota_isolation",
+      "topup_recovery",
+      "manual_disable_preservation",
+      "reset_delete_historical_accounting",
+      "clean_core_stop"
     ],
-    "checks": [
-      "repository_hygiene",
-      "installer_runtime_selftest",
-      "terminal_manager_smoke",
-      "inbounds_v3_smoke",
-      "settings_v2_smoke",
-      "reality_scanner_safety_tests",
-      "javascript_syntax",
-      "8_character_password_policy",
-      "settings_v2_backend_tests",
-      "isolated_xray_test_double_suite",
-      "simulated_firewall_suite"
+    "kernel_firewall_scope": [
+      "tcp_drop",
+      "udp_drop",
+      "management_port_preserved",
+      "native_nft_timeout",
+      "explicit_unban",
+      "foreign_table_ownership_refusal"
+    ],
+    "systemd_recovery_scope": [
+      "restricted_darkxray_service_user",
+      "service_enable_start",
+      "vps_verify_ready",
+      "sigkill_restart_new_pid",
+      "stop_start_recovery",
+      "single_owned_xray_after_recovery"
+    ],
+    "browser_scope": [
+      "login_and_cookie_session",
+      "owner_workspace_navigation",
+      "inbounds_v3_real_save",
+      "english_ltr_to_persian_rtl",
+      "refresh_focus_scroll_stability",
+      "mobile_390px_layout"
     ]
   },
-  "live_validation": {
-    "real_xray_client_connectivity_verified_for_all_vps": false,
-    "live_nftables_packet_enforcement_verified_for_all_vps": false,
-    "certificate_renewal_verified_across_providers": false,
-    "reboot_recovery_verified_across_providers": false,
-    "production_load_verified": false,
+  "target_infrastructure_validation": {
+    "fresh_install_on_target_vps_image": false,
+    "real_machine_reboot_or_power_cycle": false,
+    "lets_encrypt_issue_and_renewal_on_target_provider": false,
+    "secure_cookie_and_hsts_on_target_tls": false,
+    "ip_guard_source_mapping_on_target_traffic_topology": false,
+    "two_real_vps_node_https_validation": false,
+    "node_network_loss_and_recovery": false,
+    "production_load_and_sqlite_contention": false,
+    "exact_release_artifact_update_rollback_rehearsal": false,
     "global_multi_node_ip_limit_complete": false,
-    "distributed_client_traffic_convergence_complete": false,
-    "remote_node_https_probe_verified_on_real_vps": false
+    "distributed_client_traffic_convergence_complete": false
   },
-  "checksum_note": "SHA256SUMS is regenerated only after the stabilized main snapshot is finalized; production readiness still requires live VPS validation."
+  "claim_boundaries": {
+    "kernel_ci_is_not_provider_topology_proof": true,
+    "systemd_recovery_ci_is_not_real_machine_reboot": true,
+    "real_xray_ci_is_not_target_region_connectivity_proof": true,
+    "ip_limit_is_observation_policy_not_physical_device_count": true
+  },
+  "release_hygiene": {
+    "version_file_current": true,
+    "readmes_current_for_0_8_2": true,
+    "status_current_for_0_8_2": true,
+    "sha256sums_is_previous_snapshot_until_final_tag": true
+  },
+  "checksum_note": "Regenerate SHA256SUMS only for the exact stabilized release/tag. For moving main, CI and the commit SHA are authoritative."
 }
