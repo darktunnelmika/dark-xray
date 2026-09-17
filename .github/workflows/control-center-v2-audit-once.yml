@@ -18,7 +18,7 @@ jobs:
         run: python -m pip install -q pytest cryptography
       - name: Apply audited Control Center V2 patch
         run: |
-          python tools/control_center_menu_once.py
+          python tools/control_center_runner_once.py
           python tools/control_center_support_once.py
           python -m py_compile tools/menu.py tools/backup_cli.py tools/guard-control.py tools/update.py tools/provision.py tests/test_control_center_v2.py tests/test_backup_cli.py
           bash -n darkxray tests/run-tests.sh
@@ -32,7 +32,7 @@ jobs:
         run: |
           git config user.name darktunnelmika
           git config user.email mikakhadmi@gmail.com
-          git rm .github/workflows/control-center-v2-audit-once.yml tools/control_center_menu_once.py tools/control_center_support_once.py
+          git rm .github/workflows/control-center-v2-audit-once.yml tools/control_center_menu_once.py tools/control_center_runner_once.py tools/control_center_support_once.py
           git add -A
           git commit -m 'Upgrade terminal Control Center to V2'
           git push origin HEAD:main
