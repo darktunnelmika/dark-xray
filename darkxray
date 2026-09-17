@@ -16,6 +16,10 @@ case "${1:-menu}" in
  production-gate) shift; exec "$PY" "$ROOT/tools/production-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
  guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
+ guard-control) shift; exec "$PY" "$ROOT/tools/guard-control.py" --config "$CONFIG" "$@" ;;
+ backup) shift; exec "$PY" "$ROOT/tools/backup_cli.py" backup --config "$CONFIG" --data "$DATA" "$@" ;;
+ backup-verify) shift; exec "$PY" "$ROOT/tools/backup_cli.py" verify "$@" ;;
+ restore) shift; exec "$PY" "$ROOT/tools/backup_cli.py" restore "$@" ;;
  settings-apply) shift; exec "$PY" "$ROOT/tools/settings_apply.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  stage-runtime|stage-panel-path) shift; exec "$PY" "$ROOT/tools/runtime_stage.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  reset-password) shift; exec "$PY" "$ROOT/backend/owner_recovery.py" --data "$DATA" --action password "$@" ;;
