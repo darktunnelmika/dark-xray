@@ -1,6 +1,6 @@
-# راهنمای DARK XRAY 0.9.0 RC3
+# راهنمای DARK XRAY 0.9.0 RC4
 
-برچسب فعلی: **`0.9.0-rc3`**
+برچسب فعلی: **`0.9.0-rc4`**
 
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
@@ -79,6 +79,10 @@ sudo darkxray doctor
 
 ## Inbounds V3
 
+### REALITY Guard
+
+برای Xray pin‌شده فعلی، DARK تارگت‌های شناخته‌شده ناسازگار را در backend رد می‌کند. `www.microsoft.com` به‌دلیل مشکل شناخته‌شده رکورد Certificate بزرگ‌تر از limit parser در REALITY v26.3.27 قابل ذخیره نیست؛ `www.bing.com:443` در Search/Placeholder پیش‌فرض امن‌تر است. Scanner compatibility/advisory را نشان می‌دهد. همچنین XTLS Vision روی gRPC/XHTTP قابل اعمال نیست و backend این ترکیب را رد می‌کند.
+
 Inbound workflow برای کار روزمره شبیه پنل‌های ساده‌تر طراحی شده ولی backend مستقل است. امکانات اصلی:
 
 - VLESS، VMess، Trojan، Shadowsocks و protocolهای فرم‌شدهٔ پنل؛
@@ -93,6 +97,14 @@ Inbound workflow برای کار روزمره شبیه پنل‌های ساده�
 وجود یک قابلیت در Xray به معنی parity کامل فرم DARK با همه optionهای ممکن Xray نیست؛ Advanced JSON برای این مرز حفظ شده است.
 
 ## Clients / Groups / Resellers
+
+### Clients V3
+
+- صفحه Clients به Workspace مرتب با Summary، Search، Owner/Inbound/Status/Presence filter، Sort و Group sidebar تبدیل شده است.
+- Presence از activity واقعی Traffic Ledger / access observation / device activity محاسبه می‌شود؛ Enabled بودن حساب به معنی Online نیست.
+- Online indicator با Pulse + Signal line + arrow نمایش داده می‌شود و برای کاهش motion قابل احترام است.
+- هر Subscription و هر Config ساخته‌شده QR مستقل دارد؛ Copy و Download SVG نیز در همان پنجره موجود است.
+- Detail view مصرف، انقضا، محدودیت، Inboundها و وضعیت اجرای Client را یکجا نشان می‌دهد.
 
 - Clientها به Owner/Reseller مشخص متصل‌اند.
 - Groupها owner-scoped هستند؛ دو نماینده می‌توانند Group هم‌نام داشته باشند بدون قاطی‌شدن فیلتر.
@@ -204,7 +216,7 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 7. Update/Rollback rehearsal با exact release artifact نهایی.
 8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
 
-تا تکمیل این موارد، نام نسخه **`0.8.2-standalone-lab`** حفظ می‌شود.
+تا تکمیل این موارد، نام نسخه **`0.9.0-rc4`** حفظ می‌شود.
 
 ## منابع وضعیت
 
