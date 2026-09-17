@@ -1,7 +1,7 @@
-# وضعیت DARK XRAY 0.8.2
+# وضعیت DARK XRAY 0.9.0 RC1
 
 تاریخ بازبینی: **17 سپتامبر 2026**  
-برچسب فعلی: **`0.8.2-standalone-lab`**
+برچسب فعلی: **`0.9.0-rc1`**
 
 > «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
 
@@ -28,6 +28,7 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مست�
 | Kernel nftables | packet-level TCP/UDP enforcement در namespace واقعی Linux |
 | systemd recovery | SIGKILL restart + stop/start + single Xray child در CI |
 | Python | 3.12 و 3.13 کامل |
+| Load / Scale CI | 1000 Client + SQLite contention smoke سبز |
 
 ## Gateهای واقعی که الان در `main` اجرا می‌شوند
 
@@ -138,9 +139,9 @@ sudo darkxray production-gate --json-only
 3. **Domain/TLS provider gate**: issue و renewal واقعی Let's Encrypt، Secure Cookie و HSTS.
 4. **IP Guard روی topology واقعی**: تأیید اینکه source مشاهده‌شده در Xray همان packet source قابل enforce است.
 5. **دو VPS واقعی Node** با HTTPS معتبر، deploy/probe/core action و network loss/recovery.
-6. **Load/Scale** با تعداد Client/Inbound هدف، polling، Bulk و SQLite contention اندازه‌گیری‌شده.
+6. **Capacity روی VPS هدف**؛ smoke هزار Client/SQLite contention در CI سبز است ولی ظرفیت provider/hardware باید روی مقصد اندازه‌گیری شود.
 7. **Update/Rollback rehearsal** روی VPS disposable با exact release artifact نهایی.
-8. **Release finalization**: VERSION/CHANGELOG/README و تولید مجدد `SHA256SUMS` برای همان tag ثابت.
+8. **Stable promotion** بعد از پاس‌شدن گیت‌های VPS واقعی همین RC.
 
 ## مرزهایی که نباید بیش از واقعیت ادعا شوند
 
@@ -153,6 +154,6 @@ sudo darkxray production-gate --json-only
 
 ## مسیر بعدی
 
-مرحله بعد از این hardening، **Target VPS Validation + TLS/Node/Load evidence** و سپس Release Candidate ثابت است. هر failure جدید باید قبل از Release به regression test تبدیل شود.
+مرحله بعد، تست **`0.9.0-rc1`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)

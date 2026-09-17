@@ -4,10 +4,10 @@
 
 Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, reseller ownership, RBAC, accounting, subscriptions, nodes and direct Xray-core control.
 
-**Current line:** `0.8.2-standalone-lab`
+**VPS test candidate:** `0.9.0-rc1`
 
 > [!CAUTION]
-> DARK XRAY is **not declared production-ready yet**. The repository now exercises substantial runtime behavior with a real browser, official Xray, real Linux nftables packet paths and real systemd recovery. Target-VPS installation, an actual machine reboot, provider-specific TLS renewal, two-VPS node validation and measured production load still remain release gates.
+> DARK XRAY is now a **Release Candidate**, not a production-ready declaration. Real Chromium, official Xray, packet-level nftables, systemd crash recovery and a 1000-client/SQLite contention smoke are green in CI; target-VPS install, real machine reboot, provider TLS renewal and two-VPS node validation remain final gates.
 
 ## Architecture
 
@@ -93,14 +93,14 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 
 ## Remaining production gates
 
-The project intentionally remains `standalone-lab` until the intended deployment environment passes:
+This `0.9.0-rc1` candidate remains pre-production until the intended deployment environment passes:
 
 - fresh install on the actual target VPS image/provider;
 - real machine reboot/power-cycle recovery;
 - Let's Encrypt issuance and renewal on the target DNS/provider path, including Secure Cookie/HSTS behavior;
 - IP Guard validation on the actual tunnel/CDN/source-IP topology;
 - two real VPS nodes over valid public HTTPS, including network loss/recovery and convergence;
-- measured load/scale testing for the intended client/inbound counts and SQLite concurrency;
+- capacity validation on the intended VPS plan; CI already passes a 1000-client and SQLite-contention smoke, but that is not a provider capacity guarantee;
 - final update/rollback rehearsal with the exact release artifact to be deployed.
 
 ## Documentation
@@ -112,6 +112,6 @@ The project intentionally remains `standalone-lab` until the intended deployment
 - [Third-party notices](THIRD-PARTY-NOTICES.md)
 - [Publication status](PUBLISH-STATUS.json)
 
-`SHA256SUMS` must be regenerated for the exact stabilized release/tag. For a moving `main`, use CI and the exact commit SHA as the source of truth.
+`SHA256SUMS` is regenerated for this RC snapshot; release-archive checksums are published with the matching prerelease assets.
 
 Do not publish real credentials, private keys, certificates, databases or unredacted logs.

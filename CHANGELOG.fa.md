@@ -1,5 +1,15 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc1 — Release Candidate برای تست VPS
+
+- همه Gateهای CI روی Python 3.12/3.13، Chromium، Xray رسمی، nftables packet-level و systemd recovery سبز هستند.
+- Load/Scale smoke با 1000 Client و SQLite contention به Gate اصلی اضافه و سبز شده است.
+- CLI در برابر `PYTHONHOME/PYTHONPATH` خارجی harden شده تا virtualenv نصب‌شده منحرف نشود.
+- `kernel-firewall` شامل TCP/UDP drop، management-port preservation، nft timeout، unban و foreign-table ownership refusal است.
+- `systemd-recovery` شامل `vps-verify`، SIGKILL→Restart=on-failure، stop/start و تک‌بودن Xray child است.
+- مستندات، Validation path، VERSION و checksum snapshot برای RC یکدست شده‌اند.
+- این نسخه Production Ready اعلام نمی‌شود تا VPS هدف، reboot واقعی، TLS renewal و دو VPS Node واقعی پاس شوند.
+
 ## 0.8.2-standalone-lab — Hardening و Validation
 
 ### Runtime / Installer / Recovery

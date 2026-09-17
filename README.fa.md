@@ -1,11 +1,11 @@
-# راهنمای DARK XRAY 0.8.2
+# راهنمای DARK XRAY 0.9.0 RC1
 
-برچسب فعلی: **`0.8.2-standalone-lab`**
+برچسب فعلی: **`0.9.0-rc1`**
 
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
 > [!CAUTION]
-> این شاخه هنوز **Lab** است. CI اکنون با Xray رسمی، nftables واقعی، systemd واقعی و Chromium واقعی تست دارد، اما Production Ready فقط زمانی اعلام می‌شود که VPS هدف، reboot واقعی ماشین، TLS renewal واقعی، Nodeهای چندسروری و Load/Scale هم تأیید شوند.
+> این نسخه **Release Candidate** برای تست VPS است. CI با Xray رسمی، nftables واقعی، systemd واقعی، Chromium واقعی و Load/Scale هزار Client سبز است؛ Production Ready فقط بعد از VPS هدف، reboot واقعی، TLS renewal واقعی و Nodeهای چندسروری اعلام می‌شود.
 
 ## نصب آنلاین
 
@@ -200,7 +200,7 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 3. Domain/TLS واقعی: issue و renewal گواهی، Secure Cookie و HSTS.
 4. IP Guard در topology واقعی سرور/تونل/CDN.
 5. دو VPS واقعی Node با HTTPS معتبر و network-loss recovery.
-6. Load/Scale متناسب با تعداد Client/Inbound موردنظر و SQLite concurrency.
+6. ظرفیت‌سنجی روی پلن واقعی VPS؛ smoke هزار Client و SQLite contention در CI قبلاً سبز شده است.
 7. Update/Rollback rehearsal با exact release artifact نهایی.
 8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
 

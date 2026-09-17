@@ -3,8 +3,8 @@
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
   "date": "2026-09-17",
-  "status": "active_standalone_lab",
-  "current_version": "0.8.2-standalone-lab",
+  "status": "release_candidate_target_vps_validation",
+  "current_version": "0.9.0-rc1",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -42,13 +42,17 @@
   },
   "ci": {
     "runs_on_push_to_main": true,
-    "python_versions": ["3.12", "3.13"],
+    "python_versions": [
+      "3.12",
+      "3.13"
+    ],
     "gates": {
       "application_test_matrix": true,
       "browser_chromium": true,
       "official_xray_real_data_plane": true,
       "linux_kernel_nftables_packet_path": true,
-      "systemd_sigkill_and_stop_start_recovery": true
+      "systemd_sigkill_and_stop_start_recovery": true,
+      "load_scale_1000_clients_sqlite_contention": true
     },
     "real_xray_data_plane_scope": [
       "socks_to_vless_to_http",
@@ -97,7 +101,8 @@
     "production_load_and_sqlite_contention": false,
     "exact_release_artifact_update_rollback_rehearsal": false,
     "global_multi_node_ip_limit_complete": false,
-    "distributed_client_traffic_convergence_complete": false
+    "distributed_client_traffic_convergence_complete": false,
+    "ci_load_scale_1000_clients_complete": true
   },
   "claim_boundaries": {
     "kernel_ci_is_not_provider_topology_proof": true,
@@ -107,9 +112,12 @@
   },
   "release_hygiene": {
     "version_file_current": true,
-    "readmes_current_for_0_8_2": true,
-    "status_current_for_0_8_2": true,
-    "sha256sums_is_previous_snapshot_until_final_tag": true
+    "readmes_current_for_rc": true,
+    "status_current_for_rc": true,
+    "validation_doc_path_current": true,
+    "source_sha256sums_regenerated_for_rc": true,
+    "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "Regenerate SHA256SUMS only for the exact stabilized release/tag. For moving main, CI and the commit SHA are authoritative."
+  "checksum_note": "Repository SHA256SUMS is regenerated for the RC source snapshot. Release archive checksums are generated when the v0.9.0-rc1 prerelease assets are built.",
+  "release_candidate": true
 }

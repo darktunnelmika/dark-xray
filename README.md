@@ -11,10 +11,10 @@
 
 پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، نماینده و سطح دسترسی، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
-**نسخه فعلی:** `0.8.2-standalone-lab`
+**نسخه آزمایشی برای تست VPS:** `0.9.0-rc1`
 
 > [!CAUTION]
-> DARK XRAY هنوز **Production Ready اعلام نشده**. بخش بزرگی از رفتار Runtime در CI با مرورگر واقعی، Xray رسمی، nftables واقعی و systemd واقعی تست می‌شود؛ اما تست روی VPS هدف، reboot واقعی ماشین، TLS/renewal دیتاسنتر موردنظر، دو VPS واقعی Node و Load/Scale هنوز گیت انتشار هستند.
+> DARK XRAY در وضعیت **Release Candidate** است و هنوز Production Ready اعلام نشده. Browser، Xray رسمی، nftables packet-level، systemd recovery و Load/Scale هزار کلاینت در CI سبزند؛ اما نصب روی VPS هدف، reboot واقعی ماشین، TLS/renewal دیتاسنتر موردنظر و دو VPS واقعی Node هنوز گیت نهایی هستند.
 
 ## وضعیت فعلی
 
@@ -107,10 +107,10 @@ sudo darkxray production-gate --json-only
 - صدور و renewal واقعی Let's Encrypt در DNS/provider هدف و بررسی Secure Cookie/HSTS.
 - IP Guard روی topology واقعی ترافیک همان VPS/تونل/CDN.
 - دو VPS واقعی Node با HTTPS، قطع/وصل شبکه و convergence.
-- Load/Scale اندازه‌گیری‌شده برای تعداد Client/Inbound موردنظر و contention دیتابیس.
+- ظرفیت‌سنجی روی سخت‌افزار/پلن VPS هدف؛ CI فعلی smoke هزار Client و SQLite contention را پاس کرده است.
 - rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
-بنابراین برچسب پروژه فعلاً **`standalone-lab`** می‌ماند.
+بنابراین این build با برچسب **`0.9.0-rc1`** برای تست VPS منتشر می‌شود؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
 
 ## مستندات
 
@@ -121,6 +121,6 @@ sudo darkxray production-gate --json-only
 - [Third-party notices](THIRD-PARTY-NOTICES.md)
 - [Publication status](PUBLISH-STATUS.json)
 
-`SHA256SUMS` فقط باید برای release/tag نهایی و ثابت دوباره تولید شود. برای `main` متحرک، CI و commit SHA منبع وضعیت هستند.
+`SHA256SUMS` این شاخه برای همین RC بازتولید شده است؛ checksum آرشیوهای Release نیز کنار assetهای همان tag منتشر می‌شود.
 
 **Credential، private key، certificate، database یا log بدون سانسور را در Repository/Issue منتشر نکنید.**
