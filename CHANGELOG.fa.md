@@ -1,16 +1,66 @@
-# تغییرات ۰.۵ به ۰.۶
+# تغییرات DARK XRAY
 
-- حفظ کامل استقلال اجرایی از هر پنل دیگر.
-- نصب تازهٔ مستقل systemd؛ کد و تنظیمات نصب‌شده قابل بازنویسی توسط کاربر وب نیستند.
-- پذیرش پورت‌های پایین برای اینباند و مجوز حداقلی سرویس؛ حفاظت پورت مدیریت و API پابرجاست.
-- سرویس جداگانهٔ nftables با Unix socket و پورت‌های تأییدشدهٔ root.
-- سیاست IP پویا از دیتابیس؛ صفحهٔ وضعیت، حالت مشاهده/اعمال، خطا و رفع مسدودی.
-- ثبت آخرین مصرف مشاهده‌شده پیش از ریست/حذف؛ دورهٔ ثابت روزانه با سقف تعداد ریست.
-- فرم بومی هاست، اوتباند و روتینگ؛ حفظ فیلدهای پیشرفتهٔ قبلی و جلوگیری از تخت‌کردن خروجی چندسرور.
-- رد زنجیرهٔ دوری اوتباند و مقصد بالانسر ناشناخته.
-- restart صریح حتی برای پیکربندی همسان و حفظ مسیر rollback.
-- بکاپ رمزدار و بازیابی فقط در پوشهٔ جدید، همراه کلید TOTP و ابطال نشست‌ها.
-- ابزار دامنه/Certbot، بررسی نصب و منوی مدیریت.
-- آزمون واقعی اختیاری با Xray و دو مشتری روی اینباند مشترک؛ اجرای آن در محیط ساخت skipped است.
+## 0.8.2-standalone-lab — Hardening و Validation
 
-این تغییرها نسخهٔ آزمایشی‌اند. `STATUS.fa.md` فهرست کارهای ناتمام و مرز آزمایش‌های واقعی/شبیه‌سازی‌شده را مشخص می‌کند.
+### Runtime / Installer / Recovery
+
+- `darkxray check` به health-check خواندنی تبدیل شد و دیگر با instance lock سرویس زنده رقابت نمی‌کند.
+- Panel URI Path و Subscription Path در Web و CLI collision-safe شدند.
+- Settings privileged همچنان Stage → Apply می‌شوند و rollback مسیر Runtime حفظ شده است.
+- Safe Update با preflight dependency، SQLite `quick_check`، snapshot مستقل Source/DB و Doctor پس از activation سخت‌گیرانه‌تر شد.
+- `darkxray vps-verify` برای readiness نصب واقعی اضافه شد.
+- `darkxray production-gate` readiness نصب را با lab ایزوله روی همان Xray binary نصب‌شده ترکیب می‌کند.
+
+### Inbounds / Clients / UX
+
+- Inbounds V3 با Browser QA واقعی وارد Gate اصلی شد.
+- crash ذخیره Inboundهای غیر-XHTTP ناشی از دسترسی اشتباه به `xhttpSettings.xPaddingBytes` اصلاح و regression دائمی اضافه شد.
+- Save error اینباند دیگر silent نمی‌ماند و پیام backend را نمایش می‌دهد.
+- Language Switch دیگر روی drawer/modal کنترل‌های Save را نمی‌پوشاند.
+- Group filter با Owner + Group کار می‌کند تا Groupهای هم‌نام نماینده‌ها مخلوط نشوند.
+- تغییر Search/Filter/Owner، Bulk selection مخفی قبلی را invalidate می‌کند.
+- Auto-refresh هنگام کار روی فرم، focus/caret/scroll همان صفحه را حفظ می‌کند و page navigation را قفل نمی‌کند.
+
+### Security / RBAC
+
+- Role ceiling هنگام ذخیره و احراز هویت enforce می‌شود و grantهای legacy خارج از Role حذف می‌شوند.
+- Robot API Key نمی‌تواند `api.manage` یا mutationهای مالی حساس را نگه دارد.
+- Credit در Runtime API فقط Interactive Owner است.
+- TOTP counter واقعی window match ذخیره می‌شود تا replay window بسته شود.
+- Node egress با public HTTPS، DNS pinning، TLS hostname verification، no-redirect و no-environment-proxy سخت‌گیرانه‌تر شد.
+
+### Finance / Accounting
+
+- Event IDهای مالی idempotent شدند؛ retry یک event دوباره Balance یا Audit نمی‌سازد.
+- Reset دوره، lifetime traffic ledger را پاک نمی‌کند.
+- Finance V2 زمان مصرف را از `observed_at` و lifetime را از منبع authoritative Owner می‌گیرد.
+- Summary محدود آخرین Ledger rows دیگر به‌عنوان Lifetime معرفی نمی‌شود.
+
+### Nodes
+
+- Node connection به IP validate‌شده pin می‌شود و TLS همچنان hostname اصلی را verify می‌کند.
+- HTTP redirect و proxy environment برای Node request دنبال نمی‌شوند.
+- monitor داخلی، نودهای فعال را دوره‌ای probe و latency/error را persist می‌کند.
+
+### Validation Evidence
+
+روی `main` Gateهای زیر اجرا می‌شوند:
+
+- Python 3.12 و 3.13؛
+- Chromium Browser QA؛
+- Xray رسمی `v26.3.27` و data-plane واقعی `SOCKS → VLESS → HTTP`؛
+- nftables واقعی در Linux network namespace با TCP/UDP drop، timeout و unban؛
+- systemd واقعی با service user محدود، SIGKILL restart و stop/start recovery.
+
+این evidence جای Target-VPS Validation را نمی‌گیرد. Reboot واقعی ماشین، TLS issue/renewal provider هدف، topology واقعی IP Guard، دو VPS Node و Load/Scale هنوز گیت Release هستند.
+
+## 0.6 baseline
+
+- استقلال اجرایی از پنل‌های دیگر.
+- نصب مستقل systemd و service account غیر-root.
+- IP Guard worker جداگانه با Unix socket و nftables.
+- سیاست IP پویا، Host/Outbound/Routing forms و Advanced JSON.
+- Ledger مصرف، Reset دوره‌ای، Backup رمزدار و Restore ایزوله.
+- Domain/Certbot tooling و Manager اولیه.
+
+برای وضعیت دقیق جاری به `STATUS.fa.md` و `docs/VALIDATION.md` مراجعه کنید.
