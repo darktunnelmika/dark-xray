@@ -1,21 +1,44 @@
 [فارسی](README.md) | [English](README.en.md)
 
 ```text
-╔══════════════════════════════════════════╗
-║               DARK XRAY                  ║
-║       STANDALONE CONTROL PANEL           ║
-╚══════════════════════════════════════════╝
+╔════════════════════════════════════════════╗
+║                 DARK XRAY                  ║
+║          STANDALONE CONTROL PANEL          ║
+╚════════════════════════════════════════════╝
 ```
 
 # DARK XRAY 🖤
 
-پنل مستقل مدیریت Xray با رابط Cyber/Dark، مالکیت مشتری، مدیریت نمایندگان و کنترل سطح دسترسی. زبان پیش‌فرض رابط وب **English / LTR** است و از داخل خود پنل می‌توان بین English و فارسی جابه‌جا شد.
+پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، نماینده و سطح دسترسی، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
-نسخهٔ مبنا: `0.6.0-standalone-lab`
+**نسخه فعلی:** `0.8.2-standalone-lab`
 
 > [!CAUTION]
-> **سورس نسخهٔ ۰.۶ کامل است، اما پروژه هنوز Lab/Experimental است و Production Ready اعلام نشده.**
-> CI مخزن موفق است، ولی اتصال واقعی کلاینت، اعمال واقعی nftables، صدور گواهی روی همهٔ دیتاسنترها، بازیابی پس از ریبوت و ظرفیت زیر بار باید روی VPS واقعی جداگانه تأیید شوند.
+> DARK XRAY هنوز **Production Ready اعلام نشده**. بخش بزرگی از رفتار Runtime در CI با مرورگر واقعی، Xray رسمی، nftables واقعی و systemd واقعی تست می‌شود؛ اما تست روی VPS هدف، reboot واقعی ماشین، TLS/renewal دیتاسنتر موردنظر، دو VPS واقعی Node و Load/Scale هنوز گیت انتشار هستند.
+
+## وضعیت فعلی
+
+DARK XRAY برای Runtime به Sanayi/3x-ui وابسته نیست:
+
+```text
+DARK UI → DARK API / RBAC → DARK Database → Xray-core
+                                  ├→ Ledger / Policy
+                                  ├→ Node control
+                                  └→ IP Guard → nftables
+```
+
+قابلیت‌های اصلی فعلی:
+
+- **Inbounds V3** با VLESS/VMess/Trojan/Shadowsocks، Transportهای اصلی، TLS/REALITY، Sniffing، Fallback و Advanced JSON.
+- **Clients + Groups V2** با مالکیت نماینده، Bulk operations، محدودیت IP/HWID، دوره/حجم و Groupهای owner-scoped.
+- **Reseller / RBAC** با role ceiling، permissionهای سمت سرور و جلوگیری از privilege escalation رکوردهای legacy.
+- **Account Security** شامل Session، TOTP ضد replay و API Key با محدودیت Robot scope.
+- **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
+- **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
+- **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
+- **Nodes V2** با HTTPS اجباری، token، DNS pinning، TLS hostname verification، health monitor و core actions.
+- **Backup/Restore و Safe Update** با preflight، snapshot سورس/SQLite و rollback.
+- **Cyber UI** با English/LTR پیش‌فرض، فارسی/RTL، responsive layout و refresh/focus stability.
 
 ## نصب آنلاین
 
@@ -26,88 +49,78 @@ curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/ma
 sudo bash /tmp/dark-xray-install.sh
 ```
 
-Installer دارای روند ۱→۱۰۰ است و سه حالت را تشخیص می‌دهد:
+Installer حالت‌های `Clean`، `Partial/Failed` و `Installed` را تشخیص می‌دهد و برای نصب/Repair/Update مسیر جدا دارد. Xray رسمی به نسخه pin‌شده دریافت می‌شود و ابزار دریافت، SHA-256 رسمی Release را بررسی می‌کند.
 
-- **Clean** — نصب تازه
-- **Partial / Failed** — نگهداری بقایای قبلی در recovery و Repair امن
-- **Installed** — Safe Update یا ورود مستقیم به Manager
-
-پروفایل پیشنهادی `Domain + HTTPS/TLS` دامنه، پورت، Owner، Xray-core و Certbot را در همان Wizard مدیریت می‌کند. شکست DNS/TLS دیگر نصب سالم پنل را خراب نمی‌کند و TLS را می‌توان بعداً از `darkxray` دوباره اجرا کرد.
-
-پس از نصب:
+بعد از نصب:
 
 ```bash
 darkxray
 ```
 
-## DARK XRAY Cyber Control Center
+## گیت‌های سلامت روی سرور
 
-منوی ترمینال، عملیات مدیریتی اصلی را یکجا نگه می‌دارد:
+Readiness بدون تغییر سرویس/DB/firewall:
 
-- Live Status برای Panel، IP Guard، CPU، RAM، Disk، Endpoint و Xray
-- Start / Stop / Restart و Autostart
-- Log Center و Doctor / Diagnostics
-- Backup رمزدار و Restore ایزوله
-- Reset رمز Owner
-- Domain / TLS / Let's Encrypt / Certbot
-- IP Guard و پورت‌های دادهٔ تأییدشده
-- BBR، پورت‌های Listening و وضعیت nftables
-- Safe Update با snapshot برگشت
-
-رمز، API key و private key ذخیره‌شده در منو چاپ نمی‌شوند و عملیات حساس نیاز به تأیید صریح دارند.
-
-## سیاست رمز حساب‌ها
-
-حداقل رمز **حساب‌های DARK XRAY برابر ۸ کاراکتر** و حداکثر ۵۱۲ کاراکتر است. این قانون برای Owner، Admin/Reseller و تغییر رمز یکسان شده است. Passphrase بکاپ رمزدار یک سیاست جداگانه دارد و همچنان حداقل ۱۲ کاراکتر می‌خواهد.
-
-## رابط Cyber/Dark
-
-رابط وب اکنون به‌صورت پیش‌فرض English/LTR است و لایهٔ Cyber اختصاصی DARK دارد: پس‌زمینهٔ grid/scanline، پنل‌های شیشه‌ای تیره، glow سبز/فیروزه‌ای، سایدبار LTR، وضعیت‌های واضح Online/Warning و سوییچ EN/FA. این لایه فقط presentation است و منطق API/مالکیت/Xray را تغییر نمی‌دهد.
-
-## معماری مستقل
-
-```text
-DARK UI → DARK API / Access Control → DARK Database → Xray-core
-                                              └→ IP guard (nftables)
+```bash
+sudo darkxray vps-verify
 ```
 
-سنایی/3x-ui یا پنل دیگری پیش‌نیاز Runtime نیست. برای تجربهٔ Installer/Manager از الگوهای خوب پنل‌های成熟 مثل نصب مرحله‌ای، مدیریت SSL، Update و Service Control الهام گرفته شده، اما دیتابیس، UI، API و سرویس‌های DARK مستقل‌اند.
+گیت کامل‌تر که readiness نصب را با یک lab ایزوله روی **همان Xray binary نصب‌شده** ترکیب می‌کند:
 
-## امکانات مبنای ۰.۶
+```bash
+sudo darkxray production-gate
+```
 
-- مدیریت Inbound، Client و مالکیت روی Inboundهای مشترک
-- مدیریت نماینده، سقف مشتری، سهمیه و ledger مستقل مصرف
-- Session، TOTP و API key
-- محدودیت IP با worker مستقل و دسترسی محدود nftables
-- Host metrics و Dashboard
-- Host، Outbound و Routing با فرم بومی و Advanced JSON
-- Backup/Restore
-- systemd installation
-- تست‌های Python/JavaScript و GitHub Actions روی Python 3.12 و 3.13
+خروجی ماشینی:
 
-## وضعیت اعتبارسنجی
+```bash
+sudo darkxray production-gate --json-only
+```
 
-CI شامل Repository Hygiene، Runtime Self-Test نصب‌کننده، Smoke منوی مدیریتی، Smoke رابط English/Cyber، بررسی JavaScript و مجموعهٔ تست‌های ایزوله است. این تست‌ها از Xray test-double و firewall شبیه‌سازی‌شده استفاده می‌کنند؛ بنابراین سبز بودن CI به معنی تأیید نهایی ترافیک واقعی VPN روی هر VPS نیست.
+`production-gate` دیتابیس مشتری‌ها یا firewall نصب‌شده را تغییر نمی‌دهد؛ data-plane را در دیتابیس/پورت‌های موقت loopback تست می‌کند.
 
-قبل از استفادهٔ production هنوز باید روی VPS واقعی بررسی شوند: اتصال کلاینت Xray، IP Guard واقعی، سهمیه، certificate renewal، reboot recovery و load/concurrency. Multi-node و global IP limit چندنودی نیز هنوز کامل نیستند.
+## چه چیزهایی واقعاً در CI تست شده‌اند؟
 
-## راهنماها
+روی `main` این Gateها مستقل اجرا می‌شوند:
 
-- [راهنمای فارسی توسعه و نصب آزمایشی](README.fa.md)
-- [وضعیت امکانات نسخهٔ ۰.۶](STATUS.fa.md)
-- [امنیت](SECURITY.md)
-- [اجزای ثالث و مجوزها](THIRD-PARTY-NOTICES.md)
-- [وضعیت انتشار](PUBLISH-STATUS.json)
+- **Python 3.12 و 3.13:** API، RBAC، TOTP، Finance، Settings، Backup/Update rollback، Nodes و regressionها.
+- **Browser QA:** Chromium واقعی، Login، صفحات Owner، ذخیره Inbound V3، EN/LTR ↔ FA/RTL، refresh/focus و viewport موبایل 390px.
+- **Real Xray:** Xray رسمی `v26.3.27` با مسیر واقعی `SOCKS → VLESS → HTTP`، Subscription، Traffic Metering، quota isolation و recovery semantics.
+- **Kernel firewall:** network namespace و nftables واقعی؛ TCP/UDP drop، سالم‌ماندن management port، timeout، unban و foreign-table protection.
+- **systemd recovery:** مسیرهای production-like، user محدود `darkxray`، enable/start، `vps-verify`، SIGKILL restart، stop/start و جلوگیری از Xray child تکراری.
 
-`SHA256SUMS` مربوط به snapshot انتشار قبلی است و پس از تثبیت release/tag بعدی باید دوباره تولید شود؛ برای وضعیت جاری شاخهٔ `main` به CI و commit SHA تکیه کنید.
+جزئیات و مرز ادعاها: [docs/VALIDATION.md](docs/VALIDATION.md)
 
-**Credential واقعی، private key، certificate، database یا log بدون سانسور را در مخزن و Issue منتشر نکنید.**
+## امنیت و مرزهای دسترسی
 
+- Password حساب‌های DARK: حداقل ۸ و حداکثر ۵۱۲ کاراکتر.
+- Passphrase بکاپ رمزدار: سیاست جدا و حداقل ۱۲ کاراکتر.
+- Robot Key نمی‌تواند lifecycle کلیدها یا mutation مالی حساس را در اختیار بگیرد.
+- `finance.credit` و `finance.refund` در سقف Roleهای پایین‌تر قرار ندارند.
+- Node URL باید HTTPS باشد و به IP عمومی resolve شود؛ redirect و proxy environment در مسیر Node دنبال نمی‌شود.
+- IP Guard فقط وقتی باید enforce شود که تطابق IP مشاهده‌شده در Xray و source packet روی همان host تأیید شده باشد.
 
-## DARK XRAY 0.7 Lab workspace map
+## هنوز چه چیزهایی برای Production باقی است؟
 
-The current standalone LAB line includes structured **Settings V2**, **Clients + Groups V2**, **Subscription V2** (Raw/Base64/DARK JSON/Clash-Mihomo), **Xray Control V2** (DNS, Outbounds, Routing, Balancers, Observatory), **Hosts V2**, **Operations V2** (real dashboard/logs/backup status), **Nodes V2** with dedicated HTTPS agent tokens, and **Inbounds V3** with the REALITY workflow.
+- Fresh install روی **VPS هدف واقعی** با image/provider نهایی.
+- Reboot/Power-cycle واقعی ماشین؛ CI فعلاً crash و stop/start systemd را اثبات می‌کند، نه reboot میزبان.
+- صدور و renewal واقعی Let's Encrypt در DNS/provider هدف و بررسی Secure Cookie/HSTS.
+- IP Guard روی topology واقعی ترافیک همان VPS/تونل/CDN.
+- دو VPS واقعی Node با HTTPS، قطع/وصل شبکه و convergence.
+- Load/Scale اندازه‌گیری‌شده برای تعداد Client/Inbound موردنظر و contention دیتابیس.
+- rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
-Runtime-sensitive panel changes are staged first and require the root-owned `darkxray settings-apply` boundary. Safe Update validates candidate source before service interruption and restores the previous source snapshot if activation fails. The online installer accepts `DARK_XRAY_REF` to pin a branch, tag, or commit.
+بنابراین برچسب پروژه فعلاً **`standalone-lab`** می‌ماند.
 
-This repository is still a **LAB build**. CI uses isolated Xray/firewall doubles. Real VPS client connectivity, certificate renewal across providers, reboot recovery, nftables packet enforcement, production load, and distributed multi-node customer/traffic convergence require live validation before any production-ready claim.
+## مستندات
+
+- [راهنمای فارسی](README.fa.md)
+- [وضعیت دقیق قابلیت‌ها و گیت‌ها](STATUS.fa.md)
+- [Validation Matrix](docs/VALIDATION.md)
+- [Security](SECURITY.md)
+- [Third-party notices](THIRD-PARTY-NOTICES.md)
+- [Publication status](PUBLISH-STATUS.json)
+
+`SHA256SUMS` فقط باید برای release/tag نهایی و ثابت دوباره تولید شود. برای `main` متحرک، CI و commit SHA منبع وضعیت هستند.
+
+**Credential، private key، certificate، database یا log بدون سانسور را در Repository/Issue منتشر نکنید.**
