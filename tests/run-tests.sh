@@ -16,6 +16,7 @@ python -m pytest tests/test_live_check.py -q --junitxml=qa/junit/live-check.xml
 python -m pytest tests/test_production_gate.py -q --junitxml=qa/junit/production-gate.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
+python -m pytest tests/test_bulk_batching.py -q --junitxml=qa/junit/bulk-batching.xml
 python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscription-v2.xml
 python -m pytest tests/test_subscription_path.py -q --junitxml=qa/junit/subscription-path.xml
 python -m pytest tests/test_hosts_v3.py -q --junitxml=qa/junit/hosts-v3.xml
