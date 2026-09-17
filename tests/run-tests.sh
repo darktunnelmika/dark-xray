@@ -16,6 +16,7 @@ python -m pytest tests/test_live_check.py -q --junitxml=qa/junit/live-check.xml
 python -m pytest tests/test_production_gate.py -q --junitxml=qa/junit/production-gate.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
+python -m pytest tests/test_client_presence.py -q --junitxml=qa/junit/client-presence.xml
 python -m pytest tests/test_bulk_batching.py -q --junitxml=qa/junit/bulk-batching.xml
 python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscription-v2.xml
 python -m pytest tests/test_subscription_path.py -q --junitxml=qa/junit/subscription-path.xml
@@ -46,6 +47,7 @@ node --test tests/form-models.test.cjs
 node --test tests/inbounds-models.test.cjs
 node --test tests/inbounds-v3-regression.test.cjs
 node --test tests/clients-v2-filter.test.cjs
+node --test tests/clients-v3.test.cjs
 node --test tests/ops-v2-cache.test.cjs
 node --test tests/finance-v2.test.cjs
 node --test tests/ui-stability.test.cjs
