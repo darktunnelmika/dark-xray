@@ -1,5 +1,14 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc3 — Control Center V2 audit
+
+- منوی ترمینال از نظر Backup/Restore، Guard، Update/Ref، Validation gates و عملیات systemd audit و بازطراحی شد.
+- Backup/Restore CLI واقعی با passphrase تعاملی، verify و isolated restore اضافه شد.
+- Guard status/clear فقط از Broker احرازشده انجام می‌شود؛ نام جدول nft صحیح `dark_xray_ip` است و Stop دیگر به‌اشتباه ادعای clear ban ندارد.
+- Update منویی از Tag/Commit/Ref دقیق پشتیبانی می‌کند و `check`، `vps-verify` و `production-gate` داخل Control Center در دسترس‌اند.
+- BBR قبل از persistence، پشتیبانی kernel را بررسی می‌کند و در خطای activation فایل/runtime قبلی را restore می‌کند.
+- Main Control Matrix از CPU/RAM شلوغ پاک شد؛ منابع سیستم در Diagnostics باقی مانده‌اند.
+
 ## 0.9.0-rc2 — Safe Update compatibility hotfix
 
 - RC1 روی نصب‌های قدیمی که Doctor آن‌ها هنوز `panel_route` نداشت، ممکن بود با `panel={}` به‌اشتباه Update را unhealthy تشخیص دهد.

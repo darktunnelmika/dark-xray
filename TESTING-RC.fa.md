@@ -1,12 +1,12 @@
-# تست DARK XRAY 0.9.0-rc2
+# تست DARK XRAY 0.9.0-rc3
 
 این نسخه برای تست روی VPS واقعی آماده شده و هنوز Stable/Production Ready اعلام نشده است.
 
 ## نصب دقیق همین RC
 
 ```bash
-curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/v0.9.0-rc2/install-online.sh -o /tmp/dark-xray-install.sh
-sudo DARK_XRAY_REF=v0.9.0-rc2 bash /tmp/dark-xray-install.sh
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/v0.9.0-rc3/install-online.sh -o /tmp/dark-xray-install.sh
+sudo DARK_XRAY_REF=v0.9.0-rc3 bash /tmp/dark-xray-install.sh
 ```
 
 بعد از نصب:

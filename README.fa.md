@@ -1,6 +1,6 @@
-# راهنمای DARK XRAY 0.9.0 RC1
+# راهنمای DARK XRAY 0.9.0 RC3
 
-برچسب فعلی: **`0.9.0-rc2`**
+برچسب فعلی: **`0.9.0-rc3`**
 
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 

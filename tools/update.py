@@ -37,7 +37,7 @@ def write_wrapper():
 set -Eeuo pipefail
 export DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray
 case "${1:-menu}" in
-  init|reset-password|account|stage-runtime|stage-panel-path|check|serve|backup|doctor)
+  init|reset-password|account|stage-runtime|stage-panel-path|check|serve|backup|backup-verify|guard-control|doctor)
     if [[ $EUID -eq 0 ]]; then
       exec runuser -u darkxray -- env DARK_CONFIG="$DARK_CONFIG" DARK_DATA="$DARK_DATA" /opt/dark-xray/darkxray "$@"
     fi ;;
@@ -62,11 +62,11 @@ def source_version(src:Path)->str:
 
 def validate_source(src:Path):
     if src.is_symlink() or not src.is_dir():raise SystemExit('Invalid update source directory')
-    required=[src/'backend/server.py',src/'backend/core.py',src/'backend/owner_recovery.py',src/'tools/repo-check.py',src/'tools/doctor.py',src/'deploy/dark-xray.service',src/'darkxray',src/'requirements.txt',src/'VERSION']
+    required=[src/'backend/server.py',src/'backend/core.py',src/'backend/owner_recovery.py',src/'tools/repo-check.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py',src/'deploy/dark-xray.service',src/'darkxray',src/'requirements.txt',src/'VERSION']
     if any(not p.is_file() or p.is_symlink() for p in required):raise SystemExit('Invalid update source: required application files are missing or unsafe')
     source_version(src)
     run([sys.executable,src/'tools/repo-check.py'],stdout=subprocess.DEVNULL)
-    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py'])
+    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py'])
     run(['bash','-n',src/'darkxray',src/'setup.sh',src/'install-online.sh'])
 
 

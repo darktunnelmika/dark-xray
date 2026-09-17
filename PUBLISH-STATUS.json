@@ -4,7 +4,7 @@
   "branch": "main",
   "date": "2026-09-17",
   "status": "release_candidate_target_vps_validation",
-  "current_version": "0.9.0-rc2",
+  "current_version": "0.9.0-rc3",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -120,5 +120,6 @@
     "release_archive_sha256sums_generated_with_prerelease": false
   },
   "checksum_note": "RC2 source checksums will be regenerated after the compatibility hotfix is finalized; release asset checksums are generated with the prerelease.",
-  "release_candidate": true
+  "release_candidate": true,
+  "control_center_v2": true
 }
