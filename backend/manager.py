@@ -210,7 +210,7 @@ class Manager:
             old=latest.get(str(email))
             if old is None or value>old[0]:latest[str(email)]=(value,source)
         with self.store.lock:
-            for email,at in self.store.db.execute('SELECT client_id,MAX(at) FROM traffic_ledger GROUP BY client_id'):
+            for email,at in self.store.db.execute('SELECT client_id,MAX(observed_at) FROM traffic_ledger GROUP BY client_id'):
                 keep(email,at,'traffic')
             if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone():
                 for email,at in self.store.db.execute('SELECT client_id,MAX(last_seen) FROM observations GROUP BY client_id'):
