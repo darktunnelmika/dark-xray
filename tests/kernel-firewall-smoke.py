@@ -72,7 +72,7 @@ def inner(action:str)->int:
     raise RuntimeError('Unknown inner action')
 
 
-SERVER=r'''import select,socket,sys,threading
+SERVER=r'''import socket,sys,threading
 ip=sys.argv[1];data=int(sys.argv[2]);mgmt=int(sys.argv[3])
 
 def tcp(port):
@@ -155,9 +155,13 @@ def outer(report:Path)->int:
         result['checks'] += [probe(src,DATA_PORT,'tcp',True),probe(src,DATA_PORT,'udp',True)]
         result['explicit_unban_verified']=True
 
-        run(['ip','netns','exec',dst,nft_path(),'delete','table','inet',TABLE],check=False)
-        script=f'table inet {TABLE} {{ comment "FOREIGN TEST TABLE" }}\n'
-        run(['ip','netns','exec',dst,nft_path(),'-f','-'],input=script)
+        deleted=run(['ip','netns','exec',dst,nft_path(),'delete','table','inet',TABLE],check=False)
+        if deleted.returncode:
+            raise RuntimeError('Could not remove DARK test table before foreign-owner check: '+(deleted.stderr or deleted.stdout)[-500:])
+        script=f'add table inet {TABLE} {{ comment "FOREIGN TEST TABLE"; }}\n'
+        created=run(['ip','netns','exec',dst,nft_path(),'-f','-'],check=False,input=script)
+        if created.returncode:
+            raise RuntimeError('Could not create foreign-owner nft test table: '+(created.stderr or created.stdout)[-500:])
         run(['ip','netns','exec',dst,sys.executable,str(Path(__file__).resolve()),'--inner','foreign'])
         result['foreign_table_refused']=True
         result['passed']=all(result[k] for k in ('tcp_drop_verified','udp_drop_verified','management_port_preserved',
