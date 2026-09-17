@@ -1,5 +1,12 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc2 — Safe Update compatibility hotfix
+
+- RC1 روی نصب‌های قدیمی که Doctor آن‌ها هنوز `panel_route` نداشت، ممکن بود با `panel={}` به‌اشتباه Update را unhealthy تشخیص دهد.
+- updater در این حالت فقط به یک probe محلی سخت‌گیرانه fallback می‌کند: UI و `assets/style.css` هر دو باید HTTP 200 بدهند.
+- اگر Doctor جدید `panel_route` دارد ولی آن را fail اعلام کند، هیچ fallbackی انجام نمی‌شود و Update همچنان fail-closed می‌ماند.
+- regression برای شکل دقیق legacy Doctor اضافه شد.
+
 ## 0.9.0-rc1 — Release Candidate برای تست VPS
 
 - همه Gateهای CI روی Python 3.12/3.13، Chromium، Xray رسمی، nftables packet-level و systemd recovery سبز هستند.

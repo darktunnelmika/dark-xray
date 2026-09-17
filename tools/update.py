@@ -10,7 +10,8 @@ If activation fails after the new code has touched the database, both source and
 database are restored before the previous service is reactivated.
 """
 from __future__ import annotations
-import argparse,json,os,re,shutil,sqlite3,subprocess,sys,tarfile,tempfile,time
+import argparse,json,os,re,shutil,socket,sqlite3,ssl,subprocess,sys,tarfile,tempfile,time
+from urllib.parse import urlsplit
 from pathlib import Path
 
 APP=Path('/opt/dark-xray'); CONF=Path('/etc/dark-xray'); DATA=Path('/var/lib/dark-xray')
@@ -200,12 +201,51 @@ def install_runtime_files():
     write_wrapper();run(['systemctl','daemon-reload']);run(['systemctl','enable','dark-xray.service'])
 
 
+
+def _compat_panel_route()->dict:
+    """Strict local UI/asset probe for pre-panel_route legacy Doctor versions."""
+    raw=json.loads((CONF/'config.json').read_text(encoding='utf-8'))
+    origin=urlsplit(str(raw.get('public_origin') or ''))
+    if origin.scheme not in {'http','https'} or not origin.hostname:
+        raise RuntimeError('legacy config has no usable public_origin')
+    bind_host=str(raw.get('bind_host') or '127.0.0.1')
+    target='127.0.0.1' if bind_host in {'0.0.0.0','::'} else bind_host
+    port_raw=raw.get('bind_port')
+    bind_port=int(port_raw if port_raw is not None else (origin.port or (443 if origin.scheme=='https' else 80)))
+    if not 1 <= bind_port <= 65535: raise RuntimeError('legacy bind_port is invalid')
+    panel_path=str(raw.get('panel_path') or '/')
+    if not panel_path.startswith('/'): raise RuntimeError('legacy panel_path is invalid')
+    base='' if panel_path=='/' else panel_path.rstrip('/')
+    host=origin.netloc
+    def status(path:str)->int:
+        sock=socket.create_connection((target,bind_port),timeout=2.5)
+        try:
+            if origin.scheme=='https':
+                ctx=ssl.create_default_context();sock=ctx.wrap_socket(sock,server_hostname=origin.hostname)
+            req=f'GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: darkxray-update-compat\r\n\r\n'.encode()
+            sock.sendall(req);raw_head=b''
+            while b'\r\n' not in raw_head and len(raw_head)<4096:
+                chunk=sock.recv(512)
+                if not chunk:break
+                raw_head+=chunk
+            first=raw_head.split(b'\r\n',1)[0].decode('ascii','replace').split()
+            return int(first[1]) if len(first)>=2 and first[1].isdigit() else 0
+        finally:
+            try:sock.close()
+            except Exception:pass
+    ui=status(base+'/');asset=status(base+'/assets/style.css')
+    return {'ui_status':ui,'asset_status':asset,'ok':ui==200 and asset==200,'probe':'legacy-compat'}
+
+
 def _doctor_once()->tuple[bool,str]:
     cp=subprocess.run([APP/'.venv/bin/python',APP/'tools/doctor.py','--config',CONF/'config.json','--data',DATA],capture_output=True,text=True,check=False,timeout=15)
     if cp.returncode:return False,'doctor exit '+str(cp.returncode)
     try:doc=json.loads(cp.stdout);checks=doc.get('checks',{})
     except Exception:return False,'doctor returned invalid JSON'
     route=checks.get('panel_route') if isinstance(checks.get('panel_route'),dict) else {}
+    if not route and checks.get('configuration')=='ok' and checks.get('database')=='ok':
+        try:route=_compat_panel_route()
+        except Exception as ex:route={'ok':False,'probe':'legacy-compat','error':type(ex).__name__+': '+str(ex)[:180]}
     ok=checks.get('configuration')=='ok' and checks.get('database')=='ok' and route.get('ok') is True
     detail='config='+str(checks.get('configuration'))+', db='+str(checks.get('database'))+', panel='+str(route)
     return ok,detail

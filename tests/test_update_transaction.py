@@ -57,3 +57,26 @@ def test_source_version_is_strict(tmp_path):
     assert UPDATE.source_version(tmp_path)=='0.7.2-standalone-lab'
     (tmp_path/'VERSION').write_text('latest please')
     with pytest.raises(SystemExit,match='malformed'):UPDATE.source_version(tmp_path)
+
+
+def test_legacy_doctor_without_panel_route_uses_strict_compat_probe(monkeypatch):
+    state={'checks':{'configuration':'ok','database':'ok'}}
+    class CP:
+        returncode=0
+        @property
+        def stdout(self):return json.dumps(state)
+    monkeypatch.setattr(UPDATE.subprocess,'run',lambda *a,**k:CP())
+    monkeypatch.setattr(UPDATE,'_compat_panel_route',lambda:{'ok':True,'ui_status':200,'asset_status':200,'probe':'legacy-compat'})
+    ok,detail=UPDATE._doctor_once()
+    assert ok is True and 'legacy-compat' in detail
+
+
+def test_legacy_doctor_compat_probe_remains_fail_closed(monkeypatch):
+    state={'checks':{'configuration':'ok','database':'ok'}}
+    class CP:
+        returncode=0
+        @property
+        def stdout(self):return json.dumps(state)
+    monkeypatch.setattr(UPDATE.subprocess,'run',lambda *a,**k:CP())
+    monkeypatch.setattr(UPDATE,'_compat_panel_route',lambda:{'ok':False,'ui_status':200,'asset_status':404,'probe':'legacy-compat'})
+    assert UPDATE._doctor_once()[0] is False

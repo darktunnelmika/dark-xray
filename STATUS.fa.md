@@ -1,7 +1,7 @@
 # وضعیت DARK XRAY 0.9.0 RC1
 
 تاریخ بازبینی: **17 سپتامبر 2026**  
-برچسب فعلی: **`0.9.0-rc1`**
+برچسب فعلی: **`0.9.0-rc2`**
 
 > «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
 
@@ -154,6 +154,6 @@ sudo darkxray production-gate --json-only
 
 ## مسیر بعدی
 
-مرحله بعد، تست **`0.9.0-rc1`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
+مرحله بعد، تست **`0.9.0-rc2`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)

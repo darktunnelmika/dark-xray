@@ -11,7 +11,7 @@
 
 پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، نماینده و سطح دسترسی، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
-**نسخه آزمایشی برای تست VPS:** `0.9.0-rc1`
+**نسخه آزمایشی برای تست VPS:** `0.9.0-rc2`
 
 > [!CAUTION]
 > DARK XRAY در وضعیت **Release Candidate** است و هنوز Production Ready اعلام نشده. Browser، Xray رسمی، nftables packet-level، systemd recovery و Load/Scale هزار کلاینت در CI سبزند؛ اما نصب روی VPS هدف، reboot واقعی ماشین، TLS/renewal دیتاسنتر موردنظر و دو VPS واقعی Node هنوز گیت نهایی هستند.
@@ -110,7 +110,7 @@ sudo darkxray production-gate --json-only
 - ظرفیت‌سنجی روی سخت‌افزار/پلن VPS هدف؛ CI فعلی smoke هزار Client و SQLite contention را پاس کرده است.
 - rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
-بنابراین این build با برچسب **`0.9.0-rc1`** برای تست VPS منتشر می‌شود؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
+بنابراین این build با برچسب **`0.9.0-rc2`** برای تست VPS منتشر می‌شود؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
 
 ## مستندات
 

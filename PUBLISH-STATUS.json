@@ -4,7 +4,7 @@
   "branch": "main",
   "date": "2026-09-17",
   "status": "release_candidate_target_vps_validation",
-  "current_version": "0.9.0-rc1",
+  "current_version": "0.9.0-rc2",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -38,7 +38,8 @@
     "combined_production_gate": "sudo darkxray production-gate",
     "safe_update_source_and_sqlite_rollback": true,
     "online_installer": "install-online.sh",
-    "pinned_official_xray_ci_version": "v26.3.27"
+    "pinned_official_xray_ci_version": "v26.3.27",
+    "legacy_doctor_safe_update_compat": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -118,6 +119,6 @@
     "source_sha256sums_regenerated_for_rc": true,
     "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "Repository SHA256SUMS is regenerated for the RC source snapshot. Release archive checksums are generated when the v0.9.0-rc1 prerelease assets are built.",
+  "checksum_note": "RC2 source checksums will be regenerated after the compatibility hotfix is finalized; release asset checksums are generated with the prerelease.",
   "release_candidate": true
 }

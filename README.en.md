@@ -4,7 +4,7 @@
 
 Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, reseller ownership, RBAC, accounting, subscriptions, nodes and direct Xray-core control.
 
-**VPS test candidate:** `0.9.0-rc1`
+**VPS test candidate:** `0.9.0-rc2`
 
 > [!CAUTION]
 > DARK XRAY is now a **Release Candidate**, not a production-ready declaration. Real Chromium, official Xray, packet-level nftables, systemd crash recovery and a 1000-client/SQLite contention smoke are green in CI; target-VPS install, real machine reboot, provider TLS renewal and two-VPS node validation remain final gates.
@@ -93,7 +93,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 
 ## Remaining production gates
 
-This `0.9.0-rc1` candidate remains pre-production until the intended deployment environment passes:
+This `0.9.0-rc2` candidate remains pre-production until the intended deployment environment passes:
 
 - fresh install on the actual target VPS image/provider;
 - real machine reboot/power-cycle recovery;
