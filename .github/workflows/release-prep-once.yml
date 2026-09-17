@@ -1,0 +1,35 @@
+name: RC release prep once
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  prep:
+    if: github.actor == 'darktunnelmika'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Prepare 0.9.0-rc1 snapshot
+        run: |
+          python tools/release_prep_once.py
+          python tools/repo-check.py
+          bash -n darkxray install-online.sh setup.sh tests/systemd-recovery-smoke.sh
+          python -m json.tool PUBLISH-STATUS.json >/dev/null
+          grep -qx '0.9.0-rc1' VERSION
+          test -f docs/VALIDATION.md
+          test -f TESTING-RC.fa.md
+          ! test -e docs/VALIDATION-GATES.md
+          grep -q 'load_scale_1000_clients_sqlite_contention' PUBLISH-STATUS.json
+      - name: Publish release-prep commit and self-clean
+        run: |
+          git config user.name darktunnelmika
+          git config user.email mikakhadmi@gmail.com
+          git rm .github/workflows/release-prep-once.yml tools/release_prep_once.py
+          git add -A
+          git commit -m 'Prepare DARK XRAY v0.9.0-rc1'
+          git push origin HEAD:main
