@@ -183,6 +183,49 @@ class Manager:
         unsupported=[inbounds[i]['protocol'] for i in ids if inbounds[i]['protocol'] not in MANAGED_CLIENT_PROTOCOLS]
         if unsupported:raise PolicyError('Managed clients require credential-bearing inbounds; unsupported: '+','.join(sorted(set(unsupported))))
 
+    def validate_client_transport(self, client: dict, ids: list[int]):
+        flow=str(client.get('flow') or '')
+        if not flow:return
+        inbounds={i['id']:i for i in self.engine.inbounds()}
+        bad=[]
+        for inbound_id in ids:
+            ib=inbounds.get(inbound_id)
+            if not ib or ib.get('protocol')!='vless':continue
+            st=ib.get('streamSettings',{})
+            if st.get('network','tcp') not in ('tcp','raw') or st.get('security','none') not in ('tls','reality'):
+                bad.append(ib.get('remark') or ib.get('tag') or str(inbound_id))
+        if bad:
+            raise PolicyError('XTLS Vision flow is only valid on VLESS TCP/RAW with TLS/REALITY; incompatible inbound(s): '+', '.join(bad[:8]))
+
+    def _activity_map(self) -> dict[str,dict]:
+        # Presence means recent verified application traffic/activity, not merely
+        # an enabled account. It intentionally exposes no source IP.
+        try:self.engine.read_ip_log()
+        except Exception:pass
+        latest:dict[str,tuple[float,str]]={}
+        def keep(email,at,source):
+            try:value=float(at or 0)
+            except (TypeError,ValueError):return
+            if value<=0:return
+            old=latest.get(str(email))
+            if old is None or value>old[0]:latest[str(email)]=(value,source)
+        with self.store.lock:
+            for email,at in self.store.db.execute('SELECT client_id,MAX(at) FROM traffic_ledger GROUP BY client_id'):
+                keep(email,at,'traffic')
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone():
+                for email,at in self.store.db.execute('SELECT client_id,MAX(last_seen) FROM observations GROUP BY client_id'):
+                    keep(email,at,'access')
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_devices'").fetchone():
+                for email,at in self.store.db.execute('SELECT email,MAX(last_seen) FROM core_devices GROUP BY email'):
+                    keep(email,at,'device')
+        now=time.time();out={}
+        for email,(at,source) in latest.items():
+            age=max(0,int(now-at))
+            state='online' if age<=60 else 'idle' if age<=300 else 'offline'
+            out[email]={'activity_at':at,'presence_state':state,'presence_age_seconds':age,'presence_source':source}
+        return out
+
+
     @staticmethod
     def validate_client(data: dict, *, partial: bool = False) -> dict:
         if not isinstance(data,dict) or set(data)-CLIENT_KEYS-{'email'}:
@@ -237,6 +280,7 @@ class Manager:
         if not self.engine.config.writes_enabled:raise PolicyError('CoreEngine writes are disabled')
         data=dict(client) if validated else self.validate_client(client);email=data['email'].lower()
         if not inbounds_checked:self.check_inbounds(actor,owner,ids)
+        self.validate_client_transport(data,ids)
         if email in existing:raise PolicyError('Client already exists in engine; adopt explicitly instead of overwriting')
         if email in reserved:raise PolicyError('Identity is already reserved (including historical tombstones)')
         data['email']=email;data['id']=data.get('id') or str(uuid.uuid4());data['password']=data.get('password') or secrets.token_urlsafe(24)
@@ -341,6 +385,7 @@ class Manager:
             if ids is None:ids=json.loads(meta['inbounds'])
             self.check_inbounds(actor,row['owner'],ids)
             desired.update(patch);desired['email']=email
+            self.validate_client_transport(desired,ids)
             if desired.get('group'):
                 group=self._group_name(desired['group']);desired['group']=group
                 now=time.time()
@@ -380,7 +425,7 @@ class Manager:
         if not r:raise PolicyError('Managed metadata missing')
         return dict(r)
 
-    def detail(self,actor: Actor,email: str,*,credentials: bool=True) -> dict:
+    def detail(self,actor: Actor,email: str,*,credentials: bool=True,activity:dict|None=None) -> dict:
         row=self.own_row(actor,email)
         meta=self.meta(email);engine=self.snapshot.get(email,{})
         desired=json.loads(meta['desired'])
@@ -389,15 +434,20 @@ class Manager:
             client={k:v for k,v in client.items() if k not in {'id','uuid','password','auth','subId','reverse','encryption'}}
         reasons=self.store.client_reasons(email)
         if meta['external_disabled']:reasons.append('engine_manual_or_external_disable')
+        activity=activity or self._activity_map().get(email) or {'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}
         return {'email':email,'owner':row['owner'],'client':client,'inboundIds':json.loads(meta['inbounds']),
                 'used_bytes':row['used_bytes'],'block_reasons':reasons,'state':meta['state'],
-                'error':meta['error'],'observed_enable':engine.get('enable'),'last_seen_at':self.last_poll,
+                'error':meta['error'],'observed_enable':engine.get('enable'),
+                'last_seen_at':activity['activity_at'],'activity_at':activity['activity_at'],
+                'presence_state':activity['presence_state'],'presence_age_seconds':activity['presence_age_seconds'],
+                'presence_source':activity['presence_source'],'manager_seen_at':self.last_poll,
                 'data_plane_state':'running' if self.engine.running and not self.engine.runtime_state()['dirty'] else 'staged',
                 'subscription_url':self.engine.config.public_origin+self.engine.section('subscription').get('path','/sub')+'/'+meta['public_token']
                      if credentials and actor.can('clients','credentials',row['owner']) else None}
 
     def list(self,actor: Actor) -> list[dict]:
-        return [self.detail(actor,r['id'],credentials=False) for r in self.store.list_clients(actor)]
+        activity=self._activity_map()
+        return [self.detail(actor,r['id'],credentials=False,activity=activity.get(r['id']) or {'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}) for r in self.store.list_clients(actor)]
 
     def _charge_snapshot(self,meta: dict,record: dict):
         email=meta['email'];up,down=CoreEngine.counters(record)
