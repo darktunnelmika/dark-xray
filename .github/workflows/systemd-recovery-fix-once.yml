@@ -1,0 +1,31 @@
+name: Systemd recovery harness fix once
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor == 'darktunnelmika'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - name: Apply exact recovery harness patch
+        run: |
+          python tools/systemd_recovery_fix_once.py
+          bash -n tests/systemd-recovery-smoke.sh darkxray
+          grep -q 'runtime dependency import check: ok' tests/systemd-recovery-smoke.sh
+          grep -q 'PYTHONHOME=/invalid-dark-ci' tests/systemd-recovery-smoke.sh
+          grep -q 'unset PYTHONHOME PYTHONPATH' darkxray
+      - name: Publish patch and self-clean
+        run: |
+          git config user.name darktunnelmika
+          git config user.email mikakhadmi@gmail.com
+          git rm .github/workflows/systemd-recovery-fix-once.yml tools/systemd_recovery_fix_once.py
+          git add tests/systemd-recovery-smoke.sh darkxray
+          git commit -m 'Fix real systemd recovery gate'
+          git push origin HEAD:main
