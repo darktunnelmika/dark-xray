@@ -9,6 +9,7 @@ This file documents what each automated gate proves. Passing CI is evidence for 
 - `systemd-recovery`: disposable install on production paths, non-root service user, `vps-verify`, SIGKILL auto-restart, clean stop/start and single owned Xray process after recovery. This does not claim a physical VPS reboot was tested.
 - `load-scale`: measured high-client-count / concurrent SQLite and API smoke. It is not a universal capacity guarantee.
 - `legacy-update-compat`: Safe Update must remain fail-closed while accepting older installed Doctor output that predates `panel_route`. In that compatibility path, the updater independently probes the local panel UI and `assets/style.css`; both must return HTTP 200 before rollback snapshots or source replacement begin.
+- `control-center-v2`: terminal-control regressions cover explicit Login Owner selection, configured protected-port handling, staged-runtime visibility, fail-closed BBR capability checks, correct `dark_xray_ip` table routing, broker-authenticated Guard clear/status, exact-ref Safe Update routing, and encrypted backup → verify → isolated restore CLI flow.
 
 The installed-server boundary remains:
 
@@ -16,4 +17,4 @@ The installed-server boundary remains:
 sudo darkxray production-gate
 ```
 
-Real provider-specific TLS renewal, physical/VM reboot, remote-node WAN behavior and IP Guard topology/source verification must still be validated on the target VPS before promoting `0.9.0-rc2` to a stable production release.
+Real provider-specific TLS renewal, physical/VM reboot, remote-node WAN behavior and IP Guard topology/source verification must still be validated on the target VPS before promoting `0.9.0-rc3` to a stable production release.
