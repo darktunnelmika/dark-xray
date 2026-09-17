@@ -1,7 +1,7 @@
-# وضعیت DARK XRAY 0.9.0 RC3
+# وضعیت DARK XRAY 0.9.0 RC4
 
-تاریخ بازبینی: **17 سپتامبر 2026**  
-برچسب فعلی: **`0.9.0-rc3`**
+تاریخ بازبینی: **18 سپتامبر 2026**  
+برچسب فعلی: **`0.9.0-rc4`**
 
 > «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
 
@@ -12,8 +12,8 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مست�
 | بخش | وضعیت فعلی |
 |---|---|
 | استقلال Runtime | مستقل از Sanayi/3x-ui |
-| Inbounds / REALITY | Inbounds V3 + workflow بومی + regression ذخیره واقعی |
-| Clients / Groups | V2، owner-scoped، Bulk-safe و backend ownership checks |
+| Inbounds / REALITY | Inbounds V3 + REALITY target compatibility guard + regression ذخیره واقعی |
+| Clients / Groups | V3، real-activity presence، QR per-config، owner-scoped و Bulk-safe |
 | Reseller / RBAC | role ceiling، legacy sanitization و server-side scope |
 | Session / TOTP | revoke + replay-counter hardening |
 | Robot API keys | بدون API-key lifecycle و finance mutation حساس |
@@ -117,6 +117,13 @@ sudo darkxray production-gate --json-only
 
 `production-gate` برای lab خودش temporary DB/ports ایجاد می‌کند و customer DB یا firewall نصب‌شده را تغییر نمی‌دهد.
 
+## Hardeningهای مهم RC4
+
+- **Clients V3 Online** از آخرین activity واقعی Client محاسبه می‌شود: تا 60 ثانیه Online، تا 5 دقیقه Idle و بعد Offline؛ این status ادعای socket دائماً باز نیست.
+- QR هر Config/Subscription exact payload خودش را دارد و لینک انتخابی مستقیماً encode می‌شود.
+- REALITY target policy در backend fail-closed است؛ Microsoft target روی Xray v26.3.27 مسدود و Bing در لیست پیش‌فرض اول است.
+- Flow سازگار با Transport کنترل می‌شود و Vision روی gRPC/XHTTP رد می‌شود.
+
 ## Hardeningهای مهم 0.8.2
 
 - `darkxray check` بدون گرفتن instance lock سرویس زنده اجرا می‌شود.
@@ -154,6 +161,6 @@ sudo darkxray production-gate --json-only
 
 ## مسیر بعدی
 
-مرحله بعد، تست **`0.9.0-rc3`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
+مرحله بعد، تست **`0.9.0-rc4`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)
