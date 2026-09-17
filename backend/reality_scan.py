@@ -16,12 +16,17 @@ import time
 from dataclasses import dataclass
 
 DEFAULT_REALITY_TARGETS = (
-    'www.microsoft.com:443',
-    'www.apple.com:443',
+    'www.bing.com:443',
     'www.cloudflare.com:443',
     'www.google.com:443',
     'github.com:443',
+    'www.amazon.com:443',
 )
+# Xray-core v26.3.27 / github.com/xtls/reality has an 8192-byte
+# target-handshake record limit. www.microsoft.com has been observed returning
+# a Certificate record of 8273 bytes and is therefore fail-closed here.
+INCOMPATIBLE_REALITY_HOSTS = {'www.microsoft.com'}
+DISCOURAGED_REALITY_HOSTS = {'www.apple.com', 'icloud.com', 'www.icloud.com'}
 MAX_TARGETS = 20
 DEFAULT_TIMEOUT = 4.0
 
@@ -71,6 +76,33 @@ def parse_target(value: str) -> ParsedTarget:
     if not host or len(host) > 253 or not 1 <= port <= 65535:
         raise RealityScanError('Invalid REALITY target')
     return ParsedTarget(host, port)
+
+
+def reality_target_policy(value: str | ParsedTarget) -> dict:
+    target = value if isinstance(value, ParsedTarget) else parse_target(value)
+    host = target.host.lower().rstrip('.')
+    if host in INCOMPATIBLE_REALITY_HOSTS:
+        return {
+            'compatible': False,
+            'severity': 'blocked',
+            'advisory': (
+                'Known incompatible REALITY target on pinned Xray-core v26.3.27: '
+                'the target may return a TLS Certificate record larger than REALITY\'s '
+                '8192-byte parser limit. Use www.bing.com:443 or run Target Search.'
+            ),
+            'suggestedTarget': 'www.bing.com:443',
+        }
+    if host in DISCOURAGED_REALITY_HOSTS or host.endswith('.icloud.com'):
+        return {
+            'compatible': True,
+            'severity': 'warning',
+            'advisory': (
+                'This target family is discouraged by current Xray REALITY guidance. '
+                'Prefer a neutral TLS 1.3 target returned by Target Search.'
+            ),
+            'suggestedTarget': 'www.bing.com:443',
+        }
+    return {'compatible': True, 'severity': 'ok', 'advisory': '', 'suggestedTarget': ''}
 
 
 def _public_addresses(target: ParsedTarget) -> list[str]:
@@ -160,6 +192,9 @@ def scan_target(value: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
             errors.append(type(exc).__name__)
     if best:
         best['resolved'] = addresses
+        policy = reality_target_policy(target)
+        best.update(policy)
+        best['recommended'] = bool(best.get('recommended')) and policy['compatible'] and policy['severity'] == 'ok'
         return best
     return {
         'target': target.display,
@@ -179,6 +214,7 @@ def scan_target(value: str, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
         'ok': False,
         'x25519Verified': None,
         'recommended': False,
+        **reality_target_policy(target),
         'error': 'TLS probe failed' + (': ' + ', '.join(errors[:3]) if errors else ''),
     }
 
@@ -214,5 +250,5 @@ def search_targets(values: list[str] | None, *, timeout: float = DEFAULT_TIMEOUT
                 rows.append({'target': item, 'ok': False, 'recommended': False, 'latencyMs': 0, 'error': str(exc)})
             except Exception as exc:
                 rows.append({'target': item, 'ok': False, 'recommended': False, 'latencyMs': 0, 'error': type(exc).__name__})
-    rows.sort(key=lambda r: (not bool(r.get('recommended')), not bool(r.get('ok')), int(r.get('latencyMs') or 10**9), str(r.get('target', ''))))
+    rows.sort(key=lambda r: (not bool(r.get('compatible', True)), not bool(r.get('recommended')), not bool(r.get('ok')), int(r.get('latencyMs') or 10**9), str(r.get('target', ''))))
     return rows
