@@ -58,6 +58,8 @@ for name in backend web tools deploy; do cp -a "$ROOT/$name" "/opt/dark-xray/$na
 for name in darkxray requirements.txt LICENSE THIRD-PARTY-NOTICES.md VERSION; do cp -a "$ROOT/$name" "/opt/dark-xray/$name"; done
 python3 -m venv /opt/dark-xray/.venv
 /opt/dark-xray/.venv/bin/python -m pip install -q --disable-pip-version-check -r /opt/dark-xray/requirements.txt
+/opt/dark-xray/.venv/bin/python -m pip check
+/opt/dark-xray/.venv/bin/python -c 'import cryptography,fastapi,psutil,pydantic,uvicorn; print("runtime dependency import check: ok")'
 python3 "$ROOT/tools/fetch-core.py" --version v26.3.27 --destination /usr/local/lib/dark-xray/v26.3.27 >/tmp/dark-core-fetch.json
 
 find /opt/dark-xray -type d -exec chmod 0755 {} +
@@ -130,8 +132,9 @@ FIRST_PID="$(systemctl show -p MainPID --value dark-xray.service)"
 systemctl is-enabled --quiet dark-xray.service
 
 PHASE=vps-verify
-/opt/dark-xray/.venv/bin/python /opt/dark-xray/tools/vps-verify.py \
-  --config /etc/dark-xray/config.json --data /var/lib/dark-xray --json-only >/tmp/dark-vps-verify.json
+DARK_CONFIG=/etc/dark-xray/config.json DARK_DATA=/var/lib/dark-xray \
+PYTHONHOME=/invalid-dark-ci PYTHONPATH=/invalid-dark-ci \
+  /opt/dark-xray/darkxray vps-verify --json-only >/tmp/dark-vps-verify.json
 python3 - <<'PY'
 import json
 x=json.load(open('/tmp/dark-vps-verify.json'));assert x['ready'] is True,(x['failures'],x['warnings'])
