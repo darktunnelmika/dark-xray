@@ -16,6 +16,7 @@ jobs:
           fetch-depth: 0
       - name: Prepare 0.9.0-rc1 snapshot
         run: |
+          if [[ -f docs/VALIDATION.md && -f docs/VALIDATION-GATES.md ]]; then rm -f docs/VALIDATION.md; fi
           python tools/release_prep_once.py
           python tools/repo-check.py
           bash -n darkxray install-online.sh setup.sh tests/systemd-recovery-smoke.sh
