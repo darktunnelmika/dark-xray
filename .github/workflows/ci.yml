@@ -34,7 +34,7 @@ jobs:
         run: python tools/repo-check.py
       - name: Installer updater and manager smoke
         run: |
-          bash -n install-online.sh setup.sh darkxray
+          bash -n install-online.sh setup.sh darkxray tests/systemd-recovery-smoke.sh
           bash install-online.sh --selftest > /tmp/dark-installer-smoke.txt
           grep -q '\[100/100\]' /tmp/dark-installer-smoke.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
@@ -205,5 +205,27 @@ jobs:
         with:
           name: dark-xray-kernel-firewall-qa
           path: qa/kernel-firewall.json
+          if-no-files-found: error
+          retention-days: 14
+
+  systemd-recovery:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install host prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -q python3-venv ca-certificates >/dev/null
+      - name: Real systemd crash recovery smoke
+        run: sudo bash tests/systemd-recovery-smoke.sh
+      - name: Upload systemd recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-xray-systemd-recovery-qa
+          path: qa/systemd-recovery.json
           if-no-files-found: error
           retention-days: 14
