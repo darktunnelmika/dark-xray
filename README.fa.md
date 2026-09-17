@@ -1,196 +1,218 @@
-# DARK XRAY ۰.۶ — مستقل، تک‌سرور، آزمایشی
+# راهنمای DARK XRAY 0.8.2
 
-این نسخه برای **سرور آزمایشی جدا** است، نه جایگزینی فوری پنل مشتری‌دار. هیچ نصب سنایی، API سنایی، ورود دوم یا نمایش صفحات پنل دیگری لازم نیست. برنامه دیتابیس، احراز هویت، کاربران، نمایندگان، صفحات و کنترل‌کنندهٔ هستهٔ خودش را دارد. Xray-core موتور اتصال است و مستقل از هر پنل نصب می‌شود.
+برچسب فعلی: **`0.8.2-standalone-lab`**
 
-**وضعیت آزمون:** کد و HTTP محلی با دیتابیس واقعی آزمایش شده‌اند؛ فرایند هسته و فرمان‌های nftables با جایگزین آزمایشی تست شده‌اند. باینری واقعی Xray در محیط ساخت دریافت نشد. بنابراین اتصال واقعی پروکسی، مسدودی بسته‌های شبکه، صدور گواهی، نصب روی VPS تازه و ظرفیت زیر بار تأیید نشده‌اند. مرورگر نیز با `ERR_BLOCKED_BY_ADMINISTRATOR` مسدود شد؛ برای این نسخه اسکرین‌شات جدیدِ تأییدشده نداریم.
+DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
-## تغییرهای ۰.۶
+> [!CAUTION]
+> این شاخه هنوز **Lab** است. CI اکنون با Xray رسمی، nftables واقعی، systemd واقعی و Chromium واقعی تست دارد، اما Production Ready فقط زمانی اعلام می‌شود که VPS هدف، reboot واقعی ماشین، TLS renewal واقعی، Nodeهای چندسروری و Load/Scale هم تأیید شوند.
 
-محدودیت IP به تنظیمات مشتری و چرخهٔ همگام‌سازی وصل شده است؛ فایل سیاست دستی لازم نیست. سرویس محدود و جداگانهٔ `dark-xray-guard` با nftables کار می‌کند. پنل با کاربر عادی اجرا می‌شود و فقط برای شنود پورت پایین، مانند ۴۴۳، `CAP_NET_BIND_SERVICE` می‌گیرد. حفاظت پورت‌های مدیریت برقرار است.
+## نصب آنلاین
 
-فرم بومی هاست، اوتباندهای رایج و روتینگ، تنظیم سیاست IP، نمایش مسدودی و رفع مسدودی اضافه شده‌اند. این فرم‌ها داده را در دیتابیس خود DARK ذخیره می‌کنند؛ برابری کامل با همهٔ فرم‌های سنایی هنوز حاصل نشده است. JSON پیشرفته کنار فرم‌ها باقی است؛ فرم ساده، خروجی چندسرور/چندکاربر را بدون اجازه تخت و ناقص نمی‌کند.
-
-نصاب مستقل اولیه، ابزار دامنه/گواهی، منوی ترمینال، بکاپ رمزدار و بازیابی در مقصد جدید اضافه شده‌اند. مصرف نهایی مشاهده‌شده پیش از ریست یا حذف مشتری در دفتر نماینده می‌ماند. ریست حجم با دورهٔ روز ثابت و تعداد دفعات محدود اضافه شده؛ این قابلیت تمدید تاریخ انقضا یا ماه تقویمی نیست.
-
-## نصب روی یک VPS آزمایشی تازه
-
-پیش‌نیاز: Linux با systemd، Python 3.11 یا بالاتر و venv؛ برای دریافت وابستگی‌ها دسترسی به PyPI و برای حالت آنلاین دریافت هسته دسترسی به GitHub لازم است. نصاب فعلاً amd64 و arm64 را برای دریافت هسته پشتیبانی می‌کند. خود این نصاب روی VPS تازه در محیط ساخت اجرا نشده است.
-
-آرشیو پروژه را استخراج کن و وارد پوشه شو. **مقادیر نمونهٔ IP و پورت SSH را با مقادیر واقعی جایگزین کن.** انتخاب `--install-os-packages` اجازهٔ صریح نصب `python3-venv` و `ca-certificates` با apt است؛ ارتقای کلی سیستم یا نصب پنل دیگر انجام نمی‌شود.
+روی Ubuntu/Debian دارای systemd:
 
 ```bash
-unzip DARK-XRAY-v0.6-Standalone.zip
-cd DARK-XRAY-v0.6
-sudo bash setup.sh \
-  --public-address YOUR_SERVER_IP \
-  --ssh-port YOUR_ACTUAL_SSH_PORT \
-  --install-os-packages
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-online.sh -o /tmp/dark-xray-install.sh
+sudo bash /tmp/dark-xray-install.sh
 ```
 
-نصاب نام کاربر پیش‌فرض `dark` دارد ولی **رمز پیش‌فرض ندارد**؛ رمز را تعاملی دو بار وارد می‌کنی. با `--username` و `--port` می‌توان نام کاربر و پورت پنل را عوض کرد. پورت پیش‌فرض پنل ۲۰۸۷ و API داخلی هسته ۱۰۰۸۵ است؛ API هسته فقط روی loopback می‌ماند.
+Installer سه وضعیت را تشخیص می‌دهد:
 
-دریافت آنلاین هسته به انتشار مشخص `v26.3.27` قفل شده است؛ این نسخه «باینری تست‌شده در محیط ساخت» نامیده نمی‌شود. ابزار متادیتای SHA-256 رسمی انتشار را بررسی می‌کند و TLS را خاموش نمی‌کند. در نبود هش معتبر یا خطای دریافت، متوقف می‌شود و به mirror ناشناس نمی‌رود. باینری Xray داخل ZIP پروژه نیست.
+- **Clean** — نصب تازه.
+- **Partial / Failed** — نگهداری بقایای نصب ناقص و Repair امن.
+- **Installed** — Safe Update یا ورود به Manager.
 
-نصاب فقط نصب تازه انجام می‌دهد. وجود مسیرهای قبلی DARK یا فرمان نصب‌شده باعث توقف می‌شود؛ دیتابیس و پنل قبلی بازنویسی نمی‌شوند. نصب ناموفق ممکن است فایل‌های نیمه‌کاره باقی بگذارد؛ پاک‌کردن خودکار و خطرناک انجام نمی‌شود. این نسخه هنوز ابزار ارتقای خودکار یا مهاجرت از سنایی ندارد.
-
-### واردکردن آرشیو رسمی هسته به‌صورت محلی
-
-وقتی دریافت هسته از GitHub ممکن نیست، آرشیو متناسب با معماری و SHA-256 معتبر آن را جداگانه تهیه کن:
-
-```bash
-sudo bash setup.sh \
-  --public-address YOUR_SERVER_IP \
-  --ssh-port YOUR_ACTUAL_SSH_PORT \
-  --core-archive /root/Xray-linux-64.zip \
-  --core-sha256 YOUR_TRUSTED_64_CHARACTER_SHA256
-```
-
-این مسیر فقط دریافت هسته را آفلاین می‌کند؛ نصب وابستگی‌های Python همچنان به اینترنت یا مخزن محلی آماده نیاز دارد. هش را از محلی مورداعتماد بگیر، نه صرفاً با محاسبهٔ هش همان فایل ناشناس.
-
-### مسیرهای نصب
+مسیرهای اصلی نصب:
 
 | مورد | مسیر |
 |---|---|
-| برنامه و محیط Python، متعلق به root | `/opt/dark-xray` |
-| تنظیمات، root-owned و قابل خواندن برای گروه سرویس | `/etc/dark-xray/config.json` |
-| دیتابیس، کلید ورود دومرحله‌ای و runtime | `/var/lib/dark-xray` |
-| باینری و داده‌های هسته | `/usr/local/lib/dark-xray/v26.3.27` |
+| سورس و virtualenv | `/opt/dark-xray` |
+| تنظیمات | `/etc/dark-xray/config.json` |
+| دیتابیس، secret و runtime | `/var/lib/dark-xray` |
+| Xray رسمی | `/usr/local/lib/dark-xray/<version>` |
 | سرویس اصلی | `dark-xray.service` |
-| کارگر اختیاری IP | `dark-xray-guard.service` |
-| فرمان مدیریت | `darkxray` |
+| IP Guard worker | `dark-xray-guard.service` |
+| فرمان مدیریتی | `/usr/local/bin/darkxray` |
 
-پنل و Xray زیر کاربر `darkxray` اجرا می‌شوند. کارگر فایروال جداست و فقط پس از تأیید دستی root فعال می‌شود. نصب اولیه آن را فعال نمی‌کند و ruleset فعلی میزبان را پاک نمی‌کند.
+پنل اصلی با user محدود `darkxray` اجرا می‌شود. دسترسی root برای تغییرات privileged مثل TLS/runtime apply و firewall worker جدا نگه داشته شده است.
 
-## ورود اولیه و ساخت اتصال
+## Xray-core
 
-ورود اولیه فقط از طریق loopback است. روی رایانهٔ خودت اجرا کن:
+مسیر آنلاین، Xray را از Release رسمی pin‌شده دریافت می‌کند. `tools/fetch-core.py` وجود SHA-256 رسمی asset را الزامی می‌داند و در خطای validation به mirror یا دانلود insecure fallback نمی‌کند.
 
-```bash
-ssh -p YOUR_ACTUAL_SSH_PORT \
-  -L 2087:127.0.0.1:2087 root@YOUR_SERVER_IP
+نسخه‌ای که در Gate واقعی CI فعلی اجرا می‌شود:
+
+```text
+Xray v26.3.27
 ```
 
-سپس در همان رایانه `http://127.0.0.1:2087` را باز کن. استفاده از `localhost` به‌جای `127.0.0.1` ممکن است با کنترل دقیق Host همخوان نباشد. برای دسترسی عمومی، ابتدا بخش دامنه و TLS را تنظیم کن. مسیر ساب در حالت اولیه loopback است؛ قبل از تحویل ساب عمومی باید نشانی عمومی پنل تنظیم شود.
+برای آرشیو محلی نیز مسیر import فقط با SHA-256 مورداعتماد پذیرفته می‌شود.
 
-در صفحهٔ اینباند، ورودی بساز، انتقال و TLS/REALITY متناسب را وارد کن؛ از داخل همان اینباند مشتری اضافه کن. هاست، آدرس و پورت بیرونی اشتراک را تغییر می‌دهد و به‌خودی‌خود تانل ایجاد نمی‌کند. پورت‌های داده باید در فایروال فعلی میزبان و ارائه‌دهنده مجاز باشند؛ نصاب آن‌ها را خودکار باز نمی‌کند.
+## دسترسی اولیه
 
-در «تنظیمات Xray» اعتبارسنجی و اجرای هسته را بررسی کن. «ذخیره‌شده در DARK» به معنی فعال‌بودن اتصال نیست؛ وضعیت جداگانهٔ هسته و تغییرات اعمال‌نشده ملاک است. دادهٔ CPU/RAM از همان میزبان برنامه می‌آید؛ نود یا آنلاین بودن ساختگی نمایش داده نمی‌شود.
-
-## محدودیت IP یکپارچه
-
-در مشتری، `حداکثر IP` را تعیین کن: صفر بدون سقف؛ ۱ یا بیشتر سقف IPهای متمایز در پنجرهٔ فعالیت است. تغییر مقدار به سیاست فعلی سرویس منتقل می‌شود. حالت پیش‌فرض «مشاهده» است؛ تا آماده‌بودن کارگر و تأیید شرایط، مسدودی واقعی ادعا نمی‌شود.
-
-**این روش از لاگ اتصال و پنجرهٔ فعالیت استفاده می‌کند، نه شمارش قطعی همهٔ سوکت‌های باز.** چند اتصال از یک IP یک سهم می‌گیرند. یک نشست بسیار طولانی که لاگ تازه تولید نکند ممکن است از پنجره خارج شود؛ چند دستگاه پشت NAT هم ممکن است یک سهم بگیرند. IPv4 و IPv6 مستقل ممکن است دو سهم شوند. این محدودیت، تضمین تک‌نفره یا تک‌دستگاهی نیست.
-
-### تأیید یک‌بارهٔ مدیر سیستم
-
-فقط هنگامی انجام بده که IP مبدأ واقعی لاگ Xray با مبدأ بسته در **همین میزبان فایروال** یکسان است. روی تونل، CDN یا پراکسی مبهم فعال نکن. مشاهدهٔ IP ظاهراً واقعی در یک هدر، به‌تنهایی کافی نیست.
-
-`nftables` باید روی میزبان نصب باشد. فرمان زیر **نمونه** است؛ پورت‌ها باید فقط شنونده‌های واقعی دادهٔ خودت باشند. ابتدا از درست‌بودن پورت‌های SSH/پنل/API در `protected_ports` مطمئن شو.
+حالت SSH/loopback نمونه:
 
 ```bash
-sudo darkxray guard-enable \
-  --ports 2020,443 \
-  --verified-direct-sources
+ssh -p YOUR_SSH_PORT -L 2087:127.0.0.1:2087 root@YOUR_SERVER_IP
 ```
 
-افزودن `--exempt YOUR_MANAGEMENT_IP/32` یک IP معاف ریشه‌ای می‌سازد. پورت‌ها را از روی مثال کورکورانه کپی نکن. این فرمان فایل root-owned `/etc/dark-xray/guard.json` را می‌سازد و سرویس‌ها را دوباره راه می‌اندازد؛ اتصال‌های جاری Xray قطع می‌شوند.
+سپس آدرس loopback پنل را باز کن. برای public access از Settings/Domain-TLS و workflow گواهی استفاده کن. تغییرات حساس Network/Port/Path اول stage می‌شوند و بعد از مرز root اعمال می‌شوند تا احتمال lockout کمتر شود.
 
-سپس از صفحهٔ «محدودیت IP»، حالت «اعمال» را انتخاب کن. وضعیت باید سیاست بارگذاری‌شده و سرویس آماده را نشان دهد. خطای نبود کارگر یا پورت تأییدنشده، «موفق» نمایش داده نمی‌شود. تغییر سقف IP مشتری در پورت‌های از قبل تأییدشده، نیازمند خروجی‌گرفتن دستی نیست؛ اضافه‌کردن پورت دادهٔ جدید به فهرست مجاز root نیاز دارد.
-
-جدول اختصاصی `inet dark_xray_ip` فقط source IP و پورت‌های تأییدشده را هدف می‌گیرد. مسدودی IP روی پورت مشترک می‌تواند حساب دیگری با همان IP/پورت را هم متأثر کند؛ UUID در فایروال قابل تفکیک نیست. این نسخه از nftables استفاده می‌کند و به نصب سنایی یا Fail2ban وابسته نیست. ماژول قدیمی Fail2ban برای آزمون‌های عقب‌رو نگهداری شده، اما مسیر یکپارچهٔ ۰.۶ از آن استفاده نمی‌کند.
-
-TTL بومی مجموعه‌ها برای پایان مسدودی در نظر گرفته شده است. راه‌اندازی مجدد کارگر، مسدودی‌های موقت متعلق به DARK را آزاد می‌کند. خاموش‌کردن حالت اعمال، ابتدا باید مسدودی‌های قبلی DARK را از طریق کارگر آزاد کند؛ اگر کارگر در دسترس نباشد خطا می‌دهد. «پاک‌کردن تاریخچهٔ IP» با «رفع مسدودی» جداست.
-
-**کارکرد واقعی قانون روی بسته‌ها هنوز در محیط ساخت تست نشده است.** دو منبع IP مستقل، بازگشت پس از زمان مسدودی و حفظ دسترسی SSH/پنل را روی سرور آزمایشی بررسی کن. شمارش مشترک IP میان چند نود مستقل در این نسخه وجود ندارد. HWID فقط دریافت ساب را محدود می‌کند؛ کانفیگ کپی‌شده یا شناسهٔ جعل‌شده را به یک دستگاه سخت‌افزاری قابل‌اعتماد تبدیل نمی‌کند.
-
-## دامنه و HTTPS پنل
-
-این ابزار برای Certbot بسته‌بندی‌شده با `certbot.timer` است. نیاز به دامنه‌ای با DNS صحیح به همان سرور، پورت ۸۰ در دسترس برای HTTP-01 و نصب قبلی Certbot دارد. هیچ وب‌سرور دیگری را برای آزادکردن پورت متوقف نمی‌کند.
+## فرمان مدیریتی
 
 ```bash
-sudo darkxray domain \
-  --domain panel.YOUR_DOMAIN \
-  --email YOUR_EMAIL \
-  --port 2087 \
-  --agree-tos
+darkxray
 ```
 
-این مقادیر نمونه‌اند. دامنهٔ ASCII واقعی و ایمیل خودت را وارد کن؛ `--agree-tos` تأیید صریح شرایط سرویس گواهی است. پس از موفقیت، پنل مستقیماً HTTPS ارائه می‌کند؛ reverse proxy یا پنل دیگری لازم نیست. دامنه و مسیر عمومی ساب نیز با همین مبدأ همخوان می‌شوند. گواهی پنل به‌صورت خودکار گواهی تمام اینباندها نمی‌شود؛ TLS اینباند تنظیم جدا دارد.
-
-hook تمدید، گواهی را به مسیر خواندنی سرویس منتقل و DARK را restart می‌کند؛ **تمدید هم ممکن است اتصال‌های Xray را قطع کند**. صدور/تمدید واقعی در این محیط اجرا نشده است. از این دستور به‌عنوان سامانهٔ بدون‌قطعی گواهی استفاده نکن.
-
-## بکاپ و بازیابی
+فرمان‌های مهم:
 
 ```bash
-sudo darkxray backup \
-  --output /var/lib/dark-xray/backups/before-change.darkbackup
-```
-
-عبارت عبور حداقل ۱۲ کاراکتری را تعاملی وارد کن؛ در خط فرمان یا فایل عمومی ننویس. در نصب سرویس، این فرمان با کاربر سرویس اجرا می‌شود؛ مقصد باید برای او قابل نوشتن باشد. فایل خروجی رمزدار شامل snapshot سازگار SQLite، `secret.key` ورود دومرحله‌ای، تنظیمات و در صورت تنظیم، جفت گواهی TLS پنل است. محدودیت فعلی ابزار ۲۵۶ MiB است.
-
-باینری/geo هسته، گواهی‌های خارجی اینباندها، اجازه‌های root فایروال و فایل‌های systemd در بکاپ نیستند؛ manifest این موارد را صریحاً فهرست می‌کند. دانلود «بکاپ دیتابیس» از رابط فقط دیتابیس است و جای این بستهٔ رمزدار را نمی‌گیرد.
-
-بازیابی فقط در **پوشه‌ای که هنوز وجود ندارد** انجام می‌شود؛ هرگز روی دیتابیس جاری بازنویسی نمی‌کند:
-
-```bash
-sudo darkxray restore \
-  --archive /var/lib/dark-xray/backups/before-change.darkbackup \
-  --destination /root/dark-recovery-NEW
-```
-
-فایل‌ها در `dark-recovery-NEW/data` و `dark-recovery-NEW/config.json` قرار می‌گیرند؛ نشست‌ها باطل می‌شوند، کلید TOTP حفظ می‌شود و شروع خودکار هسته خاموش می‌ماند. این دستور ارتقا یا بازگردانی خودکار نصب فعال نیست. مسیر هسته و گواهی‌های بیرونی، مالکیت فایل‌ها، نشانی پنل و فهرست root فایروال روی میزبان مقصد باید بازبینی شوند.
-
-## منوی ترمینال و لاگ‌ها
-
-```bash
-sudo darkxray
+sudo darkxray vps-verify
+sudo darkxray production-gate
+sudo darkxray settings-apply
 sudo darkxray doctor
-sudo systemctl status dark-xray.service --no-pager
-sudo journalctl -u dark-xray.service -n 100 --no-pager
 ```
 
-منو: وضعیت، شروع/توقف/ری‌استارت، بررسی‌ها، بکاپ رمزدار، بازیابی رمز مالک و راهنمای دامنه/IP. برای تغییر آفلاین رمز، ابتدا سرویس را متوقف کن؛ TOTP غیرفعال نمی‌شود و نشست‌های همان حساب باطل می‌شوند:
+`vps-verify` read-only است و Configuration، SQLite، Xray binary، route پنل، systemd، TLS state، IP Guard و Node readiness را بررسی می‌کند.
 
-```bash
-sudo systemctl stop dark-xray.service
-sudo darkxray reset-password --username dark
-sudo systemctl start dark-xray.service
+`production-gate` علاوه بر readiness، یک محیط موقت مستقل می‌سازد و با **همان Xray binary تعریف‌شده در config نصب** data-plane را تست می‌کند. این lab دیتابیس مشتری واقعی یا firewall نصب‌شده را تغییر نمی‌دهد.
+
+## Inbounds V3
+
+Inbound workflow برای کار روزمره شبیه پنل‌های ساده‌تر طراحی شده ولی backend مستقل است. امکانات اصلی:
+
+- VLESS، VMess، Trojan، Shadowsocks و protocolهای فرم‌شدهٔ پنل؛
+- TCP/RAW، WebSocket، gRPC، HTTP Upgrade، XHTTP و mKCP در محدوده قابلیت‌های فرم فعلی؛
+- TLS و REALITY؛
+- Sniffing؛
+- Fallback برای ترکیب‌های پشتیبانی‌شده؛
+- Host/endpoint override؛
+- Advanced JSON برای تنظیمات خارج از فرم ساده؛
+- Validate و state مستقل Core.
+
+وجود یک قابلیت در Xray به معنی parity کامل فرم DARK با همه optionهای ممکن Xray نیست؛ Advanced JSON برای این مرز حفظ شده است.
+
+## Clients / Groups / Resellers
+
+- Clientها به Owner/Reseller مشخص متصل‌اند.
+- Groupها owner-scoped هستند؛ دو نماینده می‌توانند Group هم‌نام داشته باشند بدون قاطی‌شدن فیلتر.
+- Bulk selection با تغییر Search/Filter/Owner invalidate می‌شود تا عملیات روی ردیف مخفی اجرا نشود.
+- Backend ownership و permission را دوباره بررسی می‌کند؛ UI مرز امنیتی محسوب نمی‌شود.
+- محدودیت تعداد Client، quota ترافیک و Inbound assignment در سمت سرور اعمال می‌شوند.
+
+## RBAC و امنیت حساب
+
+- Role ceiling هنگام ذخیره و احراز هویت enforce می‌شود.
+- Permission legacy دستکاری‌شده نمی‌تواند سطح بالاتر ایجاد کند.
+- `finance.credit` و `finance.refund` به Reseller/Readonly delegate نمی‌شوند.
+- Robot API Key نمی‌تواند lifecycle کلیدها یا mutation مالی حساس را مدیریت کند.
+- Sessionها قابل revoke هستند.
+- TOTP با counter واقعی window match ذخیره می‌شود تا replay window کاهش یابد.
+
+سیاست Password حساب‌ها: ۸ تا ۵۱۲ کاراکتر. Passphrase بکاپ رمزدار حداقل ۱۲ کاراکتر دارد.
+
+## Finance / Ledger
+
+Ledger مالی/مصرفی پایه برای حساب‌وکتاب داخلی پنل است، نه درگاه پرداخت کامل.
+
+- event-id برای عملیات مالی idempotent است؛
+- retry یک event موجود دوباره balance/Audit ایجاد نمی‌کند؛
+- Credit فقط Interactive Owner است؛
+- Traffic ledger تاریخی با Reset دوره پاک نمی‌شود؛
+- Current-period usage از lifetime usage جدا نگه داشته می‌شود؛
+- Finance V2 lifetime را از منبع authoritative Owner می‌گیرد، نه صرفاً آخرین صفحه Ledger.
+
+## Subscription
+
+Subscription از مسیر مستقل DARK تولید می‌شود و فرمت‌های فعلی شامل Raw/Base64/DARK JSON و Clash/Mihomo هستند. Path Subscription با Panel Path تداخل‌سنجی می‌شود تا route پنل یا subscription روی هم نیفتند.
+
+## Nodes V2
+
+Node control برای Origin عمومی HTTPS طراحی شده است:
+
+- URL بدون credential/path/query ناخواسته؛
+- DNS فقط به IPهای globally routable؛
+- TCP connection به IP validate‌شده pin می‌شود؛
+- TLS همچنان hostname اصلی را verify می‌کند؛
+- HTTP redirect دنبال نمی‌شود؛
+- proxy environment برای Node request استفاده نمی‌شود؛
+- response/request limit و deadline وجود دارد؛
+- health monitor نودهای فعال را دوره‌ای probe می‌کند.
+
+این کنترل‌ها SSRF risk را کم می‌کنند ولی جای network ACL بیرونی را نمی‌گیرند.
+
+## IP Guard
+
+IP Guard از worker root جداگانه و nftables استفاده می‌کند. حالت `observe` باید قبل از `enforce` برای topology واقعی بررسی شود.
+
+محدودیت IP به معنای شمارش قطعی «آدم» یا «دستگاه فیزیکی» نیست. NAT، IPv4/IPv6 دوگانه، tunnel، CDN/proxy و sessionهای طولانی روی نتیجه اثر دارند.
+
+قبل از enforce باید مطمئن شوی IP مبدأیی که Xray برای Client مشاهده می‌کند همان source packet قابل enforce روی nftables همان host است.
+
+### چیزی که در CI packet-level ثابت شده
+
+تست `kernel-firewall` با network namespace و nftables واقعی انجام می‌شود و موارد زیر را اثبات می‌کند:
+
+- TCP data port بعد Ban drop می‌شود؛
+- UDP data port بعد Ban drop می‌شود؛
+- management port محافظت‌شده سالم می‌ماند؛
+- nft timeout واقعی دسترسی را برمی‌گرداند؛
+- explicit unban کار می‌کند؛
+- جدول same-name با owner/comment بیگانه overwrite نمی‌شود.
+
+این تست روی kernel واقعی runner است، اما هنوز topology دیتاسنتر/VPS هدف را ثابت نمی‌کند.
+
+## Safe Update / Recovery
+
+Updater قبل از activation:
+
+- source candidate را validate می‌کند؛
+- dependency preflight ایزوله می‌سازد؛
+- SQLite `quick_check` می‌زند؛
+- snapshot مستقل سورس و DB می‌گیرد؛
+- بعد از restart فقط `systemctl active` را کافی نمی‌داند و Doctor باید route/asset پنل را سالم ببیند؛
+- در failure، source و DB قبلی را restore می‌کند.
+
+### systemd recovery که واقعاً در CI اجرا می‌شود
+
+Gate `systemd-recovery` روی Ubuntu runner مسیرهای production-like را می‌سازد، سرویس را با user `darkxray` بالا می‌آورد، `vps-verify` را پاس می‌کند، Main PID را با SIGKILL می‌زند و نیاز دارد systemd با PID جدید سرویس را برگرداند. سپس stop/start انجام می‌شود و باید تنها یک Xray child متعلق به سرویس باقی بماند.
+
+**این تست reboot واقعی ماشین نیست.** تا reboot/power-cycle واقعی روی VPS انجام نشود، این claim باز می‌ماند.
+
+## Browser QA
+
+Browser Gate با Chromium واقعی اجرا می‌شود و شامل Login/Session، navigation صفحات Owner، ساخت و ذخیره Inbound V3، تغییر English/LTR به فارسی/RTL، حفظ focus/scroll در refresh و viewport موبایل 390px است.
+
+## Real Xray data-plane QA
+
+Gate `real-core` باینری رسمی checksum-verified را اجرا می‌کند و مسیر واقعی زیر را می‌سنجد:
+
+```text
+SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 ```
 
-ری‌استارت و برخی تغییرات اینباند/کاربر در این نسخه، هسته را دوباره اجرا می‌کنند. به‌روزرسانی بدون قطع نشست‌ها هنوز ساخته نشده است. لاگ‌های runtime و فضای دیسک را پایش کن؛ سیاست نگهداری بلندمدت لاگ و آزمون ظرفیت هنوز کامل نیست.
+همراه با دو Client روی Inbound مشترک، Subscription، Traffic Metering، reseller quota isolation، top-up، manual disable، reset/delete accounting و stop تمیز Core.
 
-## آزمون واقعی اختیاری با باینری خودت
+## چه چیزهایی هنوز باید روی VPS هدف انجام شوند؟
 
-```bash
-sudo darkxray selftest \
-  --binary /usr/local/lib/dark-xray/v26.3.27/xray \
-  --report /root/dark-real-test.json
-```
+1. Fresh install با online installer روی image/provider واقعی.
+2. Reboot/Power-cycle واقعی ماشین و بررسی Panel/Xray/DB بعد boot.
+3. Domain/TLS واقعی: issue و renewal گواهی، Secure Cookie و HSTS.
+4. IP Guard در topology واقعی سرور/تونل/CDN.
+5. دو VPS واقعی Node با HTTPS معتبر و network-loss recovery.
+6. Load/Scale متناسب با تعداد Client/Inbound موردنظر و SQLite concurrency.
+7. Update/Rollback rehearsal با exact release artifact نهایی.
+8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
 
-ابزار پوشه، دیتابیس، پورت و فرایندهای آزمایشی جدا می‌سازد؛ به دیتابیس نصب اصلی وصل نمی‌شود و فایروال را تغییر نمی‌دهد. دو مشتری روی اینباند مشترک، ساب، انتقال HTTP از مسیر Xray، مصرف، محدودیت سهمیهٔ یک نماینده، شارژ و حفظ قطع دستی را بررسی می‌کند. مقصد ترافیک loopback است، نه سایت خارجی. عنوان TEST-DOUBLE/FAKE را رد می‌کند.
+تا تکمیل این موارد، نام نسخه **`0.8.2-standalone-lab`** حفظ می‌شود.
 
-خود این آزمون هنوز با هستهٔ واقعی در محیط ساخت اجرا نشده؛ کد آن داخل بسته است. موفقیت آن هم تست فایروال/IP چندمبدأ، شبکهٔ ایران–خارج، بار زیاد یا سازگاری همهٔ کلاینت‌ها نیست.
+## منابع وضعیت
 
-## توسعهٔ محلی
+- `README.md` — معرفی سریع فارسی
+- `README.en.md` — معرفی انگلیسی
+- `STATUS.fa.md` — وضعیت مهندسی فعلی
+- `docs/VALIDATION.md` — تفکیک evidence و claim
+- `PUBLISH-STATUS.json` — وضعیت machine-readable انتشار
+- `SECURITY.md` — گزارش امنیتی و disclosure
 
-برای توسعهٔ بدون systemd و بدون ایجاد مسیرهای سیستمی:
-
-```bash
-chmod +x install.sh darkxray
-./install.sh
-./darkxray init --username dark
-./darkxray serve
-```
-
-این مسیر سرویس و گواهی/فایروال سیستم را نصب نمی‌کند. آزمون‌ها با وابستگی‌های توسعه و Node برای تست نگاشت فرم‌ها اجرا می‌شوند:
-
-```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
-PATH="$PWD/.venv/bin:$PATH" bash tests/run-tests.sh
-.venv/bin/python tests/browser-smoke.py
-```
-
-مقادیر و رمزهای ثابت موجود در `tests/` فقط fixture آزمایشی‌اند و در سرویس نصب نمی‌شوند. تست واقعی Xray با متغیر `DARK_REAL_XRAY` اختیاری است؛ نبود باینری باعث skip صریح می‌شود، نه موفقیت ساختگی.
-
-فهرست کامل نواقص و مرز قابلیت‌ها در `STATUS.fa.md` و گزارش ماشین‌خوان آزمون‌ها در `qa/summary.json` است.
+Credential واقعی، private key، certificate، database، secret.key یا log بدون سانسور را داخل مخزن یا Issue منتشر نکن.
