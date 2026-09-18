@@ -69,7 +69,7 @@ jobs:
           grep -q 'settings-apply' darkxray
           grep -q 'Change panel URI path' tools/menu.py
           grep -q 'Generate random panel URI path' tools/menu.py
-          grep -q 'Create owner login' tools/menu.py
+          grep -q 'Create primary owner login' tools/menu.py
           grep -q 'panel_route' tools/doctor.py
           grep -q "'changes_made':False" tools/vps-verify.py
       - name: Full cyber workspace smoke
