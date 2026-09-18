@@ -117,6 +117,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             visit(page,'clients')
             page.locator('.clients-v4').wait_for(state='visible',timeout=10000)
+            rows=page.locator('.cv4-row')
+            if rows.count():
+                first=rows.first
+                assert first.locator('.cv4-row-actions button').count()<=2
+                text=first.inner_text()
+                assert 'HWID' not in text and 'More actions' not in text
             page.locator('[data-act="new"]').click()
             page.locator('.cv4-editor').wait_for(state='visible',timeout=10000)
             assert page.locator('#dialog-form [name="email"]').count()==1
