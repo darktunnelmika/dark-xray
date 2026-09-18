@@ -113,6 +113,9 @@ chmod 0644 /etc/systemd/system/dark-xray*.service
 systemctl daemon-reload
 systemctl enable --now dark-xray-update.service
 systemctl enable --now dark-xray.service
+for _ in {1..40}; do [[ -S /run/dark-xray-update/control.sock ]] && break; sleep .25; done
+[[ -S /run/dark-xray-update/control.sock ]]
+runuser -u darkxray -- /opt/dark-xray/.venv/bin/python -c "import sys;sys.path.insert(0,'/opt/dark-xray/backend');from update_bridge import UpdateBrokerClient;x=UpdateBrokerClient(timeout=3).status();assert x.get('broker_ready') is True,x"
 
 healthy(){
   systemctl is-active --quiet dark-xray.service || return 1
