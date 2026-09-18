@@ -157,10 +157,10 @@ dashboard=function(){
 runAction=async function(act,el){
  if(act==='ov4restart'){if(confirm(L('Restart Xray? Active sessions can disconnect.','Xray ری‌استارت شود؟ اتصال‌های فعال ممکن است قطع شوند.'))){await api('/api/core/restart','POST',{});toast(L('Xray restarted.','Xray ری‌استارت شد.'));await refresh();}return;}
  if(act==='ov4stop'){if(confirm(L('Stop Xray? Proxy traffic will stop until it is started again.','Xray متوقف شود؟ ترافیک پروکسی تا اجرای مجدد قطع می‌شود.'))){await api('/api/core/stop','POST',{});toast(L('Xray stopped.','Xray متوقف شد.'));await refresh();}return;}
- if(act==='ov4logs'){await go('logs');return;}
+ if(act==='ov4logs'){if(globalThis.DarkSettingsV2?.open){await globalThis.DarkSettingsV2.open('operations');return;}await go('settings');return;}
  if(act==='ov4config'){await go('xray');return;}
  if(act==='ov4backup'){await go('backup');return;}
- if(act==='ov4history'){await go('audit');return;}
+ if(act==='ov4history'){if(globalThis.DarkSettingsV2?.open){await globalThis.DarkSettingsV2.open('operations');return;}await go('settings');return;}
  if(act==='ov4nodes'){await go('nodes');return;}
  if(act==='ov4reps'){await go('resellers');return;}
  if(act==='ov4clients'){await go('clients');return;}
