@@ -512,7 +512,8 @@ class NodeRegistry:
         except PolicyError as ex:
             with self.store.transaction() as db:
                 db.execute('''INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,0,0,?)
-                              ON CONFLICT(node_id) DO UPDATE SET last_error=excluded.last_error''',(node_id,str(ex)[:300]))
+                              ON CONFLICT(node_id) DO UPDATE SET source_verified=0,last_error=excluded.last_error''',
+                           (node_id,str(ex)[:300]))
             raise
 
     def reconcile_global_security(self,*,local_source_verified:bool,now:float|None=None)->dict:
@@ -536,7 +537,8 @@ class NodeRegistry:
                 with self.store.lock:
                     states={str(r['node_id']):dict(r) for r in self.store.db.execute(
                         'SELECT * FROM remote_node_security_state WHERE node_id IN ('+marks+')',tuple(assigned))}
-            fresh=all(n in states and states[n]['last_sync'] and now-float(states[n]['last_sync'])<180 for n in assigned)
+            fresh=all(n in states and states[n]['last_sync'] and now-float(states[n]['last_sync'])<180
+                      and not states[n]['last_error'] for n in assigned)
             verified=fresh and all(bool(states[n]['source_verified']) for n in assigned)
             ip_values=set()
             if local_source_verified:
