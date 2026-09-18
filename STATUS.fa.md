@@ -21,7 +21,7 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مست�
 | Panel/Subscription paths | collision protection در Web و CLI |
 | Domain / TLS | workflow موجود؛ provider/live renewal هنوز گیت VPS است |
 | Finance / Ledger | event-id idempotency، lifetime/current separation، Owner-only credit |
-| Nodes V3 | HTTPS-only + DNS pinning + TLS hostname verification + inbound assignment + client credential mirror + health/sync monitor |
+| Nodes V3 | HTTPS-only + DNS pinning + TLS verify + inbound assignment + credential mirror + Central traffic sync + idempotent ledger + reconnect/reset recovery |
 | Safe Update / Web Update | root-owned broker + exact-commit CI gate + source/SQLite snapshot + dependency preflight + health-gated rollback |
 | Browser | Chromium واقعی، EN/FA، mobile و Inbounds V3 save |
 | Real Xray | official v26.3.27 data-plane در CI |
@@ -120,7 +120,11 @@ sudo darkxray production-gate --json-only
 ## Hardeningهای مهم RC7
 
 - **Nodes V3 Assignment** در Add/Edit Node اجازه می‌دهد فقط Inboundهای انتخاب‌شده به آن Node تعلق بگیرند؛ Clone دستی از مسیر اصلی حذف شده است.
-- **Node credential mirror** فقط Clientهای متصل به همان Inboundهای انتخاب‌شده را با شناسه Mirror جدا روی Remote Xray sync می‌کند؛ Traffic accounting بین Node و Central هنوز تجمیع نمی‌شود.
+- **Node credential mirror** فقط Clientهای متصل به Inboundهای انتخاب‌شده را با شناسه Mirror جدا روی Remote Xray sync می‌کند.
+- **Node Traffic Sync** از counterهای Remote snapshot می‌گیرد؛ اولین snapshot baseline است و deltaهای بعدی با event ID پایدار وارد Ledger مرکزی می‌شوند، بنابراین retry/reconnect مصرف را دوباره حساب نمی‌کند.
+- **Global current usage** برای Client از Local + همه Nodeهای accounting جمع می‌شود و quota Client/Owner از مصرف Nodeها هم اثر می‌گیرد.
+- **Traffic reset recovery** با reset ID پایدار و cache نتیجه روی Agent انجام می‌شود؛ retry بعد از خطا همان final counter قبلی را بازیابی می‌کند و reset دوباره اجرا نمی‌شود.
+- **Node recovery state** تعداد failure/recovery، زمان آخرین outage/recovery و آخرین Traffic Sync را نگه می‌دارد.
 
 - **Web Update Center** فقط برای Interactive Owner است؛ Reseller/API Key اجازه Check/Start ندارند.
 - **Update Broker** با root و Unix peer credential اجرا می‌شود؛ Web process non-root باقی می‌ماند و arbitrary shell عبور نمی‌کند.
@@ -159,7 +163,7 @@ sudo darkxray production-gate --json-only
 2. **Reboot/Power-cycle واقعی ماشین** و بررسی Panel/Xray/SQLite بعد boot.
 3. **Domain/TLS provider gate**: issue و renewal واقعی Let's Encrypt، Secure Cookie و HSTS.
 4. **IP Guard روی topology واقعی**: تأیید اینکه source مشاهده‌شده در Xray همان packet source قابل enforce است.
-5. **دو VPS واقعی Node** با HTTPS معتبر، deploy/probe/core action و network loss/recovery.
+5. **دو VPS واقعی Node** با HTTPS معتبر، deploy/probe/core action، Traffic Sync، reset coordination و network-loss recovery روی WAN واقعی.
 6. **Capacity روی VPS هدف**؛ smoke هزار Client/SQLite contention در CI سبز است ولی ظرفیت provider/hardware باید روی مقصد اندازه‌گیری شود.
 7. **Update/Rollback rehearsal** روی VPS disposable با exact release artifact نهایی.
 8. **Stable promotion** بعد از پاس‌شدن گیت‌های VPS واقعی همین RC.
@@ -171,7 +175,7 @@ sudo darkxray production-gate --json-only
 - Kernel CI رفتار nftables DARK را ثابت می‌کند، نه routing/provider خاص VPS مشتری.
 - systemd recovery CI reboot واقعی ماشین نیست.
 - Ledger فعلی سیستم حسابداری عملیاتی پنل است، نه فروشگاه/درگاه/تسویه جامع.
-- Multi-node هنوز به معنی global distributed IP/accounting convergence کامل نیست.
+- Multi-node اکنون accounting مرکزی Client/Owner را جمع می‌کند، اما global IP/device enforcement و WAN failover خودکار هنوز distributed convergence کامل نیستند.
 
 ## مسیر بعدی
 
