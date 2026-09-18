@@ -71,10 +71,18 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             skin=page.evaluate("""()=>({
                 green:getComputedStyle(document.body).getPropertyValue('--classic-green').trim(),
                 activeBorder:getComputedStyle(document.querySelector('.nav-btn.active')).borderTopColor,
-                overviewBg:getComputedStyle(document.querySelector('.ov4-card')).backgroundColor
+                overviewBg:getComputedStyle(document.querySelector('.ov4-card')).backgroundImage,
+                overviewBorder:getComputedStyle(document.querySelector('.ov4-card')).borderTopColor,
+                overviewRadius:getComputedStyle(document.querySelector('.ov4-card')).borderRadius,
+                overviewAccent:getComputedStyle(document.querySelector('.ov4-spark polyline')).stroke,
+                actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor
             })""")
             assert skin['green']=='#19ff86',skin
-            mark('real browser login, cookie session, Cyber Classic shell and Overview V4')
+            assert skin['overviewRadius'] in ('2px','2px 2px 2px 2px'),skin
+            assert skin['overviewAccent']=='rgb(25, 255, 134)',skin
+            assert '25, 255, 134' in skin['overviewBorder'],skin
+            assert skin['actionBg'] in ('rgb(0, 16, 8)','rgba(0, 16, 8, 1)'),skin
+            mark('real browser login, Cyber Classic shell and theme-inherited Overview V4')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
