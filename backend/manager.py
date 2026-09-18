@@ -699,11 +699,14 @@ class Manager:
             rec=records.get(email)
             if not rec or rec.get('subId')!=json.loads(meta['desired']).get('subId'):
                 raise PolicyError('CoreEngine client identity must match before recovery')
-            # Accept the present counters. Never replay a destructive reset or
-            # refund the historical ledger. Unobserved bytes remain unknown.
+            # Reconcile the same durable remote reset ID. Node agents cache the
+            # final pre-reset counters, so this is recovery, not a second reset.
+            if self.remote_reset is not None and meta.get('op_id'):
+                self.remote_reset(email,meta['op_id'])
+            # Accept the present local counters. Never refund historical ledger rows.
             self._charge_snapshot(meta,rec)
             with self.store.transaction() as db:
-                db.execute("UPDATE managed_clients SET op='none',state='applied',error='',retry_at=0,attempts=0 WHERE email=?",(email,))
+                db.execute("UPDATE managed_clients SET op='none',op_id='',state='applied',error='',retry_at=0,attempts=0 WHERE email=?",(email,))
             self._complete_cycle(email)
             row=self.own_row(actor,email)
             self.audit(actor,row['owner'],'reset.resolve_current',email,'Current engine counters accepted; destructive reset NOT replayed; due reset cycle advanced')
