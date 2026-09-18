@@ -377,7 +377,7 @@ class NodeRegistry:
         doc,ms=self._request(node_id,'/node/api/mirrors/traffic',timeout=12.0)
         if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
             self._request_failed(node_id,'Invalid node traffic response');raise PolicyError('Invalid node traffic response')
-        result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=doc.get('capturedAt') or time.time())
+        result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=time.time())
         return {'latency_ms':ms,**result}
 
     def reset_client_traffic(self,client_id:str,reset_id:str)->dict:
@@ -398,7 +398,7 @@ class NodeRegistry:
             if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id or type(doc.get('up')) is not int or type(doc.get('down')) is not int:
                 raise PolicyError('Invalid node traffic reset response')
             snap=self.apply_traffic_snapshot(node_id,[{'sourceEmail':client_id,'up':doc['up'],'down':doc['down']}],
-                                             captured_at=doc.get('capturedAt') or time.time())
+                                             captured_at=time.time())
             with self.store.transaction() as db:
                 db.execute('''UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,current_up=0,current_down=0,
                               initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',(time.time(),node_id,client_id))
