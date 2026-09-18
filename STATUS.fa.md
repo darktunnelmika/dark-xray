@@ -1,7 +1,7 @@
-# وضعیت DARK XRAY 0.9.0 RC5
+# وضعیت DARK XRAY 0.9.0 RC6
 
 تاریخ بازبینی: **18 سپتامبر 2026**  
-برچسب فعلی: **`0.9.0-rc5`**
+برچسب فعلی: **`0.9.0-rc6`**
 
 > «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
 
@@ -119,7 +119,7 @@ sudo darkxray production-gate --json-only
 
 ## Hardeningهای مهم RC5
 
-- **Clients V4 Command Deck** Sidebar دائمی را حذف و کنترل‌ها را به Search/Presence/Filter/Sort جمع می‌کند؛ ردیف‌ها فقط OPEN / QR / More دارند.
+- **Clients V4 Command Deck** Sidebar دائمی را حذف و کنترل‌ها را به Search/Presence/Filter/Sort جمع می‌کند؛ ردیف‌ها فقط OPEN / QR دارند و IP/HWID و More Actions حذف شده‌اند.
 - **Create/Edit Basic-first** فقط Identity/Inbound/Plan/Expiry/IP را در مسیر اصلی نشان می‌دهد و گزینه‌های کم‌مصرف را داخل Advanced نگه می‌دارد.
 - **Clients V3 Online** از آخرین activity واقعی Client محاسبه می‌شود: تا 60 ثانیه Online، تا 5 دقیقه Idle و بعد Offline؛ این status ادعای socket دائماً باز نیست.
 - QR هر Config/Subscription exact payload خودش را دارد و لینک انتخابی مستقیماً encode می‌شود.
@@ -163,6 +163,6 @@ sudo darkxray production-gate --json-only
 
 ## مسیر بعدی
 
-مرحله بعد، تست **`0.9.0-rc5`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
+مرحله بعد، تست **`0.9.0-rc6`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)
