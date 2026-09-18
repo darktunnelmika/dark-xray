@@ -9,7 +9,7 @@
 
 # DARK XRAY 🖤
 
-پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، نماینده و سطح دسترسی، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
+پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، مالک اصلی واحد، نمایندگان، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
 **نسخه آزمایشی برای تست VPS:** `0.9.0-rc7`
 
@@ -21,7 +21,7 @@
 DARK XRAY برای Runtime به Sanayi/3x-ui وابسته نیست:
 
 ```text
-DARK UI → DARK API / RBAC → DARK Database → Xray-core
+DARK UI → DARK API / Owner + Representative Scope → DARK Database → Xray-core
                                   ├→ Ledger / Policy
                                   ├→ Node control
                                   └→ IP Guard → nftables
@@ -35,7 +35,7 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 - **Reduced row actions** با دو مسیر واضح `OPEN / QR`؛ IP/HWID و More Actions از UI اصلی حذف شده‌اند.
 - **QR / Share V3** با QR مستقل برای Subscription و هر Config، Copy و Download SVG.
 - **REALITY Guard** برای Xray pin‌شده: تارگت‌های شناخته‌شده ناسازگار مثل `www.microsoft.com` fail-closed رد می‌شوند و Target Search مسیر پیشنهادی سالم می‌دهد.
-- **Reseller / RBAC** با role ceiling، permissionهای سمت سرور و جلوگیری از privilege escalation رکوردهای legacy.
+- **Representatives V2** با یک Primary Owner، فرم یکپارچه Login/Profile، Inboundهای مجاز، سهمیه، سقف Client، Prefix اجباری اختیاری، Max IP/HWID و scope ثابت سمت سرور؛ صفحه Access Levels/Permission Matrix از UI حذف شده است.
 - **Account Security** شامل Session، TOTP ضد replay و API Key با محدودیت Robot scope.
 - **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
@@ -103,7 +103,7 @@ sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
 
 روی `main` این Gateها مستقل اجرا می‌شوند:
 
-- **Python 3.12 و 3.13:** API، RBAC، TOTP، Finance، Settings، Backup/Update rollback، Nodes و regressionها.
+- **Python 3.12 و 3.13:** API، Owner/Representative scope، hardening legacy roleها، TOTP، Finance، Settings، Backup/Update rollback، Nodes و regressionها.
 - **Browser QA:** Chromium واقعی، Login، صفحات Owner، ذخیره Inbound V3، EN/LTR ↔ FA/RTL، refresh/focus و viewport موبایل 390px.
 - **Real Xray:** Xray رسمی `v26.3.27` با مسیر واقعی `SOCKS → VLESS → HTTP`، Subscription، Traffic Metering، quota isolation و recovery semantics.
 - **Kernel firewall:** network namespace و nftables واقعی؛ TCP/UDP drop، سالم‌ماندن management port، timeout، unban و foreign-table protection.
