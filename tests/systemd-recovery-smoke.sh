@@ -13,8 +13,9 @@ THIRD_PID=0
 
 cleanup(){
   systemctl disable --now dark-xray.service >/dev/null 2>&1 || true
+  systemctl disable --now dark-xray-update.service >/dev/null 2>&1 || true
   systemctl disable --now dark-xray-guard.service >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-guard.service /usr/local/bin/darkxray
+  rm -f /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-update.service /etc/systemd/system/dark-xray-guard.service /usr/local/bin/darkxray
   systemctl daemon-reload >/dev/null 2>&1 || true
   rm -rf /opt/dark-xray /etc/dark-xray /var/lib/dark-xray /usr/local/lib/dark-xray
   if getent passwd darkxray >/dev/null 2>&1; then userdel darkxray >/dev/null 2>&1 || true; fi
