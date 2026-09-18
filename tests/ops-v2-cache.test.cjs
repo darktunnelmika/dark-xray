@@ -18,7 +18,7 @@ function context(){
   go:async page=>{ctx.state.page=page;events.push('baseGo:'+page)},
   refresh:async()=>{events.push('refresh')},
   renderPage:async()=>{},
-  api:async u=>{calls.push(u);if(u==='/api/core/state')return {state:'running'};if(u==='/api/audit')return [{id:1}];if(u==='/api/ip/events')return {bans:[1]};return {};},
+  api:async u=>{calls.push(u);if(u==='/api/core/state')return {state:'running'};if(u==='/api/audit')return [{id:1}];if(u==='/api/ip/events')return {bans:[1]};if(u==='/api/backup/status')return {database_bytes:4096,managed_clients:3,restore_isolated:true,database_download:'/api/backup'};return {};},
   isOwner:()=>ctx.state.me?.role==='owner',
   can:key=>ctx.state.me?.role==='owner'||ctx.state.me?.permissions?.[key]==='all'||ctx.state.me?.permissions?.[key]==='own',
   localStorage:{getItem:()=> 'en'},
@@ -45,10 +45,11 @@ test('dashboard fetches operational sources in addition to the base load',async(
  const {ctx,calls}=context();
  ctx.state.page='dashboard';ctx.state.me={id:'dark',role:'owner',permissions:{}};
  await ctx.load();
- assert.deepEqual(new Set(calls),new Set(['/api/core/state','/api/audit','/api/ip/events']));
+ assert.deepEqual(new Set(calls),new Set(['/api/core/state','/api/audit','/api/ip/events','/api/backup/status']));
  assert.equal(ctx.state.ov2.core.state,'running');
  assert.equal(ctx.state.ov2.audit.length,1);
  assert.equal(ctx.state.ov2.ip.bans.length,1);
+ assert.equal(ctx.state.ov2.backup.database_bytes,4096);
 });
 
 test('entering dashboard triggers an immediate fresh load instead of waiting for timer',async()=>{
