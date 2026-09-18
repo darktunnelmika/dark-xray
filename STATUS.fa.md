@@ -21,7 +21,7 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مست�
 | Panel/Subscription paths | collision protection در Web و CLI |
 | Domain / TLS | workflow موجود؛ provider/live renewal هنوز گیت VPS است |
 | Finance / Ledger | event-id idempotency، lifetime/current separation، Owner-only credit |
-| Nodes V2 | HTTPS-only + DNS pinning + TLS hostname verification + health monitor |
+| Nodes V3 | HTTPS-only + DNS pinning + TLS hostname verification + inbound assignment + client credential mirror + health/sync monitor |
 | Safe Update / Web Update | root-owned broker + exact-commit CI gate + source/SQLite snapshot + dependency preflight + health-gated rollback |
 | Browser | Chromium واقعی، EN/FA، mobile و Inbounds V3 save |
 | Real Xray | official v26.3.27 data-plane در CI |
@@ -118,6 +118,9 @@ sudo darkxray production-gate --json-only
 `production-gate` برای lab خودش temporary DB/ports ایجاد می‌کند و customer DB یا firewall نصب‌شده را تغییر نمی‌دهد.
 
 ## Hardeningهای مهم RC7
+
+- **Nodes V3 Assignment** در Add/Edit Node اجازه می‌دهد فقط Inboundهای انتخاب‌شده به آن Node تعلق بگیرند؛ Clone دستی از مسیر اصلی حذف شده است.
+- **Node credential mirror** فقط Clientهای متصل به همان Inboundهای انتخاب‌شده را با شناسه Mirror جدا روی Remote Xray sync می‌کند؛ Traffic accounting بین Node و Central هنوز تجمیع نمی‌شود.
 
 - **Web Update Center** فقط برای Interactive Owner است؛ Reseller/API Key اجازه Check/Start ندارند.
 - **Update Broker** با root و Unix peer credential اجرا می‌شود؛ Web process non-root باقی می‌ماند و arbitrary shell عبور نمی‌کند.
