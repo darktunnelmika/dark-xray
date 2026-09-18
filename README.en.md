@@ -33,7 +33,7 @@ Current major workspaces include:
 - **Settings V2** with staged privileged runtime changes and rollback-aware apply flows.
 - **Finance / Ledger V2** with idempotent event IDs, current-period and lifetime usage, interactive-owner credit and audit traceability.
 - **Xray Control V2** for DNS, outbounds, routing, balancers and observatory.
-- **Nodes V2** with HTTPS-only origins, token auth, DNS pinning, TLS hostname verification, health monitoring and core actions.
+- **Nodes V3** with HTTPS-only origins, Agent Tokens, DNS pinning, TLS hostname verification, per-node inbound assignment, selected credential mirroring, Central traffic aggregation with per-node baselines/idempotent ledger events, reconnect recovery, and coordinated multi-node traffic resets.
 - **Dashboard Control Center** for interactive owners: the Update Center with Latest Verified / Stable / RC / Exact Ref, exact-commit CI gating, preflight, changelog, live progress, logs and automatic rollback now lives directly on the first page.
 - **Root-owned Update Broker** separate from the non-root web process; only narrow status/check/start operations cross the authenticated Unix socket.
 - **Backup / Restore / Doctor** are centralized on the owner dashboard; DB snapshots are downloadable from Web while encrypted full backup / verify / restore keep the hardened CLI workflow.
@@ -109,7 +109,7 @@ This `0.9.0-rc7` candidate remains pre-production until the intended deployment 
 - real machine reboot/power-cycle recovery;
 - Let's Encrypt issuance and renewal on the target DNS/provider path, including Secure Cookie/HSTS behavior;
 - IP Guard validation on the actual tunnel/CDN/source-IP topology;
-- two real VPS nodes over valid public HTTPS, including network loss/recovery and convergence;
+- two real VPS nodes over valid public HTTPS, including traffic sync, reset coordination, network loss/recovery and WAN convergence;
 - capacity validation on the intended VPS plan; CI already passes a 1000-client and SQLite-contention smoke, but that is not a provider capacity guarantee;
 - final update/rollback rehearsal with the exact release artifact to be deployed.
 
