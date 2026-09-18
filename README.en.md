@@ -4,7 +4,7 @@
 
 Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, reseller ownership, RBAC, accounting, subscriptions, nodes and direct Xray-core control.
 
-**VPS test candidate:** `0.9.0-rc6`
+**VPS test candidate:** `0.9.0-rc7`
 
 > [!CAUTION]
 > DARK XRAY is now a **Release Candidate**, not a production-ready declaration. Real Chromium, official Xray, packet-level nftables, systemd crash recovery and a 1000-client/SQLite contention smoke are green in CI; target-VPS install, real machine reboot, provider TLS renewal and two-VPS node validation remain final gates.
@@ -34,6 +34,8 @@ Current major workspaces include:
 - **Finance / Ledger V2** with idempotent event IDs, current-period and lifetime usage, interactive-owner credit and audit traceability.
 - **Xray Control V2** for DNS, outbounds, routing, balancers and observatory.
 - **Nodes V2** with HTTPS-only origins, token auth, DNS pinning, TLS hostname verification, health monitoring and core actions.
+- **Web Update Center** for interactive owners with Latest Verified / Stable / RC / Exact Ref, exact-commit CI gating, preflight, changelog, live progress, logs and automatic rollback.
+- **Root-owned Update Broker** separate from the non-root web process; only narrow status/check/start operations cross the authenticated Unix socket.
 - **Backup / Restore + Safe Update** with preflight, source/SQLite snapshots and rollback.
 - **Cyber UI** with English/LTR default, Persian/RTL switching, responsive layout and refresh/focus stability.
 
@@ -95,9 +97,13 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 - Node origins must be public HTTPS; redirects and environment proxies are not followed for node control requests.
 - IP Guard enforcement should only be enabled after verifying that Xray's observed client source corresponds to the packet source seen by nftables on that same host.
 
+## One-time bootstrap for RC6 and older installs
+
+A server that predates the root update broker needs one final online-installer Safe Update to this RC. That path executes the candidate updater itself and installs/enables `dark-xray-update.service`. Future updates can then be performed from the Web Update Center without SSH.
+
 ## Remaining production gates
 
-This `0.9.0-rc6` candidate remains pre-production until the intended deployment environment passes:
+This `0.9.0-rc7` candidate remains pre-production until the intended deployment environment passes:
 
 - fresh install on the actual target VPS image/provider;
 - real machine reboot/power-cycle recovery;
@@ -116,6 +122,6 @@ This `0.9.0-rc6` candidate remains pre-production until the intended deployment 
 - [Third-party notices](THIRD-PARTY-NOTICES.md)
 - [Publication status](PUBLISH-STATUS.json)
 
-`SHA256SUMS` is regenerated for this RC snapshot; release-archive checksums are published with the matching prerelease assets.
+`SHA256SUMS` and archive checksums are regenerated only for the final fixed RC/tag snapshot; older checksum files are not treated as RC7 evidence.
 
 Do not publish real credentials, private keys, certificates, databases or unredacted logs.
