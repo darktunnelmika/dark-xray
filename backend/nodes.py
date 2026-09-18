@@ -294,13 +294,12 @@ class NodeRegistry:
 
     def probe(self,node_id:str,*,timeout:float=8.0)->dict:
         now=time.time()
-        try:
-            health,ms=self._request(node_id,'/node/api/health',timeout=timeout)
-            if not isinstance(health,dict) or health.get('service')!='DARK XRAY NODE':raise PolicyError('Remote endpoint is not a DARK node agent')
-            with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
-            return {'node':self.get(node_id),'latency_ms':ms,'health':health}
-        except PolicyError as ex:
-            self._request_failed(node_id,str(ex));raise
+        health,ms=self._request(node_id,'/node/api/health',timeout=timeout)
+        if not isinstance(health,dict) or health.get('service')!='DARK XRAY NODE':
+            self._request_failed(node_id,'Remote endpoint is not a DARK node agent')
+            raise PolicyError('Remote endpoint is not a DARK node agent')
+        with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
+        return {'node':self.get(node_id),'latency_ms':ms,'health':health}
 
 
     def _allowed_traffic_clients(self,node_id:str)->set[str]:
@@ -332,12 +331,15 @@ class NodeRegistry:
     def apply_traffic_snapshot(self,node_id:str,items:list[dict],*,captured_at:float|None=None)->dict:
         if not isinstance(items,list) or len(items)>100000:raise PolicyError('Invalid node traffic snapshot')
         allowed=self._allowed_traffic_clients(node_id);now=time.time() if captured_at is None else float(captured_at)
-        seen=set();charged_up=charged_down=0;baselined=0;resets=0;changed=[]
+        seen=set();charged_up=charged_down=0;baselined=0;resets=0;ignored=0;changed=[]
         with self.store.transaction() as db:
             for item in items:
                 if not isinstance(item,dict) or set(item)-{'sourceEmail','up','down'}:raise PolicyError('Invalid node traffic item')
                 email=item.get('sourceEmail');up=item.get('up');down=item.get('down')
-                if not isinstance(email,str) or email not in allowed or email in seen:raise PolicyError('Unexpected node traffic client')
+                if not isinstance(email,str):raise PolicyError('Invalid node traffic client')
+                if email not in allowed:
+                    ignored+=1;continue
+                if email in seen:raise PolicyError('Duplicate node traffic client')
                 if type(up)is not int or type(down)is not int or up<0 or down<0 or up>(1<<63)-1 or down>(1<<63)-1 or up+down>(1<<63)-1:
                     raise PolicyError('Invalid node traffic counter')
                 seen.add(email)
@@ -370,7 +372,7 @@ class NodeRegistry:
                               seq=?,initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',
                            (up,down,new_up,new_down,seq,now,node_id,email))
                 changed.append(email);self._recompute_client_usage(db,email)
-        return {'clients':len(seen),'baselined':baselined,'charged_up':charged_up,'charged_down':charged_down,
+        return {'clients':len(seen),'ignored_clients':ignored,'baselined':baselined,'charged_up':charged_up,'charged_down':charged_down,
                 'charged_bytes':charged_up+charged_down,'counter_resets':resets,'captured_at':now,'changed_clients':changed}
 
     def sync_traffic(self,node_id:str)->dict:
@@ -422,7 +424,10 @@ class NodeRegistry:
                         self.probe(node_id,timeout=5.0)
                         traffic=self.sync_traffic(node_id)
                         if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
-                        if sync_provider is not None:self.sync_mirrors(node_id,sync_provider(node_id))
+                        if sync_provider is not None:
+                            self.sync_mirrors(node_id,sync_provider(node_id))
+                            post=self.sync_traffic(node_id)
+                            if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
                     except (PolicyError,OSError,ValueError):
                         pass
                 if self.stop.wait(interval):return
