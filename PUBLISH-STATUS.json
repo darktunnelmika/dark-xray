@@ -4,7 +4,7 @@
   "branch": "main",
   "date": "2026-09-18",
   "status": "release_candidate_target_vps_validation",
-  "current_version": "0.9.0-rc4",
+  "current_version": "0.9.0-rc5",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -13,7 +13,7 @@
     "optional_web_language": "fa",
     "web_direction_default": "ltr",
     "inbounds_workspace": "V3",
-    "clients_groups_workspace": "V3 real-activity presence / per-config QR",
+    "clients_groups_workspace": "V4 cyber command deck / basic-first editor / real-activity presence / per-config QR",
     "settings_workspace": "V2",
     "finance_workspace": "V2",
     "subscription_workspace": "V2 raw/base64/dark-json/clash-mihomo",
@@ -46,7 +46,10 @@
       "verified_access_observation",
       "device_activity"
     ],
-    "vision_transport_compat_enforced": true
+    "vision_transport_compat_enforced": true,
+    "clients_v4_reduced_row_actions": true,
+    "clients_v4_basic_first_editor": true,
+    "clients_v4_owner_scoped_group_filter": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -95,7 +98,8 @@
       "inbounds_v3_real_save",
       "english_ltr_to_persian_rtl",
       "refresh_focus_scroll_stability",
-      "mobile_390px_layout"
+      "mobile_390px_layout",
+      "clients_v4_basic_first_editor"
     ]
   },
   "target_infrastructure_validation": {
@@ -126,7 +130,7 @@
     "source_sha256sums_regenerated_for_rc": false,
     "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "RC4 source/release checksums must be regenerated after the final tested snapshot is fixed; existing older-RC checksum files are not promoted as RC4 evidence.",
+  "checksum_note": "RC5 source/release checksums must be regenerated only after the final tested snapshot is fixed.",
   "release_candidate": true,
   "control_center_v2": true
 }
