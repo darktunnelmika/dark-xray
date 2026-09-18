@@ -432,6 +432,200 @@ class NodeRegistry:
         result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=time.time())
         return {'latency_ms':ms,**result}
 
+
+    def _client_inbounds(self,client_id:str)->list[int]:
+        with self.store.lock:
+            row=self.store.db.execute("SELECT inbounds FROM managed_clients WHERE email=? AND state!='deleted'",(client_id,)).fetchone()
+        if not row:return []
+        try:return sorted({int(x) for x in json.loads(row['inbounds']) if int(x)>0})
+        except Exception:raise PolicyError('Invalid persisted client inbound assignment')
+
+    def _assigned_node_ids(self,client_id:str)->list[str]:
+        inbound_ids=self._client_inbounds(client_id)
+        if not inbound_ids:return []
+        marks=','.join('?' for _ in inbound_ids)
+        with self.store.lock:
+            rows=self.store.db.execute(
+                'SELECT DISTINCT r.node_id FROM remote_node_inbounds r JOIN remote_nodes n ON n.id=r.node_id '
+                'WHERE n.enabled=1 AND r.remote_inbound_id>0 AND r.local_inbound_id IN ('+marks+') ORDER BY r.node_id',
+                tuple(inbound_ids)).fetchall()
+        return [str(r[0]) for r in rows]
+
+    @staticmethod
+    def _security_stamp(value)->float:
+        if isinstance(value,bool) or not isinstance(value,(int,float)):raise PolicyError('Invalid node security timestamp')
+        value=float(value)
+        if not 0<=value<1e15:raise PolicyError('Invalid node security timestamp')
+        return value
+
+    def sync_security(self,node_id:str)->dict:
+        try:
+            doc,ms=self._request(node_id,'/node/api/mirrors/security',timeout=12.0)
+            if not isinstance(doc,dict) or type(doc.get('sourceVerified')) is not bool or not isinstance(doc.get('items'),list):
+                raise PolicyError('Invalid node security response')
+            if len(doc['items'])>100000:raise PolicyError('Node security response is too large')
+            allowed=self._allowed_traffic_clients(node_id);ips=[];devices=[];ignored=0;seen=set()
+            for item in doc['items']:
+                if not isinstance(item,dict) or set(item)-{'sourceEmail','ips','devices'}:
+                    raise PolicyError('Invalid node security item')
+                email=item.get('sourceEmail')
+                if not isinstance(email,str) or len(email)>128:raise PolicyError('Invalid node security client')
+                if email not in allowed:
+                    ignored+=1;continue
+                if email in seen:raise PolicyError('Duplicate node security client')
+                seen.add(email)
+                raw_ips=item.get('ips',[]);raw_devices=item.get('devices',[])
+                if not isinstance(raw_ips,list) or not isinstance(raw_devices,list) or len(raw_ips)>10000 or len(raw_devices)>10000:
+                    raise PolicyError('Invalid node security collection')
+                for row in raw_ips:
+                    if not isinstance(row,dict) or set(row)!={'ip','firstSeen','lastSeen'}:raise PolicyError('Invalid node IP observation')
+                    ip=normalize_ip(row.get('ip',''));first=self._security_stamp(row.get('firstSeen'));last=self._security_stamp(row.get('lastSeen'))
+                    if first>last:raise PolicyError('Invalid node IP observation time')
+                    ips.append((node_id,email,ip,first,last,int(doc['sourceVerified'])))
+                for row in raw_devices:
+                    if not isinstance(row,dict) or set(row)!={'digest','deviceOs','model','firstSeen','lastSeen'}:
+                        raise PolicyError('Invalid node device observation')
+                    digest=str(row.get('digest','')).lower()
+                    if len(digest)!=64 or any(ch not in '0123456789abcdef' for ch in digest):
+                        raise PolicyError('Invalid node device digest')
+                    first=self._security_stamp(row.get('firstSeen'));last=self._security_stamp(row.get('lastSeen'))
+                    if first>last:raise PolicyError('Invalid node device observation time')
+                    os_name=str(row.get('deviceOs',''))[:80];model=str(row.get('model',''))[:120]
+                    devices.append((node_id,email,digest,os_name,model,first,last))
+            now=time.time()
+            with self.store.transaction() as db:
+                db.execute('DELETE FROM remote_node_ips WHERE node_id=?',(node_id,))
+                db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
+                if ips:db.executemany('INSERT INTO remote_node_ips(node_id,client_id,ip,first_seen,last_seen,verified) VALUES(?,?,?,?,?,?)',ips)
+                if devices:db.executemany('INSERT INTO remote_node_devices(node_id,client_id,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?,?)',devices)
+                db.execute('''INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,?,?,'')
+                              ON CONFLICT(node_id) DO UPDATE SET source_verified=excluded.source_verified,last_sync=excluded.last_sync,last_error='' ''',
+                           (node_id,int(doc['sourceVerified']),now))
+            return {'latency_ms':ms,'clients':len(seen),'ips':len(ips),'devices':len(devices),
+                    'ignored_clients':ignored,'source_verified':bool(doc['sourceVerified']),'synced_at':now}
+        except PolicyError as ex:
+            with self.store.transaction() as db:
+                db.execute('''INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,0,0,?)
+                              ON CONFLICT(node_id) DO UPDATE SET last_error=excluded.last_error''',(node_id,str(ex)[:300]))
+            raise
+
+    def reconcile_global_security(self,*,local_source_verified:bool,now:float|None=None)->dict:
+        if type(local_source_verified)is not bool:raise PolicyError('local_source_verified must be boolean')
+        now=time.time() if now is None else float(now)
+        with self.store.lock:
+            table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_clients'").fetchone()
+            if not table:return {'clients':0,'changed':[],'items':[]}
+            row=self.store.db.execute("SELECT body FROM core_sections WHERE name='ipguard'").fetchone()
+            try:window=max(10,int(json.loads(row[0]).get('window_seconds',120))) if row else 120
+            except Exception:window=120
+            metas=[dict(r) for r in self.store.db.execute('''SELECT c.id,c.limit_ip,m.desired,m.inbounds,
+                       c.global_ip_block,c.global_device_block FROM clients c
+                       JOIN managed_clients m ON m.email=c.id WHERE m.state!='deleted' ORDER BY c.id''')]
+        changed=[];items=[]
+        for meta in metas:
+            client_id=str(meta['id']);assigned=self._assigned_node_ids(client_id)
+            states={}
+            if assigned:
+                marks=','.join('?' for _ in assigned)
+                with self.store.lock:
+                    states={str(r['node_id']):dict(r) for r in self.store.db.execute(
+                        'SELECT * FROM remote_node_security_state WHERE node_id IN ('+marks+')',tuple(assigned))}
+            fresh=all(n in states and states[n]['last_sync'] and now-float(states[n]['last_sync'])<180 for n in assigned)
+            verified=fresh and all(bool(states[n]['source_verified']) for n in assigned)
+            ip_values=set()
+            if local_source_verified:
+                with self.store.lock:
+                    ip_values.update(str(r[0]) for r in self.store.db.execute(
+                        'SELECT DISTINCT ip FROM observations WHERE client_id=? AND last_seen>?',(client_id,now-window)))
+            if assigned:
+                marks=','.join('?' for _ in assigned)
+                with self.store.lock:
+                    ip_values.update(str(r[0]) for r in self.store.db.execute(
+                        'SELECT DISTINCT ip FROM remote_node_ips WHERE client_id=? AND verified=1 AND last_seen>? '
+                        'AND node_id IN ('+marks+')',(client_id,now-window,*assigned)))
+            ip_complete=bool(assigned) and local_source_verified and verified
+            limit_ip=int(meta['limit_ip'] or 0)
+            ip_block=bool(limit_ip and ip_complete and len(ip_values)>limit_ip)
+
+            try:limit_hwid=int(json.loads(meta['desired']).get('limitHwid',0) or 0)
+            except Exception:limit_hwid=0
+            device_values=set()
+            with self.store.lock:
+                device_table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_devices'").fetchone()
+                if device_table:
+                    device_values.update(str(r[0]) for r in self.store.db.execute('SELECT digest FROM core_devices WHERE email=?',(client_id,)))
+            if assigned:
+                marks=','.join('?' for _ in assigned)
+                with self.store.lock:
+                    device_values.update(str(r[0]) for r in self.store.db.execute(
+                        'SELECT DISTINCT digest FROM remote_node_devices WHERE client_id=? AND node_id IN ('+marks+')',(client_id,*assigned)))
+            device_complete=bool(assigned) and fresh
+            device_block=bool(limit_hwid and device_complete and len(device_values)>limit_hwid)
+            if bool(meta['global_ip_block'])!=ip_block or bool(meta['global_device_block'])!=device_block:
+                with self.store.transaction() as db:
+                    db.execute('UPDATE clients SET global_ip_block=?,global_device_block=? WHERE id=?',
+                               (int(ip_block),int(device_block),client_id))
+                changed.append(client_id)
+            items.append({'client_id':client_id,'nodes':assigned,'ip_count':len(ip_values),'limit_ip':limit_ip,
+                          'ip_enforceable':ip_complete,'ip_blocked':ip_block,'device_count':len(device_values),
+                          'limit_hwid':limit_hwid,'device_complete':device_complete,'device_blocked':device_block})
+        return {'clients':len(items),'changed':changed,'items':items,'window_seconds':window}
+
+    def global_security(self,client_id:str,*,local_source_verified:bool)->dict:
+        result=self.reconcile_global_security(local_source_verified=local_source_verified)
+        item=next((x for x in result['items'] if x['client_id']==client_id),None)
+        if item is None:raise PolicyError('Managed client not found')
+        now=time.time();window=result['window_seconds'];assigned=item['nodes']
+        with self.store.lock:
+            local_ips=[dict(r) for r in self.store.db.execute(
+                'SELECT ip,node,first_seen,last_seen,granted FROM observations WHERE client_id=? AND last_seen>? ORDER BY last_seen DESC',
+                (client_id,now-window))]
+            local_devices=[dict(r) for r in self.store.db.execute(
+                'SELECT id,device_os,model,first_seen,last_seen FROM core_devices WHERE email=? ORDER BY last_seen DESC',(client_id,))]
+            remote_ips=[dict(r) for r in self.store.db.execute(
+                'SELECT node_id,ip,first_seen,last_seen,verified FROM remote_node_ips WHERE client_id=? ORDER BY last_seen DESC',(client_id,))]
+            remote_devices=[dict(r) for r in self.store.db.execute(
+                'SELECT node_id,digest,device_os,model,first_seen,last_seen FROM remote_node_devices WHERE client_id=? ORDER BY last_seen DESC',(client_id,))]
+        for row in remote_devices:
+            row['device_id']='node:'+row['node_id']+':'+row.pop('digest')[:16]
+        return {**item,'local_ips':local_ips,'remote_ips':remote_ips,
+                'local_devices':local_devices,'remote_devices':remote_devices}
+
+    def failover_targets(self,client_id:str)->list[dict]:
+        inbound_ids=self._client_inbounds(client_id)
+        if not inbound_ids:return []
+        marks=','.join('?' for _ in inbound_ids);now=time.time()
+        with self.store.lock:
+            rows=[dict(r) for r in self.store.db.execute(
+                '''SELECT n.id,n.name,n.data_address,n.priority,n.failover_enabled,n.enabled,n.last_seen,
+                          n.last_latency_ms,n.last_error,n.recovery_count,r.local_inbound_id,r.remote_inbound_id
+                   FROM remote_node_inbounds r JOIN remote_nodes n ON n.id=r.node_id
+                   WHERE r.local_inbound_id IN ('''+marks+''') ORDER BY n.priority,n.name,n.id''',tuple(inbound_ids))]
+        grouped={}
+        for row in rows:
+            if not row['enabled'] or not row['failover_enabled'] or not row['data_address'] or not row['remote_inbound_id']:
+                continue
+            if not row['last_seen'] or now-float(row['last_seen'])>=180 or row['last_error']:continue
+            target=grouped.setdefault(row['id'],{'node_id':row['id'],'name':row['name'],'address':row['data_address'],
+                'priority':int(row['priority']),'latency_ms':int(row['last_latency_ms'] or 0),
+                'recovery_count':int(row['recovery_count'] or 0),'inbound_ids':[]})
+            target['inbound_ids'].append(int(row['local_inbound_id']))
+        return sorted(grouped.values(),key=lambda x:(x['priority'],x['latency_ms'] or 10**9,x['name'],x['node_id']))
+
+    def clear_remote_security(self,client_id:str,kind:str)->dict:
+        if kind not in {'ips','devices','all'}:raise PolicyError('Invalid node security clear kind')
+        node_ids=self._assigned_node_ids(client_id);items=[]
+        for node_id in node_ids:
+            doc,ms=self._request(node_id,'/node/api/mirrors/security/clear','POST',
+                                 {'sourceEmail':client_id,'kind':kind},12.0)
+            if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id:
+                raise PolicyError('Invalid node security clear response')
+            items.append({'node_id':node_id,'latency_ms':ms,'result':doc})
+        with self.store.transaction() as db:
+            if kind in {'ips','all'}:db.execute('DELETE FROM remote_node_ips WHERE client_id=?',(client_id,))
+            if kind in {'devices','all'}:db.execute('DELETE FROM remote_node_devices WHERE client_id=?',(client_id,))
+        return {'nodes':len(items),'items':items,'kind':kind}
+
     def reset_client_traffic(self,client_id:str,reset_id:str)->dict:
         if not isinstance(reset_id,str) or not 8<=len(reset_id)<=128:raise PolicyError('Invalid remote reset ID')
         with self.store.lock:
@@ -458,11 +652,12 @@ class NodeRegistry:
             results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
         return {'nodes':len(results),'items':results,'reset':True}
 
-    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,traffic_callback=None):
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,traffic_callback=None,security_callback=None):
         if self.thread and self.thread.is_alive():return
         if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
         if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
         if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
+        if security_callback is not None and not callable(security_callback):raise ValueError('security_callback must be callable')
         self.stop.clear()
         def run():
             if self.stop.wait(initial_delay):return
@@ -474,10 +669,20 @@ class NodeRegistry:
                         self.probe(node_id,timeout=5.0)
                         traffic=self.sync_traffic(node_id)
                         if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
+                        try:
+                            security=self.sync_security(node_id)
+                            if security_callback is not None:security_callback(node_id,security)
+                        except (PolicyError,OSError,ValueError):
+                            pass
                         if sync_provider is not None:
                             self.sync_mirrors(node_id,sync_provider(node_id))
                             post=self.sync_traffic(node_id)
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
+                            try:
+                                security=self.sync_security(node_id)
+                                if security_callback is not None:security_callback(node_id,security)
+                            except (PolicyError,OSError,ValueError):
+                                pass
                     except (PolicyError,OSError,ValueError):
                         pass
                 if self.stop.wait(interval):return
