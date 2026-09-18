@@ -67,3 +67,12 @@ test('Clients V4 command deck keeps group and presence organization without side
   assert.doesNotMatch(html,/>b</);
   assert.match(html,/cv4-filterdeck/);
 });
+
+
+test('Clients V4 owner-scoped groups remain isolated and login ID is not assumed to be the owner profile',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/const groupKey=\(owner,name\)=>/);
+  assert.match(src,/row\.owner===decodeURIComponent/);
+  assert.match(src,/function defaultOwner\(\)/);
+  assert.match(src,/if\(opts\.length===1\)return opts\[0\]\[0\]/);
+});
