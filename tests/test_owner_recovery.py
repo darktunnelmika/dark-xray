@@ -126,7 +126,7 @@ def test_owner_rename_reports_existing_profile_collision_cleanly(tmp_path):
     try:
         rename_owner_username(data/'dark.sqlite3','dark','Mika');assert False
     except PolicyError as exc:
-        assert 'Target owner profile already exists' in str(exc)
+        assert 'Target ownership profile already exists' in str(exc)
     with store.lock:
         assert store.db.execute("SELECT role FROM api_admins WHERE id='dark'").fetchone()[0]=='owner'
         assert store.db.execute("SELECT 1 FROM owner_profiles WHERE id='Mika'").fetchone()
