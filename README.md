@@ -11,7 +11,7 @@
 
 پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، نماینده و سطح دسترسی، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
-**نسخه آزمایشی برای تست VPS:** `0.9.0-rc6`
+**نسخه آزمایشی برای تست VPS:** `0.9.0-rc7`
 
 > [!CAUTION]
 > DARK XRAY در وضعیت **Release Candidate** است و هنوز Production Ready اعلام نشده. Browser، Xray رسمی، nftables packet-level، systemd recovery و Load/Scale هزار کلاینت در CI سبزند؛ اما نصب روی VPS هدف، reboot واقعی ماشین، TLS/renewal دیتاسنتر موردنظر و دو VPS واقعی Node هنوز گیت نهایی هستند.
@@ -41,6 +41,8 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
 - **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
 - **Nodes V2** با HTTPS اجباری، token، DNS pinning، TLS hostname verification، health monitor و core actions.
+- **Web Update Center** برای Owner با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار.
+- **Root Update Broker** مستقل از Web process؛ پنل non-root می‌ماند و Broker فقط status/check/start محدود را از Unix socket احرازشده می‌پذیرد.
 - **Backup/Restore و Safe Update** با preflight، snapshot سورس/SQLite و rollback.
 - **Cyber UI** با English/LTR پیش‌فرض، فارسی/RTL، responsive layout و refresh/focus stability.
 
@@ -114,7 +116,11 @@ sudo darkxray production-gate --json-only
 - ظرفیت‌سنجی روی سخت‌افزار/پلن VPS هدف؛ CI فعلی smoke هزار Client و SQLite contention را پاس کرده است.
 - rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
-بنابراین این build با برچسب **`0.9.0-rc6`** برای تست VPS منتشر می‌شود؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
+بنابراین این build با برچسب **`0.9.0-rc7`** برای تست VPS است؛ Production Ready بعد از گیت‌های واقعی هدف اعلام خواهد شد.
+
+### یک‌بار Bootstrap برای نصب‌های RC6 و قدیمی‌تر
+
+برای سروری که هنوز Update Broker ندارد، یک بار Safe Update با installer آنلاین همین RC لازم است. این مسیر **updater خود Candidate** را اجرا می‌کند و `dark-xray-update.service` را نصب می‌کند. از آن به بعد Update Center داخل خود پنل مسیر اصلی آپدیت است.
 
 ## مستندات
 
@@ -125,6 +131,6 @@ sudo darkxray production-gate --json-only
 - [Third-party notices](THIRD-PARTY-NOTICES.md)
 - [Publication status](PUBLISH-STATUS.json)
 
-`SHA256SUMS` این شاخه برای همین RC بازتولید شده است؛ checksum آرشیوهای Release نیز کنار assetهای همان tag منتشر می‌شود.
+`SHA256SUMS` و archive checksum فقط هنگام snapshot/tag نهایی RC بازتولید می‌شوند؛ فایل checksum قدیمی به‌عنوان evidence RC7 معرفی نمی‌شود.
 
 **Credential، private key، certificate، database یا log بدون سانسور را در Repository/Issue منتشر نکنید.**
