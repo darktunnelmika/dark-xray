@@ -225,6 +225,24 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert any(r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
             mark('Routing Guided V3 selects existing outbound tags instead of free-typing destinations')
 
+            visit(page,'xray')
+            page.locator('[data-act="xv2tab"][data-tab="balancers"]').click()
+            page.locator('[data-act="xv2balnew"]').click()
+            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="balStrategy"] option[value="leastPing"]').count()==1
+            assert page.locator('#dialog-form [name="balStrategy"] option[value="leastLoad"]').count()==0
+            page.locator('#dialog-form [name="balTag"]').fill('browser-bal')
+            page.locator('#dialog-form input[name="selector"][value="browser-proxy"]').check()
+            page.locator('#dialog-form [name="balStrategy"]').select_option('leastPing')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
+            bal=next((b for b in routing.get('balancers',[]) if b.get('tag')=='browser-bal'),None)
+            assert bal and bal['strategy']['type']=='leastPing' and 'browser-proxy' in bal['selector'],bal
+            observatory=page.evaluate("()=>api('/api/settings/observatory').then(x=>x.value)")
+            assert 'browser-proxy' in observatory.get('subjectSelector',[]),observatory
+            mark('Balancer Guided V3 configures leastPing with Observatory automatically')
+
             visit(page,'nodes')
             page.locator('[data-act="nv2new"]').click()
             page.locator('#dialog-form .nv2-picker').wait_for(state='visible',timeout=10000)
