@@ -368,7 +368,7 @@ def main():
         validate_source(src);candidate=source_commit(src);candidate_version=source_version(src)
         current_version=(APP/'VERSION').read_text(encoding='utf-8').strip() if (APP/'VERSION').is_file() else 'unknown'
         print('Current version:',current_version);print('Candidate version:',candidate_version);print('Candidate source:',candidate)
-        _status('running','rollback_preflight',40,'Checking database integrity and rollback disk space',candidate={'commit':candidate,'version':candidate_version,'ref':UPDATE_REF})
+        _status('running','rollback_preflight',40,'Checking database integrity and rollback disk space')
         space=disk_preflight(database_info)
         print('Rollback preflight: database quick_check=ok; free data space=',space['free_data_bytes']//MIB,'MiB')
         print('Dependency preflight: building isolated candidate environment...')
