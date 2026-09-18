@@ -151,9 +151,9 @@ def owner_profiles_without_login():
 def choose_owner(action='manage'):
     owners=owner_usernames()
     if not owners:
-        print(f'{RE}No login Owner exists. Use Create owner login first.{R}')
+        print(f'{RE}No primary Owner login exists. Use Create primary owner login first.{R}')
         return ''
-    print(f'{GY}Login Owners — choose account to {action}:{R}')
+    print(f'{GY}Primary Owner — choose account to {action}:{R}')
     for i,name in enumerate(owners,1):print(f'  [{i}] {name}')
     profiles=owner_profiles_without_login()
     if profiles:
@@ -290,7 +290,7 @@ def dashboard():
           f'  Version           {ver()}\n'
           f'  Access mode       {access_mode(c)}\n'
           f'  Staged settings   {staged}\n'
-          f'  Login Owners      {len(owner_usernames())}\n'
+          f'  Primary Owner     {'ready' if owner_usernames() else 'missing'}\n'
           f'  Host              {socket.gethostname()}\n'
           f'  Panel port        {c.get("bind_port","?")}\n'
           f'  Xray API          {c.get("xray_api_port","?")}\n'
@@ -304,10 +304,10 @@ def account_menu():
         summary='Login Owners: '+(', '.join(owners) if owners else 'none')
         if profiles:summary+=' | Profiles without login: '+', '.join(profiles)
         header('ACCOUNT & ACCESS',summary)
-        title_row('OWNER LOGIN ACCOUNTS')
+        title_row('PRIMARY OWNER')
         item(1,'Account security status','sessions · API keys · TOTP')
-        item(2,'Create owner login','separate from owner/reseller profile')
-        item(3,'Change owner username','select existing login owner')
+        item(2,'Create primary owner login','available only when no Owner exists')
+        item(3,'Change owner username','rename the single primary owner')
         item(4,'Change owner password','select existing login owner')
         item(5,'Revoke all owner sessions','force logout browsers')
         title_row('SECURITY RECOVERY')
@@ -317,18 +317,11 @@ def account_menu():
         back();x=ask('DARK')
         if x=='0':return
         if x=='2':
-            print(f'{GY}This creates a real panel LOGIN Owner. An owner profile alone cannot sign in.{R}')
-            if profiles:
-                print(f'{GY}Profiles without login:{R}')
-                for i,name in enumerate(profiles,1):print(f'  [{i}] {name}')
-                print('  [0] Use a new username')
-                raw=ask('Select profile','1')
-                if raw=='0':user=ask('New owner login username')
-                elif raw.isdigit() and 1<=int(raw)<=len(profiles):user=profiles[int(raw)-1]
-                else:print(f'{RE}Invalid profile selection.{R}');pause();continue
-            else:user=ask('New owner login username')
-            if user and confirm(f'Create a full Owner login named {user}?','CREATE'):
-                run_action([COMMAND,'account','--username',user,'--action','create-owner'],f'Owner login {user} created; password write verified.');pause()
+            if owners:
+                print(f'{YE}DARK already has its primary Owner: {owners[0]}. Create a representative from the Web Representatives page instead.{R}');pause();continue
+            user=ask('Primary owner username','dark')
+            if user and confirm(f'Create the single primary Owner login named {user}?','CREATE'):
+                run_action([COMMAND,'account','--username',user,'--action','create-owner'],f'Primary Owner {user} created; password write verified.');pause()
             continue
         owner_actions={
             '1':'view security status for',
