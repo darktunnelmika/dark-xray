@@ -33,6 +33,7 @@ class Manager:
         self.lock = threading.RLock()
         self.last_poll = 0.0
         self.last_error = ''
+        self.remote_reset = None
         self.snapshot: dict[str,dict] = {}
         self.inbound_cache: list[dict] = []
         self.stop = threading.Event()
@@ -46,7 +47,7 @@ class Manager:
             CREATE TABLE IF NOT EXISTS managed_clients(
               email TEXT PRIMARY KEY,desired TEXT NOT NULL,inbounds TEXT NOT NULL,
               public_token TEXT UNIQUE NOT NULL,op TEXT NOT NULL DEFAULT 'upsert',
-              state TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',
+              op_id TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',
               last_up INTEGER NOT NULL DEFAULT 0,last_down INTEGER NOT NULL DEFAULT 0,
               initialized INTEGER NOT NULL DEFAULT 0,seq INTEGER NOT NULL DEFAULT 0,
               expected_enable INTEGER,external_disabled INTEGER NOT NULL DEFAULT 0,
@@ -68,6 +69,8 @@ class Manager:
               created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,name));
             CREATE INDEX IF NOT EXISTS client_groups_owner ON client_groups(owner,name);
             ''')
+            managed_cols={r[1] for r in store.db.execute('PRAGMA table_info(managed_clients)')}
+            if 'op_id' not in managed_cols:store.db.execute("ALTER TABLE managed_clients ADD COLUMN op_id TEXT NOT NULL DEFAULT ''")
             cycle_cols={r[1] for r in store.db.execute('PRAGMA table_info(client_cycles)')}
             if 'mode' not in cycle_cols:store.db.execute("ALTER TABLE client_cycles ADD COLUMN mode TEXT NOT NULL DEFAULT 'interval'")
             if 'reset_day' not in cycle_cols:store.db.execute("ALTER TABLE client_cycles ADD COLUMN reset_day INTEGER NOT NULL DEFAULT 0")
@@ -433,7 +436,8 @@ class Manager:
             with self.store.transaction() as db:
                 meta=db.execute('SELECT * FROM managed_clients WHERE email=?',(email,)).fetchone()
                 if meta['state']=='uncertain':raise PolicyError('Resolve the uncertain operation first')
-                db.execute("UPDATE managed_clients SET op=?,state='pending',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(action,time.time(),email))
+                db.execute("UPDATE managed_clients SET op=?,op_id=?,state='pending',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",
+                           (action,secrets.token_hex(16),time.time(),email))
             self.audit(actor,row['owner'],'client.'+action,email)
             self.tick(suppress=True)
             return {'email':email,'state':self.meta(email)['state']}
@@ -475,7 +479,7 @@ class Manager:
         decreased=up<meta['last_up'] or down<meta['last_down']
         du=up-meta['last_up'] if up>=meta['last_up'] else up
         dd=down-meta['last_down'] if down>=meta['last_down'] else down
-        # Both the idempotent ledger and baseline advance under one transaction.
+        # Both the idempotent ledger and local baseline advance under one transaction.
         with self.store.transaction() as db:
             user=db.execute('SELECT * FROM clients WHERE id=?',(email,)).fetchone()
             if not user:return
@@ -485,9 +489,13 @@ class Manager:
                 if du+dd>MAX_INT:raise PolicyError('Counter overflow')
                 db.execute('INSERT INTO traffic_ledger VALUES(?,?,?,?,?,?,?)',
                     ('engine:'+hashlib.sha256(email.encode()).hexdigest()[:20]+':'+str(seq),user['owner'],email,owner['period'],du,dd,time.time()))
-            # User's current-period meter comes from engine; reseller lifetime
-            # consumption stays in the ledger, even after resets or deletion.
-            db.execute('UPDATE clients SET used_bytes=? WHERE id=?',(up+down,email))
+            remote=0
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_client_usage'").fetchone():
+                remote=int(db.execute('SELECT COALESCE(SUM(current_up+current_down),0) FROM remote_node_client_usage WHERE client_id=?',(email,)).fetchone()[0])
+            total=up+down+remote
+            if total>MAX_INT:raise PolicyError('Global client traffic counter overflow')
+            # The policy meter is the current local counter plus all current remote-node counters.
+            db.execute('UPDATE clients SET used_bytes=? WHERE id=?',(total,email))
             db.execute('UPDATE managed_clients SET last_up=?,last_down=?,initialized=1,seq=? WHERE email=?',(up,down,seq,email))
         if decreased:self.audit(SYSTEM,user['owner'],'counter.reset_observed',email,'Ledger preserved; traffic lost between polling observations cannot be reconstructed')
 
@@ -516,11 +524,16 @@ class Manager:
         if op=='reset':
             if not existing:raise CoreError('CoreEngine client missing; reset refused',status=409)
             with self.store.transaction() as db:db.execute("UPDATE managed_clients SET state='reset_inflight' WHERE email=?",(email,))
+            if self.remote_reset is not None:
+                reset_id=meta.get('op_id') or ('legacy-'+hashlib.sha256((email+str(meta.get('updated_at',0))).encode()).hexdigest()[:24])
+                self.remote_reset(email,reset_id)
             final=self.engine.reset(email)
             if final:self._charge_snapshot(self.meta(email),final)
             with self.store.transaction() as db:
                 db.execute('UPDATE clients SET used_bytes=0 WHERE id=?',(email,))
                 db.execute('UPDATE managed_clients SET last_up=0,last_down=0 WHERE email=?',(email,))
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_client_usage'").fetchone():
+                    db.execute('UPDATE remote_node_client_usage SET current_up=0,current_down=0 WHERE client_id=?',(email,))
             self._complete_cycle(email)
             # Reset does not remove manual, expiry or owner blockers.
         elif op=='upsert':
@@ -538,7 +551,7 @@ class Manager:
             with self.store.transaction() as db:
                 db.execute('UPDATE managed_clients SET expected_enable=? WHERE email=?',(int(enabled),email))
         with self.store.transaction() as db:
-            db.execute("UPDATE managed_clients SET op='none',state='applied',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
+            db.execute("UPDATE managed_clients SET op='none',op_id='',state='applied',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
 
     @staticmethod
     def _schedule_spec(desired:dict)->tuple[str,int,int]|None:
@@ -597,7 +610,8 @@ class Manager:
                 db.execute('UPDATE client_cycles SET max_resets=? WHERE email=?',(cap,meta['email']))
                 if cap and row['completed']>=cap:continue
                 if row['next_at']<=now and meta['op']=='none' and meta['state']=='applied':
-                    db.execute("UPDATE managed_clients SET op='reset',state='pending',retry_at=0,attempts=0,error='' WHERE email=?",(meta['email'],))
+                    db.execute("UPDATE managed_clients SET op='reset',op_id=?,state='pending',retry_at=0,attempts=0,error='' WHERE email=?",
+                               (secrets.token_hex(16),meta['email']))
 
     def _complete_cycle(self,email):
         with self.store.transaction() as db:
