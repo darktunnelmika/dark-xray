@@ -69,7 +69,7 @@ function trafficChart(){
  <header class="ov4-card-head"><div><span>${L('OVERALL SPEED','سرعت کلی')}</span><small>${L('Live interface rate · real samples only','نرخ زنده اینترفیس · فقط نمونه واقعی')}</small></div>
  <div class="ov4-live-rates"><b class="up">↑ ${fmtRate(n.netIO?.up)}</b><b class="down">↓ ${fmtRate(n.netIO?.down)}</b></div></header>
  <div class="ov4-chart-wrap"><svg viewBox="0 0 ${w} ${hgt}" preserveAspectRatio="none" aria-label="Network traffic chart">
- <defs><linearGradient id="ov4UpFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2585ff" stop-opacity=".28"/><stop offset="1" stop-color="#2585ff" stop-opacity="0"/></linearGradient><linearGradient id="ov4DownFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a7b0bd" stop-opacity=".18"/><stop offset="1" stop-color="#a7b0bd" stop-opacity="0"/></linearGradient></defs>
+ <defs><linearGradient id="ov4UpFill" x1="0" y1="0" x2="0" y2="1"><stop class="ov4-up-stop" offset="0" stop-opacity=".24"/><stop class="ov4-up-stop" offset="1" stop-opacity="0"/></linearGradient><linearGradient id="ov4DownFill" x1="0" y1="0" x2="0" y2="1"><stop class="ov4-down-stop" offset="0" stop-opacity=".12"/><stop class="ov4-down-stop" offset="1" stop-opacity="0"/></linearGradient></defs>
  <path class="grid" d="M0 50H900M0 100H900M0 150H900M0 200H900"/>
  <polygon class="area up" points="0,250 ${up} 900,250"/><polygon class="area down" points="0,250 ${down} 900,250"/>
  <polyline class="line up" points="${up}"/><polyline class="line down" points="${down}"/></svg></div>
