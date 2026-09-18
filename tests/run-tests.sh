@@ -59,3 +59,4 @@ node --test tests/update-center.test.cjs
 node --test tests/nodes-v3.test.cjs
 node --test tests/representatives-v2.test.cjs
 node --test tests/cyber-classic.test.cjs
+node --test tests/overview-v4.test.cjs
