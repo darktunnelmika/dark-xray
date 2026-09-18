@@ -420,7 +420,7 @@ def test_global_ip_guard_aggregates_nodes_and_preserves_block_while_telemetry_st
 
  # Telemetry becoming stale must not silently resurrect an already blocked client.
  with store.transaction() as db:
-  db.execute("UPDATE remote_node_security_state SET last_sync=0 WHERE node_id='ipn2'")
+  db.execute("UPDATE remote_node_security_state SET last_sync=?,last_error='sync failed' WHERE node_id='ipn2'",(now,))
   db.execute("DELETE FROM remote_node_ips WHERE node_id='ipn2'")
  stale=reg.reconcile_global_security(local_source_verified=True,now=now+1)
  stale_item=next(x for x in stale['items'] if x['client_id']=='ip-user')
