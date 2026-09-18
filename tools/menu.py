@@ -290,7 +290,7 @@ def dashboard():
           f'  Version           {ver()}\n'
           f'  Access mode       {access_mode(c)}\n'
           f'  Staged settings   {staged}\n'
-          f'  Primary Owner     {'ready' if owner_usernames() else 'missing'}\n'
+          f"  Primary Owner     {'ready' if owner_usernames() else 'missing'}\n"
           f'  Host              {socket.gethostname()}\n'
           f'  Panel port        {c.get("bind_port","?")}\n'
           f'  Xray API          {c.get("xray_api_port","?")}\n'
@@ -301,8 +301,8 @@ def dashboard():
 def account_menu():
     while True:
         owners=owner_usernames();profiles=owner_profiles_without_login()
-        summary='Login Owners: '+(', '.join(owners) if owners else 'none')
-        if profiles:summary+=' | Profiles without login: '+', '.join(profiles)
+        summary='Primary Owner: '+(owners[0] if owners else 'missing')
+        if len(owners)>1:summary+=' | LEGACY extra owners: '+', '.join(owners[1:])
         header('ACCOUNT & ACCESS',summary)
         title_row('PRIMARY OWNER')
         item(1,'Account security status','sessions · API keys · TOTP')
