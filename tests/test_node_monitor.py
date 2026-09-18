@@ -42,17 +42,20 @@ def test_monitor_orders_probe_traffic_policy_callback_then_mirror_sync(tmp_path,
     order=[]
     monkeypatch.setattr(registry,'probe',lambda node_id,timeout=8.0:order.append('probe') or {})
     monkeypatch.setattr(registry,'sync_traffic',lambda node_id:order.append('traffic') or {'charged_bytes':7})
+    monkeypatch.setattr(registry,'sync_security',lambda node_id:order.append('security') or {'ips':1,'devices':0})
     monkeypatch.setattr(registry,'sync_mirrors',lambda node_id,bundles:order.append('mirror') or {})
     def provider(node_id):
         order.append('provider');return []
     def callback(node_id,result):
         assert result['charged_bytes']==7;order.append('policy')
-    registry.start(interval=10,initial_delay=0,sync_provider=provider,traffic_callback=callback)
+    def security_callback(node_id,result):
+        assert result['ips']==1;order.append('security-policy')
+    registry.start(interval=10,initial_delay=0,sync_provider=provider,traffic_callback=callback,security_callback=security_callback)
     for _ in range(50):
-        if 'mirror' in order:break
+        if order.count('security-policy')>=2:break
         time.sleep(.01)
     registry.close()
-    assert order[:7]==['probe','traffic','policy','provider','mirror','traffic','policy']
+    assert order[:11]==['probe','traffic','policy','security','security-policy','provider','mirror','traffic','policy','security','security-policy']
     store.close()
 
 
