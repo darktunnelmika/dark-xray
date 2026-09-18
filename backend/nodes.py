@@ -499,7 +499,7 @@ class NodeRegistry:
                 if ips:db.executemany('INSERT INTO remote_node_ips(node_id,client_id,ip,first_seen,last_seen,verified) VALUES(?,?,?,?,?,?)',ips)
                 if devices:db.executemany('INSERT INTO remote_node_devices(node_id,client_id,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?,?)',devices)
                 db.execute('''INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,?,?,'')
-                              ON CONFLICT(node_id) DO UPDATE SET source_verified=excluded.source_verified,last_sync=excluded.last_sync,last_error='' ''',
+                              ON CONFLICT(node_id) DO UPDATE SET source_verified=excluded.source_verified,last_sync=excluded.last_sync,last_error=''',
                            (node_id,int(doc['sourceVerified']),now))
             return {'latency_ms':ms,'clients':len(seen),'ips':len(ips),'devices':len(devices),
                     'ignored_clients':ignored,'source_verified':bool(doc['sourceVerified']),'synced_at':now}
@@ -545,7 +545,12 @@ class NodeRegistry:
                         'AND node_id IN ('+marks+')',(client_id,now-window,*assigned)))
             ip_complete=bool(assigned) and local_source_verified and verified
             limit_ip=int(meta['limit_ip'] or 0)
-            ip_block=bool(limit_ip and ip_complete and len(ip_values)>limit_ip)
+            if not limit_ip or not assigned:
+                ip_block=False
+            elif not ip_complete:
+                ip_block=bool(meta['global_ip_block'])
+            else:
+                ip_block=len(ip_values)>limit_ip
 
             try:limit_hwid=int(json.loads(meta['desired']).get('limitHwid',0) or 0)
             except Exception:limit_hwid=0
@@ -560,7 +565,12 @@ class NodeRegistry:
                     device_values.update(str(r[0]) for r in self.store.db.execute(
                         'SELECT DISTINCT digest FROM remote_node_devices WHERE client_id=? AND node_id IN ('+marks+')',(client_id,*assigned)))
             device_complete=bool(assigned) and fresh
-            device_block=bool(limit_hwid and device_complete and len(device_values)>limit_hwid)
+            if not limit_hwid or not assigned:
+                device_block=False
+            elif not device_complete:
+                device_block=bool(meta['global_device_block'])
+            else:
+                device_block=len(device_values)>limit_hwid
             if bool(meta['global_ip_block'])!=ip_block or bool(meta['global_device_block'])!=device_block:
                 with self.store.transaction() as db:
                     db.execute('UPDATE clients SET global_ip_block=?,global_device_block=? WHERE id=?',
