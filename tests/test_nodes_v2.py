@@ -164,7 +164,8 @@ def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkey
 def test_node_agent_mirror_sync_reconciles_inbound_and_credentials(env,monkeypatch):
  store,eng,_,c=env
  token=c.post('/api/node-agent/tokens',json={'name':'central-mirror','days':10}).json()['token']
- monkeypatch.setattr(eng,'command',lambda action:{'state':'running','action':action})
+ calls=[]
+ monkeypatch.setattr(eng,'command',lambda action:(calls.append(action) or {'state':'running','action':action}))
  assignment={
    'sourceInboundId':77,
    'inbound':_test_vless('CENTRAL 77',22077,'central-77'),
@@ -172,7 +173,7 @@ def test_node_agent_mirror_sync_reconciles_inbound_and_credentials(env,monkeypat
  }
  r=c.post('/node/api/mirrors/sync',json={'assignments':[assignment]},headers={'authorization':'Bearer '+token})
  assert r.status_code==200,r.text
- doc=r.json();assert doc['mirrored']==1 and doc['clients']==1 and doc['core']['action']=='restart'
+ doc=r.json();assert doc['mirrored']==1 and doc['clients']==1 and doc['core']['action']=='restart' and doc['changed'] is True
  rid=doc['items'][0]['remoteInboundId']
  remote=eng.inbound(rid)
  assert remote['port']==22077 and remote['tag'].startswith('nm-')
@@ -182,10 +183,15 @@ def test_node_agent_mirror_sync_reconciles_inbound_and_credentials(env,monkeypat
  mirrored=eng.client_detail(row['mirror_email'])
  assert mirrored['client']['id']=='33333333-3333-4333-8333-333333333333'
  assert mirrored['inboundIds']==[rid]
+ # Identical background reconciliation must be a no-op and must not restart Xray.
+ same=c.post('/node/api/mirrors/sync',json={'assignments':[assignment]},headers={'authorization':'Bearer '+token})
+ assert same.status_code==200 and same.json()['changed'] is False
+ assert calls==['restart']
  # Empty desired assignments reconcile/delete only this agent token's mirrors.
  r=c.post('/node/api/mirrors/sync',json={'assignments':[]},headers={'authorization':'Bearer '+token})
  assert r.status_code==200,r.text
- assert r.json()['mirrored']==0
+ assert r.json()['mirrored']==0 and r.json()['changed'] is True
+ assert calls==['restart','restart']
  with pytest.raises(CoreError):
   eng.inbound(rid)
  with store.lock:
