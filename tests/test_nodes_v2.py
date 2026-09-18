@@ -362,3 +362,144 @@ def test_client_delete_finalizes_remote_traffic_before_tombstone(env,monkeypatch
   charged=store.db.execute("SELECT COALESCE(SUM(up_bytes+down_bytes),0) FROM traffic_ledger WHERE event_id LIKE 'node:%'").fetchone()[0]
  assert meta['state']=='deleted' and meta['op_id']==''
  assert charged==20 and len(calls)==1
+
+
+def test_agent_security_snapshot_maps_mirror_identity_without_raw_hwid(env,monkeypatch):
+ store,eng,_,c=env
+ token=c.post('/api/node-agent/tokens',json={'name':'central-security','days':10}).json()['token']
+ monkeypatch.setattr(eng,'command',lambda action:{'state':'running','action':action})
+ assignment={'sourceInboundId':91,'inbound':_test_vless('SEC 91',24091,'sec-91'),
+             'clients':[{'sourceEmail':'secure-user','client':{'id':'55555555-5555-4555-8555-555555555555','enable':True}}]}
+ r=c.post('/node/api/mirrors/sync',json={'assignments':[assignment]},headers={'authorization':'Bearer '+token})
+ assert r.status_code==200,r.text
+ with store.transaction() as db:
+  mirror=db.execute("SELECT mirror_email FROM node_agent_mirror_clients WHERE source_email='secure-user'").fetchone()[0]
+  now=time.time()
+  db.execute('INSERT INTO observations(client_id,ip,node,first_seen,last_seen,granted) VALUES(?,?,?,?,?,1)',
+             (mirror,'198.51.100.44','local',now-10,now))
+  db.execute('INSERT INTO core_devices(email,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?)',
+             (mirror,'a'*64,'ios','iphone',now-20,now))
+ snap=c.get('/node/api/mirrors/security',headers={'authorization':'Bearer '+token})
+ assert snap.status_code==200,snap.text
+ item=snap.json()['items'][0]
+ assert item['sourceEmail']=='secure-user'
+ assert item['ips'][0]['ip']=='198.51.100.44'
+ assert item['devices'][0]['digest']=='a'*64
+ assert 'hwid' not in snap.text.lower()
+ clear=c.post('/node/api/mirrors/security/clear',json={'sourceEmail':'secure-user','kind':'all'},
+              headers={'authorization':'Bearer '+token})
+ assert clear.status_code==200 and clear.json()['ips']==1 and clear.json()['devices']==1
+
+
+def test_global_ip_guard_aggregates_nodes_and_preserves_block_while_telemetry_stale(env,monkeypatch):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('GLOBAL IP',24101,'global-ip')).json()['id']
+ _managed_client(c,'ip-user',a,{'limitIp':1})
+ for node,ch in [('ipn1','I'),('ipn2','J')]:
+  r=c.post('/api/nodes',json={'id':node,'name':node,'origin':'https://'+node+'.example.com',
+    'token':'dkn_'+(ch*60),'enabled':True,'inboundIds':[a]})
+  assert r.status_code==200,r.text
+ with store.transaction() as db:
+  db.execute('UPDATE remote_node_inbounds SET remote_inbound_id=7 WHERE local_inbound_id=?',(a,))
+ reg=app.state.nodes
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  assert path=='/node/api/mirrors/security'
+  ip='203.0.113.10' if node_id=='ipn1' else '203.0.113.11'
+  return {'sourceVerified':True,'items':[{'sourceEmail':'ip-user','ips':[{'ip':ip,'firstSeen':1000.0,'lastSeen':1010.0}],'devices':[]}]},5
+ monkeypatch.setattr(reg,'_request',fake_request)
+ reg.sync_security('ipn1');reg.sync_security('ipn2')
+ now=time.time()
+ with store.transaction() as db:
+  db.execute('UPDATE remote_node_ips SET first_seen=?,last_seen=?',(now-5,now))
+ result=reg.reconcile_global_security(local_source_verified=True,now=now)
+ item=next(x for x in result['items'] if x['client_id']=='ip-user')
+ assert item['ip_enforceable'] is True and item['ip_count']==2 and item['ip_blocked'] is True
+ app.state.manager.tick(suppress=False)
+ assert eng.client_detail('ip-user')['client']['enable'] is False
+ assert 'global_ip_quota' in c.get('/api/clients/ip-user').json()['block_reasons']
+
+ # Telemetry becoming stale must not silently resurrect an already blocked client.
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_security_state SET last_sync=0 WHERE node_id='ipn2'")
+  db.execute("DELETE FROM remote_node_ips WHERE node_id='ipn2'")
+ stale=reg.reconcile_global_security(local_source_verified=True,now=now+1)
+ stale_item=next(x for x in stale['items'] if x['client_id']=='ip-user')
+ assert stale_item['ip_enforceable'] is False and stale_item['ip_blocked'] is True
+
+ # Once both nodes are fresh again and the distinct global IP set is within quota,
+ # Central clears only the global blocker and Manager re-enables the client.
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_security_state SET source_verified=1,last_sync=?,last_error='' WHERE node_id='ipn2'",(now+2,))
+  db.execute("UPDATE remote_node_ips SET ip=?,last_seen=? WHERE node_id='ipn1'",('203.0.113.10',now+2))
+  db.execute("INSERT INTO remote_node_ips(node_id,client_id,ip,first_seen,last_seen,verified) VALUES(?,?,?,?,?,1)",
+             ('ipn2','ip-user','203.0.113.10',now,now+2))
+ fresh=reg.reconcile_global_security(local_source_verified=True,now=now+2)
+ fresh_item=next(x for x in fresh['items'] if x['client_id']=='ip-user')
+ assert fresh_item['ip_count']==1 and fresh_item['ip_blocked'] is False
+ app.state.manager.tick(suppress=False)
+ assert eng.client_detail('ip-user')['client']['enable'] is True
+
+
+def test_global_device_hashes_from_two_nodes_enforce_hwid_limit(env,monkeypatch):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('GLOBAL DEVICE',24102,'global-device')).json()['id']
+ _managed_client(c,'device-user',a,{'limitHwid':1})
+ for node,ch,digest in [('dev1','K','b'*64),('dev2','L','c'*64)]:
+  r=c.post('/api/nodes',json={'id':node,'name':node,'origin':'https://'+node+'.example.com',
+    'token':'dkn_'+(ch*60),'enabled':True,'inboundIds':[a]})
+  assert r.status_code==200,r.text
+ with store.transaction() as db:
+  db.execute('UPDATE remote_node_inbounds SET remote_inbound_id=8 WHERE local_inbound_id=?',(a,))
+ reg=app.state.nodes
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  digest='b'*64 if node_id=='dev1' else 'c'*64
+  return {'sourceVerified':True,'items':[{'sourceEmail':'device-user','ips':[],
+          'devices':[{'digest':digest,'deviceOs':'ios','model':node_id,'firstSeen':1000.0,'lastSeen':1010.0}]}]},4
+ monkeypatch.setattr(reg,'_request',fake_request)
+ reg.sync_security('dev1');reg.sync_security('dev2')
+ result=reg.reconcile_global_security(local_source_verified=True)
+ item=next(x for x in result['items'] if x['client_id']=='device-user')
+ assert item['device_complete'] is True and item['device_count']==2 and item['device_blocked'] is True
+ app.state.manager.tick(suppress=False)
+ assert eng.client_detail('device-user')['client']['enable'] is False
+ detail=c.get('/api/clients/device-user/security-global').json()
+ assert detail['device_count']==2 and len(detail['remote_devices'])==2
+ assert all('digest' not in x for x in detail['remote_devices'])
+
+
+def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
+ store,_,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('FAILOVER',24103,'failover-a')).json()['id']
+ client=_managed_client(c,'fail-user',a)
+ r=c.post('/api/nodes',json={'id':'edge1','name':'EDGE ONE','origin':'https://control-edge.example.com',
+   'dataAddress':'data-edge.example.com','priority':10,'failoverEnabled':True,
+   'token':'dkn_'+('M'*60),'enabled':True,'inboundIds':[a]})
+ assert r.status_code==200,r.text
+ assert r.json()['data_address']=='data-edge.example.com' and r.json()['priority']==10
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=19 WHERE node_id='edge1' AND local_inbound_id=?",(a,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_latency_ms=12 WHERE id='edge1'",(time.time(),))
+ targets=app.state.nodes.failover_targets('fail-user')
+ assert len(targets)==1 and targets[0]['address']=='data-edge.example.com'
+ links=c.get('/api/clients/fail-user/links').json()['engine']
+ assert links['failover'] and 'data-edge.example.com' in links['failover'][0]['uri']
+ sub=c.get(client['subscription_url']+'?format=clash')
+ assert sub.status_code==200,sub.text
+ text=sub.text
+ assert 'DARK FAILOVER' in text and 'data-edge.example.com' in text
+ assert sub.headers['x-dark-failover-nodes']=='1'
+
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_error='network down' WHERE id='edge1'")
+ assert app.state.nodes.failover_targets('fail-user')==[]
+ sub=c.get(client['subscription_url']+'?format=clash')
+ assert sub.status_code==200 and 'data-edge.example.com' not in sub.text
+
+
+def test_node_data_address_defaults_to_control_hostname(env):
+ _,_,_,c=env
+ r=c.post('/api/nodes',json={'id':'default-data','name':'Default data',
+   'origin':'https://node-data.example.com','token':'dkn_'+('W'*60),'enabled':False,'inboundIds':[]})
+ assert r.status_code==200,r.text
+ assert r.json()['data_address']=='node-data.example.com'
+ assert r.json()['priority']==100 and bool(r.json()['failover_enabled']) is True
