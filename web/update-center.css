@@ -5,3 +5,38 @@
 @media(max-width:700px){.up-dashboard-title{display:grid}.up-dashboard-title>.btn{justify-self:start}}
 
 .ov2-control-center .up-dashboard-shell{margin-top:0}
+
+
+/* Compact dashboard summary; the full Update Center remains available via upopen. */
+.up-dashboard-compact{height:100%}
+.up-dashboard-compact-inner{display:grid;gap:10px;height:100%;align-content:start}
+.up-dashboard-compact .up-dashboard-title{min-height:48px;padding:2px 0 0}
+.up-dashboard-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.up-dashboard-summary{padding:12px;display:grid;gap:10px}
+.up-dashboard-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.up-dashboard-metrics>div{padding:9px 10px;border:1px solid rgba(255,255,255,.05);background:#03090c;min-width:0}
+.up-dashboard-metrics span,.up-dashboard-metrics b{display:block}
+.up-dashboard-metrics span{font:8px var(--mono);letter-spacing:.08em;color:#567279}
+.up-dashboard-metrics b{margin-top:3px;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.up-dashboard-metrics b.good{color:#4fe4a1}
+.up-dashboard-metrics b.warn{color:#e8b45e}
+.up-dashboard-metrics b.bad{color:#ef7c89}
+.up-dashboard-actions-bottom{justify-content:flex-start;padding-top:1px}
+.up-dashboard-job{display:grid;gap:6px}
+.up-dashboard-job>div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:9px;color:#6c8789}
+.up-dashboard-job>div b{color:#b9ded7}
+.up-dashboard-job>i{display:block;height:4px;background:#0c1b1d;overflow:hidden}
+.up-dashboard-job>i>em{display:block;height:100%;background:linear-gradient(90deg,#23d6c2,#31ec91);box-shadow:0 0 9px #31ec9160}
+.up-unavailable-compact{padding:13px;grid-template-columns:auto 1fr;gap:9px}
+.up-unavailable-compact>svg{width:26px;height:26px}
+.up-unavailable-compact p{margin:3px 0 0}
+.up-empty-compact{padding:16px;grid-template-columns:auto 1fr;justify-items:start;text-align:start}
+.up-empty-compact>div{width:28px;height:28px}
+.ov2-dashboard-control-row .up-dashboard-shell{margin-top:0}
+@media(max-width:700px){
+  .up-dashboard-actions{justify-content:flex-start}
+  .up-dashboard-metrics{grid-template-columns:1fr 1fr}
+}
+@media(max-width:460px){
+  .up-dashboard-metrics{grid-template-columns:1fr}
+}
