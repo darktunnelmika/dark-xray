@@ -134,6 +134,15 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-clients-v4.png'),full_page=True)
             page.locator('[data-act="close"]').first.click()
 
+            visit(page,'nodes')
+            page.locator('[data-act="nv2new"]').click()
+            page.locator('#dialog-form .nv2-picker').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="inboundIds"]').count()>=1
+            assert page.locator('#dialog-form').get_by_text('Clone local inbound to node').count()==0
+            mark('Nodes V3 Add Node exposes assigned-inbound picker instead of manual clone flow')
+            page.screenshot(path=str(OUT/'browser-nodes-v3.png'),full_page=True)
+            page.locator('[data-act="close"]').first.click()
+
             visit(page,'finance');page.screenshot(path=str(OUT/'browser-finance.png'),full_page=True)
             visit(page,'settings');page.screenshot(path=str(OUT/'browser-settings.png'),full_page=True)
             visit(page,'update')
