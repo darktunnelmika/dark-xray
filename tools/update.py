@@ -97,11 +97,11 @@ def source_version(src:Path)->str:
 
 def validate_source(src:Path):
     if src.is_symlink() or not src.is_dir():raise SystemExit('Invalid update source directory')
-    required=[src/'backend/server.py',src/'backend/core.py',src/'backend/owner_recovery.py',src/'tools/repo-check.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py',src/'deploy/dark-xray.service',src/'darkxray',src/'requirements.txt',src/'VERSION']
+    required=[src/'backend/server.py',src/'backend/core.py',src/'backend/owner_recovery.py',src/'backend/updated.py',src/'backend/update_bridge.py',src/'tools/repo-check.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py',src/'deploy/dark-xray.service',src/'deploy/dark-xray-update.service',src/'darkxray',src/'requirements.txt',src/'VERSION']
     if any(not p.is_file() or p.is_symlink() for p in required):raise SystemExit('Invalid update source: required application files are missing or unsafe')
     source_version(src)
     run([sys.executable,src/'tools/repo-check.py'],stdout=subprocess.DEVNULL)
-    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py'])
+    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'backend/updated.py',src/'backend/update_bridge.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py'])
     run(['bash','-n',src/'darkxray',src/'setup.sh',src/'install-online.sh'])
 
 
