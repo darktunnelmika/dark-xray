@@ -68,6 +68,7 @@ darkxray
 
 ```bash
 sudo darkxray vps-verify
+sudo darkxray node-wan-gate --json-only
 sudo darkxray production-gate
 sudo darkxray settings-apply
 sudo darkxray doctor
@@ -76,6 +77,14 @@ sudo darkxray doctor
 `vps-verify` read-only است و Configuration، SQLite، Xray binary، route پنل، systemd، TLS state، IP Guard و Node readiness را بررسی می‌کند.
 
 `production-gate` علاوه بر readiness، یک محیط موقت مستقل می‌سازد و با **همان Xray binary تعریف‌شده در config نصب** data-plane را تست می‌کند. این lab دیتابیس مشتری واقعی یا firewall نصب‌شده را تغییر نمی‌دهد.
+
+`node-wan-gate` از Central VPS به Nodeهای ثبت‌شده با همان HTTPS/TLS pinning مسیر Production وصل می‌شود و Health، Traffic endpoint، Security endpoint، Inbound و Failover readiness را از WAN بررسی می‌کند. برای rehearsal واقعی قطع/وصل:
+
+```bash
+sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
+```
+
+Gate خودش شبکه را قطع نمی‌کند؛ PASS شدن recovery فقط وقتی ممکن است که واقعاً Down و سپس Recovery همان Node را در بازه Watch مشاهده کند.
 
 ## Inbounds V3
 
@@ -156,7 +165,13 @@ Node control برای Origin عمومی HTTPS طراحی شده است:
 - retry/reconnect یک snapshot تکراری را دوباره حساب نمی‌کند و counter reset نود به‌صورت delta جدید مدیریت می‌شود؛
 - مصرف فعلی Client از Local + همه Nodeها جمع می‌شود و در quota مرکزی اثر دارد؛
 - Reset مصرف با reset ID پایدار روی Nodeها هماهنگ است و پاسخ reset روی Agent cache می‌شود تا retry باعث reset دوباره یا double-count نشود؛
-- Offline/Recovery count و آخرین Traffic Sync در UI Node نمایش داده می‌شوند.
+- Offline/Recovery count و آخرین Traffic Sync در UI Node نمایش داده می‌شوند؛
+- برای هر Node یک `Data Address` مستقل از Control Origin، `Priority` و Failover On/Off قابل تعریف است؛
+- Subscription فقط Nodeهای enabled، deploy‌شده، fresh و بدون خطا را به‌عنوان endpoint فیل‌اور اضافه می‌کند؛
+- Clash/Mihomo یک گروه واقعی `DARK FAILOVER` از نوع `fallback` می‌گیرد؛ Raw/Base64/DARK JSON چند endpoint سالم را دریافت می‌کنند؛
+- Nodeهای Mirrorشده source IPهای تأییدشده را observe می‌کنند و HWID فقط به‌صورت SHA-256 به Central Sync می‌شود؛ هیچ HWID خامی بین Nodeها منتقل نمی‌شود؛
+- Central IPهای Local + Nodeها را deduplicate می‌کند و در صورت کامل و fresh بودن telemetry، limit سراسری را اعمال می‌کند؛ telemetry ناقص بلاک جدید نمی‌سازد و بلاک موجود را هم کورکورانه آزاد نمی‌کند؛
+- Global Guard با disable کردن Credential در Central و Mirrorها enforce می‌شود؛ nftables همچنان محلیِ هر Host است و «firewall سراسری» ادعا نمی‌شود.
 
 این کنترل‌ها SSRF risk را کم می‌کنند ولی جای network ACL بیرونی را نمی‌گیرند.
 
@@ -233,7 +248,7 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 2. Reboot/Power-cycle واقعی ماشین و بررسی Panel/Xray/DB بعد boot.
 3. Domain/TLS واقعی: issue و renewal گواهی، Secure Cookie و HSTS.
 4. IP Guard در topology واقعی سرور/تونل/CDN.
-5. دو VPS واقعی Node با HTTPS معتبر، Traffic Sync، reset coordination و network-loss recovery روی WAN واقعی.
+5. دو VPS واقعی Node با HTTPS معتبر، اجرای `darkxray node-wan-gate`، Traffic/Security Sync، Failover readiness، reset coordination و مشاهده واقعی network-loss → recovery روی WAN.
 6. ظرفیت‌سنجی روی پلن واقعی VPS؛ smoke هزار Client و SQLite contention در CI قبلاً سبز شده است.
 7. Update/Rollback rehearsal با exact release artifact نهایی.
 8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
