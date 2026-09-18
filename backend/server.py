@@ -14,6 +14,7 @@ import secrets
 import sqlite3
 import sys
 import time
+import threading
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
@@ -143,6 +144,9 @@ class NodePatch(Model):
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
 class NodeMirrorSync(Model):
     assignments:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
+class NodeMirrorTrafficReset(Model):
+    sourceEmail:str=Field(min_length=1,max_length=128)
+    resetId:str=Field(min_length=8,max_length=128)
 class NodeTokenCreate(Model):
     name:str=Field(min_length=1,max_length=64)
     days:StrictInt=Field(default=365,ge=1,le=3650)
@@ -150,10 +154,13 @@ class NodeTokenCreate(Model):
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
+    node_reset_lock=threading.RLock()
+    manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if background:
-            manager.start();nodes.start(sync_provider=lambda node_id:build_node_bundles(node_id))
+            manager.start();nodes.start(sync_provider=lambda node_id:build_node_bundles(node_id),
+                                      traffic_callback=lambda node_id,result:manager.tick(suppress=True))
         yield
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
@@ -537,8 +544,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return bundles
 
     def sync_node_assignments(node_id:str)->dict:
+        traffic=nodes.sync_traffic(node_id)
+        if traffic.get('charged_bytes'):manager.tick(suppress=True)
         bundles=build_node_bundles(node_id)
-        return nodes.sync_mirrors(node_id,bundles)
+        result=nodes.sync_mirrors(node_id,bundles)
+        result['traffic']=traffic
+        return result
 
     @app.get('/node/api/health')
     def node_health(token_id:str=Depends(node_agent)):
@@ -662,6 +673,44 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'mirrored':len(assignments),'clients':len(desired_clients),'items':result_items,'core':core_result,
                 'changed':True,'payloadHash':payload_hash}
 
+
+    @app.get('/node/api/mirrors/traffic')
+    def node_mirror_traffic(token_id:str=Depends(node_agent)):
+        rows=engine.clients();by_email={r['email']:r for r in rows}
+        with store.lock:
+            mappings=store.db.execute('''SELECT DISTINCT mirror_email,source_email FROM node_agent_mirror_clients
+                                         WHERE token_id=? ORDER BY source_email''',(token_id,)).fetchall()
+        items=[]
+        for row in mappings:
+            rec=by_email.get(row['mirror_email'])
+            if not rec:continue
+            up,down=CoreEngine.counters(rec)
+            items.append({'sourceEmail':row['source_email'],'up':up,'down':down})
+        return {'items':items,'capturedAt':time.time()}
+
+    @app.post('/node/api/mirrors/traffic/reset')
+    def node_mirror_traffic_reset(body:NodeMirrorTrafficReset,token_id:str=Depends(node_agent)):
+        writable()
+        with node_reset_lock:
+            with store.lock:
+                cached=store.db.execute('SELECT * FROM node_agent_traffic_resets WHERE token_id=? AND reset_id=?',
+                                        (token_id,body.resetId)).fetchone()
+            if cached:
+                if cached['source_email']!=body.sourceEmail:raise HTTPException(409,'Traffic reset ID was reused for another client')
+                return {'sourceEmail':cached['source_email'],'up':int(cached['up_bytes']),'down':int(cached['down_bytes']),
+                        'capturedAt':float(cached['at']),'cached':True}
+            with store.lock:
+                mirrors=[r[0] for r in store.db.execute('''SELECT DISTINCT mirror_email FROM node_agent_mirror_clients
+                    WHERE token_id=? AND source_email=?''',(token_id,body.sourceEmail))]
+            if len(mirrors)!=1:raise HTTPException(404,'Mirrored client is not present for this node token')
+            final=engine.reset(mirrors[0])
+            if not final:raise HTTPException(404,'Mirrored client traffic state is missing')
+            up,down=CoreEngine.counters(final);captured=time.time()
+            with store.transaction() as db:
+                db.execute('INSERT INTO node_agent_traffic_resets(token_id,reset_id,source_email,up_bytes,down_bytes,at) VALUES(?,?,?,?,?,?)',
+                           (token_id,body.resetId,body.sourceEmail,up,down,captured))
+            return {'sourceEmail':body.sourceEmail,'up':up,'down':down,'capturedAt':captured,'cached':False}
+
     @app.post('/node/api/core/{action}')
     def node_core(action:str,token_id:str=Depends(node_agent)):
         writable()
@@ -697,7 +746,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/nodes/{node_id}/sync')
     def remote_node_sync(node_id:str,p:Principal=Depends(owner)):
         writable();result=sync_node_assignments(node_id)
-        manager.audit(p.actor,p.actor.id,'node.sync',node_id,str(len(result.get('items',[]))))
+        manager.audit(p.actor,p.actor.id,'node.sync',node_id,
+                      'inbounds='+str(len(result.get('items',[])))+'; traffic='+str(result.get('traffic',{}).get('charged_bytes',0)))
+        return result
+    @app.post('/api/nodes/{node_id}/traffic')
+    def remote_node_traffic(node_id:str,p:Principal=Depends(owner)):
+        result=nodes.sync_traffic(node_id)
+        if result.get('charged_bytes'):manager.tick(suppress=True)
+        manager.audit(p.actor,p.actor.id,'node.traffic_sync',node_id,str(result.get('charged_bytes',0)))
         return result
     @app.get('/api/nodes/{node_id}/inbounds')
     def remote_node_inbounds(node_id:str,p:Principal=Depends(owner)):return nodes.remote_inbounds(node_id)
