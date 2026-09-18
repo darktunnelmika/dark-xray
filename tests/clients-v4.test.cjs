@@ -30,7 +30,10 @@ test('Clients V4 removes the permanent sidebar and reduces row actions',()=>{
   assert.match(html,/clients-v4/);
   assert.match(html,/OPEN/);
   assert.match(html,/>QR</);
-  assert.match(html,/•••/);
+  assert.doesNotMatch(html,/•••/);
+  assert.doesNotMatch(html,/More actions/);
+  assert.doesNotMatch(html,/IP \\d/);
+  assert.doesNotMatch(html,/HWID/);
   assert.doesNotMatch(html,/cv3-side/);
   assert.doesNotMatch(html,/Organization/);
 });
@@ -75,4 +78,13 @@ test('Clients V4 owner-scoped groups remain isolated and login ID is not assumed
   assert.match(src,/row\.owner===decodeURIComponent/);
   assert.match(src,/function defaultOwner\(\)/);
   assert.match(src,/if\(opts\.length===1\)return opts\[0\]\[0\]/);
+});
+
+
+test('Clients V4 online signal uses a CSS triangle instead of a bidi-sensitive glyph',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.css'),'utf8');
+  assert.match(css,/RC6 readability \+ signal alignment pass/);
+  assert.match(css,/\.cv4-signal \.cv4-beam:after\{content:"";[^}]*top:50%/);
+  assert.match(css,/border-left:5px solid currentColor/);
+  assert.match(css,/transform:translateY\(-50%\)/);
 });
