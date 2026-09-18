@@ -70,10 +70,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
             # Every owner workspace must render without leaving a busy/blank content surface.
-            pages=['dashboard','inbounds','clients','resellers','roles','ipguard','finance','audit','sync',
+            pages=['dashboard','inbounds','clients','resellers','ipguard','finance','audit','sync',
                    'hosts','outbounds','routing','nodes','xray','settings','account']
             for name in pages:visit(page,name)
             mark('all primary owner workspaces render through real navigation')
+            assert page.locator('.nav-btn[data-page="roles"]').count()==0
+            mark('legacy Access Control workspace is absent; representative management is unified')
 
             # Current Inbounds V3 editor -> real API -> real SQLite.
             visit(page,'inbounds')
