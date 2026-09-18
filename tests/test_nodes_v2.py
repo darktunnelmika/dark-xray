@@ -462,9 +462,13 @@ def test_global_device_hashes_from_two_nodes_enforce_hwid_limit(env,monkeypatch)
  assert item['device_complete'] is True and item['device_count']==2 and item['device_blocked'] is True
  app.state.manager.tick(suppress=False)
  assert eng.client_detail('device-user')['client']['enable'] is False
+ with store.transaction() as db:
+  db.execute("UPDATE clients SET global_device_block=0 WHERE id='device-user'")
  detail=c.get('/api/clients/device-user/security-global').json()
- assert detail['device_count']==2 and len(detail['remote_devices'])==2
+ assert detail['device_count']==2 and detail['device_blocked'] is True and len(detail['remote_devices'])==2
  assert all('digest' not in x for x in detail['remote_devices'])
+ with store.lock:
+  assert store.db.execute("SELECT global_device_block FROM clients WHERE id='device-user'").fetchone()[0]==0
 
 
 def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
