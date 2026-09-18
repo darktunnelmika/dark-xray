@@ -20,7 +20,7 @@
     "xray_control_workspace": "V2 dns/outbounds/routing/balancers/observatory",
     "hosts_workspace": "V2",
     "operations_workspace": "V2",
-    "nodes_workspace": "V2 https-agent",
+    "nodes_workspace": "V3 inbound assignment / selected-inbound mirror / attached-client credential sync",
     "role_ceiling_enforced_server_side": true,
     "totp_replay_counter_hardened": true,
     "robot_sensitive_scope_ceiling": true,
@@ -65,7 +65,11 @@
     "update_auto_source_sqlite_rollback": true,
     "update_restart_reconnect": true,
     "update_interactive_owner_only": true,
-    "web_update_downgrade_refused": true
+    "web_update_downgrade_refused": true,
+    "node_selected_inbound_only_sync": true,
+    "node_attached_client_credential_mirror": true,
+    "node_manual_clone_primary_flow": false,
+    "node_background_assignment_reconcile": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -139,7 +143,8 @@
     "kernel_ci_is_not_provider_topology_proof": true,
     "systemd_recovery_ci_is_not_real_machine_reboot": true,
     "real_xray_ci_is_not_target_region_connectivity_proof": true,
-    "ip_limit_is_observation_policy_not_physical_device_count": true
+    "ip_limit_is_observation_policy_not_physical_device_count": true,
+    "remote_node_traffic_accounting_not_central_aggregated": true
   },
   "release_hygiene": {
     "version_file_current": true,
@@ -149,7 +154,7 @@
     "source_sha256sums_regenerated_for_rc": false,
     "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "RC7 source/release checksums will be regenerated only after the final tested snapshot is fixed.",
+  "checksum_note": "RC7 source/release checksums will be regenerated only after the final tested snapshot including Nodes V3 is fixed.",
   "release_candidate": true,
   "control_center_v2": true
 }
