@@ -40,7 +40,7 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 - **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
 - **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
-- **Nodes V2** با HTTPS اجباری، token، DNS pinning، TLS hostname verification، health monitor و core actions.
+- **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential کلاینت‌های همان Inbound، Sync دستی/دوره‌ای و Core actions.
 - **Web Update Center** برای Owner با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار.
 - **Root Update Broker** مستقل از Web process؛ پنل non-root می‌ماند و Broker فقط status/check/start محدود را از Unix socket احرازشده می‌پذیرد.
 - **Backup/Restore و Safe Update** با preflight، snapshot سورس/SQLite و rollback.
