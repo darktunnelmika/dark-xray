@@ -679,20 +679,20 @@ class NodeRegistry:
                         self.probe(node_id,timeout=5.0)
                         traffic=self.sync_traffic(node_id)
                         if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
-                        try:
-                            security=self.sync_security(node_id)
-                            if security_callback is not None:security_callback(node_id,security)
-                        except (PolicyError,OSError,ValueError):
-                            pass
+                        if security_callback is not None:
+                            try:
+                                security=self.sync_security(node_id);security_callback(node_id,security)
+                            except (PolicyError,OSError,ValueError):
+                                pass
                         if sync_provider is not None:
                             self.sync_mirrors(node_id,sync_provider(node_id))
                             post=self.sync_traffic(node_id)
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
-                            try:
-                                security=self.sync_security(node_id)
-                                if security_callback is not None:security_callback(node_id,security)
-                            except (PolicyError,OSError,ValueError):
-                                pass
+                            if security_callback is not None:
+                                try:
+                                    security=self.sync_security(node_id);security_callback(node_id,security)
+                                except (PolicyError,OSError,ValueError):
+                                    pass
                     except (PolicyError,OSError,ValueError):
                         pass
                 if self.stop.wait(interval):return
