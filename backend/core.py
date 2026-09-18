@@ -774,9 +774,17 @@ class CoreEngine:
         with self.store.lock:
             rows=self.store.db.execute('SELECT id,owner,limit_ip FROM clients').fetchall()
             cs={r['email']:json.loads(r['inbounds']) for r in self.store.db.execute('SELECT email,inbounds FROM core_clients')}
+            mirror_table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_agent_mirror_clients'").fetchone()
+            mirrors=[r[0] for r in self.store.db.execute('SELECT DISTINCT mirror_email FROM node_agent_mirror_clients')] if mirror_table else []
         for r in rows:
             ports=sorted({ibs[i]['port'] for i in cs.get(r['id'],[]) if i in ibs})
             if ports:clients[r['id']]={'owner':r['owner'],'limit_ip':r['limit_ip'],'ports':ports}
+        # Node mirror identities are observed locally with no per-node quota.
+        # Central aggregates their verified source observations across nodes and
+        # decides the global client policy; a node must never invent a local cap.
+        for email in mirrors:
+            ports=sorted({ibs[i]['port'] for i in cs.get(email,[]) if i in ibs})
+            if ports:clients[email]={'owner':'_node_mirror','limit_ip':0,'ports':ports}
         return Policy.from_dict({'schema':1,'clients':clients,'enforce':enforce,
             'source_mode':'direct' if self.config.direct_source_verified else 'opaque',
             'original_ip_verified':self.config.direct_source_verified,'window_seconds':settings['window_seconds'],
@@ -1030,10 +1038,16 @@ class CoreEngine:
         try:value.encode('ascii');return value
         except UnicodeEncodeError:return 'base64:'+base64.b64encode(value.encode('utf-8')).decode('ascii')
 
-    def subscription(self,email:str,fmt:str)->tuple[bytes,dict]:
+    def subscription(self,email:str,fmt:str,extra_links:list[dict]|None=None)->tuple[bytes,dict]:
         if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported subscription format',status=400)
         settings=self.section('subscription');result=self.links(email,'raw' if fmt=='base64' else fmt)
         if result['warnings']:raise CoreError('Subscription would be incomplete: '+'; '.join(result['warnings']),status=422)
+        if extra_links:
+            if not isinstance(extra_links,list) or len(extra_links)>2048:raise CoreError('Invalid failover link set',status=500)
+            for item in extra_links:
+                if not isinstance(item,dict) or not isinstance(item.get('uri'),str) or not isinstance(item.get('remark'),str):
+                    raise CoreError('Invalid failover link item',status=500)
+                result['links'].append(copy.deepcopy(item))
         links=[r['uri'] for r in result['links']]
         if not links:raise CoreError('No enabled supported connection',status=503)
         content_type='text/plain; charset=utf-8'
@@ -1044,7 +1058,15 @@ class CoreEngine:
         else:
             proxies=[]
             for item in result['links']:proxies.append(self._clash_proxy(item['uri'],item['remark'],item.get('hostMeta')))
-            names=[p['name'] for p in proxies];doc={'proxies':proxies,'proxy-groups':[{'name':'DARK AUTO','type':'select','proxies':names}], 'rules':['MATCH,DARK AUTO']}
+            names=[p['name'] for p in proxies]
+            if any(item.get('failoverNode') for item in result['links']):
+                groups=[
+                    {'name':'DARK FAILOVER','type':'fallback','url':'https://www.gstatic.com/generate_204','interval':120,'proxies':names},
+                    {'name':'DARK AUTO','type':'select','proxies':['DARK FAILOVER',*names]},
+                ]
+                doc={'proxies':proxies,'proxy-groups':groups,'rules':['MATCH,DARK FAILOVER']}
+            else:
+                doc={'proxies':proxies,'proxy-groups':[{'name':'DARK AUTO','type':'select','proxies':names}], 'rules':['MATCH,DARK AUTO']}
             body=(self._yaml(doc)+'\n').encode();content_type='application/yaml; charset=utf-8'
         with self.store.lock:r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
         c=json.loads(r['body']);headers={'Content-Type':content_type,'profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
