@@ -760,10 +760,43 @@ class CoreEngine:
         if self.running:
             try:core_mem=psutil.Process(self.process.pid).memory_info().rss
             except psutil.Error:pass
-        return {'cpu':psutil.cpu_percent(interval=.05),'mem':{'current':vm.used,'total':vm.total},
-                'disk':{'current':disk.used,'total':disk.total},'swap':{'current':swap.used,'total':swap.total},
+        panel_mem=panel_threads=0
+        try:
+            panel=psutil.Process(os.getpid());panel_mem=panel.memory_info().rss;panel_threads=panel.num_threads()
+        except psutil.Error:pass
+        physical=psutil.cpu_count(logical=False) or 0;logical=psutil.cpu_count(logical=True) or 0
+        freq=psutil.cpu_freq()
+        cpu_info={'physical':int(physical),'logical':int(logical),'mhz':round(float(freq.current),1) if freq and freq.current else 0.0}
+        conn={'open':0,'tcp':0,'udp':0,'available':True}
+        try:
+            for row in psutil.net_connections(kind='inet'):
+                if row.type==socket.SOCK_STREAM:conn['tcp']+=1
+                elif row.type==socket.SOCK_DGRAM:conn['udp']+=1
+            conn['open']=conn['tcp']+conn['udp']
+        except (psutil.AccessDenied,psutil.Error,OSError):
+            conn={'open':0,'tcp':0,'udp':0,'available':False}
+        addresses=[]
+        try:
+            for name,rows in psutil.net_if_addrs().items():
+                for row in rows:
+                    if row.family not in (socket.AF_INET,socket.AF_INET6):continue
+                    raw=str(row.address).split('%',1)[0]
+                    try:ip=ipaddress.ip_address(raw)
+                    except ValueError:continue
+                    if ip.is_loopback or ip.is_link_local:continue
+                    item={'interface':str(name)[:64],'address':ip.compressed,'family':4 if ip.version==4 else 6}
+                    if item not in addresses:addresses.append(item)
+                    if len(addresses)>=16:break
+                if len(addresses)>=16:break
+        except (psutil.Error,OSError):pass
+        return {'cpu':psutil.cpu_percent(interval=.05),'cpuInfo':cpu_info,
+                'mem':{'current':vm.used,'total':vm.total},
+                'disk':{'current':disk.used,'total':disk.total,'free':disk.free},
+                'swap':{'current':swap.used,'total':swap.total},
                 'uptime':int(time.time()-psutil.boot_time()),'loads':list(os.getloadavg()),
                 'netTraffic':{'sent':net.bytes_sent,'recv':net.bytes_recv},'netIO':rates,
+                'connections':conn,'addresses':addresses,
+                'panel':{'mem':panel_mem,'threads':panel_threads,'pid':os.getpid()},
                 'xray':{'state':'running' if self.running else 'stopped','version':self.version,'mem':core_mem},
                 'runtime':self.runtime_state()}
 
