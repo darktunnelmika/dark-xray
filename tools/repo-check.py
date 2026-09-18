@@ -13,7 +13,9 @@ PATTERNS = {
     "Telegram bot token": re.compile(r"\b[0-9]{8,12}:[A-Za-z0-9_-]{35}\b"),
 }
 REQUIRED = ["README.md", "README.en.md", "README.fa.md", "LICENSE", "THIRD-PARTY-NOTICES.md",
-            "VERSION", "setup.sh", "config.example.json", ".gitignore", ".github/workflows/ci.yml"]
+            "VERSION", "setup.sh", "config.example.json", ".gitignore", ".github/workflows/ci.yml",
+            "backend/updated.py", "backend/update_bridge.py", "deploy/dark-xray-update.service",
+            "web/update-center.js", "web/update-center.css"]
 
 def main() -> int:
     errors = []
