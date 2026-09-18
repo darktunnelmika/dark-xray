@@ -107,9 +107,11 @@ printf 'Temporary-CI-Owner-Password-082\nTemporary-CI-Owner-Password-082\n' | \
 
 PHASE=service-start
 cp /opt/dark-xray/deploy/dark-xray.service /etc/systemd/system/dark-xray.service
+cp /opt/dark-xray/deploy/dark-xray-update.service /etc/systemd/system/dark-xray-update.service
 cp /opt/dark-xray/deploy/dark-xray-guard.service /etc/systemd/system/dark-xray-guard.service
 chmod 0644 /etc/systemd/system/dark-xray*.service
 systemctl daemon-reload
+systemctl enable --now dark-xray-update.service
 systemctl enable --now dark-xray.service
 
 healthy(){
