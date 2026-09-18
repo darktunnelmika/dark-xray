@@ -40,7 +40,7 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 - **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
 - **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
-- **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential کلاینت‌های همان Inbound، Sync دستی/دوره‌ای و Core actions.
+- **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential همان‌ها، Traffic Sync مرکزی با baseline/ledger idempotent، recovery بعد از قطع/وصل و Reset هماهنگ چندنودی.
 - **Dashboard Control Center** برای Owner؛ Update Center با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار مستقیماً روی صفحه اول قرار دارد.
 - **Root Update Broker** مستقل از Web process؛ پنل non-root می‌ماند و Broker فقط status/check/start محدود را از Unix socket احرازشده می‌پذیرد.
 - **Backup / Restore / Doctor** نیز روی صفحه اول Owner متمرکز شده‌اند؛ DB Snapshot از Web قابل دریافت است و Full Backup/Verify/Restore رمزدار از workflow ایمن CLI اجرا می‌شود.
@@ -112,7 +112,7 @@ sudo darkxray production-gate --json-only
 - Reboot/Power-cycle واقعی ماشین؛ CI فعلاً crash و stop/start systemd را اثبات می‌کند، نه reboot میزبان.
 - صدور و renewal واقعی Let's Encrypt در DNS/provider هدف و بررسی Secure Cookie/HSTS.
 - IP Guard روی topology واقعی ترافیک همان VPS/تونل/CDN.
-- دو VPS واقعی Node با HTTPS، قطع/وصل شبکه و convergence.
+- دو VPS واقعی Node با HTTPS، قطع/وصل شبکه، Traffic convergence و recovery روی WAN واقعی.
 - ظرفیت‌سنجی روی سخت‌افزار/پلن VPS هدف؛ CI فعلی smoke هزار Client و SQLite contention را پاس کرده است.
 - rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
