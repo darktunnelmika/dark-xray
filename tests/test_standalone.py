@@ -141,23 +141,15 @@ def test_api_version_uses_version_file(env):
     assert c.get('/api/me').json()['version']==expected
 
 
-def test_web_owner_creation_attaches_owner_profile(env):
+def test_web_admin_api_keeps_single_primary_owner(env):
     store,engine,m,auth,c=env
     assert c.post('/api/inbounds',json=IB).status_code==200
     r=c.post('/api/admins',json={'username':'Mika','password':'MikaPass88','role':'owner','permissions':{}})
-    assert r.status_code==200,r.text
+    assert r.status_code==409,r.text
     with store.lock:
-        admin=store.db.execute("SELECT role,password_hash FROM api_admins WHERE id='Mika'").fetchone()
-        owner=store.db.execute("SELECT id FROM owners WHERE id='Mika'").fetchone()
-        profile=store.db.execute("SELECT id,allowed FROM owner_profiles WHERE id='Mika'").fetchone()
-    assert admin['role']=='owner' and owner['id']=='Mika' and profile['id']=='Mika'
-    assert json.loads(profile['allowed'])==[1]
-    token,p=auth.login('Mika','MikaPass88','','127.0.0.9')
-    with TestClient(make_app(m,auth,background=False),base_url=engine.config.public_origin) as other:
-        other.cookies.set('dark_session',token);other.headers['X-Dark-CSRF']=p.csrf
-        me=other.get('/api/me');assert me.status_code==200 and me.json()['role']=='owner'
-        ids={x['id'] for x in other.get('/api/owners').json()}
-        assert 'Mika' in ids
+        owners=store.db.execute("SELECT id FROM api_admins WHERE role='owner'").fetchall()
+        assert [x['id'] for x in owners]==['dark']
+        assert store.db.execute("SELECT 1 FROM api_admins WHERE id='Mika'").fetchone() is None
 
 
 def test_reseller_scope_and_shared_inbound(env):
