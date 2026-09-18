@@ -302,10 +302,114 @@ class NodeRegistry:
         except PolicyError as ex:
             self._request_failed(node_id,str(ex));raise
 
-    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None):
+
+    def _allowed_traffic_clients(self,node_id:str)->set[str]:
+        with self.store.lock:
+            assigned={int(r[0]) for r in self.store.db.execute(
+                'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
+            rows=self.store.db.execute("SELECT email,inbounds FROM managed_clients WHERE state!='deleted'").fetchall()
+        allowed=set()
+        for row in rows:
+            try:ids={int(x) for x in json.loads(row['inbounds'])}
+            except Exception:continue
+            if ids & assigned:allowed.add(str(row['email']))
+        return allowed
+
+    @staticmethod
+    def _usage_event_id(node_id:str,client_id:str,seq:int)->str:
+        key=hashlib.sha256((node_id+'\0'+client_id).encode()).hexdigest()[:24]
+        return 'node:'+key+':'+str(seq)
+
+    @staticmethod
+    def _recompute_client_usage(db,client_id:str):
+        meta=db.execute('SELECT last_up,last_down FROM managed_clients WHERE email=?',(client_id,)).fetchone()
+        if not meta:return
+        remote=int(db.execute('SELECT COALESCE(SUM(current_up+current_down),0) FROM remote_node_client_usage WHERE client_id=?',(client_id,)).fetchone()[0])
+        total=int(meta['last_up'])+int(meta['last_down'])+remote
+        if total<0 or total>(1<<63)-1:raise PolicyError('Global client traffic counter overflow')
+        db.execute('UPDATE clients SET used_bytes=? WHERE id=?',(total,client_id))
+
+    def apply_traffic_snapshot(self,node_id:str,items:list[dict],*,captured_at:float|None=None)->dict:
+        if not isinstance(items,list) or len(items)>100000:raise PolicyError('Invalid node traffic snapshot')
+        allowed=self._allowed_traffic_clients(node_id);now=time.time() if captured_at is None else float(captured_at)
+        seen=set();charged_up=charged_down=0;baselined=0;resets=0;changed=[]
+        with self.store.transaction() as db:
+            for item in items:
+                if not isinstance(item,dict) or set(item)-{'sourceEmail','up','down'}:raise PolicyError('Invalid node traffic item')
+                email=item.get('sourceEmail');up=item.get('up');down=item.get('down')
+                if not isinstance(email,str) or email not in allowed or email in seen:raise PolicyError('Unexpected node traffic client')
+                if type(up)is not int or type(down)is not int or up<0 or down<0 or up>(1<<63)-1 or down>(1<<63)-1 or up+down>(1<<63)-1:
+                    raise PolicyError('Invalid node traffic counter')
+                seen.add(email)
+                row=db.execute('SELECT * FROM remote_node_client_usage WHERE node_id=? AND client_id=?',(node_id,email)).fetchone()
+                if not row:
+                    db.execute('''INSERT INTO remote_node_client_usage(node_id,client_id,raw_up,raw_down,initialized,last_seen)
+                                  VALUES(?,?,?,?,1,?)''',(node_id,email,up,down,now))
+                    baselined+=1;changed.append(email);self._recompute_client_usage(db,email);continue
+                if not row['initialized']:
+                    db.execute('''UPDATE remote_node_client_usage SET raw_up=?,raw_down=?,initialized=1,last_seen=?
+                                  WHERE node_id=? AND client_id=?''',(up,down,now,node_id,email))
+                    baselined+=1;changed.append(email);self._recompute_client_usage(db,email);continue
+                du=up-row['raw_up'] if up>=row['raw_up'] else up
+                dd=down-row['raw_down'] if down>=row['raw_down'] else down
+                if up<row['raw_up'] or down<row['raw_down']:resets+=1
+                seq=int(row['seq'])
+                if du or dd:
+                    if du+dd>(1<<63)-1:raise PolicyError('Node traffic delta overflow')
+                    user=db.execute('SELECT owner FROM clients WHERE id=?',(email,)).fetchone()
+                    if not user:raise PolicyError('Node traffic client is not managed')
+                    owner=db.execute('SELECT period FROM owners WHERE id=?',(user['owner'],)).fetchone()
+                    if not owner:raise PolicyError('Node traffic owner is missing')
+                    seq+=1
+                    db.execute('INSERT INTO traffic_ledger VALUES(?,?,?,?,?,?,?)',
+                               (self._usage_event_id(node_id,email,seq),user['owner'],email,owner['period'],du,dd,now))
+                    charged_up+=du;charged_down+=dd
+                new_up=int(row['current_up'])+du;new_down=int(row['current_down'])+dd
+                if new_up+new_down>(1<<63)-1:raise PolicyError('Node current traffic overflow')
+                db.execute('''UPDATE remote_node_client_usage SET raw_up=?,raw_down=?,current_up=?,current_down=?,
+                              seq=?,initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',
+                           (up,down,new_up,new_down,seq,now,node_id,email))
+                changed.append(email);self._recompute_client_usage(db,email)
+        return {'clients':len(seen),'baselined':baselined,'charged_up':charged_up,'charged_down':charged_down,
+                'charged_bytes':charged_up+charged_down,'counter_resets':resets,'captured_at':now,'changed_clients':changed}
+
+    def sync_traffic(self,node_id:str)->dict:
+        doc,ms=self._request(node_id,'/node/api/mirrors/traffic',timeout=12.0)
+        if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
+            self._request_failed(node_id,'Invalid node traffic response');raise PolicyError('Invalid node traffic response')
+        result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=doc.get('capturedAt') or time.time())
+        return {'latency_ms':ms,**result}
+
+    def reset_client_traffic(self,client_id:str,reset_id:str)->dict:
+        if not isinstance(reset_id,str) or not 8<=len(reset_id)<=128:raise PolicyError('Invalid remote reset ID')
+        with self.store.lock:
+            meta=self.store.db.execute("SELECT inbounds FROM managed_clients WHERE email=? AND state!='deleted'",(client_id,)).fetchone()
+            if not meta:return {'nodes':0,'reset':True}
+            inbound_ids=sorted({int(x) for x in json.loads(meta['inbounds'])})
+            if not inbound_ids:return {'nodes':0,'reset':True}
+            marks=','.join('?' for _ in inbound_ids)
+            node_ids=[r[0] for r in self.store.db.execute(
+                'SELECT DISTINCT node_id FROM remote_node_inbounds WHERE local_inbound_id IN ('+marks+') ORDER BY node_id',tuple(inbound_ids))]
+        results=[]
+        for node_id in node_ids:
+            doc,ms=self._request(node_id,'/node/api/mirrors/traffic/reset','POST',
+                                  {'sourceEmail':client_id,'resetId':reset_id},12.0)
+            if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id or type(doc.get('up')) is not int or type(doc.get('down')) is not int:
+                raise PolicyError('Invalid node traffic reset response')
+            snap=self.apply_traffic_snapshot(node_id,[{'sourceEmail':client_id,'up':doc['up'],'down':doc['down']}],
+                                             captured_at=doc.get('capturedAt') or time.time())
+            with self.store.transaction() as db:
+                db.execute('''UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,current_up=0,current_down=0,
+                              initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',(time.time(),node_id,client_id))
+                self._recompute_client_usage(db,client_id)
+            results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
+        return {'nodes':len(results),'items':results,'reset':True}
+
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,traffic_callback=None):
         if self.thread and self.thread.is_alive():return
         if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
         if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
+        if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
         self.stop.clear()
         def run():
             if self.stop.wait(initial_delay):return
@@ -315,6 +419,8 @@ class NodeRegistry:
                     if self.stop.is_set():return
                     try:
                         self.probe(node_id,timeout=5.0)
+                        traffic=self.sync_traffic(node_id)
+                        if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
                         if sync_provider is not None:self.sync_mirrors(node_id,sync_provider(node_id))
                     except (PolicyError,OSError,ValueError):
                         pass
