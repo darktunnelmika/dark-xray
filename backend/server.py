@@ -573,12 +573,28 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if not isinstance(item.get('inbound'),dict) or not isinstance(item.get('clients'),list):raise HTTPException(400,'Invalid node mirror payload')
             total_clients+=len(item['clients'])
         if total_clients>50000:raise HTTPException(413,'Too many mirrored clients')
+        payload_hash=hashlib.sha256(json.dumps(assignments,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
 
         with store.lock:
             old_mirrors={int(r['source_inbound_id']):dict(r) for r in store.db.execute(
                 'SELECT * FROM node_agent_mirrors WHERE token_id=?',(token_id,))}
             old_client_rows=[dict(r) for r in store.db.execute(
                 'SELECT * FROM node_agent_mirror_clients WHERE token_id=?',(token_id,))]
+            state_row=store.db.execute('SELECT payload_hash FROM node_agent_mirror_state WHERE token_id=?',(token_id,)).fetchone()
+        if state_row and state_row['payload_hash']==payload_hash and len(old_mirrors)==len(assignments) and len(old_client_rows)==total_clients:
+            healthy=True
+            try:
+                for row in old_mirrors.values():engine.inbound(int(row['remote_inbound_id']))
+                for row in old_client_rows:engine.client_detail(row['mirror_email'])
+            except CoreError:
+                healthy=False
+            if healthy:
+                counts={}
+                for row in old_client_rows:counts[int(row['source_inbound_id'])]=counts.get(int(row['source_inbound_id']),0)+1
+                items=[{'sourceInboundId':source,'remoteInboundId':int(row['remote_inbound_id']),'clients':counts.get(source,0)}
+                       for source,row in sorted(old_mirrors.items())]
+                return {'mirrored':len(assignments),'clients':len({r['mirror_email'] for r in old_client_rows}),
+                        'items':items,'core':engine.runtime_state(),'changed':False,'payloadHash':payload_hash}
         old_mirror_emails={r['mirror_email'] for r in old_client_rows}
         # Remove old mirrored credentials first. The running Xray process stays on
         # its previous active.json until the final validated restart succeeds.
@@ -638,9 +654,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 db.execute('INSERT INTO node_agent_mirrors(token_id,source_inbound_id,remote_inbound_id,source_tag,updated_at) VALUES(?,?,?,?,?)',
                            (token_id,source,rid,str(item['inbound'].get('tag') or ''),now))
             db.executemany('INSERT INTO node_agent_mirror_clients(token_id,source_inbound_id,mirror_email,source_email) VALUES(?,?,?,?)',desired_rows)
+            db.execute('''INSERT INTO node_agent_mirror_state(token_id,payload_hash,updated_at) VALUES(?,?,?)
+                          ON CONFLICT(token_id) DO UPDATE SET payload_hash=excluded.payload_hash,updated_at=excluded.updated_at''',
+                       (token_id,payload_hash,now))
 
         core_result=engine.command('restart')
-        return {'mirrored':len(assignments),'clients':len(desired_clients),'items':result_items,'core':core_result}
+        return {'mirrored':len(assignments),'clients':len(desired_clients),'items':result_items,'core':core_result,
+                'changed':True,'payloadHash':payload_hash}
 
     @app.post('/node/api/core/{action}')
     def node_core(action:str,token_id:str=Depends(node_agent)):
