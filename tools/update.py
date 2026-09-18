@@ -231,12 +231,22 @@ def install_runtime_files():
     py=APP/'.venv/bin/python'
     run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
     run([py,'-m','pip','check'],stdout=subprocess.DEVNULL)
-    for unit in ('dark-xray.service','dark-xray-guard.service','dark-xray-update.service'):
+    for unit in ('dark-xray.service','dark-xray-guard.service'):
         shutil.copy2(APP/'deploy'/unit,Path('/etc/systemd/system')/unit);os.chmod(Path('/etc/systemd/system')/unit,0o644)
+    update_unit=APP/'deploy/dark-xray-update.service'
+    installed_update_unit=Path('/etc/systemd/system/dark-xray-update.service')
+    if update_unit.is_file() and not update_unit.is_symlink():
+        shutil.copy2(update_unit,installed_update_unit);os.chmod(installed_update_unit,0o644)
+    else:
+        # Rollback to a pre-broker release must remain possible during the
+        # one-time bootstrap from older RC builds.
+        quiet(['systemctl','disable','--now','dark-xray-update.service'])
+        installed_update_unit.unlink(missing_ok=True)
     write_wrapper();run(['systemctl','daemon-reload']);run(['systemctl','enable','dark-xray.service'])
-    # --now is safe both for CLI upgrades (starts the broker) and broker-owned
-    # upgrades (the already-running unit is not restarted mid-response).
-    run(['systemctl','enable','--now','dark-xray-update.service'])
+    if update_unit.is_file() and not update_unit.is_symlink():
+        # --now on an already-active broker is a no-op; on the first CLI
+        # bootstrap it starts the newly installed root-owned broker.
+        run(['systemctl','enable','--now','dark-xray-update.service'])
 
 
 
@@ -398,13 +408,23 @@ def main():
         if temp:shutil.rmtree(temp,ignore_errors=True)
 
 if __name__=='__main__':
-    try:main()
+    try:
+        main()
     except SystemExit as ex:
         if STATUS_FILE is not None:
-            state=read_status={} 
             try:
                 read_status=json.loads(STATUS_FILE.read_text(encoding='utf-8')) if STATUS_FILE.is_file() else {}
-            except Exception:read_status={}
+            except Exception:
+                read_status={}
             if read_status.get('state') not in {'rolled_back','success','failed'}:
                 _status('failed','failed',100,str(ex)[:700] or 'Update failed',finished_at=time.time())
+        raise
+    except Exception as ex:
+        if STATUS_FILE is not None:
+            try:
+                read_status=json.loads(STATUS_FILE.read_text(encoding='utf-8')) if STATUS_FILE.is_file() else {}
+            except Exception:
+                read_status={}
+            if read_status.get('state') not in {'rolled_back','success','failed'}:
+                _status('failed','failed',100,type(ex).__name__+': '+str(ex)[:650],finished_at=time.time())
         raise
