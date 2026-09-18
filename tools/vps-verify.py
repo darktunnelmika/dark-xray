@@ -25,6 +25,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
 from core import Config
 from guard_bridge import BrokerClient
+from update_bridge import UpdateBrokerClient
 
 
 def run_text(args:list[str],timeout:float=10)->tuple[int,str]:
@@ -143,7 +144,7 @@ def main()->None:
 
         systemctl=shutil.which('systemctl')
         if systemctl:
-            for unit,required in [('dark-xray.service',True),('dark-xray-guard.service',ipguard.get('mode')=='enforce')]:
+            for unit,required in [('dark-xray.service',True),('dark-xray-update.service',True),('dark-xray-guard.service',ipguard.get('mode')=='enforce')]:
                 rc_active,active=run_text([systemctl,'is-active',unit],5)
                 rc_enabled,enabled=run_text([systemctl,'is-enabled',unit],5)
                 ok_active=rc_active==0 and active.strip()=='active';ok_enabled=rc_enabled==0 and enabled.startswith('enabled')
@@ -154,6 +155,12 @@ def main()->None:
                     soft(unit+'.active',ok_active,active or 'inactive / optional while IP Guard observes')
                     soft(unit+'.enabled',ok_enabled,enabled or 'not enabled / optional while IP Guard observes')
         else:hard('systemd',False,'systemctl not found')
+
+        try:
+            updater=UpdateBrokerClient(timeout=3).status()
+            hard('update_broker',bool(updater.get('broker_ready')),{'state':updater.get('state'),'version':updater.get('current',{}).get('version')})
+        except Exception as ex:
+            hard('update_broker',False,type(ex).__name__+': '+str(ex))
 
         nft=shutil.which('nft') is not None
         guard=None
