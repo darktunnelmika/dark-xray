@@ -115,6 +115,8 @@ class NodeRegistry:
             CREATE TABLE IF NOT EXISTS node_agent_mirror_clients(
               token_id TEXT NOT NULL,source_inbound_id INTEGER NOT NULL,mirror_email TEXT NOT NULL,source_email TEXT NOT NULL,
               PRIMARY KEY(token_id,source_inbound_id,mirror_email));
+            CREATE TABLE IF NOT EXISTS node_agent_mirror_state(
+              token_id TEXT PRIMARY KEY,payload_hash TEXT NOT NULL,updated_at REAL NOT NULL);
             ''')
 
     def list(self)->list[dict]:
