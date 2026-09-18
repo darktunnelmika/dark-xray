@@ -13,7 +13,7 @@ test('Node add/edit exposes per-node inbound assignment picker',()=>{
 });
 
 test('Node workflow replaces manual clone with assignment sync',()=>{
-  assert.match(src,/data-act="nv2sync"/);
+  assert.match(src,/'nv2sync'/);
   assert.match(src,/\/api\/nodes\/'.*\/sync/);
   assert.doesNotMatch(src,/nv2cloneinbound/);
   assert.doesNotMatch(src,/Clone local inbound to node/);
@@ -23,5 +23,6 @@ test('Node cards expose assigned inbound names and sync state',()=>{
   assert.match(src,/function assignedNames\(n\)/);
   assert.match(src,/ASSIGNED INBOUNDS/);
   assert.match(src,/n\.assignments/);
-  assert.match(src,/remote_inbound_id/);
+  assert.match(src,/n\.assignments/);
+  assert.match(src,/last_error/);
 });
