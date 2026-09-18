@@ -417,6 +417,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             auth.admin_create(p.actor,reseller_id,body.password or '','reseller',DEFAULTS['reseller'])
         auth.admin_edit(p.actor,reseller_id,disabled=not body.enabled,password=body.password,
                         permissions=DEFAULTS['reseller'])
+        manager.tick(suppress=True)
         manager.audit(p.actor,reseller_id,'representative.save',reseller_id,
                       'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed)))
         return next(r for r in representative_rows(p) if r['id']==reseller_id)
