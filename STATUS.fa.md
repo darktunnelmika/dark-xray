@@ -1,7 +1,7 @@
-# وضعیت DARK XRAY 0.9.0 RC6
+# وضعیت DARK XRAY 0.9.0 RC7
 
 تاریخ بازبینی: **18 سپتامبر 2026**  
-برچسب فعلی: **`0.9.0-rc6`**
+برچسب فعلی: **`0.9.0-rc7`**
 
 > «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
 
@@ -22,7 +22,7 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مست�
 | Domain / TLS | workflow موجود؛ provider/live renewal هنوز گیت VPS است |
 | Finance / Ledger | event-id idempotency، lifetime/current separation، Owner-only credit |
 | Nodes V2 | HTTPS-only + DNS pinning + TLS hostname verification + health monitor |
-| Safe Update | source/SQLite snapshot + dependency preflight + health-gated rollback |
+| Safe Update / Web Update | root-owned broker + exact-commit CI gate + source/SQLite snapshot + dependency preflight + health-gated rollback |
 | Browser | Chromium واقعی، EN/FA، mobile و Inbounds V3 save |
 | Real Xray | official v26.3.27 data-plane در CI |
 | Kernel nftables | packet-level TCP/UDP enforcement در namespace واقعی Linux |
@@ -117,6 +117,15 @@ sudo darkxray production-gate --json-only
 
 `production-gate` برای lab خودش temporary DB/ports ایجاد می‌کند و customer DB یا firewall نصب‌شده را تغییر نمی‌دهد.
 
+## Hardeningهای مهم RC7
+
+- **Web Update Center** فقط برای Interactive Owner است؛ Reseller/API Key اجازه Check/Start ندارند.
+- **Update Broker** با root و Unix peer credential اجرا می‌شود؛ Web process non-root باقی می‌ماند و arbitrary shell عبور نمی‌کند.
+- Candidate قبل از Start به SHA ثابت resolve و CI همان Commit دقیق بررسی می‌شود؛ CI غیرسبز/نامشخص Web Update را قفل می‌کند.
+- Progress و reconnect مرحله‌های snapshot/apply/restart/rollback را حتی هنگام restart پنل قابل بازیابی می‌کنند.
+- `vps-verify` فعال و enabled بودن Broker و پاسخ status آن را Hard Gate می‌داند.
+- یک بار bootstrap از RC6 با installer آنلاین لازم است؛ بعد از آن مسیر اصلی آپدیت داخل پنل است.
+
 ## Hardeningهای مهم RC5
 
 - **Clients V4 Command Deck** Sidebar دائمی را حذف و کنترل‌ها را به Search/Presence/Filter/Sort جمع می‌کند؛ ردیف‌ها فقط OPEN / QR دارند و IP/HWID و More Actions حذف شده‌اند.
@@ -163,6 +172,6 @@ sudo darkxray production-gate --json-only
 
 ## مسیر بعدی
 
-مرحله بعد، تست **`0.9.0-rc6`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
+مرحله بعد، تست **`0.9.0-rc7`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)
