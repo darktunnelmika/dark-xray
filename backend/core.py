@@ -797,7 +797,8 @@ class CoreEngine:
                 'netTraffic':{'sent':net.bytes_sent,'recv':net.bytes_recv},'netIO':rates,
                 'connections':conn,'addresses':addresses,
                 'panel':{'mem':panel_mem,'threads':panel_threads,'pid':os.getpid()},
-                'xray':{'state':'running' if self.running else 'stopped','version':self.version,'mem':core_mem},
+                'xray':{'state':'running' if self.running else 'stopped','version':self.version,'mem':core_mem,
+                        'uptime':int(time.time()-self.last_start) if self.running and self.last_start else 0},
                 'runtime':self.runtime_state()}
 
     def ip_policy(self,enforce:bool|None=None)->Policy:
