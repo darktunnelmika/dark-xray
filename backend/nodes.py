@@ -263,9 +263,10 @@ class NodeRegistry:
         except PolicyError as ex:
             self._request_failed(node_id,str(ex));raise
 
-    def start(self,*,interval:float=60.0,initial_delay:float=5.0):
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None):
         if self.thread and self.thread.is_alive():return
         if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
+        if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
         self.stop.clear()
         def run():
             if self.stop.wait(initial_delay):return
@@ -273,8 +274,11 @@ class NodeRegistry:
                 with self.store.lock:ids=[r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY id')]
                 for node_id in ids:
                     if self.stop.is_set():return
-                    try:self.probe(node_id,timeout=5.0)
-                    except (PolicyError,OSError):pass
+                    try:
+                        self.probe(node_id,timeout=5.0)
+                        if sync_provider is not None:self.sync_mirrors(node_id,sync_provider(node_id))
+                    except (PolicyError,OSError,ValueError):
+                        pass
                 if self.stop.wait(interval):return
         self.thread=threading.Thread(target=run,name='dark-node-health',daemon=True);self.thread.start()
 
