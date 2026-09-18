@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 import nodes as nodes_mod
 from auth import Auth
-from core import Config,CoreEngine
+from core import Config,CoreEngine,CoreError
 from dark_policy import Store,Actor,PolicyError
 from manager import Manager
 from server import make_app
@@ -186,7 +186,7 @@ def test_node_agent_mirror_sync_reconciles_inbound_and_credentials(env,monkeypat
  r=c.post('/node/api/mirrors/sync',json={'assignments':[]},headers={'authorization':'Bearer '+token})
  assert r.status_code==200,r.text
  assert r.json()['mirrored']==0
- with pytest.raises(Exception):
+ with pytest.raises(CoreError):
   eng.inbound(rid)
  with store.lock:
   assert store.db.execute('SELECT COUNT(*) FROM node_agent_mirrors').fetchone()[0]==0
