@@ -67,32 +67,48 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.wait_for_selector('.nav-btn[data-page="inbounds"]',timeout=10000)
             assert page.locator('html').get_attribute('dir')=='ltr'
             assert page.locator('body').evaluate("b=>b.classList.contains('skin-cyber-classic')")
-            page.locator('.ov2-control-center .ov2-priority').first.wait_for(state='visible',timeout=10000)
+            page.locator('.ov4-commandbar').wait_for(state='visible',timeout=10000)
             skin=page.evaluate("""()=>({
                 green:getComputedStyle(document.body).getPropertyValue('--classic-green').trim(),
-                bg:getComputedStyle(document.body).backgroundColor,
-                panelRadius:getComputedStyle(document.querySelector('.panel')).borderRadius,
-                activeBorder:getComputedStyle(document.querySelector('.nav-btn.active')).borderTopColor
+                activeBorder:getComputedStyle(document.querySelector('.nav-btn.active')).borderTopColor,
+                overviewBg:getComputedStyle(document.querySelector('.ov4-card')).backgroundColor
             })""")
             assert skin['green']=='#19ff86',skin
-            assert skin['panelRadius'] in ('2px','2px 2px 2px 2px'),skin
-            mark('real browser login, cookie session and Cyber Classic default skin')
-            page.locator('.ov2-dashboard-control-row').wait_for(state='visible',timeout=10000)
+            mark('real browser login, cookie session, Cyber Classic shell and Overview V4')
+
+            assert page.locator('.ov4-resource').count()==4
+            assert page.locator('.ov4-traffic-card').count()==1
+            assert page.locator('.ov4-connections').count()==1
+            assert page.locator('.ov4-telemetry-strip').count()==1
+            assert page.locator('.ov4-summary-item').count()==6
             page.locator('.up-dashboard-compact').wait_for(state='visible',timeout=10000)
-            page.locator('.ov2-empty-inline').wait_for(state='visible',timeout=10000)
-            node_box=page.locator('.ov2-dashboard-control-row > .ov2-priority').bounding_box()
-            update_box=page.locator('.ov2-dashboard-control-row > .up-dashboard-shell').bounding_box()
+
+            resource_boxes=[page.locator('.ov4-resource').nth(i).bounding_box() for i in range(4)]
+            assert all(resource_boxes),resource_boxes
+            assert max(abs(resource_boxes[i]['y']-resource_boxes[0]['y']) for i in range(1,4))<=3,resource_boxes
+            traffic_box=page.locator('.ov4-traffic-card').bounding_box()
+            connection_box=page.locator('.ov4-connections').bounding_box()
+            assert traffic_box and connection_box,(traffic_box,connection_box)
+            assert abs(traffic_box['y']-connection_box['y'])<=3,(traffic_box,connection_box)
+            node_box=page.locator('.ov4-management-grid > .ov4-node-card').bounding_box()
+            update_box=page.locator('.ov4-management-grid > .up-dashboard-shell').bounding_box()
             assert node_box and update_box,(node_box,update_box)
             assert abs(node_box['y']-update_box['y'])<=4,(node_box,update_box)
-            assert node_box['height']<330,node_box
-            assert page.locator('.ov2-performance .ov2-grid').count()==1
-            report['dashboard_layout']={'node_height':round(node_box['height'],1),'update_height':round(update_box['height'],1),
-                                        'row_y_delta':round(abs(node_box['y']-update_box['y']),1)}
+            assert page.locator('.ov4-resource-value').all_inner_texts()
+
             sidebar_box=page.locator('.sidebar').bounding_box()
             language_box=page.locator('.cyber-lang-switch').bounding_box()
             assert sidebar_box and language_box,(sidebar_box,language_box)
             assert language_box['x']>=sidebar_box['x']-1 and language_box['x']+language_box['width']<=sidebar_box['x']+sidebar_box['width']+1,(sidebar_box,language_box)
-            mark('dashboard keeps Node Fleet and compact Update Center aligned without tall empty-state gaps')
+
+            report['dashboard_layout']={
+                'resource_cards':4,
+                'traffic_width':round(traffic_box['width'],1),
+                'connections_width':round(connection_box['width'],1),
+                'node_update_y_delta':round(abs(node_box['y']-update_box['y']),1)
+            }
+            mark('Overview V4 renders four resource cards, traffic, connections and system telemetry')
+            mark('Overview V4 keeps Node Fleet and compact Update Center aligned')
             mark('desktop language switch stays inside the sidebar instead of covering dashboard content')
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
