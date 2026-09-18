@@ -104,6 +104,17 @@ class NodeRegistry:
               id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT NOT NULL UNIQUE,
               enabled INTEGER NOT NULL DEFAULT 1,expires_at REAL NOT NULL,created_at REAL NOT NULL,
               last_used REAL NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS remote_node_inbounds(
+              node_id TEXT NOT NULL,local_inbound_id INTEGER NOT NULL,remote_inbound_id INTEGER NOT NULL DEFAULT 0,
+              updated_at REAL NOT NULL,last_sync REAL NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',
+              PRIMARY KEY(node_id,local_inbound_id));
+            CREATE TABLE IF NOT EXISTS node_agent_mirrors(
+              token_id TEXT NOT NULL,source_inbound_id INTEGER NOT NULL,remote_inbound_id INTEGER NOT NULL,
+              source_tag TEXT NOT NULL,updated_at REAL NOT NULL,
+              PRIMARY KEY(token_id,source_inbound_id));
+            CREATE TABLE IF NOT EXISTS node_agent_mirror_clients(
+              token_id TEXT NOT NULL,source_inbound_id INTEGER NOT NULL,mirror_email TEXT NOT NULL,source_email TEXT NOT NULL,
+              PRIMARY KEY(token_id,source_inbound_id,mirror_email));
             ''')
 
     def list(self)->list[dict]:
@@ -112,6 +123,11 @@ class NodeRegistry:
             r.pop('token_enc',None)
             try:r['health']=json.loads(r.pop('last_health','{}'))
             except Exception:r['health']={}
+            with self.store.lock:
+                assigned=[dict(x) for x in self.store.db.execute(
+                    'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
+            r['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
+            r['assignments']=assigned
             r['online']=bool(r['enabled'] and r['last_seen'] and time.time()-r['last_seen']<180 and not r['last_error'])
         return rows
 
@@ -124,13 +140,22 @@ class NodeRegistry:
             try:out['token']=self.cipher.decrypt(out['token_enc'].encode()).decode()
             except Exception as ex:raise PolicyError('Node credential cannot be decrypted') from ex
         out.pop('token_enc',None)
+        with self.store.lock:
+            assigned=[dict(x) for x in self.store.db.execute(
+                'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
+        out['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
+        out['assignments']=assigned
         return out
 
-    def put(self,node_id:str,name:str,origin:str,token:str,enabled:bool=True)->dict:
+    def put(self,node_id:str,name:str,origin:str,token:str,enabled:bool=True,inbound_ids:list[int]|None=None)->dict:
         if not NAME_RE.fullmatch(node_id) or not isinstance(name,str) or not 1<=len(name)<=128:raise PolicyError('Invalid node identity')
         origin=validate_origin(origin)
         if not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:raise PolicyError('Invalid DARK node token')
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
+        inbound_ids=[] if inbound_ids is None else inbound_ids
+        if not isinstance(inbound_ids,list) or len(inbound_ids)>256 or any(type(i)is not int or i<1 for i in inbound_ids):
+            raise PolicyError('Invalid node inbound assignment')
+        inbound_ids=sorted(set(inbound_ids))
         reset_probe=True
         with self.store.lock:
             old=self.store.db.execute('SELECT origin,token_enc,enabled FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
@@ -148,6 +173,14 @@ class NodeRegistry:
               last_error=CASE WHEN ? THEN '' ELSE remote_nodes.last_error END,
               last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
               (node_id,name,origin,enc,int(enabled),now,now,int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
+            old_ids={int(r[0]) for r in db.execute('SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
+            for inbound_id in inbound_ids:
+                db.execute('''INSERT INTO remote_node_inbounds(node_id,local_inbound_id,updated_at)
+                              VALUES(?,?,?) ON CONFLICT(node_id,local_inbound_id) DO UPDATE SET updated_at=excluded.updated_at''',
+                           (node_id,inbound_id,now))
+            removed=old_ids-set(inbound_ids)
+            if removed:
+                db.executemany('DELETE FROM remote_node_inbounds WHERE node_id=? AND local_inbound_id=?',[(node_id,x) for x in removed])
         return self.get(node_id)
 
     def set_enabled(self,node_id:str,enabled:bool)->dict:
@@ -159,6 +192,7 @@ class NodeRegistry:
 
     def delete(self,node_id:str)->dict:
         with self.store.transaction() as db:
+            db.execute('DELETE FROM remote_node_inbounds WHERE node_id=?',(node_id,))
             cur=db.execute('DELETE FROM remote_nodes WHERE id=?',(node_id,))
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
@@ -268,3 +302,25 @@ class NodeRegistry:
         if not isinstance(doc,dict) or type(doc.get('id')) is not int:
             self._request_failed(node_id,'Invalid node inbound deploy response');raise PolicyError('Invalid node inbound deploy response')
         return {'latency_ms':ms,'inbound':doc,'applied':False,'next':'validate/restart remote Xray'}
+
+    def assignments(self,node_id:str)->list[dict]:
+        self.get(node_id)
+        with self.store.lock:
+            return [dict(r) for r in self.store.db.execute(
+                'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
+
+    def sync_mirrors(self,node_id:str,bundles:list[dict])->dict:
+        if not isinstance(bundles,list) or len(bundles)>256:raise PolicyError('Invalid node mirror bundle')
+        doc,ms=self._request(node_id,'/node/api/mirrors/sync','POST',{'assignments':bundles},30.0)
+        if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
+            self._request_failed(node_id,'Invalid node mirror sync response');raise PolicyError('Invalid node mirror sync response')
+        now=time.time()
+        by_source={int(x.get('sourceInboundId')):x for x in doc['items'] if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
+        with self.store.transaction() as db:
+            for bundle in bundles:
+                source=int(bundle['sourceInboundId']);item=by_source.get(source,{})
+                db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?
+                              WHERE node_id=? AND local_inbound_id=?''',
+                           (int(item.get('remoteInboundId') or 0),now,str(item.get('error') or '')[:300],now,node_id,source))
+        return {'latency_ms':ms,'items':doc['items'],'core':doc.get('core',{}),'synced_at':now}
+
