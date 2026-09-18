@@ -145,8 +145,8 @@ def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkey
  assert r.json()['inboundIds']==[a]
  captured={}
  def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
-  captured.update(node_id=node_id,path=path,method=method,body=body,timeout=timeout)
   if path=='/node/api/mirrors/traffic':return {'items':[],'capturedAt':time.time()},11
+  captured.update(node_id=node_id,path=path,method=method,body=body,timeout=timeout)
   return {'items':[{'sourceInboundId':a,'remoteInboundId':9,'clients':1}],'core':{'state':'running'}},17
  monkeypatch.setattr(app.state.nodes,'_request',fake_request)
  out=c.post('/api/nodes/tr1/sync')
@@ -312,3 +312,27 @@ def test_central_client_reset_reconciles_remote_final_counter_then_zeros_current
  assert policy==0 and tuple(remote)==(0,0,0,0)
  assert charged==20
  assert len(calls)==1 and calls[0][2]['sourceEmail']=='reset-user' and len(calls[0][2]['resetId'])>=8
+
+
+def test_deselected_stale_remote_traffic_is_ignored_so_cleanup_can_converge(env):
+ store,_,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('STALE A',23201,'stale-a')).json()['id']
+ b=c.post('/api/inbounds',json=_test_vless('KEEP B',23202,'keep-b')).json()['id']
+ _managed_client(c,'old-user',a)
+ _managed_client(c,'keep-user',b)
+ token='dkn_'+('S'*60)
+ assert c.post('/api/nodes',json={'id':'stale-node','name':'Stale','origin':'https://stale.example.com',
+   'token':token,'enabled':True,'inboundIds':[a,b]}).status_code==200
+ reg=app.state.nodes
+ reg.apply_traffic_snapshot('stale-node',[
+   {'sourceEmail':'old-user','up':0,'down':0},{'sourceEmail':'keep-user','up':0,'down':0}],captured_at=1000)
+ # Simulate Central assignment removal before the remote agent has received mirror cleanup.
+ assert c.patch('/api/nodes/stale-node',json={'name':'Stale','origin':'https://stale.example.com',
+   'keep_token':True,'enabled':True,'inboundIds':[b]}).status_code==200
+ out=reg.apply_traffic_snapshot('stale-node',[
+   {'sourceEmail':'old-user','up':999,'down':999},{'sourceEmail':'keep-user','up':10,'down':5}],captured_at=1010)
+ assert out['ignored_clients']==1 and out['charged_bytes']==15
+ with store.lock:
+  old=store.db.execute("SELECT used_bytes FROM clients WHERE id='old-user'").fetchone()[0]
+  keep=store.db.execute("SELECT used_bytes FROM clients WHERE id='keep-user'").fetchone()[0]
+ assert old==0 and keep==15
