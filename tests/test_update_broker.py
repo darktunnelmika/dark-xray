@@ -68,3 +68,18 @@ def test_start_needs_prechecked_immutable_candidate(tmp_path,monkeypatch):
     assert result['candidate']['commit']=='2'*40
     with pytest.raises(updated.UpdateError):
         c.start('not-a-sha')
+
+
+def test_broker_restart_marks_transient_job_interrupted(tmp_path,monkeypatch):
+    app=tmp_path/'app';data=tmp_path/'data';app.mkdir();data.mkdir()
+    (app/'VERSION').write_text('0.9.0-rc7\n')
+    state=data/'update-state.json'
+    state.write_text(json.dumps({'state':'running','phase':'apply_source','percent':76,'job_id':'old-job'}))
+    monkeypatch.setattr(updated,'APP',app);monkeypatch.setattr(updated,'DATA',data)
+    monkeypatch.setattr(updated,'STATE',state);monkeypatch.setattr(updated,'LOG',data/'update.log')
+    c=updated.UpdateController(1234)
+    out=c.state()
+    assert out['state']=='failed'
+    assert out['phase']=='failed'
+    assert out['broker_interrupted'] is True
+    assert 'interrupted' in out['message'].lower()
