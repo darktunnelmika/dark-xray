@@ -4,7 +4,7 @@
 
 Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, reseller ownership, RBAC, accounting, subscriptions, nodes and direct Xray-core control.
 
-**VPS test candidate:** `0.9.0-rc4`
+**VPS test candidate:** `0.9.0-rc5`
 
 > [!CAUTION]
 > DARK XRAY is now a **Release Candidate**, not a production-ready declaration. Real Chromium, official Xray, packet-level nftables, systemd crash recovery and a 1000-client/SQLite contention smoke are green in CI; target-VPS install, real machine reboot, provider TLS renewal and two-VPS node validation remain final gates.
@@ -23,7 +23,9 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 Current major workspaces include:
 
 - **Inbounds V3** with the main Xray protocols/transports, TLS/REALITY, sniffing, fallbacks and advanced JSON.
-- **Clients + Groups V3** with an organized workspace, owner/inbound/status/presence filters, owner-scoped groups, real-activity Online/Idle/Offline presence, bulk operations and IP/HWID policy.
+- **Clients + Groups V4** with a reduced-noise cyber command deck, quick presence controls, optional advanced filters, owner-scoped groups and real-activity Online/Idle/Offline presence.
+- **Create/Edit Client V4** is basic-first: identity, inbound, plan, expiry and IP limit are primary; HWID/reset/comment/XTLS Flow stay under Advanced.
+- **Reduced row actions** expose only `OPEN / QR / More`; lower-frequency operations moved into the More command menu.
 - **QR / Share V3** with independent QR payloads for the subscription and every generated config, plus copy and SVG download.
 - **REALITY Guard** for the pinned Xray release: known-incompatible targets such as `www.microsoft.com` are rejected fail-closed and target search prefers compatible candidates.
 - **Reseller / RBAC** with server-side role ceilings and legacy-permission sanitization.
@@ -95,7 +97,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 
 ## Remaining production gates
 
-This `0.9.0-rc4` candidate remains pre-production until the intended deployment environment passes:
+This `0.9.0-rc5` candidate remains pre-production until the intended deployment environment passes:
 
 - fresh install on the actual target VPS image/provider;
 - real machine reboot/power-cycle recovery;
