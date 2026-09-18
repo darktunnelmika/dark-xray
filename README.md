@@ -40,7 +40,7 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 - **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
 - **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
-- **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential همان‌ها، Traffic Sync مرکزی با baseline/ledger idempotent، recovery بعد از قطع/وصل و Reset هماهنگ چندنودی.
+- **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential همان‌ها، Traffic Sync مرکزی با baseline/ledger idempotent، Global IP/Device state، Failover priority/data-address، recovery بعد از قطع/وصل و Reset هماهنگ چندنودی.
 - **Dashboard Control Center** برای Owner؛ Update Center با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار مستقیماً روی صفحه اول قرار دارد.
 - **Root Update Broker** مستقل از Web process؛ پنل non-root می‌ماند و Broker فقط status/check/start محدود را از Unix socket احرازشده می‌پذیرد.
 - **Backup / Restore / Doctor** نیز روی صفحه اول Owner متمرکز شده‌اند؛ DB Snapshot از Web قابل دریافت است و Full Backup/Verify/Restore رمزدار از workflow ایمن CLI اجرا می‌شود.
@@ -85,6 +85,20 @@ sudo darkxray production-gate --json-only
 
 `production-gate` دیتابیس مشتری‌ها یا firewall نصب‌شده را تغییر نمی‌دهد؛ data-plane را در دیتابیس/پورت‌های موقت loopback تست می‌کند.
 
+برای بررسی واقعی Nodeهای ثبت‌شده از Central VPS:
+
+```bash
+sudo darkxray node-wan-gate --json-only
+```
+
+برای rehearsal قطع/وصل واقعی یک Node، Gate را در حالت Watch اجرا کن و شبکه همان Node را خارج از Gate قطع و دوباره وصل کن:
+
+```bash
+sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
+```
+
+این ابزار از همان HTTPS/TLS pinning مسیر Production استفاده می‌کند و Health، Traffic، Security و Failover readiness را از WAN می‌سنجد؛ **خودش outage ایجاد نمی‌کند** و بدون مشاهده واقعی Down → Recovery ادعای network-loss recovery نمی‌کند.
+
 ## چه چیزهایی واقعاً در CI تست شده‌اند؟
 
 روی `main` این Gateها مستقل اجرا می‌شوند:
@@ -105,6 +119,7 @@ sudo darkxray production-gate --json-only
 - `finance.credit` و `finance.refund` در سقف Roleهای پایین‌تر قرار ندارند.
 - Node URL باید HTTPS باشد و به IP عمومی resolve شود؛ redirect و proxy environment در مسیر Node دنبال نمی‌شود.
 - IP Guard فقط وقتی باید enforce شود که تطابق IP مشاهده‌شده در Xray و source packet روی همان host تأیید شده باشد.
+- **Global Multi-node Guard** فقط IPهایی را که Node با source مستقیمِ تأییدشده دیده تجمیع می‌کند؛ HWID خام بین Nodeها جابه‌جا نمی‌شود و فقط SHA-256 آن Sync می‌شود. عبور از limit باعث Block credential در Central و Mirrorها می‌شود؛ nftables همچنان host-local است.
 
 ## هنوز چه چیزهایی برای Production باقی است؟
 
@@ -112,7 +127,7 @@ sudo darkxray production-gate --json-only
 - Reboot/Power-cycle واقعی ماشین؛ CI فعلاً crash و stop/start systemd را اثبات می‌کند، نه reboot میزبان.
 - صدور و renewal واقعی Let's Encrypt در DNS/provider هدف و بررسی Secure Cookie/HSTS.
 - IP Guard روی topology واقعی ترافیک همان VPS/تونل/CDN.
-- دو VPS واقعی Node با HTTPS، قطع/وصل شبکه، Traffic convergence و recovery روی WAN واقعی.
+- دو VPS واقعی Node با HTTPS، اجرای `sudo darkxray node-wan-gate`، قطع/وصل واقعی شبکه و مشاهده‌ی Down → Recovery روی WAN واقعی. خود Gate قطعی شبکه ایجاد نمی‌کند.
 - ظرفیت‌سنجی روی سخت‌افزار/پلن VPS هدف؛ CI فعلی smoke هزار Client و SQLite contention را پاس کرده است.
 - rehearsal نهایی Update/Rollback با همان release artifact که قرار است deploy شود.
 
