@@ -76,6 +76,8 @@ def create_owner_account(db_path: Path, username: str, password: str) -> dict:
     db=_connect(db_path)
     try:
         db.execute('BEGIN IMMEDIATE')
+        existing=db.execute("SELECT id FROM api_admins WHERE role='owner' ORDER BY id").fetchall()
+        if existing:raise PolicyError('DARK supports one primary owner; recover or rename the existing owner instead')
         if db.execute('SELECT 1 FROM api_admins WHERE id=?',(username,)).fetchone():raise PolicyError('A login account with this username already exists')
         db.execute('INSERT INTO api_admins(id,role,password_hash,permissions,disabled) VALUES(?,?,?,?,0)',(username,'owner',hashed,'{}'))
         written=db.execute('SELECT password_hash FROM api_admins WHERE id=?',(username,)).fetchone()
@@ -127,7 +129,7 @@ def rename_owner_username(db_path: Path, username: str, new_username: str) -> di
         # implicitly during an auth rename: that could reassign clients/ledgers.
         for table in ('owners','owner_profiles'):
             if _table_exists(db,table) and _column_exists(db,table,'id') and db.execute(f'SELECT 1 FROM "{table}" WHERE id=?',(new_username,)).fetchone():
-                raise PolicyError('Target owner profile already exists without this login; use Create owner login for that profile or choose another username')
+                raise PolicyError('Target ownership profile already exists; choose another username')
         # Revoke interactive sessions first. API keys and TOTP remain attached to the
         # renamed owner by updating their admin_id references below.
         _revoke_sessions_tx(db,username)
