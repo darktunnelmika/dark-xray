@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel,ConfigDict,Field,StrictInt
 
 from auth import Auth,Principal,DEFAULTS,PERMISSIONS,digest
-from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT
+from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT,NAME_RE
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
