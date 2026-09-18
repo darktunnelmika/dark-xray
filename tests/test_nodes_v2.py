@@ -146,6 +146,7 @@ def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkey
  captured={}
  def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
   captured.update(node_id=node_id,path=path,method=method,body=body,timeout=timeout)
+  if path=='/node/api/mirrors/traffic':return {'items':[],'capturedAt':time.time()},11
   return {'items':[{'sourceInboundId':a,'remoteInboundId':9,'clients':1}],'core':{'state':'running'}},17
  monkeypatch.setattr(app.state.nodes,'_request',fake_request)
  out=c.post('/api/nodes/tr1/sync')
@@ -197,3 +198,75 @@ def test_node_agent_mirror_sync_reconciles_inbound_and_credentials(env,monkeypat
  with store.lock:
   assert store.db.execute('SELECT COUNT(*) FROM node_agent_mirrors').fetchone()[0]==0
   assert store.db.execute('SELECT COUNT(*) FROM node_agent_mirror_clients').fetchone()[0]==0
+
+
+def _managed_client(c,email,inbound_id,extra=None):
+ r=c.post('/api/clients',json={'owner':'dark','client':{'email':email,**(extra or {})},'inboundIds':[inbound_id]})
+ assert r.status_code==202,r.text
+ return r.json()
+
+
+def test_remote_traffic_is_baselined_then_counted_once_and_survives_counter_reset(env):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('TRAFFIC',23001,'traffic-a')).json()['id']
+ _managed_client(c,'alice',a)
+ token='dkn_'+('T'*60)
+ assert c.post('/api/nodes',json={'id':'n1','name':'Node 1','origin':'https://node.example.com','token':token,'enabled':True,'inboundIds':[a]}).status_code==200
+ reg=app.state.nodes
+ first=reg.apply_traffic_snapshot('n1',[{'sourceEmail':'alice','up':100,'down':50}],captured_at=1000)
+ assert first['baselined']==1 and first['charged_bytes']==0
+ second=reg.apply_traffic_snapshot('n1',[{'sourceEmail':'alice','up':160,'down':70}],captured_at=1010)
+ assert second['charged_up']==60 and second['charged_down']==20 and second['charged_bytes']==80
+ same=reg.apply_traffic_snapshot('n1',[{'sourceEmail':'alice','up':160,'down':70}],captured_at=1020)
+ assert same['charged_bytes']==0
+ reset=reg.apply_traffic_snapshot('n1',[{'sourceEmail':'alice','up':5,'down':7}],captured_at=1030)
+ assert reset['counter_resets']==1 and reset['charged_bytes']==12
+ with store.lock:
+  client=store.db.execute("SELECT used_bytes FROM clients WHERE id='alice'").fetchone()
+  node_rows=store.db.execute("SELECT COUNT(*) FROM traffic_ledger WHERE event_id LIKE 'node:%'").fetchone()[0]
+  usage=store.db.execute("SELECT raw_up,raw_down,current_up,current_down,seq FROM remote_node_client_usage WHERE node_id='n1' AND client_id='alice'").fetchone()
+ assert client['used_bytes']==92 and node_rows==2
+ assert tuple(usage)==(5,7,65,27,2)
+
+
+def test_two_nodes_aggregate_client_usage_without_duplicate_ledger_events(env):
+ store,_,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('GLOBAL',23002,'global-a')).json()['id']
+ _managed_client(c,'global-user',a)
+ for node,ch in [('n1','U'),('n2','V')]:
+  assert c.post('/api/nodes',json={'id':node,'name':node,'origin':'https://'+node+'.example.com',
+    'token':'dkn_'+(ch*60),'enabled':True,'inboundIds':[a]}).status_code==200
+ reg=app.state.nodes
+ for node in ('n1','n2'):reg.apply_traffic_snapshot(node,[{'sourceEmail':'global-user','up':0,'down':0}],captured_at=1000)
+ reg.apply_traffic_snapshot('n1',[{'sourceEmail':'global-user','up':10,'down':20}],captured_at=1010)
+ reg.apply_traffic_snapshot('n2',[{'sourceEmail':'global-user','up':30,'down':40}],captured_at=1010)
+ reg.apply_traffic_snapshot('n2',[{'sourceEmail':'global-user','up':30,'down':40}],captured_at=1020)
+ with store.lock:
+  used=store.db.execute("SELECT used_bytes FROM clients WHERE id='global-user'").fetchone()[0]
+  rows=store.db.execute("SELECT COUNT(*),SUM(up_bytes+down_bytes) FROM traffic_ledger WHERE event_id LIKE 'node:%'").fetchone()
+ assert used==100 and rows[0]==2 and rows[1]==100
+
+
+def test_agent_traffic_snapshot_and_reset_are_idempotent(env,monkeypatch):
+ store,eng,_,c=env
+ token=c.post('/api/node-agent/tokens',json={'name':'central-traffic','days':10}).json()['token']
+ monkeypatch.setattr(eng,'command',lambda action:{'state':'running','action':action})
+ assignment={'sourceInboundId':88,'inbound':_test_vless('CENTRAL 88',23088,'central-88'),
+             'clients':[{'sourceEmail':'mika','client':{'id':'44444444-4444-4444-8444-444444444444','enable':True}}]}
+ r=c.post('/node/api/mirrors/sync',json={'assignments':[assignment]},headers={'authorization':'Bearer '+token})
+ assert r.status_code==200,r.text
+ with store.lock:
+  mirror=store.db.execute("SELECT mirror_email FROM node_agent_mirror_clients WHERE source_email='mika'").fetchone()[0]
+  store.db.execute('UPDATE core_clients SET up=123,down=45 WHERE email=?',(mirror,))
+ snap=c.get('/node/api/mirrors/traffic',headers={'authorization':'Bearer '+token})
+ assert snap.status_code==200 and snap.json()['items']==[{'sourceEmail':'mika','up':123,'down':45}]
+ body={'sourceEmail':'mika','resetId':'reset-operation-0001'}
+ first=c.post('/node/api/mirrors/traffic/reset',json=body,headers={'authorization':'Bearer '+token})
+ second=c.post('/node/api/mirrors/traffic/reset',json=body,headers={'authorization':'Bearer '+token})
+ assert first.status_code==200 and second.status_code==200
+ assert first.json()['up']==123 and first.json()['down']==45 and first.json()['cached'] is False
+ assert second.json()['up']==123 and second.json()['down']==45 and second.json()['cached'] is True
+ with store.lock:
+  row=store.db.execute('SELECT up,down FROM core_clients WHERE email=?',(mirror,)).fetchone()
+  resets=store.db.execute('SELECT COUNT(*) FROM node_agent_traffic_resets').fetchone()[0]
+ assert tuple(row)==(0,0) and resets==1
