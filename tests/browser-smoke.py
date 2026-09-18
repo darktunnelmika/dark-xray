@@ -115,6 +115,19 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('Inbounds V3 save and active-editor refresh stability')
             page.screenshot(path=str(OUT/'browser-inbounds.png'),full_page=True)
 
+            visit(page,'clients')
+            page.locator('.clients-v4').wait_for(state='visible',timeout=10000)
+            page.locator('[data-act="new"]').click()
+            page.locator('.cv4-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="email"]').count()==1
+            assert page.locator('#dialog-form [name="limitIp"]').count()==1
+            assert page.locator('#dialog-form [name="tgId"]').count()==0
+            assert page.locator('#dialog-form [name="id"]').count()==0
+            assert page.locator('#dialog-form details.cv4-advanced').get_attribute('open') is None
+            mark('Clients V4 command deck and basic-first create editor')
+            page.screenshot(path=str(OUT/'browser-clients-v4.png'),full_page=True)
+            page.locator('[data-act="close"]').first.click()
+
             visit(page,'finance');page.screenshot(path=str(OUT/'browser-finance.png'),full_page=True)
             visit(page,'settings');page.screenshot(path=str(OUT/'browser-settings.png'),full_page=True)
 
