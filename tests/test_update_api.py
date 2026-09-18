@@ -48,6 +48,7 @@ def test_owner_can_check_and_start_verified_web_update(env):
 
 def test_reseller_cannot_access_update_center_api(env):
     _,eng,manager,auth,c=env
+    assert c.put('/api/owners/reseller',json={'name':'RESELLER','allowed':[]}).status_code==200
     assert c.post('/api/admins',json={'username':'reseller','password':'AnotherTestOnly123','role':'reseller'}).status_code==200
     token,p=auth.login('reseller','AnotherTestOnly123','','127.0.0.2')
     with TestClient(make_app(manager,auth,background=False),base_url=eng.config.public_origin) as x:
