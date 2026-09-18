@@ -7,14 +7,14 @@
 
 ## وضعیت کلی
 
-DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مستقیم Xray-core است. تمرکز شاخه فعلی از ساخت اولیه قابلیت‌ها به **Hardening، evidence واقعی Runtime، بازیابی، امنیت نماینده‌ها و UX پایدار** منتقل شده است.
+DARK XRAY اکنون پنل مستقل با DB/API/UI، یک Primary Owner، Representatives V2 و کنترل مستقیم Xray-core است. تمرکز شاخه فعلی از ساخت اولیه قابلیت‌ها به **Hardening، evidence واقعی Runtime، بازیابی، امنیت نماینده‌ها و UX پایدار** منتقل شده است.
 
 | بخش | وضعیت فعلی |
 |---|---|
 | استقلال Runtime | مستقل از Sanayi/3x-ui |
 | Inbounds / REALITY | Inbounds V3 + REALITY target compatibility guard + regression ذخیره واقعی |
 | Clients / Groups | V4 Command Deck، Basic-first editor، real-activity presence، QR per-config، owner-scoped و Bulk-safe |
-| Reseller / RBAC | role ceiling، legacy sanitization و server-side scope |
+| Owner / Representatives V2 | یک Primary Owner + Login/Profile یکپارچه + quota/client cap/prefix/IP/HWID + fixed server-side scope؛ Access Levels UI حذف شده |
 | Session / TOTP | revoke + replay-counter hardening |
 | Robot API keys | بدون API-key lifecycle و finance mutation حساس |
 | Settings V2 | stage/apply privileged + rollback-aware activation |
@@ -140,6 +140,9 @@ sudo darkxray production-gate --json-only
 
 ## Hardeningهای مهم RC5
 
+- **Representatives V2** صفحه Access Levels/Role Matrix را حذف کرده و مدیریت نماینده را یکپارچه کرده است: Login، فعال/غیرفعال، Inbound، quota، max clients، Prefix، Max IP و Max HWID در یک فرم Owner-only.
+- **Single Owner boundary** ساخت Owner دوم/Readonly جدید از API اصلی رد می‌شود و CLI recovery نیز فقط در نبود Owner اجازه bootstrap یک Primary Owner می‌دهد؛ رکوردهای legacy به‌صورت غیرمخرب برای migration باقی می‌مانند.
+- **Representative client policy** Prefix و سقف IP/HWID در Backend روی Create/Edit enforce می‌شوند و نماینده scope دلخواه یا cross-owner قابل انتخاب در UI ندارد.
 - **Clients V4 Command Deck** Sidebar دائمی را حذف و کنترل‌ها را به Search/Presence/Filter/Sort جمع می‌کند؛ ردیف‌ها فقط OPEN / QR دارند و IP/HWID و More Actions حذف شده‌اند.
 - **Create/Edit Basic-first** فقط Identity/Inbound/Plan/Expiry/IP را در مسیر اصلی نشان می‌دهد و گزینه‌های کم‌مصرف را داخل Advanced نگه می‌دارد.
 - **Clients V3 Online** از آخرین activity واقعی Client محاسبه می‌شود: تا 60 ثانیه Online، تا 5 دقیقه Idle و بعد Offline؛ این status ادعای socket دائماً باز نیست.
