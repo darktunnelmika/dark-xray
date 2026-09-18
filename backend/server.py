@@ -4,6 +4,7 @@ No proxy-panel installation or token is required. The default listener is loopba
 """
 from __future__ import annotations
 import argparse
+import base64
 import contextlib
 import hashlib
 import hmac
@@ -18,7 +19,7 @@ import threading
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit,urlunsplit
 
 import psutil
 from fastapi import FastAPI,Depends,HTTPException,Request
@@ -134,6 +135,9 @@ class NodeCreate(Model):
     origin:str=Field(min_length=8,max_length=500)
     token:str=Field(min_length=40,max_length=256)
     enabled:bool=True
+    dataAddress:str=Field(default='',max_length=253)
+    priority:StrictInt=Field(default=100,ge=1,le=1000)
+    failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
 class NodePatch(Model):
     name:str=Field(min_length=1,max_length=128)
@@ -141,12 +145,18 @@ class NodePatch(Model):
     token:str|None=Field(default=None,min_length=40,max_length=256)
     keep_token:bool=False
     enabled:bool=True
+    dataAddress:str=Field(default='',max_length=253)
+    priority:StrictInt=Field(default=100,ge=1,le=1000)
+    failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
 class NodeMirrorSync(Model):
     assignments:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
 class NodeMirrorTrafficReset(Model):
     sourceEmail:str=Field(min_length=1,max_length=128)
     resetId:str=Field(min_length=8,max_length=128)
+class NodeMirrorSecurityClear(Model):
+    sourceEmail:str=Field(min_length=1,max_length=128)
+    kind:Literal['ips','devices','all']
 class NodeTokenCreate(Model):
     name:str=Field(min_length=1,max_length=64)
     days:StrictInt=Field(default=365,ge=1,le=3650)
@@ -156,12 +166,17 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
     node_reset_lock=threading.RLock()
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
+    def apply_global_security(_node_id:str='',_result:dict|None=None):
+        result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified))
+        if result.get('changed'):manager.tick(suppress=True)
+        return result
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if background:
             manager.start();nodes.start(interval=max(5.0,min(60.0,float(config.poll_seconds))),
                                       sync_provider=lambda node_id:build_node_bundles(node_id),
-                                      traffic_callback=lambda node_id,result:manager.tick(suppress=True))
+                                      traffic_callback=lambda node_id,result:manager.tick(suppress=True),
+                                      security_callback=apply_global_security)
         yield
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
@@ -459,12 +474,49 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def resolve_reset(email:str,body:ResolveReset,p:Principal=Depends(owner)):
         writable();return manager.resolve_reset(p.actor,email,body.confirmation)
 
+
+    def rewrite_failover_uri(uri:str,address:str,remark:str)->str:
+        if uri.startswith('vmess://'):
+            raw=uri[8:]
+            try:
+                doc=json.loads(base64.b64decode(raw+'='*((4-len(raw)%4)%4)).decode())
+                doc['add']=address;doc['ps']=remark
+                return 'vmess://'+base64.b64encode(json.dumps(doc,separators=(',',':'),ensure_ascii=False).encode()).decode()
+            except Exception as ex:raise PolicyError('Cannot rewrite VMess failover link') from ex
+        p=urlsplit(uri)
+        if p.scheme not in {'vless','trojan','ss'}:raise PolicyError('Unsupported failover link protocol')
+        userinfo=(p.netloc.rsplit('@',1)[0]+'@') if '@' in p.netloc else ''
+        host='['+address+']' if ':' in address and not address.startswith('[') else address
+        port=p.port
+        netloc=userinfo+host+((':'+str(port)) if port else '')
+        return urlunsplit((p.scheme,netloc,p.path,p.query,remark))
+
+    def failover_links(email:str)->list[dict]:
+        targets=nodes.failover_targets(email)
+        if not targets:return []
+        base=engine.links(email,'raw');out=[]
+        for item in base['links']:
+            inbound_id=int(item.get('inboundId') or 0)
+            for target in targets:
+                if inbound_id not in target['inbound_ids']:continue
+                remark=str(item['remark'])+' · '+str(target['name'])
+                clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
+                clone['remark']=remark
+                clone['uri']=rewrite_failover_uri(item['uri'],target['address'],remark)
+                clone['failoverNode']=target['node_id'];clone['failoverPriority']=target['priority']
+                clone['failoverLatencyMs']=target['latency_ms'];out.append(clone)
+        return out
+
     @app.get('/api/clients/{email}/links')
     def links(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'credentials')
-        result=engine.links(email)
+        result=engine.links(email);result['failover']=failover_links(email)
         detail=manager.detail(p.actor,email)
         return {'engine':result,'subscription_url':detail['subscription_url']}
+    @app.get('/api/clients/{email}/security-global')
+    def global_security(email:str,p:Principal=Depends(current)):
+        manager.own_row(p.actor,email,'ip')
+        return nodes.global_security(email,local_source_verified=bool(config.direct_source_verified))
     @app.get('/api/clients/{email}/ips')
     def ips(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip')
@@ -472,16 +524,19 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.delete('/api/clients/{email}/ips')
     def clear_ips(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip');writable()
-        result=engine.clear_ips(email)
-        manager.audit(p.actor,manager.own_row(p.actor,email)['owner'],'ip.history_clear',email,'Not a firewall unban')
-        return {'engine':result,'firewall_unban':False}
+        remote=nodes.clear_remote_security(email,'ips');result=engine.clear_ips(email)
+        global_state=apply_global_security()
+        manager.audit(p.actor,manager.own_row(p.actor,email)['owner'],'ip.history_clear',email,'Global node history cleared; not a firewall unban')
+        return {'engine':result,'remote':remote,'global':global_state,'firewall_unban':False}
     @app.get('/api/clients/{email}/devices')
     def devices(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip');return engine.devices(email)
     @app.delete('/api/clients/{email}/devices')
     def clear_devices(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip');writable()
-        return {'engine':engine.clear_devices(email)}
+        remote=nodes.clear_remote_security(email,'devices');result=engine.clear_devices(email)
+        global_state=apply_global_security()
+        return {'engine':result,'remote':remote,'global':global_state}
     @app.delete('/api/clients/{email}/devices/{device_id}')
     def del_device(email:str,device_id:int,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip');writable()
@@ -547,10 +602,20 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def sync_node_assignments(node_id:str)->dict:
         pre=nodes.sync_traffic(node_id)
         if pre.get('charged_bytes'):manager.tick(suppress=True)
+        security_pre=None
+        try:
+            security_pre=nodes.sync_security(node_id);apply_global_security(node_id,security_pre)
+        except PolicyError:
+            pass
         bundles=build_node_bundles(node_id)
         result=nodes.sync_mirrors(node_id,bundles)
         post=nodes.sync_traffic(node_id)
         if post.get('charged_bytes'):manager.tick(suppress=True)
+        security_post=None
+        try:
+            security_post=nodes.sync_security(node_id);apply_global_security(node_id,security_post)
+        except PolicyError:
+            pass
         result['traffic']={
             'charged_bytes':int(pre.get('charged_bytes',0))+int(post.get('charged_bytes',0)),
             'charged_up':int(pre.get('charged_up',0))+int(post.get('charged_up',0)),
@@ -559,6 +624,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'ignored_clients':int(pre.get('ignored_clients',0))+int(post.get('ignored_clients',0)),
             'pre':pre,'post':post,
         }
+        result['security']={'pre':security_pre,'post':security_post}
         return result
 
     @app.get('/node/api/health')
@@ -684,6 +750,46 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'changed':True,'payloadHash':payload_hash}
 
 
+
+    @app.get('/node/api/mirrors/security')
+    def node_mirror_security(token_id:str=Depends(node_agent)):
+        engine.read_ip_log()
+        with store.lock:
+            mappings=[dict(r) for r in store.db.execute(
+                'SELECT DISTINCT mirror_email,source_email FROM node_agent_mirror_clients WHERE token_id=? ORDER BY source_email',
+                (token_id,))]
+        items=[]
+        for mapping in mappings:
+            with store.lock:
+                ips=[{'ip':r['ip'],'firstSeen':float(r['first_seen']),'lastSeen':float(r['last_seen'])}
+                     for r in store.db.execute(
+                        'SELECT ip,first_seen,last_seen FROM observations WHERE client_id=? ORDER BY last_seen DESC',
+                        (mapping['mirror_email'],))]
+                devices=[{'digest':r['digest'],'deviceOs':r['device_os'],'model':r['model'],
+                          'firstSeen':float(r['first_seen']),'lastSeen':float(r['last_seen'])}
+                         for r in store.db.execute(
+                            'SELECT digest,device_os,model,first_seen,last_seen FROM core_devices WHERE email=? ORDER BY last_seen DESC',
+                            (mapping['mirror_email'],))]
+            items.append({'sourceEmail':mapping['source_email'],'ips':ips,'devices':devices})
+        return {'sourceVerified':bool(config.direct_source_verified and not engine.ip_error),
+                'items':items,'capturedAt':time.time()}
+
+    @app.post('/node/api/mirrors/security/clear')
+    def node_mirror_security_clear(body:NodeMirrorSecurityClear,token_id:str=Depends(node_agent)):
+        writable()
+        with store.lock:
+            mirrors=[r[0] for r in store.db.execute(
+                'SELECT DISTINCT mirror_email FROM node_agent_mirror_clients WHERE token_id=? AND source_email=?',
+                (token_id,body.sourceEmail))]
+        cleared_ips=cleared_devices=0
+        with store.transaction() as db:
+            for mirror in mirrors:
+                if body.kind in {'ips','all'}:
+                    cur=db.execute('DELETE FROM observations WHERE client_id=?',(mirror,));cleared_ips+=max(0,cur.rowcount)
+                if body.kind in {'devices','all'}:
+                    cur=db.execute('DELETE FROM core_devices WHERE email=?',(mirror,));cleared_devices+=max(0,cur.rowcount)
+        return {'sourceEmail':body.sourceEmail,'kind':body.kind,'ips':cleared_ips,'devices':cleared_devices}
+
     @app.get('/node/api/mirrors/traffic')
     def node_mirror_traffic(token_id:str=Depends(node_agent)):
         rows=engine.clients();by_email={r['email']:r for r in rows}
@@ -734,7 +840,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
-        result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds)
+        result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds,
+                         body.dataAddress,body.priority,body.failoverEnabled)
         manager.audit(p.actor,p.actor.id,'node.create',body.id)
         return result
     @app.patch('/api/nodes/{node_id}')
@@ -745,7 +852,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             token=nodes.get(node_id,secret=True)['token']
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
-        result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds)
+        result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
+                         body.dataAddress,body.priority,body.failoverEnabled)
         manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
     @app.delete('/api/nodes/{node_id}')
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
@@ -765,6 +873,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if result.get('charged_bytes'):manager.tick(suppress=True)
         manager.audit(p.actor,p.actor.id,'node.traffic_sync',node_id,str(result.get('charged_bytes',0)))
         return result
+    @app.post('/api/nodes/{node_id}/security')
+    def remote_node_security(node_id:str,p:Principal=Depends(owner)):
+        result=nodes.sync_security(node_id);global_state=apply_global_security(node_id,result)
+        manager.audit(p.actor,p.actor.id,'node.security_sync',node_id,
+                      'ips='+str(result.get('ips',0))+'; devices='+str(result.get('devices',0)))
+        return {'node':result,'global':global_state}
     @app.get('/api/nodes/{node_id}/inbounds')
     def remote_node_inbounds(node_id:str,p:Principal=Depends(owner)):return nodes.remote_inbounds(node_id)
     @app.post('/api/nodes/{node_id}/inbounds')
@@ -899,7 +1013,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             ua=request.headers.get('user-agent','').lower()
             if sub.get('auto_detect',True) and any(x in ua for x in ('clash','mihomo')):fmt='clash'
             else:fmt=sub.get('default_format','base64')
-        body,headers=engine.subscription(row['email'],fmt)
+        extra=failover_links(row['email'])
+        body,headers=engine.subscription(row['email'],fmt,extra_links=extra)
+        if extra:headers['x-dark-failover-nodes']=str(len({x['failoverNode'] for x in extra}))
         return Response(body,headers=headers)
 
     @app.get('/api/inbounds/{inbound_id}')
