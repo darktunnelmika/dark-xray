@@ -18,7 +18,7 @@ import time
 import urllib.parse
 from typing import Any
 
-from dark_policy import PolicyError, NAME_RE, Store
+from dark_policy import PolicyError, NAME_RE, Store, normalize_ip
 
 
 def token_digest(value:str)->str:
@@ -62,6 +62,24 @@ def validate_origin(raw:str)->str:
     return resolve_origin(raw)[0]
 
 
+def validate_data_address(raw:str,origin:str)->str:
+    value=str(raw or '').strip()
+    if not value:
+        try:value=urllib.parse.urlsplit(origin).hostname or ''
+        except ValueError:value=''
+    if not value or len(value)>253 or any(ch in value for ch in '/?#@'):
+        raise PolicyError('Invalid node data address')
+    try:return ipaddress.ip_address(value.strip('[]')).compressed
+    except ValueError:pass
+    try:value=value.encode('idna').decode('ascii').lower()
+    except UnicodeError as ex:raise PolicyError('Invalid node data hostname') from ex
+    labels=value.rstrip('.').split('.')
+    if not labels or any(not part or len(part)>63 or part[0]=='-' or part[-1]=='-' or
+                         any(not (ch.isalnum() or ch=='-') for ch in part) for part in labels):
+        raise PolicyError('Invalid node data hostname')
+    return value.rstrip('.')
+
+
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """HTTPS connection that never resolves the hostname after policy validation."""
     def __init__(self,host:str,port:int,pinned_ip:str,*,timeout:float,context:ssl.SSLContext):
@@ -101,7 +119,9 @@ class NodeRegistry:
               last_latency_ms INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',
               last_health TEXT NOT NULL DEFAULT '{}',failure_count INTEGER NOT NULL DEFAULT 0,
               recovery_count INTEGER NOT NULL DEFAULT 0,last_offline_at REAL NOT NULL DEFAULT 0,
-              last_recovered_at REAL NOT NULL DEFAULT 0);
+              last_recovered_at REAL NOT NULL DEFAULT 0,
+              data_address TEXT NOT NULL DEFAULT '',priority INTEGER NOT NULL DEFAULT 100,
+              failover_enabled INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS node_agent_tokens(
               id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT NOT NULL UNIQUE,
               enabled INTEGER NOT NULL DEFAULT 1,expires_at REAL NOT NULL,created_at REAL NOT NULL,
@@ -130,6 +150,20 @@ class NodeRegistry:
               token_id TEXT NOT NULL,reset_id TEXT NOT NULL,source_email TEXT NOT NULL,
               up_bytes INTEGER NOT NULL,down_bytes INTEGER NOT NULL,at REAL NOT NULL,
               PRIMARY KEY(token_id,reset_id));
+            CREATE TABLE IF NOT EXISTS remote_node_ips(
+              node_id TEXT NOT NULL,client_id TEXT NOT NULL,ip TEXT NOT NULL,
+              first_seen REAL NOT NULL,last_seen REAL NOT NULL,verified INTEGER NOT NULL DEFAULT 0,
+              PRIMARY KEY(node_id,client_id,ip));
+            CREATE INDEX IF NOT EXISTS remote_node_ips_client ON remote_node_ips(client_id,last_seen);
+            CREATE TABLE IF NOT EXISTS remote_node_devices(
+              node_id TEXT NOT NULL,client_id TEXT NOT NULL,digest TEXT NOT NULL,
+              device_os TEXT NOT NULL DEFAULT '',model TEXT NOT NULL DEFAULT '',
+              first_seen REAL NOT NULL,last_seen REAL NOT NULL,
+              PRIMARY KEY(node_id,client_id,digest));
+            CREATE INDEX IF NOT EXISTS remote_node_devices_client ON remote_node_devices(client_id,last_seen);
+            CREATE TABLE IF NOT EXISTS remote_node_security_state(
+              node_id TEXT PRIMARY KEY,source_verified INTEGER NOT NULL DEFAULT 0,
+              last_sync REAL NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '');
             ''')
             node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
             for name,ddl in (
@@ -137,6 +171,9 @@ class NodeRegistry:
                 ('recovery_count',"ALTER TABLE remote_nodes ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0"),
                 ('last_offline_at',"ALTER TABLE remote_nodes ADD COLUMN last_offline_at REAL NOT NULL DEFAULT 0"),
                 ('last_recovered_at',"ALTER TABLE remote_nodes ADD COLUMN last_recovered_at REAL NOT NULL DEFAULT 0"),
+                ('data_address',"ALTER TABLE remote_nodes ADD COLUMN data_address TEXT NOT NULL DEFAULT ''"),
+                ('priority',"ALTER TABLE remote_nodes ADD COLUMN priority INTEGER NOT NULL DEFAULT 100"),
+                ('failover_enabled',"ALTER TABLE remote_nodes ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1"),
             ):
                 if name not in node_cols:store.db.execute(ddl)
 
@@ -157,7 +194,11 @@ class NodeRegistry:
             r['traffic_clients']=int(usage['clients'] or 0)
             r['traffic_current_bytes']=int(usage['bytes'] or 0)
             r['traffic_last_sync']=float(usage['last_sync'] or 0)
+            with self.store.lock:
+                sec=self.store.db.execute('SELECT source_verified,last_sync,last_error FROM remote_node_security_state WHERE node_id=?',(r['id'],)).fetchone()
+            r['security']={'source_verified':bool(sec['source_verified']),'last_sync':float(sec['last_sync']),'last_error':sec['last_error']} if sec else {'source_verified':False,'last_sync':0,'last_error':''}
             r['online']=bool(r['enabled'] and r['last_seen'] and time.time()-r['last_seen']<180 and not r['last_error'])
+            r['failover_ready']=bool(r['online'] and r.get('failover_enabled') and r.get('data_address'))
         return rows
 
     def get(self,node_id:str,*,secret:bool=False)->dict:
@@ -176,11 +217,14 @@ class NodeRegistry:
         out['assignments']=assigned
         return out
 
-    def put(self,node_id:str,name:str,origin:str,token:str,enabled:bool=True,inbound_ids:list[int]|None=None)->dict:
+    def put(self,node_id:str,name:str,origin:str,token:str,enabled:bool=True,inbound_ids:list[int]|None=None,
+            data_address:str='',priority:int=100,failover_enabled:bool=True)->dict:
         if not NAME_RE.fullmatch(node_id) or not isinstance(name,str) or not 1<=len(name)<=128:raise PolicyError('Invalid node identity')
-        origin=validate_origin(origin)
+        origin=validate_origin(origin);data_address=validate_data_address(data_address,origin)
         if not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:raise PolicyError('Invalid DARK node token')
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
+        if type(failover_enabled)is not bool:raise PolicyError('failover_enabled must be boolean')
+        if type(priority)is not int or not 1<=priority<=1000:raise PolicyError('Invalid node failover priority')
         inbound_ids=[] if inbound_ids is None else inbound_ids
         if not isinstance(inbound_ids,list) or len(inbound_ids)>256 or any(type(i)is not int or i<1 for i in inbound_ids):
             raise PolicyError('Invalid node inbound assignment')
@@ -194,14 +238,16 @@ class NodeRegistry:
                 reset_probe=old['origin']!=origin or old_token!=token or bool(old['enabled'])!=enabled
         enc=self.cipher.encrypt(token.encode()).decode();now=time.time()
         with self.store.transaction() as db:
-            db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health)
-              VALUES(?,?,?,?,?,?,?,0,0,'','{}') ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
+            db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health,data_address,priority,failover_enabled)
+              VALUES(?,?,?,?,?,?,?,0,0,'','{}',?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
               token_enc=excluded.token_enc,enabled=excluded.enabled,updated_at=excluded.updated_at,
+              data_address=excluded.data_address,priority=excluded.priority,failover_enabled=excluded.failover_enabled,
               last_seen=CASE WHEN ? THEN 0 ELSE remote_nodes.last_seen END,
               last_latency_ms=CASE WHEN ? THEN 0 ELSE remote_nodes.last_latency_ms END,
               last_error=CASE WHEN ? THEN '' ELSE remote_nodes.last_error END,
               last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
-              (node_id,name,origin,enc,int(enabled),now,now,int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
+              (node_id,name,origin,enc,int(enabled),now,now,data_address,priority,int(failover_enabled),
+               int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
             if reset_probe:
                 db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=0 WHERE node_id=?',(node_id,))
             old_ids={int(r[0]) for r in db.execute('SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
@@ -224,6 +270,10 @@ class NodeRegistry:
     def delete(self,node_id:str)->dict:
         with self.store.transaction() as db:
             db.execute('DELETE FROM remote_node_inbounds WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_client_usage WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_ips WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_security_state WHERE node_id=?',(node_id,))
             cur=db.execute('DELETE FROM remote_nodes WHERE id=?',(node_id,))
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
