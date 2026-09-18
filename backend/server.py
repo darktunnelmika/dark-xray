@@ -466,7 +466,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def patch_client(email:str,body:ClientPatch,p:Principal=Depends(current)):
         writable()
         if body.inboundIds is not None:manager.own_row(p.actor,email,'attach')
-        return manager.update(p.actor,email,body.client,body.inboundIds)
+        result=manager.update(p.actor,email,body.client,body.inboundIds)
+        apply_global_security()
+        return manager.detail(p.actor,email)
     @app.post('/api/clients/{email}/action',status_code=202)
     def action(email:str,body:Action,p:Principal=Depends(current)):
         writable();return manager.action(p.actor,email,body.action)
@@ -499,7 +501,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             inbound_id=int(item.get('inboundId') or 0)
             for target in targets:
                 if inbound_id not in target['inbound_ids']:continue
-                remark=str(item['remark'])+' · '+str(target['name'])
+                remark=str(item['remark'])+' · '+str(target['name'])+' ['+str(target['node_id'])+']'
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
                 clone['uri']=rewrite_failover_uri(item['uri'],target['address'],remark)
@@ -854,10 +856,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
+        apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
     @app.delete('/api/nodes/{node_id}')
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
-        writable();result=nodes.delete(node_id);manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
+        writable();result=nodes.delete(node_id);apply_global_security()
+        manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
