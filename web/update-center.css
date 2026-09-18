@@ -3,3 +3,5 @@
 /* Update Center embedded in the first-page Control Center */
 .up-dashboard-shell{display:grid;gap:12px;margin-top:18px}.up-dashboard-shell>.up-card{margin:0}.up-embedded{padding-top:0}.up-dashboard-title{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:2px 2px 0}.up-dashboard-title h2{margin:4px 0 3px;font-size:16px}.up-dashboard-title p{margin:0;max-width:760px;color:#638087;font-size:10px;line-height:1.55}.up-embedded .up-current{border-color:rgba(42,231,190,.17)}.up-embedded .up-select{padding:2px}.up-embedded .up-candidate,.up-embedded .up-progress,.up-embedded .up-changelog,.up-embedded .up-log{margin:0}
 @media(max-width:700px){.up-dashboard-title{display:grid}.up-dashboard-title>.btn{justify-self:start}}
+
+.ov2-control-center .up-dashboard-shell{margin-top:0}
