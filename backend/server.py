@@ -133,12 +133,16 @@ class NodeCreate(Model):
     origin:str=Field(min_length=8,max_length=500)
     token:str=Field(min_length=40,max_length=256)
     enabled:bool=True
+    inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
 class NodePatch(Model):
     name:str=Field(min_length=1,max_length=128)
     origin:str=Field(min_length=8,max_length=500)
     token:str|None=Field(default=None,min_length=40,max_length=256)
     keep_token:bool=False
     enabled:bool=True
+    inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
+class NodeMirrorSync(Model):
+    assignments:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
 class NodeTokenCreate(Model):
     name:str=Field(min_length=1,max_length=64)
     days:StrictInt=Field(default=365,ge=1,le=3650)
@@ -149,7 +153,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if background:
-            manager.start();nodes.start()
+            manager.start();nodes.start(sync_provider=lambda node_id:build_node_bundles(node_id))
         yield
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
@@ -502,6 +506,40 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if not cur.rowcount:raise HTTPException(404,'Node token not found')
         manager.audit(p.actor,p.actor.id,'node_token.revoke',token_id);return {'revoked':True}
 
+    def mirror_email(token_id:str,source_email:str)->str:
+        if not isinstance(source_email,str) or not source_email or len(source_email)>128:
+            raise PolicyError('Invalid mirrored client identity')
+        return 'nm_'+token_id[:8]+'_'+hashlib.sha256(source_email.encode()).hexdigest()[:20]
+
+    def mirror_client_payload(raw:dict,mirror_id:str)->dict:
+        if not isinstance(raw,dict):raise PolicyError('Invalid mirrored client payload')
+        allowed={'id','password','flow','encryption','security','enable'}
+        if set(raw)-allowed:raise PolicyError('Unexpected mirrored client field')
+        out={k:v for k,v in raw.items() if k in allowed}
+        out['email']=mirror_id
+        out['enable']=bool(out.get('enable',True))
+        if 'id' in out and (not isinstance(out['id'],str) or len(out['id'])>128):raise PolicyError('Invalid mirrored UUID')
+        if 'password' in out and (not isinstance(out['password'],str) or len(out['password'])>512):raise PolicyError('Invalid mirrored password')
+        if 'flow' in out and (not isinstance(out['flow'],str) or len(out['flow'])>80):raise PolicyError('Invalid mirrored flow')
+        return out
+
+    def build_node_bundles(node_id:str)->list[dict]:
+        assignments=nodes.assignments(node_id);all_clients=engine.clients();bundles=[]
+        for assignment in assignments:
+            source=int(assignment['local_inbound_id']);ib=engine.inbound(source)
+            inbound={k:json.loads(json.dumps(v)) for k,v in ib.items() if k not in {'id','applied'}}
+            clients=[]
+            for client in all_clients:
+                if source not in client.get('inboundIds',[]):continue
+                raw={k:client[k] for k in ('id','password','flow','encryption','security','enable') if k in client}
+                clients.append({'sourceEmail':client['email'],'client':raw})
+            bundles.append({'sourceInboundId':source,'inbound':inbound,'clients':clients})
+        return bundles
+
+    def sync_node_assignments(node_id:str)->dict:
+        bundles=build_node_bundles(node_id)
+        return nodes.sync_mirrors(node_id,bundles)
+
     @app.get('/node/api/health')
     def node_health(token_id:str=Depends(node_agent)):
         system=engine.system();runtime=engine.runtime_state()
@@ -522,6 +560,88 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         result=engine.save_inbound(body)
         return result
+    @app.post('/node/api/mirrors/sync')
+    def node_mirror_sync(body:NodeMirrorSync,token_id:str=Depends(node_agent)):
+        writable();now=time.time();assignments=body.assignments
+        seen=set();total_clients=0
+        for item in assignments:
+            if not isinstance(item,dict) or set(item)!={'sourceInboundId','inbound','clients'}:
+                raise HTTPException(400,'Invalid node mirror assignment')
+            source=item.get('sourceInboundId')
+            if type(source)is not int or source<1 or source in seen:raise HTTPException(400,'Invalid/duplicate source inbound ID')
+            seen.add(source)
+            if not isinstance(item.get('inbound'),dict) or not isinstance(item.get('clients'),list):raise HTTPException(400,'Invalid node mirror payload')
+            total_clients+=len(item['clients'])
+        if total_clients>50000:raise HTTPException(413,'Too many mirrored clients')
+
+        with store.lock:
+            old_mirrors={int(r['source_inbound_id']):dict(r) for r in store.db.execute(
+                'SELECT * FROM node_agent_mirrors WHERE token_id=?',(token_id,))}
+            old_client_rows=[dict(r) for r in store.db.execute(
+                'SELECT * FROM node_agent_mirror_clients WHERE token_id=?',(token_id,))]
+        old_mirror_emails={r['mirror_email'] for r in old_client_rows}
+        # Remove old mirrored credentials first. The running Xray process stays on
+        # its previous active.json until the final validated restart succeeds.
+        for email in sorted(old_mirror_emails):
+            try:engine.delete(email)
+            except CoreError as ex:
+                if getattr(ex,'status',0)!=404:raise
+
+        result_items=[];remote_ids={};desired_rows=[];desired_clients={}
+        for item in assignments:
+            source=int(item['sourceInboundId']);incoming=json.loads(json.dumps(item['inbound']))
+            for key in ('id','applied','nodeId','up','down','total'):incoming.pop(key,None)
+            settings=incoming.get('settings')
+            if isinstance(settings,dict):
+                settings.pop('clients',None);settings.pop('accounts',None)
+            source_tag=str(incoming.get('tag') or ('source-'+str(source)))
+            incoming['tag']='nm-'+token_id[:8]+'-'+str(source)+'-'+hashlib.sha256(source_tag.encode()).hexdigest()[:8]
+            old=old_mirrors.get(source);remote_id=int(old['remote_inbound_id']) if old else None
+            try:
+                saved=engine.save_inbound(incoming,remote_id) if remote_id else engine.save_inbound(incoming)
+                remote_id=int(saved['id']);remote_ids[source]=remote_id
+                result_items.append({'sourceInboundId':source,'remoteInboundId':remote_id,'clients':len(item['clients'])})
+            except CoreError as ex:
+                result_items.append({'sourceInboundId':source,'remoteInboundId':remote_id or 0,'clients':0,'error':str(ex)[:300]})
+                raise
+            for entry in item['clients']:
+                if not isinstance(entry,dict) or set(entry)!={'sourceEmail','client'}:raise HTTPException(400,'Invalid mirrored client entry')
+                source_email=str(entry['sourceEmail'])
+                mid=mirror_email(token_id,source_email);payload=mirror_client_payload(entry['client'],mid)
+                row=desired_clients.setdefault(mid,{'payload':payload,'inbounds':set(),'sourceEmail':source_email})
+                if row['payload']!=payload:raise HTTPException(409,'Conflicting mirrored credential payload')
+                row['inbounds'].add(remote_id);desired_rows.append((token_id,source,mid,source_email))
+
+        # Remove remote mirror inbounds deselected by Central, after their mirror
+        # clients were removed above.
+        removed=set(old_mirrors)-set(remote_ids)
+        for source in sorted(removed):
+            try:engine.delete_inbound(int(old_mirrors[source]['remote_inbound_id']))
+            except CoreError as ex:
+                if getattr(ex,'status',0)!=404:raise
+
+        for mid,row in desired_clients.items():
+            try:
+                existing=engine.client_detail(mid)
+            except CoreError as ex:
+                if getattr(ex,'status',0)==404:existing=None
+                else:raise
+            if existing and mid not in old_mirror_emails:raise HTTPException(409,'Mirror identity collision on node')
+            if existing:engine.delete(mid)
+            engine.create(row['payload'],sorted(row['inbounds']))
+
+        with store.transaction() as db:
+            db.execute('DELETE FROM node_agent_mirror_clients WHERE token_id=?',(token_id,))
+            db.execute('DELETE FROM node_agent_mirrors WHERE token_id=?',(token_id,))
+            for item in assignments:
+                source=int(item['sourceInboundId']);rid=remote_ids[source]
+                db.execute('INSERT INTO node_agent_mirrors(token_id,source_inbound_id,remote_inbound_id,source_tag,updated_at) VALUES(?,?,?,?,?)',
+                           (token_id,source,rid,str(item['inbound'].get('tag') or ''),now))
+            db.executemany('INSERT INTO node_agent_mirror_clients(token_id,source_inbound_id,mirror_email,source_email) VALUES(?,?,?,?)',desired_rows)
+
+        core_result=engine.command('restart')
+        return {'mirrored':len(assignments),'clients':len(desired_clients),'items':result_items,'core':core_result}
+
     @app.post('/node/api/core/{action}')
     def node_core(action:str,token_id:str=Depends(node_agent)):
         writable()
@@ -532,20 +652,33 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
-        writable();result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled);manager.audit(p.actor,p.actor.id,'node.create',body.id);return result
+        writable()
+        known={i['id'] for i in engine.inbounds()}
+        if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
+        result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds)
+        manager.audit(p.actor,p.actor.id,'node.create',body.id)
+        return result
     @app.patch('/api/nodes/{node_id}')
     def remote_node_edit(node_id:str,body:NodePatch,p:Principal=Depends(owner)):
         writable();token=body.token
         if not token:
             if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
             token=nodes.get(node_id,secret=True)['token']
-        result=nodes.put(node_id,body.name,body.origin,token,body.enabled);manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
+        known={i['id'] for i in engine.inbounds()}
+        if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
+        result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds)
+        manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
     @app.delete('/api/nodes/{node_id}')
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
         writable();result=nodes.delete(node_id);manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
+    @app.post('/api/nodes/{node_id}/sync')
+    def remote_node_sync(node_id:str,p:Principal=Depends(owner)):
+        writable();result=sync_node_assignments(node_id)
+        manager.audit(p.actor,p.actor.id,'node.sync',node_id,str(len(result.get('items',[]))))
+        return result
     @app.get('/api/nodes/{node_id}/inbounds')
     def remote_node_inbounds(node_id:str,p:Principal=Depends(owner)):return nodes.remote_inbounds(node_id)
     @app.post('/api/nodes/{node_id}/inbounds')
