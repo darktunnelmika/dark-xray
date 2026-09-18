@@ -34,9 +34,9 @@ Current major workspaces include:
 - **Finance / Ledger V2** with idempotent event IDs, current-period and lifetime usage, interactive-owner credit and audit traceability.
 - **Xray Control V2** for DNS, outbounds, routing, balancers and observatory.
 - **Nodes V2** with HTTPS-only origins, token auth, DNS pinning, TLS hostname verification, health monitoring and core actions.
-- **Web Update Center** for interactive owners with Latest Verified / Stable / RC / Exact Ref, exact-commit CI gating, preflight, changelog, live progress, logs and automatic rollback.
+- **Dashboard Control Center** for interactive owners: the Update Center with Latest Verified / Stable / RC / Exact Ref, exact-commit CI gating, preflight, changelog, live progress, logs and automatic rollback now lives directly on the first page.
 - **Root-owned Update Broker** separate from the non-root web process; only narrow status/check/start operations cross the authenticated Unix socket.
-- **Backup / Restore + Safe Update** with preflight, source/SQLite snapshots and rollback.
+- **Backup / Restore / Doctor** are centralized on the owner dashboard; DB snapshots are downloadable from Web while encrypted full backup / verify / restore keep the hardened CLI workflow.
 - **Cyber UI** with English/LTR default, Persian/RTL switching, responsive layout and refresh/focus stability.
 
 ## Online installation
@@ -99,7 +99,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 
 ## One-time bootstrap for RC6 and older installs
 
-A server that predates the root update broker needs one final online-installer Safe Update to this RC. That path executes the candidate updater itself and installs/enables `dark-xray-update.service`. Future updates can then be performed from the Web Update Center without SSH.
+A server that predates the root update broker needs one final online-installer Safe Update to this RC. That path executes the candidate updater itself and installs/enables `dark-xray-update.service`. Future updates can then be performed from the first-page Web Update Center without SSH.
 
 ## Remaining production gates
 
