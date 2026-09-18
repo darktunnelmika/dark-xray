@@ -76,6 +76,7 @@ repair_partial_install(){
   stamp="$(date +%Y%m%d-%H%M%S)"; recovery="/root/dark-xray-partial-recovery-$stamp"; mkdir -p "$recovery"
   progress 3 "Preserving partial configuration/data"
   systemctl stop dark-xray.service >/dev/null 2>&1 || true
+  systemctl stop dark-xray-update.service >/dev/null 2>&1 || true
   systemctl stop dark-xray-guard.service >/dev/null 2>&1 || true
   [[ -e /etc/dark-xray ]] && mv /etc/dark-xray "$recovery/etc-dark-xray"
   [[ -e /var/lib/dark-xray ]] && mv /var/lib/dark-xray "$recovery/var-lib-dark-xray"
@@ -83,7 +84,7 @@ repair_partial_install(){
     tar -C /opt -czf "$recovery/opt-dark-xray-source.tar.gz" --exclude='dark-xray/.venv' --exclude='dark-xray/__pycache__' dark-xray 2>/dev/null || true
     rm -rf /opt/dark-xray
   fi
-  rm -f /usr/local/bin/darkxray /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-guard.service
+  rm -f /usr/local/bin/darkxray /etc/systemd/system/dark-xray.service /etc/systemd/system/dark-xray-update.service /etc/systemd/system/dark-xray-guard.service
   systemctl daemon-reload >/dev/null 2>&1 || true; systemctl reset-failed >/dev/null 2>&1 || true
   ok "Partial state preserved at: $recovery"
 }
@@ -183,6 +184,8 @@ bash setup.sh --public-address "$PUBLIC_ADDRESS" --ssh-port "$DETECTED_SSH" --us
 progress 65 "Verifying systemd services and Xray core"
 systemctl is-enabled dark-xray.service >/dev/null || fail "dark-xray service is not enabled"
 systemctl is-active dark-xray.service >/dev/null || { systemctl status dark-xray.service --no-pager -l || true; fail "dark-xray service is not active"; }
+systemctl is-enabled dark-xray-update.service >/dev/null || fail "DARK update broker is not enabled"
+systemctl is-active dark-xray-update.service >/dev/null || { systemctl status dark-xray-update.service --no-pager -l || true; fail "DARK update broker is not active"; }
 /usr/local/bin/darkxray check >/dev/null || fail "DARK core check failed"
 
 if [[ "$MODE" == 1 && -n "$DOMAIN" ]]; then
