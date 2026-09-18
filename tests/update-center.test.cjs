@@ -1,0 +1,45 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const path=require('node:path');
+
+const src=fs.readFileSync(path.join(__dirname,'..','web','update-center.js'),'utf8');
+
+function ctx(owner=true){
+  const x={
+    console,
+    state:{page:'dashboard',me:{id:'dark',version:'0.9.0-rc7'},selected:new Set(),updateCenter:null},
+    enginePages:{settings:['Settings']},
+    navItems:()=>[['dashboard','Overview','grid'],['settings','Settings','settings'],['account','Account','shield']],
+    renderPage:async()=>{},runAction:async()=>{},isOwner:()=>owner,
+    localStorage:{getItem:()=> 'en'},e:v=>String(v??''),icon:()=>'<i></i>',heading:(a,b,c='')=>a+b+c,
+    api:async()=>({broker_ready:true,current:{version:'0.9.0-rc7'},state:'idle',phase:'idle',percent:0,log_tail:[]}),
+    document:{querySelector:()=>null},setTimeout:()=>{},toast:()=>{},dialog:()=>{},closeDialog:()=>{},load:async()=>{}
+  };
+  vm.createContext(x);vm.runInContext(src,x,{filename:'update-center.js'});return x;
+}
+
+test('Update Center is visible only to owner navigation',()=>{
+  const owner=ctx(true),reseller=ctx(false);
+  assert.ok(owner.navItems().some(x=>x[0]==='update'));
+  assert.ok(!reseller.navItems().some(x=>x[0]==='update'));
+});
+
+test('web update flow uses broker APIs and immutable commit confirmation',()=>{
+  assert.match(src,/\/api\/update\/status/);
+  assert.match(src,/\/api\/update\/check/);
+  assert.match(src,/\/api\/update\/start/);
+  assert.match(src,/Confirmation must be exactly UPDATE/);
+  assert.match(src,/commit:commit/);
+  assert.doesNotMatch(src,/sudo\s/);
+  assert.doesNotMatch(src,/child_process/);
+});
+
+test('Update Center includes CI, preflight, rollback and reconnect UX',()=>{
+  assert.match(src,/CI VERIFIED/);
+  assert.match(src,/Automatic rollback/);
+  assert.match(src,/snapshot_database/);
+  assert.match(src,/Panel is restarting/);
+  assert.match(src,/Latest Verified/);
+});
