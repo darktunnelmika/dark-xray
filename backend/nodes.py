@@ -99,7 +99,9 @@ class NodeRegistry:
               token_enc TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,
               created_at REAL NOT NULL,updated_at REAL NOT NULL,last_seen REAL NOT NULL DEFAULT 0,
               last_latency_ms INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',
-              last_health TEXT NOT NULL DEFAULT '{}');
+              last_health TEXT NOT NULL DEFAULT '{}',failure_count INTEGER NOT NULL DEFAULT 0,
+              recovery_count INTEGER NOT NULL DEFAULT 0,last_offline_at REAL NOT NULL DEFAULT 0,
+              last_recovered_at REAL NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS node_agent_tokens(
               id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT NOT NULL UNIQUE,
               enabled INTEGER NOT NULL DEFAULT 1,expires_at REAL NOT NULL,created_at REAL NOT NULL,
@@ -117,7 +119,26 @@ class NodeRegistry:
               PRIMARY KEY(token_id,source_inbound_id,mirror_email));
             CREATE TABLE IF NOT EXISTS node_agent_mirror_state(
               token_id TEXT PRIMARY KEY,payload_hash TEXT NOT NULL,updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS remote_node_client_usage(
+              node_id TEXT NOT NULL,client_id TEXT NOT NULL,raw_up INTEGER NOT NULL DEFAULT 0,
+              raw_down INTEGER NOT NULL DEFAULT 0,current_up INTEGER NOT NULL DEFAULT 0,
+              current_down INTEGER NOT NULL DEFAULT 0,seq INTEGER NOT NULL DEFAULT 0,
+              initialized INTEGER NOT NULL DEFAULT 0,last_seen REAL NOT NULL DEFAULT 0,
+              PRIMARY KEY(node_id,client_id));
+            CREATE INDEX IF NOT EXISTS remote_node_usage_client ON remote_node_client_usage(client_id);
+            CREATE TABLE IF NOT EXISTS node_agent_traffic_resets(
+              token_id TEXT NOT NULL,reset_id TEXT NOT NULL,source_email TEXT NOT NULL,
+              up_bytes INTEGER NOT NULL,down_bytes INTEGER NOT NULL,at REAL NOT NULL,
+              PRIMARY KEY(token_id,reset_id));
             ''')
+            node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
+            for name,ddl in (
+                ('failure_count',"ALTER TABLE remote_nodes ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"),
+                ('recovery_count',"ALTER TABLE remote_nodes ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0"),
+                ('last_offline_at',"ALTER TABLE remote_nodes ADD COLUMN last_offline_at REAL NOT NULL DEFAULT 0"),
+                ('last_recovered_at',"ALTER TABLE remote_nodes ADD COLUMN last_recovered_at REAL NOT NULL DEFAULT 0"),
+            ):
+                if name not in node_cols:store.db.execute(ddl)
 
     def list(self)->list[dict]:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM remote_nodes ORDER BY name,id')]
@@ -130,6 +151,12 @@ class NodeRegistry:
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
             r['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
             r['assignments']=assigned
+            with self.store.lock:
+                usage=self.store.db.execute('''SELECT COUNT(*) clients,COALESCE(SUM(current_up+current_down),0) bytes,
+                    COALESCE(MAX(last_seen),0) last_sync FROM remote_node_client_usage WHERE node_id=?''',(r['id'],)).fetchone()
+            r['traffic_clients']=int(usage['clients'] or 0)
+            r['traffic_current_bytes']=int(usage['bytes'] or 0)
+            r['traffic_last_sync']=float(usage['last_sync'] or 0)
             r['online']=bool(r['enabled'] and r['last_seen'] and time.time()-r['last_seen']<180 and not r['last_error'])
         return rows
 
@@ -175,6 +202,8 @@ class NodeRegistry:
               last_error=CASE WHEN ? THEN '' ELSE remote_nodes.last_error END,
               last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
               (node_id,name,origin,enc,int(enabled),now,now,int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
+            if reset_probe:
+                db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=0 WHERE node_id=?',(node_id,))
             old_ids={int(r[0]) for r in db.execute('SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
             for inbound_id in inbound_ids:
                 db.execute('''INSERT INTO remote_node_inbounds(node_id,local_inbound_id,updated_at)
@@ -202,13 +231,21 @@ class NodeRegistry:
     def _request_ok(self,node_id:str,latency_ms:int):
         now=time.time()
         with self.store.transaction() as db:
-            db.execute("UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=? WHERE id=?",
-                       (now,max(1,int(latency_ms)),now,node_id))
+            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            recovered=bool(old and old['last_error'])
+            db.execute('''UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=?,
+                       failure_count=0,recovery_count=recovery_count+?,last_recovered_at=CASE WHEN ? THEN ? ELSE last_recovered_at END
+                       WHERE id=?''',
+                       (now,max(1,int(latency_ms)),now,int(recovered),int(recovered),now,node_id))
 
     def _request_failed(self,node_id:str,error:str):
         now=time.time()
         with self.store.transaction() as db:
-            db.execute('UPDATE remote_nodes SET last_error=?,updated_at=? WHERE id=?',(str(error)[:300],now,node_id))
+            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            first=bool(old and not old['last_error'])
+            db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
+                          last_offline_at=CASE WHEN ? THEN ? ELSE last_offline_at END WHERE id=?''',
+                       (str(error)[:300],now,int(first),now,node_id))
 
     @staticmethod
     def _response_error(status:int,raw:bytes)->PolicyError:
