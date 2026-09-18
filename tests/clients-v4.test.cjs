@@ -39,9 +39,9 @@ test('Clients V4 create editor is basic-first and low-frequency fields stay adva
   const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
   assert.match(src,/cv4-editor-shell/);
   assert.match(src,/cv4-advanced/);
-  assert.match(src,/name="planMode"/);
-  assert.match(src,/name="expiryMode"/);
-  assert.match(src,/name="limitIp"/);
+  assert.match(src,/segment\('planMode'/);
+  assert.match(src,/segment\('expiryMode'/);
+  assert.match(src,/fInput\(L\('IP limit/);
   assert.doesNotMatch(src,/name="tgId"/);
   assert.doesNotMatch(src,/name="id"/);
   assert.doesNotMatch(src,/Custom UUID/);
