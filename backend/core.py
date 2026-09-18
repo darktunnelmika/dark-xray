@@ -301,7 +301,7 @@ class CoreEngine:
                 if not isinstance(server,dict):raise CoreError(label+' server must be an object')
                 address=server.get('address')
                 port=server.get('port')
-                if not isinstance(address,str) or not address or len(address)>253 or any(ch in address for ch in '/?#@ \\r\\n\\t'):
+                if not isinstance(address,str) or not address or len(address)>253 or any(ch in address for ch in '/?#@') or any(ch.isspace() for ch in address):
                     raise CoreError(label+' server address is invalid')
                 if type(port)is not int or not 1<=port<=65535:raise CoreError(label+' server port is invalid')
             for out in value:
