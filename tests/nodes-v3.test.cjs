@@ -26,3 +26,12 @@ test('Node cards expose assigned inbound names and sync state',()=>{
   assert.match(src,/n\.assignments/);
   assert.match(src,/last_error/);
 });
+
+
+test('Node cards expose Central traffic and recovery state',()=>{
+  assert.match(src,/Central traffic/);
+  assert.match(src,/Traffic sync/);
+  assert.match(src,/Recoveries/);
+  assert.match(src,/charged_bytes/);
+  assert.doesNotMatch(src,/Remote traffic accounting is still node-local/);
+});
