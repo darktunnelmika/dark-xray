@@ -105,7 +105,7 @@ Inbound workflow برای کار روزمره شبیه پنل‌های ساده�
 
 وجود یک قابلیت در Xray به معنی parity کامل فرم DARK با همه optionهای ممکن Xray نیست؛ Advanced JSON برای این مرز حفظ شده است.
 
-## Clients / Groups / Resellers
+## Clients / Groups / Representatives V2
 
 ### Clients V4
 
@@ -123,16 +123,17 @@ Inbound workflow برای کار روزمره شبیه پنل‌های ساده�
 - Backend ownership و permission را دوباره بررسی می‌کند؛ UI مرز امنیتی محسوب نمی‌شود.
 - محدودیت تعداد Client، quota ترافیک و Inbound assignment در سمت سرور اعمال می‌شوند.
 
-## RBAC و امنیت حساب
+## Owner / Representatives و امنیت حساب
 
-- Role ceiling هنگام ذخیره و احراز هویت enforce می‌شود.
-- Permission legacy دستکاری‌شده نمی‌تواند سطح بالاتر ایجاد کند.
-- `finance.credit` و `finance.refund` به Reseller/Readonly delegate نمی‌شوند.
-- Robot API Key نمی‌تواند lifecycle کلیدها یا mutation مالی حساس را مدیریت کند.
-- Sessionها قابل revoke هستند.
-- TOTP با counter واقعی window match ذخیره می‌شود تا replay window کاهش یابد.
+DARK در مسیر اصلی محصول **یک Primary Owner** دارد. ساخت Owner دوم، Readonly جدید یا Permission Matrix دلخواه از Web/API اصلی مجاز نیست. صفحه «سطوح دسترسی» از UI حذف شده و مدیریت نماینده کامل از بخش **نمایندگان** انجام می‌شود.
 
-سیاست Password حساب‌ها: ۸ تا ۵۱۲ کاراکتر. Passphrase بکاپ رمزدار حداقل ۱۲ کاراکتر دارد.
+- ساخت/ویرایش نماینده، Login و Profile را یکجا ذخیره می‌کند؛
+- هر نماینده وضعیت فعال/غیرفعال، Inboundهای مجاز، سهمیه ترافیک، سقف تعداد Client، Prefix مشتری، Max IP و Max HWID دارد؛
+- Prefix و سقف IP/HWID در Backend روی Create/Edit Client enforce می‌شوند؛ فقط فیلد نمایشی نیستند؛
+- نماینده scope ثابت و server-side فقط روی منابع خودش دارد و نمی‌تواند Role/Permission دلخواه انتخاب کند؛
+- Primary Owner فقط از Account & Security / CLI recovery مدیریت می‌شود و CLI نیز Owner دوم ایجاد نمی‌کند؛
+- حساب‌های legacy با role قدیمی برای مهاجرت امن sanitize می‌شوند، اما در UI جدید قابل ساخت/مدیریت به‌عنوان Access Level نیستند؛
+- Sessionها قابل revoke هستند و TOTP با counter واقعی window match ذخیره می‌شود تا replay window کاهش یابد.
 
 ## Finance / Ledger
 
