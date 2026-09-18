@@ -4,7 +4,7 @@
   "branch": "main",
   "date": "2026-09-18",
   "status": "release_candidate_target_vps_validation",
-  "current_version": "0.9.0-rc5",
+  "current_version": "0.9.0-rc6",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -47,9 +47,12 @@
       "device_activity"
     ],
     "vision_transport_compat_enforced": true,
-    "clients_v4_reduced_row_actions": true,
+    "clients_v4_reduced_row_actions": "OPEN / QR only",
     "clients_v4_basic_first_editor": true,
-    "clients_v4_owner_scoped_group_filter": true
+    "clients_v4_owner_scoped_group_filter": true,
+    "clients_v4_ip_hwid_action_visible": false,
+    "clients_v4_more_actions_visible": false,
+    "clients_v4_readability_pass": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -130,7 +133,7 @@
     "source_sha256sums_regenerated_for_rc": false,
     "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "RC5 source/release checksums must be regenerated only after the final tested snapshot is fixed.",
+  "checksum_note": "RC6 source/release checksums must be regenerated only after the final tested snapshot is fixed.",
   "release_candidate": true,
   "control_center_v2": true
 }
