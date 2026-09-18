@@ -516,8 +516,9 @@ class NodeRegistry:
                            (node_id,str(ex)[:300]))
             raise
 
-    def reconcile_global_security(self,*,local_source_verified:bool,now:float|None=None)->dict:
+    def reconcile_global_security(self,*,local_source_verified:bool,now:float|None=None,persist:bool=True)->dict:
         if type(local_source_verified)is not bool:raise PolicyError('local_source_verified must be boolean')
+        if type(persist)is not bool:raise PolicyError('persist must be boolean')
         now=time.time() if now is None else float(now)
         with self.store.lock:
             table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_clients'").fetchone()
@@ -580,17 +581,18 @@ class NodeRegistry:
             else:
                 device_block=len(device_values)>limit_hwid
             if bool(meta['global_ip_block'])!=ip_block or bool(meta['global_device_block'])!=device_block:
-                with self.store.transaction() as db:
-                    db.execute('UPDATE clients SET global_ip_block=?,global_device_block=? WHERE id=?',
-                               (int(ip_block),int(device_block),client_id))
-                changed.append(client_id)
+                if persist:
+                    with self.store.transaction() as db:
+                        db.execute('UPDATE clients SET global_ip_block=?,global_device_block=? WHERE id=?',
+                                   (int(ip_block),int(device_block),client_id))
+                    changed.append(client_id)
             items.append({'client_id':client_id,'nodes':assigned,'ip_count':len(ip_values),'limit_ip':limit_ip,
                           'ip_enforceable':ip_complete,'ip_blocked':ip_block,'device_count':len(device_values),
                           'limit_hwid':limit_hwid,'device_complete':device_complete,'device_blocked':device_block})
         return {'clients':len(items),'changed':changed,'items':items,'window_seconds':window}
 
     def global_security(self,client_id:str,*,local_source_verified:bool)->dict:
-        result=self.reconcile_global_security(local_source_verified=local_source_verified)
+        result=self.reconcile_global_security(local_source_verified=local_source_verified,persist=False)
         item=next((x for x in result['items'] if x['client_id']==client_id),None)
         if item is None:raise PolicyError('Managed client not found')
         now=time.time();window=result['window_seconds'];assigned=item['nodes']
