@@ -79,8 +79,11 @@ jobs:
             web/settings-v2.js web/clients-v2.js web/finance-v2.js web/ui-stability.js web/xray-v2.js web/hosts-v2.js \
             web/ops-v2.js web/nodes-v2.js; do node --check "$js"; done
           grep -q '<html lang="en" dir="ltr">' web/index.html
+          grep -q 'body class="skin-cyber-classic"' web/index.html
+          grep -q 'assets/cyber-classic.css' web/index.html
+          grep -q -- '--classic-green:#19ff86' web/cyber-classic.css
           for asset in \
-            cyber.css inbounds-v3.css settings-v2.css clients-v2.css finance-v2.css xray-v2.css hosts-v2.css ops-v2.css nodes-v2.css \
+            cyber.css cyber-classic.css inbounds-v3.css settings-v2.css clients-v2.css finance-v2.css xray-v2.css hosts-v2.css ops-v2.css nodes-v2.css \
             i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js finance-v2.js ui-stability.js xray-v2.js hosts-v2.js ops-v2.js nodes-v2.js; do
             grep -q "assets/$asset" web/index.html
           done
