@@ -55,3 +55,4 @@ node --test tests/ops-v2-cache.test.cjs
 node --test tests/finance-v2.test.cjs
 node --test tests/ui-stability.test.cjs
 node --test tests/update-center.test.cjs
+node --test tests/nodes-v3.test.cjs
