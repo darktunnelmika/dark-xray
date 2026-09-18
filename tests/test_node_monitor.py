@@ -52,7 +52,7 @@ def test_monitor_orders_probe_traffic_policy_callback_then_mirror_sync(tmp_path,
         if 'mirror' in order:break
         time.sleep(.01)
     registry.close()
-    assert order[:5]==['probe','traffic','policy','provider','mirror']
+    assert order[:7]==['probe','traffic','policy','provider','mirror','traffic','policy']
     store.close()
 
 
