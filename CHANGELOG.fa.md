@@ -14,6 +14,10 @@
 - Update Center Changelog، Commit، CI status، progress timeline و log tail را داخل خود پنل نشان می‌دهد.
 - Fresh install / Safe Update آنلاین Broker را نصب و فعال می‌کنند؛ `vps-verify` از این نسخه وجود و سلامت Update Broker را Hard Gate می‌داند.
 - سرورهای RC6 برای فعال شدن Broker فقط یک بار باید با installer آنلاین RC7 bootstrap شوند؛ بعد از آن آپدیت‌های آینده از خود پنل انجام می‌شوند.
+- **Nodes V3 Assignment**: هنگام Add/Edit Node می‌توان Inboundهای همان نود را انتخاب کرد؛ فقط همان Inboundها روی Remote Mirror می‌شوند.
+- Credential کلاینت‌های متصل به Inbound انتخاب‌شده با شناسه Mirror جدا روی Node همگام می‌شود؛ Inboundهای انتخاب‌نشده و Clientهای آن‌ها به آن Node ارسال نمی‌شوند.
+- Clone دستی Inbound از مسیر اصلی حذف و با `Sync assigned` جایگزین شد؛ Save اولیه Sync فوری می‌زند و monitor پس‌زمینه نیز assignmentها را دوره‌ای reconcile می‌کند.
+- حذف assignment باعث حذف Mirror مربوط به همان Agent Token می‌شود. Traffic accounting نود هنوز محلی است و در Central تجمیع نمی‌شود.
 
 ## 0.9.0-rc6 — Clients V4 cleanup pass
 
