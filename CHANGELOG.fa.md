@@ -1,5 +1,19 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc7 — Web Update Center + root update broker
+
+- Update Center داخل خود پنل اضافه شد و فقط برای Interactive Owner قابل دسترسی است؛ Reseller و API Key نمی‌توانند Check/Start آپدیت انجام دهند.
+- یک `dark-xray-update.service` مستقل و root-owned با Unix socket محدود اضافه شد؛ Web process همچنان non-root باقی می‌ماند و هیچ shell دلخواهی از API قابل اجرا نیست.
+- کانال‌های Latest Verified / Stable / Release Candidate / Exact Ref اضافه شدند؛ هر Ref قبل از نصب به Commit ثابت ۴۰ کاراکتری resolve می‌شود.
+- Latest Verified فقط وقتی قابل نصب است که Workflow اصلی GitHub Actions برای همان Commit دقیق، completed + success باشد.
+- Preflight داخل پنل DB quick_check، سرویس، فضای rollback، Git و CI را نشان می‌دهد؛ Candidate نامعتبر یا CI قرمز/نامشخص fail-closed قفل می‌شود.
+- Safe Update وضعیت مرحله‌به‌مرحله می‌نویسد: health → resolve → source validation → rollback preflight → dependencies → source snapshot → DB snapshot → apply → restart/health → success یا rollback.
+- هنگام ری‌استارت پنل، Job داخل Broker مستقل ادامه پیدا می‌کند و UI بعد از برگشت سرویس خودکار reconnect و نتیجه را نمایش می‌دهد.
+- در خطای activation، سورس و SQLite قبلی مثل قبل خودکار restore می‌شوند؛ bootstrap اولیه از نسخه‌های pre-broker هم rollback-compatible باقی مانده است.
+- Update Center Changelog، Commit، CI status، progress timeline و log tail را داخل خود پنل نشان می‌دهد.
+- Fresh install / Safe Update آنلاین Broker را نصب و فعال می‌کنند؛ `vps-verify` از این نسخه وجود و سلامت Update Broker را Hard Gate می‌داند.
+- سرورهای RC6 برای فعال شدن Broker فقط یک بار باید با installer آنلاین RC7 bootstrap شوند؛ بعد از آن آپدیت‌های آینده از خود پنل انجام می‌شوند.
+
 ## 0.9.0-rc6 — Clients V4 cleanup pass
 
 - IP/HWID action و نمایش IP/HWID از صفحه و Detail کاربران حذف شد؛ policy هسته همچنان دست‌نخورده است.
