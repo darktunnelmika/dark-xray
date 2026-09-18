@@ -43,7 +43,8 @@ class Manager:
             CREATE TABLE IF NOT EXISTS live_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS owner_profiles(
               id TEXT PRIMARY KEY,name TEXT NOT NULL,allowed TEXT NOT NULL DEFAULT '[]',
-              prefix TEXT NOT NULL DEFAULT '',max_client_ips INTEGER NOT NULL DEFAULT 0);
+              prefix TEXT NOT NULL DEFAULT '',max_client_ips INTEGER NOT NULL DEFAULT 0,
+              max_client_hwid INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS managed_clients(
               email TEXT PRIMARY KEY,desired TEXT NOT NULL,inbounds TEXT NOT NULL,
               public_token TEXT UNIQUE NOT NULL,op TEXT NOT NULL DEFAULT 'upsert',
@@ -69,6 +70,9 @@ class Manager:
               created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,name));
             CREATE INDEX IF NOT EXISTS client_groups_owner ON client_groups(owner,name);
             ''')
+            profile_cols={r[1] for r in store.db.execute('PRAGMA table_info(owner_profiles)')}
+            if 'max_client_hwid' not in profile_cols:
+                store.db.execute("ALTER TABLE owner_profiles ADD COLUMN max_client_hwid INTEGER NOT NULL DEFAULT 0")
             managed_cols={r[1] for r in store.db.execute('PRAGMA table_info(managed_clients)')}
             if 'op_id' not in managed_cols:store.db.execute("ALTER TABLE managed_clients ADD COLUMN op_id TEXT NOT NULL DEFAULT ''")
             cycle_cols={r[1] for r in store.db.execute('PRAGMA table_info(client_cycles)')}
@@ -97,26 +101,41 @@ class Manager:
 
     def owner_put(self, actor: Actor, owner: str, *, name: str, allowed: list[int],
                   quota_bytes: int = 0,max_clients: int = 0,manual: bool | None = None,
-                  prefix: str = '',max_client_ips: int = 0):
+                  prefix: str = '',max_client_ips: int = 0,max_client_hwid: int = 0):
         if actor.role != 'owner': raise PermissionDenied('Only the primary owner may configure resellers')
         if not NAME_RE.fullmatch(owner) or not 1<=len(name)<=128: raise PolicyError('Invalid owner identity')
         if len(allowed)>4096 or any(type(i)is not int or i<1 for i in allowed): raise PolicyError('Invalid inbound assignments')
-        integer(max_client_ips,0,1000)
+        if not isinstance(prefix,str):raise PolicyError('Invalid reseller client prefix')
+        prefix=prefix.strip().lower()
+        if len(prefix)>64 or prefix and not re.fullmatch(r'[A-Za-z0-9_.@+\-]+',prefix):
+            raise PolicyError('Invalid reseller client prefix')
+        integer(max_client_ips,0,1000);integer(max_client_hwid,0,1000)
         with self.lock:
             if allowed:
                 known={r['id'] for r in self.engine.inbounds()}
                 if not set(allowed)<=known: raise PolicyError('Assigned inbound does not exist')
             # Restriction changes may not strand already-owned clients silently.
             with self.store.lock:
-                rows=self.store.db.execute("SELECT m.inbounds,c.limit_ip,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'",(owner,)).fetchall()
+                rows=self.store.db.execute("SELECT m.inbounds,m.desired,c.limit_ip,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'",(owner,)).fetchall()
             if any(not set(json.loads(r['inbounds']))<=set(allowed) for r in rows):
                 raise PolicyError('Detach or transfer affected clients before removing their inbound access')
             if max_client_ips and any(r['limit_ip']==0 or r['limit_ip']>max_client_ips for r in rows):
-                raise PolicyError('Reduce existing client IP limits before lowering the owner max-client-IP policy')
+                raise PolicyError('Reduce existing client IP limits before lowering the reseller max-client-IP policy')
+            if max_client_hwid:
+                for row in rows:
+                    try:limit=int(json.loads(row['desired']).get('limitHwid',0) or 0)
+                    except Exception:limit=0
+                    if limit==0 or limit>max_client_hwid:
+                        raise PolicyError('Reduce existing client HWID limits before lowering the reseller max-client-HWID policy')
+            if prefix and any(not str(r['id']).lower().startswith(prefix) for r in rows):
+                raise PolicyError('Existing client identities must match the reseller prefix before enabling it')
             self.store.register_owner(actor,owner,quota_bytes,max_clients,manual)
             with self.store.transaction() as db:
-                db.execute('INSERT INTO owner_profiles VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,allowed=excluded.allowed,prefix=excluded.prefix,max_client_ips=excluded.max_client_ips',
-                           (owner,name,json.dumps(sorted(set(allowed))),prefix[:64],max_client_ips))
+                db.execute('''INSERT INTO owner_profiles(id,name,allowed,prefix,max_client_ips,max_client_hwid)
+                              VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                              name=excluded.name,allowed=excluded.allowed,prefix=excluded.prefix,
+                              max_client_ips=excluded.max_client_ips,max_client_hwid=excluded.max_client_hwid''',
+                           (owner,name,json.dumps(sorted(set(allowed))),prefix,max_client_ips,max_client_hwid))
             self.audit(actor,owner,'owner.update',owner)
             # Reconcile synchronously when possible, otherwise the worker retries.
             self.tick(suppress=True)
@@ -304,6 +323,8 @@ class Manager:
         self.validate_client_transport(data,ids)
         if email in existing:raise PolicyError('Client already exists in engine; adopt explicitly instead of overwriting')
         if email in reserved:raise PolicyError('Identity is already reserved (including historical tombstones)')
+        profile=self.profile(owner);prefix=str(profile.get('prefix') or '').lower()
+        if prefix and not email.startswith(prefix):raise PolicyError('Client identity must start with reseller prefix: '+prefix)
         data['email']=email;data['id']=data.get('id') or str(uuid.uuid4());data['password']=data.get('password') or secrets.token_urlsafe(24)
         data['auth']=data.get('auth') or secrets.token_urlsafe(24);data['subId']=secrets.token_hex(16)
         if data.get('group'):
@@ -312,8 +333,9 @@ class Manager:
         for k,v in {'flow':'','security':'auto','limitIp':1,'limitHwid':0,'totalGB':0,
                     'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0,
                     'resetTraffic':'never','resetTrafficDay':0,'resetCount':0}.items():data.setdefault(k,v)
-        ceiling=self.profile(owner)['max_client_ips']
-        if ceiling and (data['limitIp']==0 or data['limitIp']>ceiling):raise PolicyError('Requested IP limit exceeds the owner policy')
+        ip_ceiling=int(profile.get('max_client_ips') or 0);hwid_ceiling=int(profile.get('max_client_hwid') or 0)
+        if ip_ceiling and (data['limitIp']==0 or data['limitIp']>ip_ceiling):raise PolicyError('Requested IP limit exceeds the reseller policy')
+        if hwid_ceiling and (data['limitHwid']==0 or data['limitHwid']>hwid_ceiling):raise PolicyError('Requested HWID limit exceeds the reseller policy')
         try:self.store.register_client(actor,email,owner,data['limitIp'],data['totalGB'])
         except sqlite3.IntegrityError as ex:raise PolicyError('Identity is already reserved') from ex
         try:
@@ -411,8 +433,9 @@ class Manager:
                 group=self._group_name(desired['group']);desired['group']=group
                 now=time.time()
                 with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(row['owner'],group,'',now,now))
-            cap=self.profile(row['owner'])['max_client_ips']
-            if cap and (desired.get('limitIp',0)==0 or desired['limitIp']>cap):raise PolicyError('IP cap exceeds owner policy')
+            profile=self.profile(row['owner']);ip_cap=int(profile.get('max_client_ips') or 0);hwid_cap=int(profile.get('max_client_hwid') or 0)
+            if ip_cap and (desired.get('limitIp',0)==0 or desired['limitIp']>ip_cap):raise PolicyError('IP cap exceeds reseller policy')
+            if hwid_cap and (desired.get('limitHwid',0)==0 or desired['limitHwid']>hwid_cap):raise PolicyError('HWID cap exceeds reseller policy')
             changes={}
             if 'limitIp' in patch:changes['limit_ip']=patch['limitIp']
             if 'totalGB' in patch:changes['quota_bytes']=patch['totalGB']
