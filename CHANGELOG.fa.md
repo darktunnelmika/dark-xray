@@ -1,5 +1,13 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc6 — Clients V4 cleanup pass
+
+- IP/HWID action و نمایش IP/HWID از صفحه و Detail کاربران حذف شد؛ policy هسته همچنان دست‌نخورده است.
+- More Actions و دکمه سه‌نقطه حذف شدند؛ هر ردیف فقط OPEN و QR دارد و Detail فقط Edit و QR را نگه می‌دارد.
+- فونت‌های صفحه Clients، فیلترها، وضعیت، سرویس، مصرف، انقضا، فرم و Detail خواناتر شدند.
+- فلش Online دیگر glyph وابسته به bidi/font نیست و با CSS triangle دقیقاً روی محور Signal line قرار می‌گیرد.
+- HWID از فرم Advanced پنهان شد و مقدار موجود هنگام Edit حفظ می‌شود.
+
 ## 0.9.0-rc5 — Clients V4 cyber command deck
 
 - صفحه Clients از نو با Command Deck دارک/سایبری ساخته شد؛ Sidebar دائمی حذف و Search/Quick Presence/Filter/Sort در یک نوار کنترل جمع شدند.
