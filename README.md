@@ -41,9 +41,9 @@ DARK UI → DARK API / RBAC → DARK Database → Xray-core
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
 - **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
 - **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential کلاینت‌های همان Inbound، Sync دستی/دوره‌ای و Core actions.
-- **Web Update Center** برای Owner با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار.
+- **Dashboard Control Center** برای Owner؛ Update Center با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار مستقیماً روی صفحه اول قرار دارد.
 - **Root Update Broker** مستقل از Web process؛ پنل non-root می‌ماند و Broker فقط status/check/start محدود را از Unix socket احرازشده می‌پذیرد.
-- **Backup/Restore و Safe Update** با preflight، snapshot سورس/SQLite و rollback.
+- **Backup / Restore / Doctor** نیز روی صفحه اول Owner متمرکز شده‌اند؛ DB Snapshot از Web قابل دریافت است و Full Backup/Verify/Restore رمزدار از workflow ایمن CLI اجرا می‌شود.
 - **Cyber UI** با English/LTR پیش‌فرض، فارسی/RTL، responsive layout و refresh/focus stability.
 
 ## نصب آنلاین
@@ -120,7 +120,7 @@ sudo darkxray production-gate --json-only
 
 ### یک‌بار Bootstrap برای نصب‌های RC6 و قدیمی‌تر
 
-برای سروری که هنوز Update Broker ندارد، یک بار Safe Update با installer آنلاین همین RC لازم است. این مسیر **updater خود Candidate** را اجرا می‌کند و `dark-xray-update.service` را نصب می‌کند. از آن به بعد Update Center داخل خود پنل مسیر اصلی آپدیت است.
+برای سروری که هنوز Update Broker ندارد، یک بار Safe Update با installer آنلاین همین RC لازم است. این مسیر **updater خود Candidate** را اجرا می‌کند و `dark-xray-update.service` را نصب می‌کند. از آن به بعد Update Center روی صفحه اول پنل مسیر اصلی آپدیت است.
 
 ## مستندات
 
