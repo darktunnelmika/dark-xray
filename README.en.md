@@ -2,7 +2,7 @@
 
 # DARK XRAY
 
-Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, reseller ownership, RBAC, accounting, subscriptions, nodes and direct Xray-core control.
+Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, one primary owner, unified representatives, accounting, subscriptions, nodes and direct Xray-core control.
 
 **VPS test candidate:** `0.9.0-rc7`
 
@@ -14,7 +14,7 @@ Independent Xray control panel with a cyber-dark web interface, first-class inbo
 DARK is not runtime-dependent on Sanayi/3x-ui:
 
 ```text
-DARK UI → DARK API / RBAC → DARK Database → Xray-core
+DARK UI → DARK API / Owner + Representative Scope → DARK Database → Xray-core
                                   ├→ Ledger / Policy
                                   ├→ Node control
                                   └→ IP Guard → nftables
@@ -28,7 +28,7 @@ Current major workspaces include:
 - **Reduced row actions** expose only `OPEN / QR`; IP/HWID and More Actions are removed from the primary client UI.
 - **QR / Share V3** with independent QR payloads for the subscription and every generated config, plus copy and SVG download.
 - **REALITY Guard** for the pinned Xray release: known-incompatible targets such as `www.microsoft.com` are rejected fail-closed and target search prefers compatible candidates.
-- **Reseller / RBAC** with server-side role ceilings and legacy-permission sanitization.
+- **Representatives V2** with one primary owner, unified login/profile management, allowed inbounds, traffic quota, client-count ceiling, optional enforced client prefix, Max IP/HWID policy and fixed server-side self scope. The Access Control / permission-matrix workspace is removed from the UI.
 - **Account Security** with revocable sessions, replay-hardened TOTP and scoped API keys.
 - **Settings V2** with staged privileged runtime changes and rollback-aware apply flows.
 - **Finance / Ledger V2** with idempotent event IDs, current-period and lifetime usage, interactive-owner credit and audit traceability.
@@ -94,7 +94,7 @@ The WAN gate uses the production pinned HTTPS/TLS node client. It does **not** i
 
 ## What is exercised on `main`?
 
-- **Python 3.12 / 3.13:** API, RBAC, TOTP, accounting, settings, backup/update recovery, nodes and security regressions.
+- **Python 3.12 / 3.13:** API, owner/representative scope, legacy-role hardening, TOTP, accounting, settings, backup/update recovery, nodes and security regressions.
 - **Browser QA:** real Chromium login/session, owner workspaces, Inbounds V3 save, EN/LTR ↔ FA/RTL, refresh/focus stability and a 390px mobile viewport.
 - **Real Xray data-plane:** checksum-verified official Xray `v26.3.27`, SOCKS → VLESS → HTTP, generated subscriptions, traffic metering, reseller quota isolation, top-up/manual-disable semantics and reset/delete accounting behavior.
 - **Kernel firewall:** real network namespaces and nftables with TCP/UDP drop, management-port preservation, native timeout, explicit unban and foreign-table ownership protection.
@@ -107,7 +107,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 - DARK account passwords: 8–512 characters.
 - Encrypted-backup passphrases use a separate policy and require at least 12 characters.
 - Robot keys cannot own API-key lifecycle or sensitive finance mutation scopes.
-- Sensitive finance grants are outside reseller/readonly role ceilings.
+- Representatives never receive sensitive finance mutation scopes; legacy role records remain sanitized only for migration compatibility.
 - Node origins must be public HTTPS; redirects and environment proxies are not followed for node control requests.
 - IP Guard enforcement should only be enabled after verifying that Xray's observed client source corresponds to the packet source seen by nftables on that same host.
 - The global multi-node guard aggregates only source IPs reported as directly verified by each node and device SHA-256 digests; raw HWIDs are never transferred. A global violation disables the Central credential and its mirrors. nftables enforcement remains host-local and is not presented as a distributed firewall.
