@@ -13,13 +13,17 @@ function ago(s){if(s==null)return L('never','هرگز');s=Math.max(0,Number(s)||
 function signal(r){const p=presenceOf(r),names={online:L('ONLINE','آنلاین'),idle:L('IDLE','کم‌فعال'),offline:L('OFFLINE','آفلاین')};return `<div class="cv4-signal ${p}"><span class="cv4-orb"></span><span class="cv4-beam"><i></i></span><b>${names[p]}</b><small>${e(ago(r.presence_age_seconds))}</small></div>`;}
 function owners(){return state.owners||[];}
 function groups(owner='all'){return (state.groups||[]).filter(g=>owner==='all'||g.owner===owner);}
+function ownerOptions(){return owners().filter(o=>isOwner()||o.id===state.me.id).map(o=>[o.id,o.name||o.id]);}
+function defaultOwner(){const opts=ownerOptions();if(opts.some(x=>x[0]===state.me.id))return state.me.id;if(opts.length===1)return opts[0][0];return opts[0]?.[0]||state.me.id;}
+const groupKey=(owner,name)=>encodeURIComponent(owner)+'|'+encodeURIComponent(name);
+function groupMatch(row,key){if(key==='all')return true;if(key==='__ungrouped')return !(row.client?.group||'');const p=String(key).split('|');if(p.length!==2)return false;try{return row.owner===decodeURIComponent(p[0])&&(row.client?.group||'')===decodeURIComponent(p[1]);}catch(_){return false;}}
 function inboundNames(r){return (r.inboundIds||[]).map(id=>{const x=state.inbounds.find(i=>i.id===id);return x?(x.remark||x.tag):'#'+id;});}
 function filteredV4(){
  let rows=filtered(state.clients);
  const f=state.cv4;
  if(f.owner!=='all')rows=rows.filter(x=>x.owner===f.owner);
  if(f.inbound!=='all')rows=rows.filter(x=>(x.inboundIds||[]).includes(Number(f.inbound)));
- if(f.group!=='all')rows=rows.filter(x=>(x.client?.group||'')===f.group);
+ if(f.group!=='all')rows=rows.filter(x=>groupMatch(x,f.group));
  if(f.status!=='all')rows=rows.filter(x=>statusOf(x)===f.status);
  if(f.presence!=='all')rows=rows.filter(x=>presenceOf(x)===f.presence);
  return [...rows].sort((a,b)=>{
@@ -54,7 +58,7 @@ function quickTabs(){
  return `<div class="cv4-quick">${b(L('All','همه'),'presence','all',p==='all'&&s==='all')}${b(L('Online','آنلاین'),'presence','online',p==='online')}${b(L('Idle','کم‌فعال'),'presence','idle',p==='idle')}${b(L('Offline','آفلاین'),'presence','offline',p==='offline')}${b(L('Blocked','محدود'),'status','blocked',s==='blocked')}</div>`;
 }
 function filters(){
- const f=state.cv4,ownerItems=[['all',L('All owners','همه مالک‌ها')],...owners().map(x=>[x.id,x.name||x.id])],inItems=[['all',L('All inbounds','همه اینباندها')],...state.inbounds.map(x=>[String(x.id),x.remark||x.tag])],groupItems=[['all',L('All groups','همه گروه‌ها')],['',L('Ungrouped','بدون گروه')],...groups(f.owner).map(g=>[g.name,g.name])],statusItems=[['all',L('All states','همه وضعیت‌ها')],['active',L('Active','فعال')],['disabled',L('Disabled','قطع')],['blocked',L('Blocked','محدود')]];
+ const f=state.cv4,ownerItems=[['all',L('All owners','همه مالک‌ها')],...owners().map(x=>[x.id,x.name||x.id])],inItems=[['all',L('All inbounds','همه اینباندها')],...state.inbounds.map(x=>[String(x.id),x.remark||x.tag])],groupItems=[['all',L('All groups','همه گروه‌ها')],['__ungrouped',L('Ungrouped','بدون گروه')],...groups(f.owner).map(g=>[groupKey(g.owner,g.name),(f.owner==='all'?((owners().find(o=>o.id===g.owner)?.name||g.owner)+' · '):'')+g.name])],statusItems=[['all',L('All states','همه وضعیت‌ها')],['active',L('Active','فعال')],['disabled',L('Disabled','قطع')],['blocked',L('Blocked','محدود')]];
  return `<div class="cv4-filterdeck ${f.filters?'show':''}"><label><span>${L('Owner','مالک')}</span><select data-cv4-filter="owner">${opt(ownerItems,f.owner)}</select></label><label><span>${L('Inbound','اینباند')}</span><select data-cv4-filter="inbound">${opt(inItems,f.inbound)}</select></label><label><span>${L('Group','گروه')}</span><select data-cv4-filter="group">${opt(groupItems,f.group)}</select></label><label><span>${L('Account state','وضعیت حساب')}</span><select data-cv4-filter="status">${opt(statusItems,f.status)}</select></label></div>`;
 }
 function clientsView(){
@@ -78,7 +82,6 @@ function groupsView(){
 clientsPage=function(){return state.cv4.view==='groups'?groupsView():clientsView();};
 
 function ownerAllowed(owner){const o=owners().find(x=>x.id===owner);return o?.allowed||[];}
-function ownerOptions(){return owners().filter(o=>isOwner()||o.id===state.me.id).map(o=>[o.id,o.name||o.id]);}
 function groupOptions(owner){return groups(owner).map(g=>[g.name,g.name]);}
 function inboundTiles(ids,owner){
  const allowed=ownerAllowed(owner),list=state.inbounds.filter(i=>!allowed.length||allowed.includes(i.id));
@@ -90,7 +93,7 @@ function segment(name,items,value){return `<div class="cv4-segments">${items.map
 function flowCompatible(ids){if(!ids.length)return false;return ids.every(id=>{const i=state.inbounds.find(x=>x.id===id),m=i&&inboundMeta(i);return i?.protocol==='vless'&&['tcp','raw'].includes(m?.network)&&['tls','reality'].includes(m?.security);});}
 function decorateEditor(){const d=document.querySelector('#overlay .dialog');if(d)d.classList.add('cv4-editor');}
 async function clientFormV4(email=null,inbound=null){
- const detail=email?await api('/api/clients/'+enc(email)):null,c=detail?.client||{},owner=detail?.owner||state.me.id,ids=detail?.inboundIds||(inbound?[Number(inbound)]:[]);
+ const detail=email?await api('/api/clients/'+enc(email)):null,c=detail?.client||{},owner=detail?.owner||defaultOwner(),ids=detail?.inboundIds||(inbound?[Number(inbound)]:[]);
  const plan=Number(c.totalGB||0)>0?'limited':'unlimited',expiryMode=Number(c.expiryTime||0)>0?'date':'unlimited',dateValue=c.expiryTime>0?new Date(c.expiryTime).toISOString().slice(0,16):'';
  const ownerField=isOwner()&&ownerOptions().length>1?fSelect(L('Owner','مالک'),'owner',ownerOptions(),owner):`<input type="hidden" name="owner" value="${e(owner)}"><div class="cv4-lockfield"><span>${L('Owner','مالک')}</span><b>${e(owner)}</b></div>`;
  const groupItems=[['',L('Ungrouped','بدون گروه')],...groupOptions(owner)];
@@ -139,7 +142,7 @@ function more(id){
  dialog(L('Client actions','عملیات کاربر')+' · '+id,`<div class="cv4-action-menu">${can('clients.edit',r.owner)?`<button data-act="cv4edit" data-id="${e(id)}"><span>${icon('edit')}</span><div><b>${L('Edit client','ویرایش کاربر')}</b><small>${L('Plan, inbound, limits and advanced options','پلن، اینباند و محدودیت‌ها')}</small></div></button>`:''}${can('clients.ip',r.owner)?`<button data-act="cv4ips" data-id="${e(id)}"><span>${icon('shield')}</span><div><b>IP / HWID</b><small>${L('Observed IPs and registered devices','IPهای دیده‌شده و دستگاه‌ها')}</small></div></button>`:''}${can('clients.edit',r.owner)?`<button data-act="cv4toggle" data-id="${e(id)}"><span>${icon('power')}</span><div><b>${c.enable===false?L('Enable client','فعال‌سازی'):L('Disable client','قطع کاربر')}</b><small>${L('Manual service state','وضعیت دستی سرویس')}</small></div></button>`:''}${can('clients.reset',r.owner)?`<button data-act="cv4resettraffic" data-id="${e(id)}"><span>${icon('refresh')}</span><div><b>${L('Reset traffic','ریست مصرف')}</b><small>${L('Historical reseller accounting is preserved','حساب تاریخی نماینده حفظ می‌شود')}</small></div></button>`:''}${can('clients.delete',r.owner)?`<button class="danger" data-act="cv4delete" data-id="${e(id)}"><span>${icon('trash')}</span><div><b>${L('Delete client','حذف کاربر')}</b><small>${L('Permanent managed-client deletion','حذف دائمی کاربر مدیریت‌شده')}</small></div></button>`:''}</div>`);document.querySelector('#overlay .dialog')?.classList.add('cv4-menu-dialog');
 }
 async function bulkCreate(){
- const owner=state.me.id;
+ const owner=defaultOwner();
  dialog(L('Bulk create','ساخت گروهی'),`<div class="cv4-editor-shell"><section class="cv4-edit-section"><header><span>01</span><div><b>${L('Batch','دسته')}</b><small>${L('Create many clients with one clean template.','چند کاربر با یک الگوی ساده بساز.')}</small></div></header><div class="cv4-edit-grid">${isOwner()&&ownerOptions().length>1?fSelect(L('Owner','مالک'),'owner',ownerOptions(),owner):`<input type="hidden" name="owner" value="${e(owner)}">`}${fInput(L('Quantity','تعداد'),'quantity',10,'number','min="1" max="500" required')}${fInput(L('Prefix','پیشوند'),'prefix','dark-','text','maxlength="64"')}${fInput(L('Start number','شماره شروع'),'first',1,'number','min="0" max="999999"')}</div></section><section class="cv4-edit-section"><header><span>02</span><div><b>${L('Service','سرویس')}</b></div></header><div id="cv4-inbounds">${inboundTiles([],owner)}</div></section><section class="cv4-edit-section"><header><span>03</span><div><b>${L('Plan','پلن')}</b></div></header><div class="cv4-edit-grid">${fInput(L('Quota GiB · 0 unlimited','حجم GiB · صفر نامحدود'),'totalGB',0,'number','min="0" step="0.1"')}${fInput(L('Expiry days · 0 unlimited','روز اعتبار · صفر نامحدود'),'days',0,'number','min="0" max="36500"')}${fInput(L('IP limit · 0 unlimited','محدودیت IP'),'limitIp',1,'number','min="0" max="1000"')}</div></section></div>`,async f=>{const selected=f.getAll('inbound').map(Number);if(!selected.length)throw Error(L('Select at least one inbound.','حداقل یک اینباند انتخاب کن.'));const days=Number(f.get('days')||0),client={totalGB:Math.round(Number(f.get('totalGB')||0)*gb),limitIp:Number(f.get('limitIp')||0)};if(days)client.expiryTime=Date.now()+days*86400000;const out=await api('/api/clients/bulk-create','POST',{owner:f.get('owner'),prefix:f.get('prefix'),postfix:'',first:Number(f.get('first')||0),quantity:Number(f.get('quantity')||0),inboundIds:selected,client});closeDialog();dialog(L('Bulk result','نتیجه ساخت گروهی'),jsonBox(out));await refresh();},L('Create batch','ساخت دسته'));decorateEditor();
 }
 runAction=async function(act,el){
@@ -160,7 +163,7 @@ runAction=async function(act,el){
 };
 document.addEventListener('change',async ev=>{
  const el=ev.target;
- if(el?.dataset?.cv4Filter){state.cv4[el.dataset.cv4Filter]=el.value;if(el.dataset.cv4Filter==='owner'&&state.cv4.group!=='all'&&!groups(el.value).some(g=>g.name===state.cv4.group))state.cv4.group='all';state.selected.clear();await renderPage();}
+ if(el?.dataset?.cv4Filter){state.cv4[el.dataset.cv4Filter]=el.value;if(el.dataset.cv4Filter==='owner'&&state.cv4.group!=='all'){const valid=new Set(groups(el.value).map(g=>groupKey(g.owner,g.name)));valid.add('__ungrouped');if(!valid.has(state.cv4.group))state.cv4.group='all';}state.selected.clear();await renderPage();}
  if(el?.id==='cv4-sort'){state.cv4.sort=el.value;await renderPage();}
 });
 })();
