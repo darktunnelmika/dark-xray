@@ -19,7 +19,7 @@ import threading
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit,urlunsplit
+from urllib.parse import urlsplit,urlunsplit,quote
 
 import psutil
 from fastapi import FastAPI,Depends,HTTPException,Request
@@ -489,7 +489,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         host='['+address+']' if ':' in address and not address.startswith('[') else address
         port=p.port
         netloc=userinfo+host+((':'+str(port)) if port else '')
-        return urlunsplit((p.scheme,netloc,p.path,p.query,remark))
+        return urlunsplit((p.scheme,netloc,p.path,p.query,quote(remark)))
 
     def failover_links(email:str)->list[dict]:
         targets=nodes.failover_targets(email)
