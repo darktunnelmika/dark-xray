@@ -4,7 +4,7 @@
   "branch": "main",
   "date": "2026-09-18",
   "status": "release_candidate_target_vps_validation",
-  "current_version": "0.9.0-rc6",
+  "current_version": "0.9.0-rc7",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -52,7 +52,19 @@
     "clients_v4_owner_scoped_group_filter": true,
     "clients_v4_ip_hwid_action_visible": false,
     "clients_v4_more_actions_visible": false,
-    "clients_v4_readability_pass": true
+    "clients_v4_readability_pass": true,
+    "web_update_center": true,
+    "update_channels": [
+      "latest_verified",
+      "stable",
+      "release_candidate",
+      "exact_ref"
+    ],
+    "root_owned_update_broker": true,
+    "update_exact_commit_ci_gate": true,
+    "update_auto_source_sqlite_rollback": true,
+    "update_restart_reconnect": true,
+    "update_interactive_owner_only": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -93,7 +105,9 @@
       "vps_verify_ready",
       "sigkill_restart_new_pid",
       "stop_start_recovery",
-      "single_owned_xray_after_recovery"
+      "single_owned_xray_after_recovery",
+      "root_update_broker_active_enabled",
+      "darkxray_uid_update_socket_status"
     ],
     "browser_scope": [
       "login_and_cookie_session",
@@ -102,7 +116,8 @@
       "english_ltr_to_persian_rtl",
       "refresh_focus_scroll_stability",
       "mobile_390px_layout",
-      "clients_v4_basic_first_editor"
+      "clients_v4_basic_first_editor",
+      "update_center_graceful_unavailable_state"
     ]
   },
   "target_infrastructure_validation": {
@@ -133,7 +148,7 @@
     "source_sha256sums_regenerated_for_rc": false,
     "release_archive_sha256sums_generated_with_prerelease": false
   },
-  "checksum_note": "RC6 source/release checksums must be regenerated only after the final tested snapshot is fixed.",
+  "checksum_note": "RC7 source/release checksums will be regenerated only after the final tested snapshot is fixed.",
   "release_candidate": true,
   "control_center_v2": true
 }
