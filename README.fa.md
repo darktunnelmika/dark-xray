@@ -1,6 +1,6 @@
-# راهنمای DARK XRAY 0.9.0 RC6
+# راهنمای DARK XRAY 0.9.0 RC7
 
-برچسب فعلی: **`0.9.0-rc6`**
+برچسب فعلی: **`0.9.0-rc7`**
 
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
@@ -176,6 +176,21 @@ IP Guard از worker root جداگانه و nftables استفاده می‌کن�
 
 این تست روی kernel واقعی runner است، اما هنوز topology دیتاسنتر/VPS هدف را ثابت نمی‌کند.
 
+## Update Center
+
+از RC7، Owner یک صفحهٔ مستقل **Update Center** داخل پنل دارد:
+
+- **Latest Verified**: آخرین Commit شاخه main فقط وقتی CI همان SHA دقیق سبز است؛
+- **Stable**: جدیدترین Tag پایدار؛
+- **Release Candidate**: جدیدترین Tag RC؛
+- **Exact Ref**: Tag/Branch/Commit برای حالت پیشرفته.
+
+Web process همچنان با user محدود `darkxray` اجرا می‌شود. عملیات privileged به `dark-xray-update.service` روت منتقل شده که فقط پیام‌های محدود `status/check/start` را از Unix socket می‌پذیرد و با Linux peer credentials احراز می‌کند. هیچ shell دلخواهی از API قابل عبور نیست.
+
+قبل از نصب، Candidate به Commit ثابت resolve می‌شود، CI، DB، سرویس و فضای rollback بررسی می‌شوند. سپس Snapshot سورس و SQLite گرفته می‌شود. اگر activation/health fail شود، rollback قبلی خودکار انجام می‌شود. در زمان restart پنل، Broker مستقل کار را ادامه می‌دهد و Browser بعد از برگشت سرویس status را بازیابی می‌کند.
+
+**Bootstrap:** نصب‌هایی که هنوز RC6 یا قدیمی‌ترند یک بار باید با Safe Update installer آنلاین RC7 ارتقا پیدا کنند تا Broker systemd نصب شود. پس از آن آپدیت‌های بعدی از خود پنل انجام می‌شوند.
+
 ## Safe Update / Recovery
 
 Updater قبل از activation:
@@ -218,7 +233,7 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 7. Update/Rollback rehearsal با exact release artifact نهایی.
 8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
 
-تا تکمیل این موارد، نام نسخه **`0.9.0-rc6`** حفظ می‌شود.
+تا تکمیل این موارد، نام نسخه **`0.9.0-rc7`** حفظ می‌شود.
 
 ## منابع وضعیت
 
