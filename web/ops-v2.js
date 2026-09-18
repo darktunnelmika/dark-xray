@@ -6,7 +6,7 @@ const baseLoad=load,baseEnginePage=enginePage,baseNavItems=navItems,baseRunActio
 state.ov2={audit:[],ip:null,core:null,backup:null,nodes:[],logKind:'process'};
 enginePages.logs=['Logs'];enginePages.backup=['Backup'];
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
-navItems=function(){let n=baseNavItems();if(isOwner()){let at=n.findIndex(x=>x[0]==='sync');let extras=[['logs','Logs','terminal']];if(at<0)n.push(...extras);else n.splice(at,0,...extras);}return n;};
+navItems=function(){return baseNavItems();};
 load=async function(){
  await baseLoad();
  if(!state.me){state.ov2.audit=[];state.ov2.ip=null;state.ov2.core=null;state.ov2.backup=null;state.ov2.nodes=[];return;}
@@ -64,8 +64,8 @@ async function backupPage(){let s=await api('/api/backup/status');return heading
 enginePage=async function(){if(state.page==='logs')return logsPage();if(state.page==='backup')return backupPage();return baseEnginePage();};
 runAction=async function(act,el){
  if(act==='ov2logtab'){state.ov2.logKind=el.dataset.kind;await renderPage();return;}
- if(act==='all-audit'){await go('audit');return;}
- if(act==='ov2logs'){await go('logs');return;}
+ if(act==='all-audit'){if(globalThis.DarkSettingsV2?.open){await globalThis.DarkSettingsV2.open('operations');return;}await go('settings');return;}
+ if(act==='ov2logs'){if(globalThis.DarkSettingsV2?.open){await globalThis.DarkSettingsV2.open('operations');return;}await go('settings');return;}
  if(act==='ov2nodes'){await go('nodes');return;}
  if(act==='ov2backuphelp'){dialog(L('Encrypted full backup','بکاپ کامل رمزدار'),`<div class="notice">${L('Passphrases are requested only by the interactive terminal and are never sent through the browser.','Passphrase فقط داخل ترمینال تعاملی دریافت می‌شود و هرگز از مرورگر ارسال نمی‌شود.')}</div><div class="ov2-command">sudo darkxray backup --output /root/dark-full.darkbackup</div>`);return;}
  if(act==='ov2restorehelp'){dialog(L('Verify / restore backup','Verify / Restore بکاپ'),`<div class="notice warning">${L('Always verify the archive first. Restore writes into a new isolated destination and does not replace the live installation.','همیشه اول آرشیو را Verify کن. Restore داخل مقصد ایزوله جدید نوشته می‌شود و نصب Live را جایگزین نمی‌کند.')}</div><div class="ov2-command">sudo darkxray backup-verify --archive /root/dark-full.darkbackup</div><div class="ov2-command" style="margin-top:8px">sudo darkxray restore --archive /root/dark-full.darkbackup --destination /root/dark-restore</div>`);return;}
