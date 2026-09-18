@@ -126,3 +126,68 @@ def test_agent_can_stage_inbound_without_copying_clients(env):
  out=c.post('/node/api/inbounds',json=ib,headers={'authorization':'Bearer '+token});assert out.status_code==200,out.text
  assert out.json()['id']==1 and eng.inbound(1)['tag']=='remote-stage'
  assert eng.runtime_state()['dirty'] is True
+
+
+def _test_vless(remark,port,tag):
+ return {"remark":remark,"listen":"0.0.0.0","port":port,"protocol":"vless","enable":True,"tag":tag,
+         "settings":{"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"},"sniffing":{}}
+
+
+def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkeypatch):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('NODE A',21001,'node-a')).json()['id']
+ b=c.post('/api/inbounds',json=_test_vless('LOCAL B',21002,'local-b')).json()['id']
+ eng.create({'email':'alice','id':'11111111-1111-4111-8111-111111111111','enable':True},[a])
+ eng.create({'email':'bob','id':'22222222-2222-4222-8222-222222222222','enable':True},[b])
+ token='dkn_'+('N'*60)
+ r=c.post('/api/nodes',json={'id':'tr1','name':'Turkey','origin':'https://node.example.com','token':token,'enabled':True,'inboundIds':[a]})
+ assert r.status_code==200,r.text
+ assert r.json()['inboundIds']==[a]
+ captured={}
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  captured.update(node_id=node_id,path=path,method=method,body=body,timeout=timeout)
+  return {'items':[{'sourceInboundId':a,'remoteInboundId':9,'clients':1}],'core':{'state':'running'}},17
+ monkeypatch.setattr(app.state.nodes,'_request',fake_request)
+ out=c.post('/api/nodes/tr1/sync')
+ assert out.status_code==200,out.text
+ assert captured['path']=='/node/api/mirrors/sync'
+ assignments=captured['body']['assignments']
+ assert [x['sourceInboundId'] for x in assignments]==[a]
+ assert assignments[0]['inbound']['tag']=='node-a'
+ assert [x['sourceEmail'] for x in assignments[0]['clients']]==['alice']
+ assert all(x['sourceEmail']!='bob' for x in assignments[0]['clients'])
+ node=c.get('/api/nodes').json()[0]
+ assert node['assignments'][0]['remote_inbound_id']==9
+ assert node['assignments'][0]['last_error']==''
+
+
+def test_node_agent_mirror_sync_reconciles_inbound_and_credentials(env,monkeypatch):
+ store,eng,_,c=env
+ token=c.post('/api/node-agent/tokens',json={'name':'central-mirror','days':10}).json()['token']
+ monkeypatch.setattr(eng,'command',lambda action:{'state':'running','action':action})
+ assignment={
+   'sourceInboundId':77,
+   'inbound':_test_vless('CENTRAL 77',22077,'central-77'),
+   'clients':[{'sourceEmail':'mika','client':{'id':'33333333-3333-4333-8333-333333333333','enable':True}}]
+ }
+ r=c.post('/node/api/mirrors/sync',json={'assignments':[assignment]},headers={'authorization':'Bearer '+token})
+ assert r.status_code==200,r.text
+ doc=r.json();assert doc['mirrored']==1 and doc['clients']==1 and doc['core']['action']=='restart'
+ rid=doc['items'][0]['remoteInboundId']
+ remote=eng.inbound(rid)
+ assert remote['port']==22077 and remote['tag'].startswith('nm-')
+ with store.lock:
+  row=store.db.execute('SELECT mirror_email FROM node_agent_mirror_clients').fetchone()
+ assert row is not None
+ mirrored=eng.client_detail(row['mirror_email'])
+ assert mirrored['client']['id']=='33333333-3333-4333-8333-333333333333'
+ assert mirrored['inboundIds']==[rid]
+ # Empty desired assignments reconcile/delete only this agent token's mirrors.
+ r=c.post('/node/api/mirrors/sync',json={'assignments':[]},headers={'authorization':'Bearer '+token})
+ assert r.status_code==200,r.text
+ assert r.json()['mirrored']==0
+ with pytest.raises(Exception):
+  eng.inbound(rid)
+ with store.lock:
+  assert store.db.execute('SELECT COUNT(*) FROM node_agent_mirrors').fetchone()[0]==0
+  assert store.db.execute('SELECT COUNT(*) FROM node_agent_mirror_clients').fetchone()[0]==0
