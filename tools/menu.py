@@ -574,15 +574,15 @@ def update_repair_menu():
         elif x=='8':
             if not INSTALLED:print(f'{RE}Unit reinstall is only available from /opt/dark-xray.{R}');pause();continue
             if need_root() and confirm('Replace unit files from installed source?','UNITS'):
-                for n in ('dark-xray.service','dark-xray-guard.service'):shutil.copy2(ROOT/'deploy'/n,Path('/etc/systemd/system')/n);os.chmod(Path('/etc/systemd/system')/n,0o644)
+                for n in ('dark-xray.service','dark-xray-update.service','dark-xray-guard.service'):shutil.copy2(ROOT/'deploy'/n,Path('/etc/systemd/system')/n);os.chmod(Path('/etc/systemd/system')/n,0o644)
                 run(['systemctl','daemon-reload']);print(f'{GR}Units restored.{R}')
             pause()
         elif x=='9':print('Version:',ver(),'\nApp:',ROOT,'\nConfig:',CONFIG,'\nData:',DATA);pause()
         elif x=='10':
             if not INSTALLED:print(f'{RE}Uninstall refused outside /opt/dark-xray.{R}');pause();continue
             if need_root() and confirm('Remove app/services but KEEP config/data?','UNINSTALL'):
-                run(['systemctl','disable','--now','dark-xray.service']);run(['systemctl','disable','--now','dark-xray-guard.service'])
-                for f in ('/etc/systemd/system/dark-xray.service','/etc/systemd/system/dark-xray-guard.service','/usr/local/bin/darkxray'):Path(f).unlink(missing_ok=True)
+                run(['systemctl','disable','--now','dark-xray.service']);run(['systemctl','disable','--now','dark-xray-update.service']);run(['systemctl','disable','--now','dark-xray-guard.service'])
+                for f in ('/etc/systemd/system/dark-xray.service','/etc/systemd/system/dark-xray-update.service','/etc/systemd/system/dark-xray-guard.service','/usr/local/bin/darkxray'):Path(f).unlink(missing_ok=True)
                 hook=Path('/etc/letsencrypt/renewal-hooks/deploy/dark-xray-panel')
                 if hook.exists() or hook.is_symlink():hook.unlink()
                 shutil.rmtree('/opt/dark-xray',ignore_errors=True);run(['systemctl','daemon-reload']);print('Application removed; config/data preserved.');raise SystemExit(0)
