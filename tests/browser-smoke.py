@@ -121,12 +121,15 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
             # Every owner workspace must render without leaving a busy/blank content surface.
-            pages=['dashboard','inbounds','clients','resellers','ipguard','finance','audit','sync',
+            pages=['dashboard','inbounds','clients','resellers','ipguard','finance','sync',
                    'hosts','outbounds','routing','nodes','xray','settings','account']
             for name in pages:visit(page,name)
             mark('all primary owner workspaces render through real navigation')
             assert page.locator('.nav-btn[data-page="roles"]').count()==0
+            assert page.locator('.nav-btn[data-page="logs"]').count()==0
+            assert page.locator('.nav-btn[data-page="audit"]').count()==0
             mark('legacy Access Control workspace is absent; representative management is unified')
+            mark('Logs and Audit are absent from primary navigation')
 
             # Current Inbounds V3 editor -> real API -> real SQLite.
             visit(page,'inbounds')
@@ -196,8 +199,22 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-nodes-v3.png'),full_page=True)
             page.locator('[data-act="close"]').first.click()
 
-            visit(page,'finance');page.screenshot(path=str(OUT/'browser-finance.png'),full_page=True)
-            visit(page,'settings');page.screenshot(path=str(OUT/'browser-settings.png'),full_page=True)
+            visit(page,'finance')
+            finance_text=page.locator('#content').inner_text()
+            assert 'Owner scope' not in finance_text and 'محدوده مالک' not in finance_text
+            assert 'Representative' in finance_text or 'نماینده' in finance_text
+            mark('Finance workspace is representative-centric and has no owner-scope selector')
+            page.screenshot(path=str(OUT/'browser-finance.png'),full_page=True)
+
+            visit(page,'settings')
+            page.locator('[data-sv2-action="tab"][data-tab="operations"]').click()
+            page.locator('.sv2-operations').wait_for(state='visible',timeout=10000)
+            assert page.locator('.sv2-terminal').count()==1
+            ops_text=page.locator('.sv2-operations').inner_text()
+            assert ('Runtime logs' in ops_text or 'لاگ‌های Runtime' in ops_text)
+            assert ('Operation report' in ops_text or 'گزارش عملیات' in ops_text)
+            mark('Settings Operations contains runtime Logs and Audit report')
+            page.screenshot(path=str(OUT/'browser-settings.png'),full_page=True)
             visit(page,'dashboard')
             assert page.locator('.nav-btn[data-page="update"]').count()==0
             page.locator('.up-dashboard-shell').wait_for(state='visible',timeout=10000)
