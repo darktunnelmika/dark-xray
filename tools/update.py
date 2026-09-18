@@ -10,7 +10,7 @@ If activation fails after the new code has touched the database, both source and
 database are restored before the previous service is reactivated.
 """
 from __future__ import annotations
-import argparse,json,os,re,shutil,socket,sqlite3,ssl,subprocess,sys,tarfile,tempfile,time
+import argparse,json,os,re,shutil,socket,sqlite3,ssl,subprocess,sys,tarfile,tempfile,time,uuid
 from urllib.parse import urlsplit
 from pathlib import Path
 
@@ -21,6 +21,41 @@ COPY_DIRS=('backend','web','tools','deploy')
 COPY_FILES=('darkxray','requirements.txt','LICENSE','THIRD-PARTY-NOTICES.md','VERSION')
 SNAPSHOT_FILES=COPY_DIRS+('darkxray','requirements.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md')
 MIB=1024*1024
+STATUS_FILE:Path|None=None
+JOB_ID=''
+UPDATE_REF=''
+
+
+def _status(state:str,phase:str,percent:int,message:str,**extra):
+    if STATUS_FILE is None:return
+    current={}
+    try:
+        if STATUS_FILE.is_file() and not STATUS_FILE.is_symlink() and STATUS_FILE.stat().st_size<1024*1024:
+            value=json.loads(STATUS_FILE.read_text(encoding='utf-8'))
+            if isinstance(value,dict):current=value
+    except Exception:current={}
+    current.update({'state':state,'phase':phase,'percent':max(0,min(100,int(percent))),'message':message,
+                    'job_id':JOB_ID or current.get('job_id',''),'updated_at':time.time()})
+    current.update(extra)
+    STATUS_FILE.parent.mkdir(parents=True,exist_ok=True)
+    tmp=STATUS_FILE.with_name('.'+STATUS_FILE.name+'.tmp-'+uuid.uuid4().hex)
+    tmp.write_text(json.dumps(current,ensure_ascii=False,indent=2)+'\n',encoding='utf-8');os.chmod(tmp,0o640)
+    try:
+        import pwd
+        os.chown(tmp,0,pwd.getpwnam('darkxray').pw_gid)
+    except Exception:pass
+    os.replace(tmp,STATUS_FILE)
+
+
+def _source_info(commit:str,version:str,ref:str):
+    path=DATA/'installed-source.json';tmp=path.with_name('.'+path.name+'.tmp-'+uuid.uuid4().hex)
+    value={'commit':commit,'version':version,'ref':ref,'installed_at':time.time()}
+    tmp.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8');os.chmod(tmp,0o640)
+    try:
+        import pwd
+        os.chown(tmp,0,pwd.getpwnam('darkxray').pw_gid)
+    except Exception:pass
+    os.replace(tmp,path)
 
 
 def run(args, **kw):
@@ -196,9 +231,12 @@ def install_runtime_files():
     py=APP/'.venv/bin/python'
     run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements.txt'])
     run([py,'-m','pip','check'],stdout=subprocess.DEVNULL)
-    for unit in ('dark-xray.service','dark-xray-guard.service'):
+    for unit in ('dark-xray.service','dark-xray-guard.service','dark-xray-update.service'):
         shutil.copy2(APP/'deploy'/unit,Path('/etc/systemd/system')/unit);os.chmod(Path('/etc/systemd/system')/unit,0o644)
     write_wrapper();run(['systemctl','daemon-reload']);run(['systemctl','enable','dark-xray.service'])
+    # --now is safe both for CLI upgrades (starts the broker) and broker-owned
+    # upgrades (the already-running unit is not restarted mid-response).
+    run(['systemctl','enable','--now','dark-xray-update.service'])
 
 
 
@@ -268,6 +306,7 @@ def activate():
 
 
 def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
+    _status('rolling_back','rollback',88,'Activation failed; restoring previous DARK XRAY source and database')
     print('Update activation failed; restoring previous DARK XRAY source + database...',file=sys.stderr)
     quiet(['systemctl','stop','dark-xray.service'])
     try:
@@ -281,8 +320,10 @@ def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
         restore_database(db_backup)
         install_runtime_files();activate()
         if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
+        _status('rolled_back','rollback',100,'Update failed; previous DARK XRAY source and database were restored successfully',finished_at=time.time(),rollback_ok=True)
         print('Previous DARK XRAY source and database restored; panel route is healthy.',file=sys.stderr);return True
     except Exception as ex:
+        _status('failed','rollback_failed',100,'CRITICAL: automatic rollback could not reactivate the previous installation',finished_at=time.time(),rollback_ok=False,error=type(ex).__name__+': '+str(ex)[:300])
         print('CRITICAL: rollback could not reactivate previous installation: '+type(ex).__name__+': '+str(ex)[:300],file=sys.stderr)
         quiet(['systemctl','status','dark-xray.service','--no-pager','-l']);return False
 
@@ -291,14 +332,21 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--source',type=Path,help='Already-cloned candidate source tree (online bootstrap uses this)')
     p.add_argument('--ref',default=os.environ.get('DARK_UPDATE_REF','main'),help='Git branch/tag/commit when --source is omitted')
-    p.add_argument('--non-interactive',action='store_true');a=p.parse_args()
+    p.add_argument('--non-interactive',action='store_true')
+    p.add_argument('--status-file',type=Path)
+    p.add_argument('--job-id',default='')
+    a=p.parse_args()
+    global STATUS_FILE,JOB_ID,UPDATE_REF
+    STATUS_FILE=a.status_file;JOB_ID=str(a.job_id or '');UPDATE_REF=str(a.ref or '')
     if os.geteuid()!=0:raise SystemExit('Root is required for update')
     if APP.is_symlink() or not APP.is_dir() or not (APP/'.venv/bin/python').is_file():raise SystemExit('DARK XRAY application path is incomplete or unsafe; use installer repair mode')
     if CONF.is_symlink() or DATA.is_symlink() or not (CONF/'config.json').is_file() or not DATA.is_dir():raise SystemExit('Configuration/data paths are incomplete or unsafe; use installer repair mode')
+    _status('running','current_health',20,'Checking current DARK installation health')
     database_info=database_preflight(DB)
     try:require_live_panel(5.0)
     except Exception as ex:raise SystemExit('Current DARK panel is not healthy enough for a rollback-safe update; run darkxray doctor/repair first: '+str(ex))
 
+    _status('running','resolve',25,'Resolving candidate source')
     temp=None;preflight=Path(tempfile.mkdtemp(prefix='dark-xray-preflight.'));src=a.source.resolve() if a.source else None
     try:
         if src is None:
@@ -306,21 +354,26 @@ def main():
             run(['git','clone','--filter=blob:none','--no-checkout',REPO,src],stdout=subprocess.DEVNULL)
             run(['git','-C',src,'fetch','--depth','1','origin',a.ref],stdout=subprocess.DEVNULL)
             run(['git','-C',src,'checkout','--detach','FETCH_HEAD'],stdout=subprocess.DEVNULL)
+        _status('running','validate_source',32,'Validating candidate source and syntax')
         validate_source(src);candidate=source_commit(src);candidate_version=source_version(src)
         current_version=(APP/'VERSION').read_text(encoding='utf-8').strip() if (APP/'VERSION').is_file() else 'unknown'
         print('Current version:',current_version);print('Candidate version:',candidate_version);print('Candidate source:',candidate)
+        _status('running','rollback_preflight',40,'Checking database integrity and rollback disk space',candidate={'commit':candidate,'version':candidate_version,'ref':UPDATE_REF})
         space=disk_preflight(database_info)
         print('Rollback preflight: database quick_check=ok; free data space=',space['free_data_bytes']//MIB,'MiB')
         print('Dependency preflight: building isolated candidate environment...')
+        _status('running','dependencies',50,'Building isolated candidate environment and checking dependencies')
         dependency_preflight(src,preflight);print('Dependency preflight: passed')
 
         stamp=time.strftime('%Y%m%d-%H%M%S');backups=DATA/'backups'
         source_backup=backups/f'pre-update-source-{stamp}.tar.gz';db_backup=backups/f'pre-update-db-{stamp}.sqlite3'
+        _status('running','snapshot_source',60,'Creating rollback source snapshot')
         source_snapshot(source_backup);print('Rollback source snapshot:',source_backup)
         guard_was_active=quiet(['systemctl','is-active','--quiet','dark-xray-guard.service']).returncode==0
         quiet(['systemctl','stop','dark-xray.service'])
         try:
             # Capture SQLite after the old service has flushed traffic and closed the DB.
+            _status('running','snapshot_database',68,'Stopping panel briefly and creating SQLite rollback snapshot')
             database_preflight(DB);database_snapshot(db_backup);print('Rollback database snapshot:',db_backup)
         except Exception as ex:
             # Source is still untouched here; restore availability immediately.
@@ -328,15 +381,30 @@ def main():
             except Exception as restart_ex:raise SystemExit('Database snapshot failed and current panel could not be reactivated: '+str(restart_ex)) from ex
             raise SystemExit('Database snapshot failed; current version was reactivated without changing source') from ex
         try:
-            copy_source(src);install_runtime_files();activate()
+            _status('running','apply_source',76,'Applying verified DARK source and runtime files')
+            copy_source(src);install_runtime_files()
+            _status('restarting','restart',84,'Restarting DARK panel and verifying local route / asset health')
+            activate()
             if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
         except Exception:
             ok=rollback(source_backup,db_backup,guard_was_active)
             if not ok:raise SystemExit('Update failed and automatic source/database rollback also failed; inspect systemd and rollback snapshots')
             raise SystemExit('Update failed; previous source + database were restored successfully')
+        _source_info(candidate,candidate_version,UPDATE_REF)
+        _status('success','complete',100,'DARK XRAY updated successfully; local health checks passed',finished_at=time.time(),installed={'commit':candidate,'version':candidate_version,'ref':UPDATE_REF},rollback_ok=None)
         print('DARK XRAY updated successfully.');print('Installed source:',candidate);print('Local panel route/asset Doctor probe: passed');print('Run: darkxray')
     finally:
         shutil.rmtree(preflight,ignore_errors=True)
         if temp:shutil.rmtree(temp,ignore_errors=True)
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    try:main()
+    except SystemExit as ex:
+        if STATUS_FILE is not None:
+            state=read_status={} 
+            try:
+                read_status=json.loads(STATUS_FILE.read_text(encoding='utf-8')) if STATUS_FILE.is_file() else {}
+            except Exception:read_status={}
+            if read_status.get('state') not in {'rolled_back','success','failed'}:
+                _status('failed','failed',100,str(ex)[:700] or 'Update failed',finished_at=time.time())
+        raise
