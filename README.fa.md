@@ -1,6 +1,6 @@
-# راهنمای DARK XRAY 0.9.0 RC5
+# راهنمای DARK XRAY 0.9.0 RC6
 
-برچسب فعلی: **`0.9.0-rc5`**
+برچسب فعلی: **`0.9.0-rc6`**
 
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
@@ -102,7 +102,7 @@ Inbound workflow برای کار روزمره شبیه پنل‌های ساده�
 
 - صفحه Clients به Command Deck دارک/سایبری تبدیل شده؛ Sidebar دائمی حذف شده و Search، Presence، Filter و Sort در نوار کنترل جمع شده‌اند.
 - Presence از activity واقعی Traffic Ledger / access observation / device activity محاسبه می‌شود؛ Enabled بودن حساب به معنی Online نیست.
-- اکشن‌های هر ردیف به OPEN / QR / More کاهش یافته‌اند و عملیات فرعی داخل More قرار گرفته‌اند.
+- اکشن‌های هر ردیف فقط OPEN / QR هستند؛ IP/HWID و More Actions از UI اصلی حذف شده‌اند.
 - فرم Create/Edit به Basic-first تبدیل شده و HWID/reset/comment/XTLS Flow فقط در Advanced دیده می‌شوند.
 - Online indicator با Pulse + Signal line + arrow نمایش داده می‌شود و برای کاهش motion قابل احترام است.
 - هر Subscription و هر Config ساخته‌شده QR مستقل دارد؛ Copy و Download SVG نیز در همان پنجره موجود است.
@@ -218,7 +218,7 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 7. Update/Rollback rehearsal با exact release artifact نهایی.
 8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
 
-تا تکمیل این موارد، نام نسخه **`0.9.0-rc5`** حفظ می‌شود.
+تا تکمیل این موارد، نام نسخه **`0.9.0-rc6`** حفظ می‌شود.
 
 ## منابع وضعیت
 
