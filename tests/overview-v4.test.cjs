@@ -46,3 +46,15 @@ test('Overview V4 has responsive desktop and mobile geometry',()=>{
   assert.match(css,/ov4-management-grid/);
   assert.match(css,/@media\(max-width:700px\)/);
 });
+
+
+test('Overview V4 palette is inherited from Cyber Classic instead of hard-coded blue UI colors',()=>{
+  assert.match(css,/--ov4-accent:var\(--classic-green/);
+  assert.match(css,/--ov4-panel:var\(--classic-panel/);
+  assert.match(css,/body\.skin-cyber-classic \.ov4-card/);
+  assert.match(css,/border-radius:2px!important/);
+  assert.doesNotMatch(css,/#2f86ff|#1e6ed8|#2e83ff|#2585ff|#2a73ca|#62a7ff/i);
+  assert.doesNotMatch(src,/#2585ff|#a7b0bd/i);
+  assert.match(src,/class="ov4-up-stop"/);
+  assert.match(src,/class="ov4-down-stop"/);
+});
