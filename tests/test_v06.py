@@ -244,6 +244,38 @@ def test_real_xray_end_to_end_opt_in(tmp_path):
     data=json.loads(report.read_text())
     assert data['passed'] and data['live_proxy_connection_tested']
 
+def test_common_outbound_shapes_fail_with_clear_dark_validation(env):
+    *_,c=env
+    cases=[
+      ([{'tag':'v','protocol':'vless','settings':{'address':'edge.example','port':443,'id':''}}],'VLESS outbound requires a UUID'),
+      ([{'tag':'m','protocol':'vmess','settings':{'vnext':[]}}],'VMess outbound requires vnext'),
+      ([{'tag':'t','protocol':'trojan','settings':{'servers':[{'address':'edge.example','port':443,'password':''}]}}],'trojan outbound requires a password'),
+      ([{'tag':'w','protocol':'wireguard','settings':{'secretKey':'','address':[],'peers':[]}}],'WireGuard outbound requires secretKey'),
+      ([{'tag':'l','protocol':'loopback','settings':{}}],'Loopback outbound requires inboundTag'),
+      ([{'tag':'d','protocol':'dns','settings':{'rewritePort':70000}}],'DNS outbound rewritePort is invalid'),
+    ]
+    for value,message in cases:
+        r=c.put('/api/settings/outbounds',json={'value':value})
+        assert r.status_code==422,(value,r.text)
+        assert message in r.text
+
+
+def test_guided_vless_flat_outbound_shape_is_accepted(env):
+    *_,c=env
+    value=[
+      {'tag':'direct','protocol':'freedom','settings':{}},
+      {'tag':'edge','protocol':'vless','settings':{
+        'address':'edge.example.test','port':443,'id':'33333333-3333-4333-8333-333333333333',
+        'flow':'','encryption':'none'},
+       'streamSettings':{'network':'grpc','security':'none','grpcSettings':{'serviceName':'dark'},'sockopt':{}}}
+    ]
+    r=c.put('/api/settings/outbounds',json={'value':value})
+    assert r.status_code==200,r.text
+    saved=c.get('/api/settings/outbounds').json()['value']
+    assert saved[1]['settings']['address']=='edge.example.test'
+    assert saved[1]['streamSettings']['grpcSettings']['serviceName']=='dark'
+
+
 @pytest.mark.parametrize('value',[
  [{'tag':'loop','protocol':'freedom','streamSettings':{'sockopt':{'dialerProxy':'loop'}}}],
  [{'tag':'edge','protocol':'freedom','streamSettings':{'sockopt':{'dialerProxy':'missing'}}}],
