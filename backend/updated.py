@@ -151,7 +151,14 @@ def log_tail()->list[str]:
 class UpdateController:
     def __init__(self,allowed_uid:int):
         self.allowed_uid=allowed_uid;self.lock=threading.RLock();self.worker=None;self.candidate=None
-        if not STATE.exists():atomic_json(STATE,{'state':'idle','phase':'idle','percent':0,'message':'No update job has run yet','current':current_source()})
+        existing=read_json(STATE,{})
+        if existing.get('state') in {'checking','queued','running','restarting','rolling_back'}:
+            existing.update(state='failed',phase='failed',percent=100,
+                            message='Previous update job was interrupted when the root update broker restarted',
+                            finished_at=time.time(),broker_interrupted=True)
+            atomic_json(STATE,existing)
+        elif not STATE.exists():
+            atomic_json(STATE,{'state':'idle','phase':'idle','percent':0,'message':'No update job has run yet','current':current_source()})
     def state(self):
         out=read_json(STATE,{'state':'idle','phase':'idle','percent':0,'message':'No update state'})
         out['current']=current_source();out['broker_ready']=True;out['log_tail']=log_tail();return out
