@@ -1,5 +1,15 @@
 # تغییرات DARK XRAY
 
+## 0.9.0-rc5 — Clients V4 cyber command deck
+
+- صفحه Clients از نو با Command Deck دارک/سایبری ساخته شد؛ Sidebar دائمی حذف و Search/Quick Presence/Filter/Sort در یک نوار کنترل جمع شدند.
+- اکشن‌های هر ردیف به سه مسیر واضح `OPEN / QR / More` کاهش یافتند؛ Edit، IP/HWID، Enable/Disable، Reset و Delete داخل منوی More قرار گرفتند.
+- Create/Edit Client به Basic-first تبدیل شد: Identity، Inbound، Plan، Expiry و IP limit در مسیر اصلی؛ HWID، reset schedule، comment و XTLS Flow داخل Advanced بسته هستند.
+- Telegram ID و Custom UUID از فرم روزمره حذف شدند و credentialهای جدید به تولید امن سمت سرور سپرده می‌شوند.
+- Bulk Create هم به فرم ساده سه‌بخشی Batch / Service / Plan منتقل شد.
+- Group filter همچنان owner-scoped است و Login Owner دیگر به‌اشتباه به‌عنوان Owner Profile پیش‌فرض فرض نمی‌شود.
+- Detail و Action menu ظاهر سایبری یکدست، Responsive و Reduced-motion-safe دارند.
+
 ## 0.9.0-rc4 — Clients V3 + REALITY Guard
 
 - Clients V3 صفحه کاربران را به workspace سازمان‌یافته با Summary، Owner/Inbound/Status/Presence filters، Sort، Group sidebar و Detail view ارتقا می‌دهد.
