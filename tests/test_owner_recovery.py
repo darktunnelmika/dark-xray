@@ -81,10 +81,9 @@ def test_owner_security_recovery_actions(tmp_path):
     close_runtime(store,engine,manager)
 
 
-def test_create_owner_login_from_existing_profile(tmp_path):
+def test_create_primary_owner_login_from_existing_profile_when_no_owner_exists(tmp_path):
     data,store,engine,manager,auth=make_runtime(tmp_path)
-    auth.bootstrap('dark','OwnerPass8')
-    manager.owner_put(Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
+    manager.owner_put(Actor('bootstrap','owner',{}),'Mika',name='Mika',allowed=[])
     result=create_owner_account(data/'dark.sqlite3','Mika','MikaPass88')
     assert result['created'] is True and result['role']=='owner' and result['password_verified'] is True
     with store.lock:
@@ -92,6 +91,20 @@ def test_create_owner_login_from_existing_profile(tmp_path):
     assert row['role']=='owner' and verify_password('MikaPass88',row['password_hash'])
     close_runtime(store,engine,manager)
 
+
+def test_create_second_owner_is_rejected(tmp_path):
+    from dark_policy import PolicyError
+    data,store,engine,manager,auth=make_runtime(tmp_path)
+    auth.bootstrap('dark','OwnerPass8')
+    manager.owner_put(Actor('dark','owner',{}),'Mika',name='Mika',allowed=[])
+    try:
+        create_owner_account(data/'dark.sqlite3','Mika','MikaPass88');assert False
+    except PolicyError as exc:
+        assert 'one primary owner' in str(exc)
+    with store.lock:
+        owners=store.db.execute("SELECT id FROM api_admins WHERE role='owner' ORDER BY id").fetchall()
+    assert [r['id'] for r in owners]==['dark']
+    close_runtime(store,engine,manager)
 
 
 def test_owner_status_excludes_expired_sessions_and_api_keys(tmp_path):
