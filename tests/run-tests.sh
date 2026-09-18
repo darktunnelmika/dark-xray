@@ -37,6 +37,7 @@ python -m pytest tests/test_sessions.py -q --junitxml=qa/junit/sessions.xml
 python -m pytest tests/test_api_key_boundaries.py -q --junitxml=qa/junit/api-key-boundaries.xml
 python -m pytest tests/test_totp_replay.py -q --junitxml=qa/junit/totp-replay.xml
 python -m pytest tests/test_rbac_hardening.py -q --junitxml=qa/junit/rbac-hardening.xml
+python -m pytest tests/test_representatives_v2.py -q --junitxml=qa/junit/representatives-v2.xml
 python -m pytest tests/test_sync_redaction.py -q --junitxml=qa/junit/sync-redaction.xml
 python -m pytest tests/test_backup_hardening.py -q --junitxml=qa/junit/backup-hardening.xml
 python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
@@ -56,3 +57,4 @@ node --test tests/finance-v2.test.cjs
 node --test tests/ui-stability.test.cjs
 node --test tests/update-center.test.cjs
 node --test tests/nodes-v3.test.cjs
+node --test tests/representatives-v2.test.cjs
