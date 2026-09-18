@@ -61,9 +61,15 @@ def valid_ref(value:str)->str:
     return value
 
 def ver_key(tag:str):
-    m=re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?',tag)
+    m=re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?',str(tag or ''))
     if not m:return None
-    return tuple(int(x or 0) for x in m.groups())
+    major,minor,patch,rc=m.groups()
+    # Stable of the same X.Y.Z sorts after every RC.
+    return (int(major),int(minor),int(patch),1 if rc is None else 0,int(rc or 0))
+
+def older_than(candidate:str,current:str)->bool:
+    a=ver_key(candidate);b=ver_key(current)
+    return bool(a and b and a<b)
 
 def resolve_channel(channel:str,exact:str)->str:
     if channel=='main':return 'main'
@@ -172,9 +178,12 @@ class UpdateController:
             ci=ci_status(candidate['commit']);preflight=local_preflight()
             current=current_source()
             candidate['ci']=ci
-            candidate['ready']=bool(ci.get('verified')) and bool(preflight.get('ready'))
+            downgrade=older_than(candidate.get('version',''),current.get('version',''))
+            candidate['downgrade_blocked']=downgrade
+            candidate['ready']=bool(ci.get('verified')) and bool(preflight.get('ready')) and not downgrade
             candidate['update_available']=candidate['commit']!=current.get('commit') if current.get('commit') else candidate['version']!=current.get('version')
             warnings=[]
+            if downgrade:warnings.append('Candidate version is older than the installed DARK version; web downgrade is refused. Use rollback snapshots for recovery.')
             if not ci.get('verified'):warnings.append('Candidate CI is not green; web update is locked.')
             if not preflight.get('ready'):warnings.append('Local preflight is not ready.')
             self.candidate=candidate
