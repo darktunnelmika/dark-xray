@@ -336,3 +336,29 @@ def test_deselected_stale_remote_traffic_is_ignored_so_cleanup_can_converge(env)
   old=store.db.execute("SELECT used_bytes FROM clients WHERE id='old-user'").fetchone()[0]
   keep=store.db.execute("SELECT used_bytes FROM clients WHERE id='keep-user'").fetchone()[0]
  assert old==0 and keep==15
+
+
+def test_client_delete_finalizes_remote_traffic_before_tombstone(env,monkeypatch):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('DELETE',23103,'delete-a')).json()['id']
+ _managed_client(c,'delete-user',a)
+ assert c.post('/api/nodes',json={'id':'delete-node','name':'Delete','origin':'https://delete.example.com',
+   'token':'dkn_'+('Y'*60),'enabled':True,'inboundIds':[a]}).status_code==200
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=12 WHERE node_id='delete-node' AND local_inbound_id=?",(a,))
+ reg=app.state.nodes
+ reg.apply_traffic_snapshot('delete-node',[{'sourceEmail':'delete-user','up':10,'down':0}],captured_at=1000)
+ calls=[]
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  calls.append((node_id,path,body))
+  assert path=='/node/api/mirrors/traffic/reset'
+  return {'sourceEmail':'delete-user','up':25,'down':5,'capturedAt':1010,'cached':False},7
+ monkeypatch.setattr(reg,'_request',fake_request)
+ out=c.post('/api/clients/delete-user/action',json={'action':'delete'})
+ assert out.status_code==202,out.text
+ with store.lock:
+  assert store.db.execute("SELECT 1 FROM clients WHERE id='delete-user'").fetchone() is None
+  meta=store.db.execute("SELECT state,op_id FROM managed_clients WHERE email='delete-user'").fetchone()
+  charged=store.db.execute("SELECT COALESCE(SUM(up_bytes+down_bytes),0) FROM traffic_ledger WHERE event_id LIKE 'node:%'").fetchone()[0]
+ assert meta['state']=='deleted' and meta['op_id']==''
+ assert charged==20 and len(calls)==1
