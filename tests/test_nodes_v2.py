@@ -270,3 +270,45 @@ def test_agent_traffic_snapshot_and_reset_are_idempotent(env,monkeypatch):
   row=store.db.execute('SELECT up,down FROM core_clients WHERE email=?',(mirror,)).fetchone()
   resets=store.db.execute('SELECT COUNT(*) FROM node_agent_traffic_resets').fetchone()[0]
  assert tuple(row)==(0,0) and resets==1
+
+
+def test_remote_usage_participates_in_client_quota_enforcement(env):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('QUOTA',23101,'quota-a')).json()['id']
+ _managed_client(c,'quota-user',a,{'totalGB':50})
+ assert c.post('/api/nodes',json={'id':'quota-node','name':'Quota','origin':'https://quota.example.com',
+   'token':'dkn_'+('Q'*60),'enabled':True,'inboundIds':[a]}).status_code==200
+ reg=app.state.nodes
+ reg.apply_traffic_snapshot('quota-node',[{'sourceEmail':'quota-user','up':0,'down':0}],captured_at=1000)
+ reg.apply_traffic_snapshot('quota-node',[{'sourceEmail':'quota-user','up':60,'down':0}],captured_at=1010)
+ app.state.manager.tick(suppress=False)
+ assert eng.client_detail('quota-user')['client']['enable'] is False
+ row=c.get('/api/clients/quota-user').json()
+ assert row['used_bytes']==60 and 'client_quota' in row['block_reasons']
+
+
+def test_central_client_reset_reconciles_remote_final_counter_then_zeros_current_usage(env,monkeypatch):
+ store,eng,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('RESET',23102,'reset-a')).json()['id']
+ _managed_client(c,'reset-user',a)
+ assert c.post('/api/nodes',json={'id':'reset-node','name':'Reset','origin':'https://reset.example.com',
+   'token':'dkn_'+('Z'*60),'enabled':True,'inboundIds':[a]}).status_code==200
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=9 WHERE node_id='reset-node' AND local_inbound_id=?",(a,))
+ reg=app.state.nodes
+ reg.apply_traffic_snapshot('reset-node',[{'sourceEmail':'reset-user','up':10,'down':0}],captured_at=1000)
+ calls=[]
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  calls.append((node_id,path,body))
+  assert path=='/node/api/mirrors/traffic/reset'
+  return {'sourceEmail':'reset-user','up':25,'down':5,'capturedAt':1010,'cached':False},8
+ monkeypatch.setattr(reg,'_request',fake_request)
+ out=c.post('/api/clients/reset-user/action',json={'action':'reset'})
+ assert out.status_code==202,out.text
+ with store.lock:
+  policy=store.db.execute("SELECT used_bytes FROM clients WHERE id='reset-user'").fetchone()[0]
+  remote=store.db.execute("SELECT raw_up,raw_down,current_up,current_down FROM remote_node_client_usage WHERE node_id='reset-node' AND client_id='reset-user'").fetchone()
+  charged=store.db.execute("SELECT COALESCE(SUM(up_bytes+down_bytes),0) FROM traffic_ledger WHERE event_id LIKE 'node:%'").fetchone()[0]
+ assert policy==0 and tuple(remote)==(0,0,0,0)
+ assert charged==20
+ assert len(calls)==1 and calls[0][2]['sourceEmail']=='reset-user' and len(calls[0][2]['resetId'])>=8
