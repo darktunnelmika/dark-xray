@@ -41,6 +41,7 @@ python -m pytest tests/test_sync_redaction.py -q --junitxml=qa/junit/sync-redact
 python -m pytest tests/test_backup_hardening.py -q --junitxml=qa/junit/backup-hardening.xml
 python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
 python -m pytest tests/test_update_transaction.py -q --junitxml=qa/junit/update-transaction.xml
+python -m pytest tests/test_update_broker.py -q --junitxml=qa/junit/update-broker.xml
 python -m pytest tests/test_web_contract.py -q --junitxml=qa/junit/web-contract.xml
 python -m pytest tests/test_reality_scan.py -q --junitxml=qa/junit/reality.xml
 node --test tests/form-models.test.cjs
@@ -52,3 +53,4 @@ node --test tests/clients-v4.test.cjs
 node --test tests/ops-v2-cache.test.cjs
 node --test tests/finance-v2.test.cjs
 node --test tests/ui-stability.test.cjs
+node --test tests/update-center.test.cjs
