@@ -146,6 +146,7 @@ def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkey
  captured={}
  def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
   if path=='/node/api/mirrors/traffic':return {'items':[],'capturedAt':time.time()},11
+  if path=='/node/api/mirrors/security':return {'sourceVerified':False,'items':[],'capturedAt':time.time()},12
   captured.update(node_id=node_id,path=path,method=method,body=body,timeout=timeout)
   return {'items':[{'sourceInboundId':a,'remoteInboundId':9,'clients':1}],'core':{'state':'running'}},17
  monkeypatch.setattr(app.state.nodes,'_request',fake_request)
