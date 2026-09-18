@@ -389,7 +389,8 @@ class NodeRegistry:
             if not inbound_ids:return {'nodes':0,'reset':True}
             marks=','.join('?' for _ in inbound_ids)
             node_ids=[r[0] for r in self.store.db.execute(
-                'SELECT DISTINCT node_id FROM remote_node_inbounds WHERE local_inbound_id IN ('+marks+') ORDER BY node_id',tuple(inbound_ids))]
+                'SELECT DISTINCT node_id FROM remote_node_inbounds WHERE remote_inbound_id>0 AND local_inbound_id IN ('+marks+') ORDER BY node_id',
+                tuple(inbound_ids))]
         results=[]
         for node_id in node_ids:
             doc,ms=self._request(node_id,'/node/api/mirrors/traffic/reset','POST',
