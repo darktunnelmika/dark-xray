@@ -66,7 +66,16 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#login-form button[type=submit]').click()
             page.wait_for_selector('.nav-btn[data-page="inbounds"]',timeout=10000)
             assert page.locator('html').get_attribute('dir')=='ltr'
-            mark('real browser login, cookie session and English/LTR shell')
+            assert page.locator('body').evaluate("b=>b.classList.contains('skin-cyber-classic')")
+            skin=page.evaluate("""()=>({
+                green:getComputedStyle(document.body).getPropertyValue('--classic-green').trim(),
+                bg:getComputedStyle(document.body).backgroundColor,
+                panelRadius:getComputedStyle(document.querySelector('.panel')).borderRadius,
+                activeBorder:getComputedStyle(document.querySelector('.nav-btn.active')).borderTopColor
+            })""")
+            assert skin['green']=='#19ff86',skin
+            assert skin['panelRadius'] in ('2px','2px 2px 2px 2px'),skin
+            mark('real browser login, cookie session and Cyber Classic default skin')
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
             # Every owner workspace must render without leaving a busy/blank content surface.
