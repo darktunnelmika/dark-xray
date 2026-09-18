@@ -77,14 +77,14 @@ jobs:
           for js in \
             web/i18n-en.js web/form-models.js web/inbounds-models.js web/inbounds-v3.js \
             web/settings-v2.js web/clients-v2.js web/finance-v2.js web/ui-stability.js web/xray-v2.js web/hosts-v2.js \
-            web/ops-v2.js web/nodes-v2.js web/overview-v4.js; do node --check "$js"; done
+            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/xray-guided-v3.js; do node --check "$js"; done
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q 'body class="skin-cyber-classic"' web/index.html
           grep -q 'assets/cyber-classic.css' web/index.html
           grep -q -- '--classic-green:#19ff86' web/cyber-classic.css
           for asset in \
-            cyber.css cyber-classic.css inbounds-v3.css settings-v2.css clients-v2.css finance-v2.css xray-v2.css hosts-v2.css ops-v2.css nodes-v2.css overview-v4.css \
-            i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js finance-v2.js ui-stability.js xray-v2.js hosts-v2.js ops-v2.js nodes-v2.js overview-v4.js; do
+            cyber.css cyber-classic.css inbounds-v3.css settings-v2.css clients-v2.css finance-v2.css xray-v2.css xray-guided-v3.css hosts-v2.css ops-v2.css nodes-v2.css overview-v4.css \
+            i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js finance-v2.js ui-stability.js xray-v2.js xray-guided-v3.js hosts-v2.js ops-v2.js nodes-v2.js overview-v4.js; do
             grep -q "assets/$asset" web/index.html
           done
           ! grep -q '/assets/runtime-policy.js' web/index.html
@@ -96,6 +96,9 @@ jobs:
           grep -q '/api/resellers' backend/server.py
           grep -q '/api/resellers/' web/live.js
           grep -q 'max_client_hwid' backend/manager.py
+          grep -q 'DarkXrayGuidedV3' web/xray-guided-v3.js
+          grep -q 'assets/xray-guided-v3.js' web/index.html
+          grep -q 'assets/xray-guided-v3.css' web/index.html
           grep -q 'ov4-resource-grid' web/overview-v4.js
           grep -q 'connections' backend/core.py
           grep -q 'panel' backend/core.py
