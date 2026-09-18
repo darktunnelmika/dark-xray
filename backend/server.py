@@ -439,7 +439,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 if not patch:raise PolicyError('No bulk adjustment requested')
                 manager.update(p.actor,email,patch,reconcile=False);changed.append(email);out.append({'email':email,'_changed':True})
             except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
-        if changed:manager.tick(suppress=True)
+        if changed:
+            manager.tick(suppress=True);apply_global_security()
         for item in out:
             if item.pop('_changed',False):item['result']=manager.detail(p.actor,item['email'])
         return {'changed':len(changed),'items':out}
@@ -454,7 +455,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 if not ids:raise PolicyError('A client must retain at least one inbound')
                 manager.update(p.actor,email,{},ids,reconcile=False);changed.append(email);out.append({'email':email,'_changed':True})
             except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
-        if changed:manager.tick(suppress=True)
+        if changed:
+            manager.tick(suppress=True);apply_global_security()
         for item in out:
             if item.pop('_changed',False):item['result']=manager.detail(p.actor,item['email'])
         return {'changed':len(changed),'items':out}
