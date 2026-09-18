@@ -67,6 +67,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.wait_for_selector('.nav-btn[data-page="inbounds"]',timeout=10000)
             assert page.locator('html').get_attribute('dir')=='ltr'
             assert page.locator('body').evaluate("b=>b.classList.contains('skin-cyber-classic')")
+            page.locator('.ov2-control-center .ov2-priority').first.wait_for(state='visible',timeout=10000)
             skin=page.evaluate("""()=>({
                 green:getComputedStyle(document.body).getPropertyValue('--classic-green').trim(),
                 bg:getComputedStyle(document.body).backgroundColor,
