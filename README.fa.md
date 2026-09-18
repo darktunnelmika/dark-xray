@@ -151,7 +151,12 @@ Node control برای Origin عمومی HTTPS طراحی شده است:
 - HTTP redirect دنبال نمی‌شود؛
 - proxy environment برای Node request استفاده نمی‌شود؛
 - response/request limit و deadline وجود دارد؛
-- health monitor نودهای فعال را دوره‌ای probe می‌کند.
+- health monitor نودهای فعال را دوره‌ای probe می‌کند؛
+- Traffic Clientهای Mirrorشده با baseline مستقل هر Node وارد Ledger مرکزی می‌شود؛
+- retry/reconnect یک snapshot تکراری را دوباره حساب نمی‌کند و counter reset نود به‌صورت delta جدید مدیریت می‌شود؛
+- مصرف فعلی Client از Local + همه Nodeها جمع می‌شود و در quota مرکزی اثر دارد؛
+- Reset مصرف با reset ID پایدار روی Nodeها هماهنگ است و پاسخ reset روی Agent cache می‌شود تا retry باعث reset دوباره یا double-count نشود؛
+- Offline/Recovery count و آخرین Traffic Sync در UI Node نمایش داده می‌شوند.
 
 این کنترل‌ها SSRF risk را کم می‌کنند ولی جای network ACL بیرونی را نمی‌گیرند.
 
@@ -228,7 +233,7 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 2. Reboot/Power-cycle واقعی ماشین و بررسی Panel/Xray/DB بعد boot.
 3. Domain/TLS واقعی: issue و renewal گواهی، Secure Cookie و HSTS.
 4. IP Guard در topology واقعی سرور/تونل/CDN.
-5. دو VPS واقعی Node با HTTPS معتبر و network-loss recovery.
+5. دو VPS واقعی Node با HTTPS معتبر، Traffic Sync، reset coordination و network-loss recovery روی WAN واقعی.
 6. ظرفیت‌سنجی روی پلن واقعی VPS؛ smoke هزار Client و SQLite contention در CI قبلاً سبز شده است.
 7. Update/Rollback rehearsal با exact release artifact نهایی.
 8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
