@@ -178,7 +178,7 @@ IP Guard از worker root جداگانه و nftables استفاده می‌کن�
 
 ## Update Center
 
-از RC7، Owner یک صفحهٔ مستقل **Update Center** داخل پنل دارد:
+از RC7، **Update Center** به صفحه اول Owner منتقل شده و کنار Backup / Restore / Doctor در Control Center قرار دارد:
 
 - **Latest Verified**: آخرین Commit شاخه main فقط وقتی CI همان SHA دقیق سبز است؛
 - **Stable**: جدیدترین Tag پایدار؛
@@ -189,7 +189,7 @@ Web process همچنان با user محدود `darkxray` اجرا می‌شود.
 
 قبل از نصب، Candidate به Commit ثابت resolve می‌شود، CI، DB، سرویس و فضای rollback بررسی می‌شوند. سپس Snapshot سورس و SQLite گرفته می‌شود. اگر activation/health fail شود، rollback قبلی خودکار انجام می‌شود. در زمان restart پنل، Broker مستقل کار را ادامه می‌دهد و Browser بعد از برگشت سرویس status را بازیابی می‌کند.
 
-**Bootstrap:** نصب‌هایی که هنوز RC6 یا قدیمی‌ترند یک بار باید با Safe Update installer آنلاین RC7 ارتقا پیدا کنند تا Broker systemd نصب شود. پس از آن آپدیت‌های بعدی از خود پنل انجام می‌شوند.
+**Bootstrap:** نصب‌هایی که هنوز RC6 یا قدیمی‌ترند یک بار باید با Safe Update installer آنلاین RC7 ارتقا پیدا کنند تا Broker systemd نصب شود. پس از آن آپدیت‌های بعدی مستقیماً از Control Center صفحه اول انجام می‌شوند.
 
 ## Safe Update / Recovery
 
