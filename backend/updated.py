@@ -85,7 +85,7 @@ def resolve_channel(channel:str,exact:str)->str:
         if channel=='stable' and re.fullmatch(r'v\d+\.\d+\.\d+',tag):tags.append(tag)
         if channel=='rc' and re.fullmatch(r'v\d+\.\d+\.\d+-rc\d+',tag):tags.append(tag)
     if not tags:raise UpdateError('No '+channel+' DARK release tag is available yet')
-    return max(tags,key=lambda x:ver_key(x) or (0,0,0,0))
+    return max(tags,key=lambda x:ver_key(x) or (0,0,0,0,0))
 
 def inspect_ref(ref:str)->dict:
     ref=valid_ref(ref)
