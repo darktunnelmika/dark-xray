@@ -31,6 +31,7 @@ from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
 from nodes import NodeRegistry,token_digest
+from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
@@ -115,6 +116,12 @@ class Password(Model):
     old_password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
     new_password:str=Field(min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
 
+
+class UpdateCheck(Model):
+    channel:Literal['main','stable','rc','exact']='main'
+    ref:str=Field(default='',max_length=128)
+class UpdateStart(Model):
+    commit:str=Field(min_length=40,max_length=40)
 
 class RealityProbe(Model):
     target:str=Field(min_length=1,max_length=300)
@@ -219,6 +226,31 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
+
+    def update_client()->UpdateBrokerClient:
+        return UpdateBrokerClient(timeout=12)
+
+    @app.get('/api/update/status')
+    def update_status(p:Principal=Depends(owner)):
+        try:return update_client().status()
+        except UpdateBrokerError as ex:raise HTTPException(503,str(ex))
+
+    @app.post('/api/update/check')
+    def update_check(body:UpdateCheck,p:Principal=Depends(owner)):
+        try:
+            result=update_client().check(body.channel,body.ref)
+            manager.audit(p.actor,p.actor.id,'system.update_check',str(result.get('candidate',{}).get('commit',''))[:40],body.channel)
+            return result
+        except UpdateBrokerError as ex:raise HTTPException(503,str(ex))
+
+    @app.post('/api/update/start',status_code=202)
+    def update_start(body:UpdateStart,p:Principal=Depends(owner)):
+        if config.test_engine:raise HTTPException(409,'System update is disabled in test-engine mode')
+        try:
+            result=update_client().start(body.commit)
+            manager.audit(p.actor,p.actor.id,'system.update_start',body.commit)
+            return result
+        except UpdateBrokerError as ex:raise HTTPException(503,str(ex))
     @app.post('/api/auth/login')
     def login(body:Login,request:Request):
         session_minutes=int(engine.section('panel').get('session_max_age_minutes',480))
