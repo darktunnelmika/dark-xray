@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'backend'))
 from core import Config
 from guard_bridge import BrokerClient
+from update_bridge import UpdateBrokerClient
 
 
 def _panel_http_status(cfg:Config,path:str)->int:
@@ -52,6 +53,8 @@ def main():
         checks['protected_ports']=cfg.protected_ports
         try:checks['guard']=BrokerClient(cfg.guard_socket).status()
         except Exception as ex:checks['guard']={'connected':False,'message':str(ex)}
+        try:checks['update_broker']=UpdateBrokerClient(timeout=3).status()
+        except Exception as ex:checks['update_broker']={'connected':False,'message':str(ex)}
         checks['nft_binary_found']=shutil.which('nft') is not None
         checks['live_packet_test']='not performed by doctor'
     except Exception as ex:checks['configuration_error']=str(ex)
