@@ -31,6 +31,10 @@ test('Update Center lives on the owner dashboard and not in standalone navigatio
   assert.ok(html.indexOf('<before>')<html.indexOf('Update Center'));
   assert.ok(html.indexOf('Update Center')<html.indexOf('<after>'));
   assert.ok(!html.includes('dark-update-center-slot'));
+  assert.match(html,/up-dashboard-compact/);
+  assert.match(html,/Open Update Center/);
+  assert.match(html,/Check Latest Verified/);
+  assert.ok(!html.includes('Choose update channel'));
 });
 
 test('web update flow uses broker APIs and immutable commit confirmation',()=>{
