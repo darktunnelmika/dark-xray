@@ -190,6 +190,41 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-clients-v4.png'),full_page=True)
             page.locator('[data-act="close"]').first.click()
 
+            visit(page,'outbounds')
+            page.locator('[data-act="xv2outnew"]').click()
+            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="settings"]').count()==0
+            assert page.locator('#dialog-form [name="stream"]').count()==0
+            assert page.locator('#dialog-form [name="protocol"]').count()==1
+            page.locator('#dialog-form [name="tag"]').fill('browser-proxy')
+            page.locator('#dialog-form [name="protocol"]').select_option('vless')
+            page.locator('#dialog-form [name="address"]').fill('edge.example.test')
+            page.locator('#dialog-form [name="port"]').fill('443')
+            page.locator('#dialog-form [name="id"]').fill('33333333-3333-4333-8333-333333333333')
+            page.locator('#dialog-form [name="network"]').select_option('grpc')
+            page.locator('#dialog-form [name="serviceName"]').fill('browser-grpc')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            outbounds=page.evaluate("()=>api('/api/settings/outbounds').then(x=>x.value)")
+            browser_out=next((x for x in outbounds if x.get('tag')=='browser-proxy'),None)
+            assert browser_out and browser_out['protocol']=='vless',browser_out
+            assert browser_out['settings']['address']=='edge.example.test'
+            assert browser_out['streamSettings']['grpcSettings']['serviceName']=='browser-grpc'
+            mark('Xray Guided V3 creates VLESS outbound without raw Settings/StreamSettings JSON')
+
+            visit(page,'routing')
+            page.locator('[data-act="xv2rulenew"]').click()
+            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="targetType"]').count()==1
+            assert page.locator('#dialog-form [name="targetOutbound"] option[value="browser-proxy"]').count()==1
+            page.locator('#dialog-form [name="domain"]').fill('domain:browser.example')
+            page.locator('#dialog-form [name="targetOutbound"]').select_option('browser-proxy')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
+            assert any(r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
+            mark('Routing Guided V3 selects existing outbound tags instead of free-typing destinations')
+
             visit(page,'nodes')
             page.locator('[data-act="nv2new"]').click()
             page.locator('#dialog-form .nv2-picker').wait_for(state='visible',timeout=10000)
