@@ -38,8 +38,8 @@ test('Node cards expose Central traffic and recovery state',()=>{
 
 
 test('Node editor exposes failover address priority and security sync',()=>{
-  assert.match(src,/name="dataAddress"/);
-  assert.match(src,/name="priority"/);
+  assert.match(src,/,\'dataAddress\',/);
+  assert.match(src,/,\'priority\',/);
   assert.match(src,/name="failoverEnabled"/);
   assert.match(src,/nv2security/);
   assert.match(src,/Security synchronized/);
