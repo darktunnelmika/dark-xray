@@ -504,6 +504,9 @@ class Manager:
         existing=records.get(email)
         if op=='delete':
             final=None
+            if self.remote_reset is not None:
+                reset_id=meta.get('op_id') or ('legacy-delete-'+hashlib.sha256((email+str(meta.get('updated_at',0))).encode()).hexdigest()[:24])
+                self.remote_reset(email,reset_id)
             if existing:
                 if existing.get('subId')!=desired.get('subId'):raise CoreError('Identity conflict: refusing to delete a different engine client',status=409)
                 final=self.engine.delete(email)
@@ -519,7 +522,7 @@ class Manager:
             if policy_exists:self.store.delete_client(SYSTEM,email)
             with self.store.transaction() as db:
                 db.execute('DELETE FROM client_cycles WHERE email=?',(email,))
-                db.execute("UPDATE managed_clients SET op='none',state='deleted',desired='{}',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
+                db.execute("UPDATE managed_clients SET op='none',op_id='',state='deleted',desired='{}',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",(time.time(),email))
             return
         if op=='reset':
             if not existing:raise CoreError('CoreEngine client missing; reset refused',status=409)
