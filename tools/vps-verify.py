@@ -109,16 +109,36 @@ def main()->None:
                 runtime_row=db.execute("SELECT body FROM core_sections WHERE name='runtime'").fetchone()
                 row=db.execute("SELECT body FROM core_sections WHERE name='ipguard'").fetchone()
                 if row:ipguard=json.loads(row[0])
-                nodes={'total':0,'enabled':0,'fresh':0,'errors':0}
+                nodes={'total':0,'enabled':0,'fresh':0,'errors':0,'failover_ready':0,
+                       'security_fresh':0,'security_verified':0}
                 table=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_nodes'").fetchone()
                 if table:
                     now=__import__('time').time()
-                    rows=db.execute('SELECT enabled,last_seen,last_error FROM remote_nodes').fetchall();nodes['total']=len(rows)
-                    nodes['enabled']=sum(bool(r[0]) for r in rows)
-                    nodes['fresh']=sum(bool(r[0] and r[1] and now-r[1]<180 and not r[2]) for r in rows)
-                    nodes['errors']=sum(bool(r[0] and r[2]) for r in rows)
+                    node_cols={r[1] for r in db.execute('PRAGMA table_info(remote_nodes)')}
+                    modern={'data_address','failover_enabled'}<=node_cols
+                    if modern:
+                        rows=db.execute('SELECT id,enabled,last_seen,last_error,data_address,failover_enabled FROM remote_nodes').fetchall()
+                    else:
+                        rows=[(r[0],r[1],r[2],r[3],'',0) for r in db.execute('SELECT id,enabled,last_seen,last_error FROM remote_nodes').fetchall()]
+                    nodes['total']=len(rows)
+                    nodes['enabled']=sum(bool(r[1]) for r in rows)
+                    nodes['fresh']=sum(bool(r[1] and r[2] and now-r[2]<180 and not r[3]) for r in rows)
+                    nodes['errors']=sum(bool(r[1] and r[3]) for r in rows)
+                    nodes['failover_ready']=sum(bool(r[1] and r[2] and now-r[2]<180 and not r[3] and r[4] and r[5]) for r in rows)
+                    sec_table=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_security_state'").fetchone()
+                    if sec_table:
+                        security={str(r[0]):r for r in db.execute(
+                            'SELECT node_id,source_verified,last_sync,last_error FROM remote_node_security_state').fetchall()}
+                        for r in rows:
+                            if not r[1]:continue
+                            sec=security.get(str(r[0]))
+                            if sec and sec[2] and now-sec[2]<180 and not sec[3]:
+                                nodes['security_fresh']+=1
+                                if sec[1]:nodes['security_verified']+=1
             hard('database',quick=='ok',{'quick_check':quick,'bytes':db_path.stat().st_size})
             soft('remote_nodes',nodes['errors']==0, nodes)
+            soft('remote_node_failover',nodes['enabled']==0 or nodes['failover_ready']==nodes['enabled'],nodes)
+            soft('remote_node_security',nodes['enabled']==0 or nodes['security_fresh']==nodes['enabled'],nodes)
         except Exception as ex:hard('database',False,type(ex).__name__+': '+str(ex))
 
         try:
