@@ -297,6 +297,57 @@ class CoreEngine:
                 if out['tag']=='dark-api': raise CoreError('Reserved API tag')
                 tags.append(out['tag'])
             if len(set(tags))!=len(tags): raise CoreError('Duplicate outbound tags')
+            def require_server(server:dict,label:str):
+                if not isinstance(server,dict):raise CoreError(label+' server must be an object')
+                address=server.get('address')
+                port=server.get('port')
+                if not isinstance(address,str) or not address or len(address)>253 or any(ch in address for ch in '/?#@ \\r\\n\\t'):
+                    raise CoreError(label+' server address is invalid')
+                if type(port)is not int or not 1<=port<=65535:raise CoreError(label+' server port is invalid')
+            for out in value:
+                protocol=str(out.get('protocol','')).lower();settings=out.get('settings',{})
+                if not isinstance(settings,dict):raise CoreError('Outbound '+out['tag']+' settings must be an object')
+                if protocol=='vless':
+                    if isinstance(settings.get('vnext'),list):
+                        if not settings['vnext']:raise CoreError('VLESS outbound requires a server')
+                        server=settings['vnext'][0];require_server(server,'VLESS')
+                        users=server.get('users',[])
+                        if not isinstance(users,list) or not users or not isinstance(users[0],dict) or not isinstance(users[0].get('id'),str) or not users[0]['id']:
+                            raise CoreError('VLESS outbound requires a UUID')
+                    else:
+                        require_server(settings,'VLESS')
+                        if not isinstance(settings.get('id'),str) or not settings['id']:raise CoreError('VLESS outbound requires a UUID')
+                elif protocol=='vmess':
+                    vnext=settings.get('vnext')
+                    if not isinstance(vnext,list) or not vnext:raise CoreError('VMess outbound requires vnext server settings')
+                    require_server(vnext[0],'VMess')
+                    users=vnext[0].get('users',[])
+                    if not isinstance(users,list) or not users or not isinstance(users[0],dict) or not isinstance(users[0].get('id'),str) or not users[0]['id']:
+                        raise CoreError('VMess outbound requires a UUID')
+                elif protocol in {'trojan','shadowsocks','socks','http'}:
+                    servers=settings.get('servers')
+                    if not isinstance(servers,list) or not servers:raise CoreError(protocol+' outbound requires at least one server')
+                    require_server(servers[0],protocol.upper())
+                    if protocol in {'trojan','shadowsocks'} and (not isinstance(servers[0].get('password'),str) or not servers[0]['password']):
+                        raise CoreError(protocol+' outbound requires a password')
+                elif protocol=='wireguard':
+                    if not isinstance(settings.get('secretKey'),str) or not settings['secretKey']:raise CoreError('WireGuard outbound requires secretKey')
+                    peers=settings.get('peers')
+                    if not isinstance(peers,list) or not peers:raise CoreError('WireGuard outbound requires at least one peer')
+                    peer=peers[0]
+                    if not isinstance(peer,dict) or not isinstance(peer.get('publicKey'),str) or not peer['publicKey'] or not isinstance(peer.get('endpoint'),str) or not peer['endpoint']:
+                        raise CoreError('WireGuard peer requires publicKey and endpoint')
+                    addresses=settings.get('address',[])
+                    if not isinstance(addresses,list) or any(not isinstance(x,str) or not x for x in addresses):raise CoreError('WireGuard address must be a list of CIDRs')
+                elif protocol=='loopback':
+                    if not isinstance(settings.get('inboundTag'),str) or not settings['inboundTag']:raise CoreError('Loopback outbound requires inboundTag')
+                elif protocol=='hysteria':
+                    require_server(settings,'Hysteria')
+                    version=settings.get('version',2)
+                    if type(version)is not int or version not in (1,2):raise CoreError('Hysteria outbound version must be 1 or 2')
+                elif protocol=='dns':
+                    if 'rewritePort' in settings and (type(settings['rewritePort'])is not int or not 1<=settings['rewritePort']<=65535):
+                        raise CoreError('DNS outbound rewritePort is invalid')
             links={}
             for out in value:
                 stream=out.get('streamSettings',{})
