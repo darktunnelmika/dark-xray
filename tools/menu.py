@@ -155,9 +155,7 @@ def choose_owner(action='manage'):
         return ''
     print(f'{GY}Primary Owner — choose account to {action}:{R}')
     for i,name in enumerate(owners,1):print(f'  [{i}] {name}')
-    profiles=owner_profiles_without_login()
-    if profiles:
-        print(f'{YE}Profiles without login/password (not selectable):{R} '+', '.join(profiles))
+    if len(owners)>1:print(f'{YE}Legacy database warning: more than one Owner exists. No new Owner can be created.{R}')
     raw=ask('Select login Owner','1')
     if raw.isdigit() and 1<=int(raw)<=len(owners):
         selected=owners[int(raw)-1]
