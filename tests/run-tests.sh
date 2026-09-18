@@ -32,6 +32,7 @@ python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
 python -m pytest tests/test_menu_owner_selection.py -q --junitxml=qa/junit/menu-owner-selection.xml
 python -m pytest tests/test_control_center_v2.py -q --junitxml=qa/junit/control-center-v2.xml
+python -m pytest tests/test_overview_v4_system.py -q --junitxml=qa/junit/overview-v4-system.xml
 python -m pytest tests/test_backup_cli.py -q --junitxml=qa/junit/backup-cli.xml
 python -m pytest tests/test_sessions.py -q --junitxml=qa/junit/sessions.xml
 python -m pytest tests/test_api_key_boundaries.py -q --junitxml=qa/junit/api-key-boundaries.xml
