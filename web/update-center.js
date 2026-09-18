@@ -27,7 +27,7 @@ function UWorkspace(st,embedded){
  var ch=state.updateCenter.channel,run=['queued','running','restarting','rolling_back','checking'].indexOf(st&&st.state)>=0;
  if(run)setTimeout(function(){if(state.page==='update'||state.page==='dashboard')UPoll();},1200);
  var h='<div class="update-center '+(embedded?'up-embedded':'')+'">';
- if(embedded)h+='<div class="up-dashboard-title"><div><span class="eyebrow">DARK UPDATE / ROLLBACK</span><h2>'+UL('Update Center','مرکز آپدیت')+'</h2><p>'+UL('Verified source · CI gate · snapshots · automatic rollback · live progress','سورس تاییدشده · گیت CI · Snapshot · Rollback خودکار · پیشرفت زنده')+'</p></div><button class="btn" data-act="uprefresh">'+icon('refresh')+UL('Refresh','بروزرسانی')+'</button></div>';
+ if(embedded)h+='<div class="up-dashboard-title"><div><span class="eyebrow">03 / UPDATE & ROLLBACK</span><h2>'+UL('Update Center','مرکز آپدیت')+'</h2><p>'+UL('Verified source · CI gate · snapshots · automatic rollback · live progress','سورس تاییدشده · گیت CI · Snapshot · Rollback خودکار · پیشرفت زنده')+'</p></div><button class="btn" data-act="uprefresh">'+icon('refresh')+UL('Refresh','بروزرسانی')+'</button></div>';
  h+=UCurrent(st)+'<section class="up-select"><div class="up-section-title"><span>01</span><div><b>'+UL('Choose update channel','کانال آپدیت را انتخاب کن')+'</b><small>'+UL('Latest Verified uses the newest tested main commit.','Latest Verified جدیدترین Commit تست‌شده main را استفاده می‌کند.')+'</small></div></div><div class="up-channels">';
  h+=UChannel('main',UL('Latest Verified','آخرین نسخه تاییدشده'),UL('Newest main commit · CI must be green','جدیدترین main · فقط با CI سبز'),ch==='main','activity');
  h+=UChannel('stable',UL('Stable','پایدار'),UL('Newest stable release tag','آخرین Tag پایدار'),ch==='stable','shield');
@@ -38,11 +38,11 @@ function UWorkspace(st,embedded){
 }
 function UDashboard(){
  if(!isOwner())return '';
- if(state.updateCenter.error)return '<section class="up-dashboard-shell"><div class="update-center up-embedded"><div class="up-dashboard-title"><div><span class="eyebrow">DARK UPDATE / ROLLBACK</span><h2>'+UL('Update Center','مرکز آپدیت')+'</h2></div></div><article class="up-card up-unavailable">'+icon('alert')+'<div><b>'+UL('Update Broker is not available','Update Broker در دسترس نیست')+'</b><p>'+UE(state.updateCenter.error)+'</p></div></article></div></section>';
+ if(state.updateCenter.error)return '<section class="up-dashboard-shell"><div class="update-center up-embedded"><div class="up-dashboard-title"><div><span class="eyebrow">03 / UPDATE & ROLLBACK</span><h2>'+UL('Update Center','مرکز آپدیت')+'</h2></div></div><article class="up-card up-unavailable">'+icon('alert')+'<div><b>'+UL('Update Broker is not available','Update Broker در دسترس نیست')+'</b><p>'+UE(state.updateCenter.error)+'</p></div></article></div></section>';
  if(!state.updateCenter.status)return '<section class="up-dashboard-shell"><article class="up-card up-empty"><div>'+icon('refresh')+'</div><b>'+UL('Loading update status…','در حال دریافت وضعیت آپدیت…')+'</b></article></section>';
  return '<section class="up-dashboard-shell">'+UWorkspace(state.updateCenter.status,true)+'</section>';
 }
-dashboard=function(){var base=baseDashboardUpdate();return isOwner()?base+UDashboard():base;};
+dashboard=function(){var base=baseDashboardUpdate(),slot='<div id="dark-update-center-slot"></div>';if(!isOwner())return base.replace(slot,'');var update=UDashboard();return base.includes(slot)?base.replace(slot,update):base+update;};
 async function UPage(){
  var st;try{st=await api('/api/update/status');state.updateCenter.status=st;state.updateCenter.error='';}catch(ex){state.updateCenter.error=ex.message;return UUnavailable(ex.message);}
  return heading(UL('Update Center','مرکز آپدیت'),UL('Verified source · CI gate · snapshots · automatic rollback · live progress','سورس تاییدشده · گیت CI · Snapshot · Rollback خودکار · پیشرفت زنده'),'<button class="btn" data-act="uprefresh">'+icon('refresh')+UL('Refresh','بروزرسانی')+'</button>')+UWorkspace(st,false);
