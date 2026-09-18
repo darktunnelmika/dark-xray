@@ -69,4 +69,16 @@ test('dashboard priority order is health, nodes, update slot, recovery, metrics'
  const order=['01 / HEALTH & ALERTS','02 / MULTI-NODE','dark-update-center-slot','04 / BACKUP & RECOVERY','05 / LIVE OPERATIONS'].map(x=>html.indexOf(x));
  assert.ok(order.every(x=>x>=0),order);
  assert.deepEqual([...order].sort((a,b)=>a-b),order);
+ assert.match(html,/ov2-dashboard-control-row/);
+ assert.match(html,/ov2-grid ov2-grid-all/);
+ assert.equal((html.match(/class="ov2-grid/g)||[]).length,1);
+});
+
+test('empty node fleet stays compact instead of rendering a tall generic empty state',()=>{
+ const {ctx}=context();
+ ctx.state.page='dashboard';ctx.state.me={id:'dark',role:'owner',permissions:{}};
+ ctx.state.ov2.nodes=[];
+ const html=ctx.dashboard();
+ assert.match(html,/ov2-empty-inline/);
+ assert.doesNotMatch(html,/No remote nodes registered yet/);
 });
