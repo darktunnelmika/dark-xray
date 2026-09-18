@@ -77,6 +77,16 @@ class AdminPatch(Model):
     disabled:bool|None=None
     password:str|None=Field(default=None,min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
     permissions:dict[str,str]|None=None
+class RepresentativeBody(Model):
+    name:str=Field(min_length=1,max_length=128)
+    password:str|None=Field(default=None,min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
+    enabled:bool=True
+    allowed:list[StrictInt]=Field(default_factory=list,max_length=4096)
+    quota_bytes:StrictInt=Field(default=0,ge=0,le=MAX_INT)
+    max_clients:StrictInt=Field(default=0,ge=0,le=1000000)
+    prefix:str=Field(default='',max_length=64)
+    max_client_ips:StrictInt=Field(default=0,ge=0,le=1000)
+    max_client_hwid:StrictInt=Field(default=0,ge=0,le=1000)
 class ResolveReset(Model):confirmation:str=Field(min_length=1,max_length=128)
 class Action(Model): action:Literal['enable','disable','reset','delete']
 class Bulk(Model):
@@ -347,20 +357,90 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/admins')
     def admins(p:Principal=Depends(owner)):
-        with store.lock:rows=[dict(r) for r in store.db.execute('SELECT id,role,permissions,disabled FROM api_admins ORDER BY id')]
+        # Legacy compatibility endpoint. The interactive UI no longer exposes a
+        # role/permission editor; new accounts are representatives only.
+        with store.lock:rows=[dict(r) for r in store.db.execute("SELECT id,role,permissions,disabled FROM api_admins WHERE role IN ('owner','reseller') ORDER BY id")]
         for r in rows:r['permissions']=json.loads(r['permissions'])
         return rows
     @app.post('/api/admins')
     def add_admin(body:AdminBody,p:Principal=Depends(owner)):
-        auth.admin_create(p.actor,body.username,body.password,body.role,body.permissions)
-        manager.audit(p.actor,body.username,'admin.create',body.username)
-        return {'created':True}
+        if body.role!='reseller':raise HTTPException(409,'DARK has one primary owner; only representative accounts can be created')
+        auth.admin_create(p.actor,body.username,body.password,'reseller',DEFAULTS['reseller'])
+        manager.audit(p.actor,body.username,'representative.login_create',body.username)
+        return {'created':True,'role':'reseller'}
     @app.patch('/api/admins/{username}')
     def edit_admin(username:str,body:AdminPatch,p:Principal=Depends(owner)):
-        auth.admin_edit(p.actor,username,**body.model_dump())
-        manager.audit(p.actor,username,'admin.update',username)
+        with store.lock:row=store.db.execute('SELECT role FROM api_admins WHERE id=?',(username,)).fetchone()
+        if not row:raise HTTPException(404,'Account not found')
+        if row['role']!='reseller':raise HTTPException(409,'Primary owner account is managed only from Account & Security')
+        auth.admin_edit(p.actor,username,disabled=body.disabled,password=body.password,permissions=DEFAULTS['reseller'])
+        manager.audit(p.actor,username,'representative.login_update',username)
         manager.tick(suppress=True)
         return {'updated':True,'sessions_revoked':True}
+
+    def representative_rows(p:Principal)->list[dict]:
+        with store.lock:
+            primary={r[0] for r in store.db.execute("SELECT id FROM api_admins WHERE role='owner'")}
+            profiles=[dict(r) for r in store.db.execute('SELECT * FROM owner_profiles ORDER BY name,id')]
+            accounts={r['id']:dict(r) for r in store.db.execute("SELECT id,role,disabled FROM api_admins WHERE role='reseller'")}
+        out=[]
+        for profile in profiles:
+            rid=str(profile['id'])
+            if rid in primary:continue
+            try:stats=store.owner_stats(p.actor,rid)
+            except PolicyError:continue
+            account=accounts.get(rid)
+            out.append({**stats,**manager.profile(rid),
+                        'login_ready':bool(account),
+                        'login_disabled':bool(account['disabled']) if account else True,
+                        'enabled':bool(account and not account['disabled'] and not stats.get('manual') and not stats.get('account_disabled'))})
+        return out
+
+    @app.get('/api/resellers')
+    def representatives(p:Principal=Depends(owner)):
+        return representative_rows(p)
+
+    @app.put('/api/resellers/{reseller_id}')
+    def representative_put(reseller_id:str,body:RepresentativeBody,p:Principal=Depends(owner)):
+        writable()
+        if not NAME_RE.fullmatch(reseller_id):raise HTTPException(400,'Invalid representative ID')
+        with store.lock:
+            primary=store.db.execute("SELECT 1 FROM api_admins WHERE id=? AND role='owner'",(reseller_id,)).fetchone()
+            account=store.db.execute('SELECT role FROM api_admins WHERE id=?',(reseller_id,)).fetchone()
+        if primary:raise HTTPException(409,'Primary owner cannot be converted to a representative')
+        if account and account['role']!='reseller':raise HTTPException(409,'Account ID belongs to a legacy non-representative role')
+        if not account and not body.password:raise HTTPException(400,'Password is required when creating a representative')
+        manager.owner_put(p.actor,reseller_id,name=body.name,allowed=body.allowed,
+                          quota_bytes=body.quota_bytes,max_clients=body.max_clients,manual=not body.enabled,
+                          prefix=body.prefix,max_client_ips=body.max_client_ips,max_client_hwid=body.max_client_hwid)
+        if not account:
+            auth.admin_create(p.actor,reseller_id,body.password or '','reseller',DEFAULTS['reseller'])
+        auth.admin_edit(p.actor,reseller_id,disabled=not body.enabled,password=body.password,
+                        permissions=DEFAULTS['reseller'])
+        manager.audit(p.actor,reseller_id,'representative.save',reseller_id,
+                      'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed)))
+        return next(r for r in representative_rows(p) if r['id']==reseller_id)
+
+    @app.delete('/api/resellers/{reseller_id}')
+    def representative_delete(reseller_id:str,p:Principal=Depends(owner)):
+        writable()
+        with store.lock:
+            primary=store.db.execute("SELECT 1 FROM api_admins WHERE id=? AND role='owner'",(reseller_id,)).fetchone()
+            active=store.db.execute('SELECT COUNT(*) FROM clients WHERE owner=?',(reseller_id,)).fetchone()[0]
+            account=store.db.execute('SELECT role FROM api_admins WHERE id=?',(reseller_id,)).fetchone()
+        if primary:raise HTTPException(409,'Primary owner cannot be deleted')
+        if active:raise HTTPException(409,'Move or delete representative clients before deleting the representative')
+        if account and account['role']!='reseller':raise HTTPException(409,'Account is not a representative')
+        with store.transaction() as db:
+            db.execute('DELETE FROM live_sessions WHERE admin_id=?',(reseller_id,))
+            db.execute('DELETE FROM robot_keys WHERE admin_id=?',(reseller_id,))
+            db.execute('DELETE FROM mfa WHERE admin_id=?',(reseller_id,))
+            db.execute("DELETE FROM api_admins WHERE id=? AND role='reseller'",(reseller_id,))
+            db.execute('DELETE FROM client_groups WHERE owner=?',(reseller_id,))
+            db.execute('DELETE FROM owner_profiles WHERE id=?',(reseller_id,))
+            db.execute('DELETE FROM owners WHERE id=?',(reseller_id,))
+        manager.audit(p.actor,reseller_id,'representative.delete',reseller_id,'Historical ledgers are preserved')
+        return {'deleted':True}
 
     @app.get('/api/owners')
     def owners(p:Principal=Depends(current)):
