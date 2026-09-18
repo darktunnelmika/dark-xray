@@ -83,3 +83,23 @@ def test_broker_restart_marks_transient_job_interrupted(tmp_path,monkeypatch):
     assert out['phase']=='failed'
     assert out['broker_interrupted'] is True
     assert 'interrupted' in out['message'].lower()
+
+
+def test_web_update_refuses_older_candidate_version(tmp_path,monkeypatch):
+    assert updated.older_than('0.9.0-rc1','0.9.0-rc7') is True
+    assert updated.older_than('0.9.0-rc7','0.9.0-rc7') is False
+    assert updated.older_than('0.9.0','0.9.0-rc7') is False
+    app=tmp_path/'app';data=tmp_path/'data';app.mkdir();data.mkdir()
+    (app/'VERSION').write_text('0.9.0-rc7\n')
+    monkeypatch.setattr(updated,'APP',app);monkeypatch.setattr(updated,'DATA',data)
+    monkeypatch.setattr(updated,'STATE',data/'update-state.json');monkeypatch.setattr(updated,'LOG',data/'update.log')
+    monkeypatch.setattr(updated,'resolve_channel',lambda channel,ref:'v0.9.0-rc1')
+    monkeypatch.setattr(updated,'inspect_ref',lambda ref:{'ref':ref,'commit':'3'*40,'version':'0.9.0-rc1','notes':'old'})
+    monkeypatch.setattr(updated,'local_preflight',lambda:{'database':True,'panel_service':True,'disk':True,'git':True,'ready':True})
+    monkeypatch.setattr(updated,'ci_status',lambda commit:{'state':'success','verified':True,'run_id':9})
+    c=updated.UpdateController(1234)
+    result=c.check('rc','')
+    assert result['state']=='blocked'
+    assert result['candidate']['downgrade_blocked'] is True
+    assert result['candidate']['ready'] is False
+    assert any('older' in x.lower() for x in result['warnings'])
