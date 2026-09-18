@@ -176,6 +176,12 @@ class NodeRegistry:
                 ('failover_enabled',"ALTER TABLE remote_nodes ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1"),
             ):
                 if name not in node_cols:store.db.execute(ddl)
+            # Existing Node V3 records predate data_address. Preserve their
+            # behavior without requiring an Edit/Save round trip after upgrade.
+            for row in store.db.execute("SELECT id,origin,data_address FROM remote_nodes WHERE data_address=''").fetchall():
+                try:address=validate_data_address('',str(row['origin']))
+                except PolicyError:continue
+                store.db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',(address,row['id']))
 
     def list(self)->list[dict]:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM remote_nodes ORDER BY name,id')]
