@@ -33,7 +33,7 @@ Current major workspaces include:
 - **Settings V2** with staged privileged runtime changes and rollback-aware apply flows.
 - **Finance / Ledger V2** with idempotent event IDs, current-period and lifetime usage, interactive-owner credit and audit traceability.
 - **Xray Control V2** for DNS, outbounds, routing, balancers and observatory.
-- **Nodes V3** with HTTPS-only origins, Agent Tokens, DNS pinning, TLS hostname verification, per-node inbound assignment, selected credential mirroring, Central traffic aggregation with per-node baselines/idempotent ledger events, reconnect recovery, and coordinated multi-node traffic resets.
+- **Nodes V3** with HTTPS-only origins, Agent Tokens, DNS pinning, TLS hostname verification, per-node inbound assignment, selected credential mirroring, Central traffic aggregation, global verified-IP/device-hash state, per-node failover data addresses/priorities, reconnect recovery, and coordinated multi-node traffic resets.
 - **Dashboard Control Center** for interactive owners: the Update Center with Latest Verified / Stable / RC / Exact Ref, exact-commit CI gating, preflight, changelog, live progress, logs and automatic rollback now lives directly on the first page.
 - **Root-owned Update Broker** separate from the non-root web process; only narrow status/check/start operations cross the authenticated Unix socket.
 - **Backup / Restore / Doctor** are centralized on the owner dashboard; DB snapshots are downloadable from Web while encrypted full backup / verify / restore keep the hardened CLI workflow.
@@ -78,6 +78,20 @@ sudo darkxray production-gate --json-only
 
 The data-plane lab uses temporary loopback ports and temporary data. It does not mutate the installed customer database or installed firewall rules.
 
+Real WAN inspection of registered nodes from the Central VPS:
+
+```bash
+sudo darkxray node-wan-gate --json-only
+```
+
+For a real outage/recovery rehearsal, run watch mode and interrupt/restore the chosen node network outside the gate:
+
+```bash
+sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
+```
+
+The WAN gate uses the production pinned HTTPS/TLS node client. It does **not** inject the outage itself and only reports outage recovery as passed after it observes a real Down → Recovery transition.
+
 ## What is exercised on `main`?
 
 - **Python 3.12 / 3.13:** API, RBAC, TOTP, accounting, settings, backup/update recovery, nodes and security regressions.
@@ -96,6 +110,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 - Sensitive finance grants are outside reseller/readonly role ceilings.
 - Node origins must be public HTTPS; redirects and environment proxies are not followed for node control requests.
 - IP Guard enforcement should only be enabled after verifying that Xray's observed client source corresponds to the packet source seen by nftables on that same host.
+- The global multi-node guard aggregates only source IPs reported as directly verified by each node and device SHA-256 digests; raw HWIDs are never transferred. A global violation disables the Central credential and its mirrors. nftables enforcement remains host-local and is not presented as a distributed firewall.
 
 ## One-time bootstrap for RC6 and older installs
 
@@ -109,7 +124,7 @@ This `0.9.0-rc7` candidate remains pre-production until the intended deployment 
 - real machine reboot/power-cycle recovery;
 - Let's Encrypt issuance and renewal on the target DNS/provider path, including Secure Cookie/HSTS behavior;
 - IP Guard validation on the actual tunnel/CDN/source-IP topology;
-- two real VPS nodes over valid public HTTPS, including traffic sync, reset coordination, network loss/recovery and WAN convergence;
+- two real VPS nodes over valid public HTTPS, including `darkxray node-wan-gate`, Traffic/Security sync, failover readiness, reset coordination, and a real observed network-loss → recovery transition;
 - capacity validation on the intended VPS plan; CI already passes a 1000-client and SQLite-contention smoke, but that is not a provider capacity guarantee;
 - final update/rollback rehearsal with the exact release artifact to be deployed.
 
