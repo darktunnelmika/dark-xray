@@ -64,7 +64,8 @@
     "update_exact_commit_ci_gate": true,
     "update_auto_source_sqlite_rollback": true,
     "update_restart_reconnect": true,
-    "update_interactive_owner_only": true
+    "update_interactive_owner_only": true,
+    "web_update_downgrade_refused": true
   },
   "ci": {
     "runs_on_push_to_main": true,
