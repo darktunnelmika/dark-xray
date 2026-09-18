@@ -6,6 +6,7 @@
 - یک `dark-xray-update.service` مستقل و root-owned با Unix socket محدود اضافه شد؛ Web process همچنان non-root باقی می‌ماند و هیچ shell دلخواهی از API قابل اجرا نیست.
 - کانال‌های Latest Verified / Stable / Release Candidate / Exact Ref اضافه شدند؛ هر Ref قبل از نصب به Commit ثابت ۴۰ کاراکتری resolve می‌شود.
 - Latest Verified فقط وقتی قابل نصب است که Workflow اصلی GitHub Actions برای همان Commit دقیق، completed + success باشد.
+- Web downgrade به نسخه قدیمی‌تر حتی با CI سبز رد می‌شود؛ بازیابی نسخه فقط از rollback snapshot مسیر امن است.
 - Preflight داخل پنل DB quick_check، سرویس، فضای rollback، Git و CI را نشان می‌دهد؛ Candidate نامعتبر یا CI قرمز/نامشخص fail-closed قفل می‌شود.
 - Safe Update وضعیت مرحله‌به‌مرحله می‌نویسد: health → resolve → source validation → rollback preflight → dependencies → source snapshot → DB snapshot → apply → restart/health → success یا rollback.
 - هنگام ری‌استارت پنل، Job داخل Broker مستقل ادامه پیدا می‌کند و UI بعد از برگشت سرویس خودکار reconnect و نتیجه را نمایش می‌دهد.
