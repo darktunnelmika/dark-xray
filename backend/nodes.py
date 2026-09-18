@@ -504,8 +504,8 @@ class NodeRegistry:
                 db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
                 if ips:db.executemany('INSERT INTO remote_node_ips(node_id,client_id,ip,first_seen,last_seen,verified) VALUES(?,?,?,?,?,?)',ips)
                 if devices:db.executemany('INSERT INTO remote_node_devices(node_id,client_id,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?,?)',devices)
-                db.execute('''INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,?,?,'')
-                              ON CONFLICT(node_id) DO UPDATE SET source_verified=excluded.source_verified,last_sync=excluded.last_sync,last_error=''',
+                db.execute("""INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,?,?,'')
+                              ON CONFLICT(node_id) DO UPDATE SET source_verified=excluded.source_verified,last_sync=excluded.last_sync,last_error=''""",
                            (node_id,int(doc['sourceVerified']),now))
             return {'latency_ms':ms,'clients':len(seen),'ips':len(ips),'devices':len(devices),
                     'ignored_clients':ignored,'source_verified':bool(doc['sourceVerified']),'synced_at':now}
