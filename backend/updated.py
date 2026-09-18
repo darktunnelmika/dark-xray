@@ -214,7 +214,6 @@ class BrokerHandler(socketserver.StreamRequestHandler):
         self.connection.settimeout(15)
         try:
             raw=self.connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize('3i'));_,uid,_=struct.unpack('3i',raw)
-            if uid!=self.server.controller.allowed_uid:raise UpdateError('Unix peer UID is not authorized')
             data=self.rfile.readline(MAX_MESSAGE+1)
             if len(data)>MAX_MESSAGE or not data.endswith(b'\n'):raise UpdateError('Incomplete or oversized request')
             msg=json.loads(data)
@@ -222,6 +221,8 @@ class BrokerHandler(socketserver.StreamRequestHandler):
             op=msg.get('operation')
             expected={'status':{'operation'},'check':{'operation','channel','ref'},'start':{'operation','commit'}}
             if op not in expected or set(msg)!=expected[op]:raise UpdateError('Unknown update operation or fields')
+            if uid not in {0,self.server.controller.allowed_uid}:raise UpdateError('Unix peer UID is not authorized')
+            if uid==0 and op!='status':raise UpdateError('Root peer is read-only; web update mutations require the DARK service UID')
             if op=='status':result=self.server.controller.state()
             elif op=='check':result=self.server.controller.check(str(msg['channel']),str(msg['ref']))
             else:result=self.server.controller.start(str(msg['commit']))
