@@ -87,7 +87,7 @@ def main():
         if not path.is_symlink():os.chmod(path,0o755)
     init_input=bootstrap_password+'\n'+bootstrap_password+'\n';cp=subprocess.run(['runuser','-u','darkxray','--',str(py),str(APP/'backend/server.py'),'--config',str(CONF/'config.json'),'--data',str(DATA),'init','--username',a.username,'--password-stdin'],input=init_input,text=True,check=False);bootstrap_password='';init_input=''
     if cp.returncode!=0:raise SystemExit('Owner initialization failed; partial install can be repaired by the online installer')
-    for name in ['dark-xray.service','dark-xray-guard.service']:shutil.copy2(APP/'deploy'/name,Path('/etc/systemd/system')/name)
+    for name in ['dark-xray.service','dark-xray-guard.service','dark-xray-update.service']:shutil.copy2(APP/'deploy'/name,Path('/etc/systemd/system')/name)
     wrapper=Path('/usr/local/bin/darkxray')
     if wrapper.exists():raise SystemExit('Refusing to overwrite an existing /usr/local/bin/darkxray')
     wrapper.write_text('''#!/usr/bin/env bash
@@ -101,7 +101,14 @@ case "${1:-menu}" in
 esac
 exec /opt/dark-xray/darkxray "$@"
 ''');os.chmod(wrapper,0o755)
-    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray.service'])
+    source_cp=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True,check=False)
+    source_info={'commit':source_cp.stdout.strip() if source_cp.returncode==0 else '',
+                 'version':(APP/'VERSION').read_text(encoding='utf-8').strip(),'ref':'fresh-install','installed_at':time.time()}
+    source_path=DATA/'installed-source.json';source_path.write_text(json.dumps(source_info,indent=2)+'\n',encoding='utf-8')
+    os.chmod(source_path,0o640);os.chown(source_path,0,account.pw_gid)
+    run(['systemctl','daemon-reload'])
+    run(['systemctl','enable','--now','dark-xray-update.service'])
+    run(['systemctl','enable','--now','dark-xray.service'])
     print('\nDARK XRAY installed independently. Default web access is loopback only.');print(f'From your own computer: ssh -L {a.port}:127.0.0.1:{a.port} root@YOUR_SERVER -p YOUR_SSH_PORT')
     suffix=(a.panel_path if a.panel_path!='/' else '')+'/'
     print(f'Open http://127.0.0.1:{a.port}{suffix} after forwarding. No firewall was enabled.')
