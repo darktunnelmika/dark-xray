@@ -12,18 +12,21 @@ function ctx(owner=true){
     state:{page:'dashboard',me:{id:'dark',version:'0.9.0-rc7'},selected:new Set(),updateCenter:null},
     enginePages:{settings:['Settings']},
     navItems:()=>[['dashboard','Overview','grid'],['settings','Settings','settings'],['account','Account','shield']],
-    renderPage:async()=>{},runAction:async()=>{},isOwner:()=>owner,
+    dashboard:()=>'<base></base>',load:async()=>{},renderPage:async()=>{},runAction:async()=>{},isOwner:()=>owner,
     localStorage:{getItem:()=> 'en'},e:v=>String(v??''),icon:()=>'<i></i>',heading:(a,b,c='')=>a+b+c,
     api:async()=>({broker_ready:true,current:{version:'0.9.0-rc7'},state:'idle',phase:'idle',percent:0,log_tail:[]}),
-    document:{querySelector:()=>null},setTimeout:()=>{},toast:()=>{},dialog:()=>{},closeDialog:()=>{},load:async()=>{}
+    document:{querySelector:()=>null},setTimeout:()=>{},toast:()=>{},dialog:()=>{},closeDialog:()=>{}
   };
   vm.createContext(x);vm.runInContext(src,x,{filename:'update-center.js'});return x;
 }
 
-test('Update Center is visible only to owner navigation',()=>{
+test('Update Center lives on the owner dashboard and not in standalone navigation',async()=>{
   const owner=ctx(true),reseller=ctx(false);
-  assert.ok(owner.navItems().some(x=>x[0]==='update'));
+  assert.ok(!owner.navItems().some(x=>x[0]==='update'));
   assert.ok(!reseller.navItems().some(x=>x[0]==='update'));
+  await owner.load();
+  assert.match(owner.dashboard(),/Update Center/);
+  assert.equal(reseller.dashboard(),'<base></base>');
 });
 
 test('web update flow uses broker APIs and immutable commit confirmation',()=>{
