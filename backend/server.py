@@ -159,7 +159,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if background:
-            manager.start();nodes.start(sync_provider=lambda node_id:build_node_bundles(node_id),
+            manager.start();nodes.start(interval=max(5.0,min(60.0,float(config.poll_seconds))),
+                                      sync_provider=lambda node_id:build_node_bundles(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True))
         yield
         nodes.close();manager.close();engine.close()
@@ -544,11 +545,20 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return bundles
 
     def sync_node_assignments(node_id:str)->dict:
-        traffic=nodes.sync_traffic(node_id)
-        if traffic.get('charged_bytes'):manager.tick(suppress=True)
+        pre=nodes.sync_traffic(node_id)
+        if pre.get('charged_bytes'):manager.tick(suppress=True)
         bundles=build_node_bundles(node_id)
         result=nodes.sync_mirrors(node_id,bundles)
-        result['traffic']=traffic
+        post=nodes.sync_traffic(node_id)
+        if post.get('charged_bytes'):manager.tick(suppress=True)
+        result['traffic']={
+            'charged_bytes':int(pre.get('charged_bytes',0))+int(post.get('charged_bytes',0)),
+            'charged_up':int(pre.get('charged_up',0))+int(post.get('charged_up',0)),
+            'charged_down':int(pre.get('charged_down',0))+int(post.get('charged_down',0)),
+            'baselined':int(pre.get('baselined',0))+int(post.get('baselined',0)),
+            'ignored_clients':int(pre.get('ignored_clients',0))+int(post.get('ignored_clients',0)),
+            'pre':pre,'post':post,
+        }
         return result
 
     @app.get('/node/api/health')
