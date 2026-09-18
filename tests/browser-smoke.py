@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             # Every owner workspace must render without leaving a busy/blank content surface.
             pages=['dashboard','inbounds','clients','resellers','roles','ipguard','finance','audit','sync',
-                   'hosts','outbounds','routing','nodes','xray','settings','update','account']
+                   'hosts','outbounds','routing','nodes','xray','settings','account']
             for name in pages:visit(page,name)
             mark('all primary owner workspaces render through real navigation')
 
@@ -145,10 +145,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             visit(page,'finance');page.screenshot(path=str(OUT/'browser-finance.png'),full_page=True)
             visit(page,'settings');page.screenshot(path=str(OUT/'browser-settings.png'),full_page=True)
-            visit(page,'update')
+            visit(page,'dashboard')
+            assert page.locator('.nav-btn[data-page="update"]').count()==0
+            page.locator('.up-dashboard-shell').wait_for(state='visible',timeout=10000)
             page.locator('.update-center').wait_for(state='visible',timeout=10000)
             assert page.locator('.up-unavailable').count()==1
-            mark('Update Center unavailable state is graceful when broker is absent in browser lab')
+            mark('first-page Update Center unavailable state is graceful when broker is absent in browser lab')
 
             # Language toggle must survive reload/session and flip geometry.
             switch=page.locator('.cyber-lang-switch');switch.wait_for(state='visible',timeout=10000)
