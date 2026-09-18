@@ -223,7 +223,9 @@ class Store:
         CREATE TABLE IF NOT EXISTS clients(
           id TEXT PRIMARY KEY, owner TEXT NOT NULL, limit_ip INTEGER NOT NULL DEFAULT 0,
           quota_bytes INTEGER NOT NULL DEFAULT 0, used_bytes INTEGER NOT NULL DEFAULT 0,
-          manual INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL DEFAULT 0);
+          manual INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL DEFAULT 0,
+          global_ip_block INTEGER NOT NULL DEFAULT 0,
+          global_device_block INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS clients_owner ON clients(owner);
         CREATE TABLE IF NOT EXISTS traffic_ledger(
           event_id TEXT PRIMARY KEY, owner TEXT NOT NULL, client_id TEXT NOT NULL,
@@ -260,6 +262,11 @@ class Store:
         columns={row[1] for row in self.db.execute("PRAGMA table_info(owners)")}
         if "account_disabled" not in columns:
             self.db.execute("ALTER TABLE owners ADD COLUMN account_disabled INTEGER NOT NULL DEFAULT 0")
+        client_columns={row[1] for row in self.db.execute("PRAGMA table_info(clients)")}
+        if "global_ip_block" not in client_columns:
+            self.db.execute("ALTER TABLE clients ADD COLUMN global_ip_block INTEGER NOT NULL DEFAULT 0")
+        if "global_device_block" not in client_columns:
+            self.db.execute("ALTER TABLE clients ADD COLUMN global_device_block INTEGER NOT NULL DEFAULT 0")
         self.db.execute("PRAGMA user_version=2")
         if self.path != ":memory:":
             os.chmod(self.path, 0o600)
@@ -425,6 +432,8 @@ class Store:
             r = self.db.execute("SELECT * FROM owners WHERE id=?", (u["owner"],)).fetchone()
             reasons = []
             if u["manual"]: reasons.append("client_manual")
+            if u["global_ip_block"]: reasons.append("global_ip_quota")
+            if u["global_device_block"]: reasons.append("global_device_quota")
             if u["expires_at"] and u["expires_at"] <= (time.time() if now is None else now): reasons.append("expired")
             if u["quota_bytes"] and u["used_bytes"] >= u["quota_bytes"]: reasons.append("client_quota")
             if not r: reasons.append("missing_owner")
