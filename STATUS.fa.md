@@ -21,7 +21,7 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI/RBAC و کنترل مست�
 | Panel/Subscription paths | collision protection در Web و CLI |
 | Domain / TLS | workflow موجود؛ provider/live renewal هنوز گیت VPS است |
 | Finance / Ledger | event-id idempotency، lifetime/current separation، Owner-only credit |
-| Nodes V3 | HTTPS-only + DNS pinning + TLS verify + inbound assignment + credential mirror + Central traffic sync + idempotent ledger + reconnect/reset recovery |
+| Nodes V3 | HTTPS-only + DNS/TLS pinning + inbound/credential mirror + Central traffic + Global IP/device state + subscription failover + reconnect/reset recovery |
 | Safe Update / Web Update | root-owned broker + exact-commit CI gate + source/SQLite snapshot + dependency preflight + health-gated rollback |
 | Browser | Chromium واقعی، EN/FA، mobile و Inbounds V3 save |
 | Real Xray | official v26.3.27 data-plane در CI |
@@ -125,6 +125,11 @@ sudo darkxray production-gate --json-only
 - **Global current usage** برای Client از Local + همه Nodeهای accounting جمع می‌شود و quota Client/Owner از مصرف Nodeها هم اثر می‌گیرد.
 - **Traffic reset recovery** با reset ID پایدار و cache نتیجه روی Agent انجام می‌شود؛ retry بعد از خطا همان final counter قبلی را بازیابی می‌کند و reset دوباره اجرا نمی‌شود.
 - **Node recovery state** تعداد failure/recovery، زمان آخرین outage/recovery و آخرین Traffic Sync را نگه می‌دارد.
+- **Global IP Guard state** فقط Observationهایی را که Local/Node با source مستقیمِ تأییدشده دارند merge و deduplicate می‌کند؛ telemetry باید برای همه Nodeهای Deployشده fresh باشد تا بلاک جدید ساخته شود. اگر telemetry بعداً stale شود، بلاک موجود کورکورانه آزاد نمی‌شود.
+- **Global Device state** فقط SHA-256 HWID را بین Node و Central جابه‌جا می‌کند؛ HWID خام ارسال نمی‌شود. عبور مجموع digestها از `limitHwid` یک blocker مستقل `global_device_quota` ایجاد می‌کند.
+- **Global enforcement boundary** با disable شدن Credential در Central و Mirrorها اعمال می‌شود. nftables همچنان روی هر Host مستقل است؛ این قابلیت distributed firewall نیست.
+- **Node Failover** برای هر Node `Data Address`، `Priority` و Enable/Disable دارد. فقط Nodeهای Online، Deployشده و بدون خطا وارد Subscription می‌شوند؛ Clash/Mihomo گروه `DARK FAILOVER` از نوع fallback و فرمت‌های Raw/Base64/JSON endpointهای سالم اضافی می‌گیرند.
+- **WAN validation gate** با `darkxray node-wan-gate` همان HTTPS/TLS pinning Production را از Central به Nodeها تست می‌کند. حالت `--expect-outage` فقط وقتی PASS می‌شود که قطع و Recovery واقعی خارج از خود Gate مشاهده شود.
 
 - **Web Update Center** فقط برای Interactive Owner است؛ Reseller/API Key اجازه Check/Start ندارند.
 - **Update Broker** با root و Unix peer credential اجرا می‌شود؛ Web process non-root باقی می‌ماند و arbitrary shell عبور نمی‌کند.
@@ -163,7 +168,7 @@ sudo darkxray production-gate --json-only
 2. **Reboot/Power-cycle واقعی ماشین** و بررسی Panel/Xray/SQLite بعد boot.
 3. **Domain/TLS provider gate**: issue و renewal واقعی Let's Encrypt، Secure Cookie و HSTS.
 4. **IP Guard روی topology واقعی**: تأیید اینکه source مشاهده‌شده در Xray همان packet source قابل enforce است.
-5. **دو VPS واقعی Node** با HTTPS معتبر، deploy/probe/core action، Traffic Sync، reset coordination و network-loss recovery روی WAN واقعی.
+5. **دو VPS واقعی Node** با HTTPS معتبر، `darkxray node-wan-gate`، Traffic/Security Sync، Failover readiness، reset coordination و مشاهده واقعی Down → Recovery روی WAN.
 6. **Capacity روی VPS هدف**؛ smoke هزار Client/SQLite contention در CI سبز است ولی ظرفیت provider/hardware باید روی مقصد اندازه‌گیری شود.
 7. **Update/Rollback rehearsal** روی VPS disposable با exact release artifact نهایی.
 8. **Stable promotion** بعد از پاس‌شدن گیت‌های VPS واقعی همین RC.
@@ -175,7 +180,7 @@ sudo darkxray production-gate --json-only
 - Kernel CI رفتار nftables DARK را ثابت می‌کند، نه routing/provider خاص VPS مشتری.
 - systemd recovery CI reboot واقعی ماشین نیست.
 - Ledger فعلی سیستم حسابداری عملیاتی پنل است، نه فروشگاه/درگاه/تسویه جامع.
-- Multi-node اکنون accounting مرکزی Client/Owner را جمع می‌کند، اما global IP/device enforcement و WAN failover خودکار هنوز distributed convergence کامل نیستند.
+- Multi-node اکنون Traffic accounting، verified global IP/device blockers و client-side subscription failover را در Central همگرا می‌کند؛ packet-level nftables همچنان Host-local است و transparent server-side routing/failover برای Clientهای generic URI ادعا نمی‌شود. WAN outage/recovery تا اجرای Gate روی دو VPS واقعی هنوز evidence محیط هدف ندارد.
 
 ## مسیر بعدی
 
