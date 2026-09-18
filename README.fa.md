@@ -140,7 +140,7 @@ Ledger مالی/مصرفی پایه برای حساب‌وکتاب داخلی پ
 
 Subscription از مسیر مستقل DARK تولید می‌شود و فرمت‌های فعلی شامل Raw/Base64/DARK JSON و Clash/Mihomo هستند. Path Subscription با Panel Path تداخل‌سنجی می‌شود تا route پنل یا subscription روی هم نیفتند.
 
-## Nodes V2
+## Nodes V3
 
 Node control برای Origin عمومی HTTPS طراحی شده است:
 
