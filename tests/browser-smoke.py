@@ -88,7 +88,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert page.locator('.ov2-performance .ov2-grid').count()==1
             report['dashboard_layout']={'node_height':round(node_box['height'],1),'update_height':round(update_box['height'],1),
                                         'row_y_delta':round(abs(node_box['y']-update_box['y']),1)}
+            sidebar_box=page.locator('.sidebar').bounding_box()
+            language_box=page.locator('.cyber-lang-switch').bounding_box()
+            assert sidebar_box and language_box,(sidebar_box,language_box)
+            assert language_box['x']>=sidebar_box['x']-1 and language_box['x']+language_box['width']<=sidebar_box['x']+sidebar_box['width']+1,(sidebar_box,language_box)
             mark('dashboard keeps Node Fleet and compact Update Center aligned without tall empty-state gaps')
+            mark('desktop language switch stays inside the sidebar instead of covering dashboard content')
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
             # Every owner workspace must render without leaving a busy/blank content surface.
