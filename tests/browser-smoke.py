@@ -76,6 +76,18 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert skin['green']=='#19ff86',skin
             assert skin['panelRadius'] in ('2px','2px 2px 2px 2px'),skin
             mark('real browser login, cookie session and Cyber Classic default skin')
+            page.locator('.ov2-dashboard-control-row').wait_for(state='visible',timeout=10000)
+            page.locator('.up-dashboard-compact').wait_for(state='visible',timeout=10000)
+            page.locator('.ov2-empty-inline').wait_for(state='visible',timeout=10000)
+            node_box=page.locator('.ov2-dashboard-control-row > .ov2-priority').bounding_box()
+            update_box=page.locator('.ov2-dashboard-control-row > .up-dashboard-shell').bounding_box()
+            assert node_box and update_box,(node_box,update_box)
+            assert abs(node_box['y']-update_box['y'])<=4,(node_box,update_box)
+            assert node_box['height']<330,node_box
+            assert page.locator('.ov2-performance .ov2-grid').count()==1
+            report['dashboard_layout']={'node_height':round(node_box['height'],1),'update_height':round(update_box['height'],1),
+                                        'row_y_delta':round(abs(node_box['y']-update_box['y']),1)}
+            mark('dashboard keeps Node Fleet and compact Update Center aligned without tall empty-state gaps')
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
             # Every owner workspace must render without leaving a busy/blank content surface.
