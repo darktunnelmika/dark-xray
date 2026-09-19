@@ -359,7 +359,54 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('Finance workspace is representative-centric and has no owner-scope selector')
             page.screenshot(path=str(OUT/'browser-finance.png'),full_page=True)
 
+            hwid_client=page.evaluate("""({inboundId})=>api('/api/clients','POST',{
+                owner:state.me.id,client:{email:'browser-hwid-policy',totalGB:0,limitIp:1,limitHwid:1},
+                inboundIds:[inboundId]
+            })""",{'inboundId':inbound_id})
+            hwid_access=page.evaluate("""async url=>{
+                const r=await fetch(url,{headers:{'x-hwid':'browser-device-policy-001','x-device-os':'browser'}});
+                return {status:r.status,text:await r.text()}
+            }""",hwid_client['subscription_url'])
+            assert hwid_access['status']==200,hwid_access
+
             visit(page,'settings')
+            page.locator('[data-sv2-action="tab"][data-tab="subscription"]').click()
+            page.locator('.sv3-subscription').wait_for(state='visible',timeout=10000)
+            sub_text=page.locator('.sv3-subscription').inner_text()
+            assert 'global local + node traffic' in sub_text.lower()
+            assert 'x-hwid' in sub_text.lower()
+            assert page.locator('.sv3-substat').count()==4
+            stats_text=' '.join(page.locator('.sv3-substats').inner_text().split())
+            assert '1' in stats_text
+            page.locator('[data-sv2-segment="default_format"] [data-value="raw"]').click()
+            page.locator('[name="profile_update_interval_hours"]').fill('9')
+            page.locator('[name="profile_title"]').fill('DARK Browser Policy')
+            page.locator('[name="remark_template"]').fill('{protocol} :: {remark}')
+            page.locator('[name="announce"]').fill('Browser JSON only')
+            assert 'VLESS :: TURKEY FAST' in page.locator('[data-sub-remark-preview]').inner_text()
+            page.locator('.sv3-subscription button[type="submit"]').click()
+            page.locator('.sv3-subscription').wait_for(state='visible',timeout=10000)
+
+            raw_sub=page.evaluate("""async url=>{
+                const r=await fetch(url);return {
+                  status:r.status,text:await r.text(),title:r.headers.get('profile-title'),
+                  interval:r.headers.get('profile-update-interval'),info:r.headers.get('subscription-userinfo')
+                }
+            }""",delivery_client['subscription_url'])
+            assert raw_sub['status']==200 and raw_sub['text'].startswith('vless://'),raw_sub
+            assert raw_sub['title']=='DARK Browser Policy'
+            assert raw_sub['interval']=='9'
+            assert 'upload=' in raw_sub['info'] and 'download=' in raw_sub['info']
+            assert 'VLESS%20%3A%3A%20BROWSER%20PUBLIC%20ENDPOINT' in raw_sub['text']
+
+            json_sub=page.evaluate("""async url=>{
+                const r=await fetch(url+'?format=json');return {status:r.status,doc:await r.json()}
+            }""",delivery_client['subscription_url'])
+            assert json_sub['status']==200 and json_sub['doc']['announce']=='Browser JSON only',json_sub
+            assert json_sub['doc']['title']=='DARK Browser Policy'
+            mark('Subscription Policy V3 drives real format, headers, naming, announcement and HWID status')
+            page.screenshot(path=str(OUT/'browser-subscription-policy-v3.png'),full_page=True)
+
             page.locator('[data-sv2-action="tab"][data-tab="operations"]').click()
             page.locator('.sv2-operations').wait_for(state='visible',timeout=10000)
             assert page.locator('.sv2-terminal').count()==1
