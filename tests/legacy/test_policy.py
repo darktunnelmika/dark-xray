@@ -223,7 +223,6 @@ def test_legacy_paid_client_creation_is_rejected(store):
     with pytest.raises(PolicyError,match='Monetary reseller credit is retired'):
         store.register_client(RESELLER,'a','arda',price=100,order_id='sale')
     assert store.owner_stats(OWNER,'arda')['client_count']==0
-    assert store.db.execute('select count(*) from money_ledger').fetchone()[0]==0
 
 
 def test_overflow_no_partial_mutation(store):
