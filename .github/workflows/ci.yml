@@ -312,6 +312,8 @@ jobs:
           EOF
           expect /tmp/dark-fresh-install.exp
       - name: Verify installed services and production gate
+        env:
+          DARK_INSTALL_REF: "${{ github.event.pull_request.head.sha || github.sha }}"
         run: |
           systemctl is-enabled dark-xray.service
           systemctl is-active dark-xray.service
