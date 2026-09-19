@@ -476,6 +476,11 @@ def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
  store,_,app,c=env
  a=c.post('/api/inbounds',json=_test_vless('FAILOVER',24103,'failover-a')).json()['id']
  client=_managed_client(c,'fail-user',a)
+ assert c.put('/api/settings/hosts',json={'value':[{
+   'inboundId':a,'address':'primary-tunnel.example.com','port':20443,'remark':'PRIMARY TUNNEL',
+   'security':'same','sni':'','host':'','path':'','alpn':'','fingerprint':'','allowInsecure':False,
+   'overrideSniFromAddress':False,'keepSniBlank':False,'finalMask':'','mihomoIpVersion':'',
+   'excludeFromSubTypes':[],'enable':True}]}).status_code==200
  r=c.post('/api/nodes',json={'id':'edge1','name':'EDGE ONE','origin':'https://control-edge.example.com',
    'dataAddress':'data-edge.example.com','priority':10,'failoverEnabled':True,
    'token':'dkn_'+('M'*60),'enabled':True,'inboundIds':[a]})
@@ -487,18 +492,56 @@ def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
  targets=app.state.nodes.failover_targets('fail-user')
  assert len(targets)==1 and targets[0]['address']=='data-edge.example.com'
  links=c.get('/api/clients/fail-user/links').json()['engine']
+ assert links['links'] and ':20443' in links['links'][0]['uri']
  assert links['failover'] and 'data-edge.example.com' in links['failover'][0]['uri']
+ assert ':24103' in links['failover'][0]['uri'] and ':20443' not in links['failover'][0]['uri']
+ assert links['failover'][0]['failoverPort']==24103
  sub=c.get(client['subscription_url']+'?format=clash')
  assert sub.status_code==200,sub.text
  text=sub.text
  assert 'DARK FAILOVER' in text and 'data-edge.example.com' in text
- assert sub.headers['x-dark-failover-nodes']=='1'
+ assert '24103' in text and sub.headers['x-dark-failover-nodes']=='1'
 
  with store.transaction() as db:
   db.execute("UPDATE remote_nodes SET last_error='network down' WHERE id='edge1'")
  assert app.state.nodes.failover_targets('fail-user')==[]
  sub=c.get(client['subscription_url']+'?format=clash')
  assert sub.status_code==200 and 'data-edge.example.com' not in sub.text
+
+
+def test_node_orchestration_explains_deployment_and_subscription_readiness(env):
+ store,_,_,c=env
+ a=c.post('/api/inbounds',json=_test_vless('ORCHESTRATE',24104,'orchestrate-a')).json()['id']
+ assert c.post('/api/nodes',json={'id':'orch1','name':'ORCH ONE','origin':'https://orch.example.com',
+   'dataAddress':'data-orch.example.com','priority':7,'failoverEnabled':True,
+   'token':'dkn_'+('N'*60),'enabled':True,'inboundIds':[a]}).status_code==200
+
+ doc=c.get('/api/nodes/orchestration').json()
+ row=next(x for x in doc['inbounds'] if x['inbound_id']==a);route=row['routes'][0]
+ assert route['deployment_state']=='pending'
+ assert route['subscription_reason']=='not_deployed'
+ assert route['subscription_included'] is False
+ assert route['data_port']==24104
+
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=44,last_sync=? WHERE node_id='orch1' AND local_inbound_id=?",(time.time(),a))
+ doc=c.get('/api/nodes/orchestration').json();route=next(x for x in doc['inbounds'] if x['inbound_id']==a)['routes'][0]
+ assert route['deployment_state']=='deployed'
+ assert route['subscription_reason']=='node_offline'
+
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_latency_ms=9 WHERE id='orch1'",(time.time(),))
+ doc=c.get('/api/nodes/orchestration').json();row=next(x for x in doc['inbounds'] if x['inbound_id']==a);route=row['routes'][0]
+ assert route['subscription_included'] is True
+ assert route['subscription_reason']=='ready'
+ assert row['failover_count']==1
+ assert doc['summary']['subscription_routes']>=1
+
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET failover_enabled=0 WHERE id='orch1'")
+ doc=c.get('/api/nodes/orchestration').json();route=next(x for x in doc['inbounds'] if x['inbound_id']==a)['routes'][0]
+ assert route['subscription_included'] is False
+ assert route['subscription_reason']=='failover_disabled'
 
 
 def test_node_data_address_defaults_to_control_hostname(env):
