@@ -35,6 +35,21 @@ def visit(page,name):
     page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
     report['pages'].append(name)
 
+def open_guided(page,locator,stage):
+    errors_before=page.locator('.toast.error').count()
+    locator.click()
+    page.wait_for_function("""n=>{
+      const editor=document.querySelector('.xv3-editor');
+      const errors=document.querySelectorAll('.toast.error');
+      return !!editor || errors.length>n;
+    }""",arg=errors_before,timeout=10000)
+    editor=page.locator('.xv3-editor')
+    if editor.count()==0:
+        msg=page.locator('.toast.error').last.inner_text() if page.locator('.toast.error').count()>errors_before else 'no editor and no error toast'
+        raise RuntimeError(stage+': '+msg)
+    editor.wait_for(state='visible',timeout=10000)
+    mark(stage+' opened')
+
 
 with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
     tmp=Path(d);sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1];sock.close()
@@ -235,8 +250,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('.te4').wait_for(state='visible',timeout=10000)
             assert page.locator('.te4-summary').count()==1
             assert page.locator('.te4-graph').count()==1
-            page.locator('[data-act="te4outnew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4outnew"]'),'Traffic Engine V4 new outbound editor')
             assert page.locator('#dialog-form [name="settings"]').count()==0
             assert page.locator('#dialog-form [name="stream"]').count()==0
             assert page.locator('#dialog-form [name="protocol"]').count()==1
@@ -256,8 +270,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert browser_out['streamSettings']['grpcSettings']['serviceName']=='browser-grpc'
 
             proxy_card=page.locator('.te4-out').filter(has_text='browser-proxy')
-            proxy_card.locator('[data-act="te4outclone"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,proxy_card.locator('[data-act="te4outclone"]'),'Traffic Engine V4 clone outbound editor')
             page.locator('#dialog-form [name="tag"]').fill('browser-proxy-backup')
             page.locator('#submit-dialog').click()
             page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
@@ -283,8 +296,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             visit(page,'routing')
             page.locator('.te4-preview').wait_for(state='visible',timeout=10000)
-            page.locator('[data-act="te4rulenew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4rulenew"]'),'Traffic Engine V4 routing rule editor')
             assert page.locator('#dialog-form [name="targetType"]').count()==1
             assert page.locator('#dialog-form [name="ruleSourceIP"]').count()==1
             assert page.locator('#dialog-form [name="ruleUser"]').count()==1
@@ -306,8 +318,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert 'RULE #1' in preview_text and 'OUT browser-proxy' in preview_text,preview_text
             mark('Traffic Engine V4 previews literal routing decisions without sending traffic')
 
-            page.locator('[data-act="te4routesettings"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4routesettings"]'),'Traffic Engine V4 routing settings editor')
             assert page.locator('#dialog-form [name="routeDomainStrategy"] option[value="IPIfNonMatch"]').count()==1
             page.locator('#dialog-form [name="routeDomainStrategy"]').select_option('IPIfNonMatch')
             page.locator('#submit-dialog').click()
@@ -317,8 +328,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert any(r.get('outboundTag')=='browser-proxy' for r in routing.get('rules',[])),routing
             mark('Routing Guided V4 changes domain strategy without overwriting rules')
 
-            page.locator('[data-act="te4balnew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4balnew"]'),'Traffic Engine V4 balancer editor')
             assert page.locator('#dialog-form [name="balStrategy"] option[value="leastPing"]').count()==1
             assert page.locator('#dialog-form [name="balStrategy"] option[value="leastLoad"]').count()==0
             page.locator('#dialog-form [name="balTag"]').fill('browser-bal')
@@ -336,8 +346,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert 'browser-proxy' in bal_text and 'browser-proxy-backup' in bal_text,bal_text
             mark('Traffic Engine V4 makes Xray prefix-selector expansion visible for leastPing balancers')
 
-            page.locator('[data-act="te4rulenew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4rulenew"]'),'Traffic Engine V4 balancer-target rule editor')
             page.locator('#dialog-form [name="ruleTag"]').fill('BROWSER-BAL')
             page.locator('#dialog-form [name="domain"]').fill('domain:balance.example')
             page.locator('#dialog-form [name="targetType"]').select_option('balancer')
@@ -350,8 +359,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             bal_preview=page.locator('#te4-preview-result').inner_text()
             assert 'browser-proxy' in bal_preview and 'browser-proxy-backup' in bal_preview,bal_preview
 
-            page.locator('[data-act="te4obsedit"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4obsedit"]'),'Traffic Engine V4 Observatory editor')
             assert page.locator('#dialog-form input[name="obsSelector"][value="browser-proxy"]').is_checked()
             page.locator('#dialog-form [name="obsInterval"]').fill('45s')
             page.locator('#submit-dialog').click()
