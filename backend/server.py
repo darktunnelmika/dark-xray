@@ -1221,7 +1221,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         runtime['generation_state']=generation
         runtime['next_action']='restart_apply' if generation=='running_dirty' else 'start_apply' if generation in {'stopped_staged','stopped_unexpected','runtime_error'} else 'none'
         if p.actor.role!='owner':
-            runtime={k:runtime.get(k) for k in ('state','running','dirty','desired_running','generation_state','next_action')}
+            runtime={k:runtime.get(k) for k in ('state','running','dirty','desired_running')}
 
         poll_age=None if not manager.last_poll else max(0,int(now-manager.last_poll))
         poll_stale=manager.last_poll==0 or poll_age>max(15,int(config.poll_seconds)*3)
