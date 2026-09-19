@@ -1138,7 +1138,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'local_enforcer':'root-owned DARK nftables broker','local_firewall_scope':'this host data ports only',
                 'global_policy':'central Local + Node verified-source aggregation',
                 'global_action':'client service block across synchronized DARK runtime',
-                'global_remote_firewall_ban':False,'fail2ban':False}}
+                'global_remote_firewall_ban':False}}
 
     @app.get('/api/security-center')
     def security_center(p:Principal=Depends(current)):return security_center_payload(p)
