@@ -63,7 +63,7 @@ async function securityPage(){
  state.ip4=d;
  const warning=!g.source_verified?`<div class="notice warning">${L('Direct packet source is not verified on this host. Local automatic nftables bans stay fail-safe/off until root explicitly verifies the source path.','Source واقعی Packet روی این سرور تأیید نشده؛ بن خودکار nftables به‌صورت Fail-safe خاموش می‌ماند تا مسیر Source توسط روت تأیید شود.')}</div>`:'';
  const err=g.error?`<div class="notice error">${e(g.error)}</div>`:'';
- return heading(L('DARK Security Center','مرکز امنیت DARK'),L('Native IP/HWID policy across Local Xray and DARK nodes — no Fail2Ban dependency.','سیاست Native برای IP/HWID بین Xray محلی و نودهای DARK — بدون وابستگی Fail2Ban.'),
+ return heading(L('DARK Security Center','مرکز امنیت DARK'),L('Native IP/HWID policy across Local Xray and DARK nodes.','سیاست Native برای IP/HWID بین Xray محلی و نودهای DARK.'),
   isOwner()?button(L('Guard settings','تنظیمات Guard'),'ip4settings','settings','',true):'')+
  `<div class="ip4">${warning}${err}
    ${architecture(d)}
