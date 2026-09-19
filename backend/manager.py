@@ -693,9 +693,20 @@ class Manager:
                     if meta['state']=='missing':
                         with self.store.transaction() as db:db.execute("UPDATE managed_clients SET state='applied',error='' WHERE email=?",(meta['email'],))
                     self._charge_snapshot(self.meta(meta['email']),rec)
+                    observed_quota=int(rec.get('totalGB',0))
+                    observed_expiry=max(0,int(rec.get('expiryTime',0))//1000)
+                    with self.store.lock:
+                        policy_row=self.store.db.execute('SELECT owner,quota_bytes FROM clients WHERE id=?',(meta['email'],)).fetchone()
+                    if policy_row and observed_quota!=int(policy_row['quota_bytes']):
+                        try:
+                            self.store.edit_client(SYSTEM,meta['email'],quota_bytes=observed_quota)
+                        except PolicyError as exc:
+                            self.audit(SYSTEM,policy_row['owner'],'resource_credit.external_quota_rejected',meta['email'],str(exc)[:300])
+                            if self.engine.config.writes_enabled:
+                                payload=CoreEngine.writable(rec);payload['totalGB']=int(policy_row['quota_bytes'])
+                                self.engine.update(meta['email'],payload);rec['totalGB']=int(policy_row['quota_bytes'])
                     with self.store.transaction() as db:
-                        db.execute('UPDATE clients SET quota_bytes=?,expires_at=? WHERE id=?',
-                            (int(rec.get('totalGB',0)),max(0,int(rec.get('expiryTime',0))//1000),meta['email']))
+                        db.execute('UPDATE clients SET expires_at=? WHERE id=?',(observed_expiry,meta['email']))
                     reasons=self.store.client_reasons(meta['email'])
                     # Preserve unexpected external disables. Never automatically
                     # resurrect a client whose enable flag changed outside DARK.
