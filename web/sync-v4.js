@@ -127,7 +127,7 @@ function identityConfirm(id,kind){
  dialog(title+` · ${id}`,`<div class="notice warning">${e(notice)}</div>${field(L('Client identity confirmation','تأیید شناسه کاربر'),'confirmation','','text',`required autocomplete="off" data-expected="${e(id)}"`) }`,async f=>{
    const value=String(f.get('confirmation')||'').trim();if(value!==id)throw Error(L('Client identity does not match.','شناسه کاربر مطابقت ندارد.'));
    const endpoint=restore?'/api/clients/'+enc(id)+'/restore-missing':'/api/clients/'+enc(id)+'/resolve-reset';
-   await api(endpoint,'POST',{confirmation:value});closeDialog();toast(restore?L('Missing client recovery completed.','Recovery کاربر گم‌شده انجام شد.'):L('Uncertain reset resolved without replay.','ریست نامشخص بدون تکرار حل شد.'));await refresh();
+   await api(endpoint,'POST',{confirmation:value});await refresh();closeDialog();toast(restore?L('Missing client recovery completed.','Recovery کاربر گم‌شده انجام شد.'):L('Uncertain reset resolved without replay.','ریست نامشخص بدون تکرار حل شد.'));
  });
 }
 function inspectSync(id){
