@@ -1055,10 +1055,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         all_=p.actor.role=='owner' or p.actor.permissions.get('audit.read')=='all'
         with store.lock:return [dict(r) for r in store.db.execute('SELECT * FROM live_audit'+('' if all_ else ' WHERE owner=?')+' ORDER BY id DESC LIMIT 250',() if all_ else (p.actor.id,))]
     @app.get('/api/ledger/{kind}')
-    def ledger(kind:Literal['traffic','money','credits'],p:Principal=Depends(current)):
-        resource='finance' if kind in ('money','credits') else 'owners';p.actor.require(resource,'read',p.actor.id)
+    def ledger(kind:Literal['traffic','credits'],p:Principal=Depends(current)):
+        resource='finance' if kind=='credits' else 'owners';p.actor.require(resource,'read',p.actor.id)
         all_=p.actor.role=='owner' or p.actor.permissions.get(resource+'.read')=='all'
-        table={'money':'money_ledger','traffic':'traffic_ledger','credits':'resource_credit_ledger'}[kind]
+        table='resource_credit_ledger' if kind=='credits' else 'traffic_ledger'
         with store.lock:return [dict(r) for r in store.db.execute('SELECT * FROM '+table+('' if all_ else ' WHERE owner=?')+' ORDER BY rowid DESC LIMIT 250',() if all_ else (p.actor.id,))]
 
     @app.get('/api/logs/{kind}')
@@ -1137,7 +1137,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         except PolicyError:profile={'name':p.actor.id,'allowed':[]}
         with store.lock:stat=store.db.execute('SELECT * FROM owners WHERE id=?',(p.actor.id,)).fetchone()
         manager.owner_put(p.actor,p.actor.id,name=profile['name'],allowed=profile['allowed']+[result['id']],
-            quota_bytes=stat['quota_bytes'] if stat else 0,max_clients=stat['max_clients'] if stat else 0)
+            volume_credit_bytes=stat['volume_credit_bytes'] if stat else None,
+            unlimited_credit=stat['unlimited_credit'] if stat else None,
+            max_clients=stat['max_clients'] if stat else 0)
         manager.audit(p.actor,p.actor.id,'inbound.create',str(result['id']))
         return result
 
