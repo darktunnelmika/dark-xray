@@ -171,6 +171,26 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('Inbounds V3 save and active-editor refresh stability')
             page.screenshot(path=str(OUT/'browser-inbounds.png'),full_page=True)
 
+            inbound_id=saved[0]['id']
+            visit(page,'hosts')
+            page.locator('[data-act="hv2new"]').click()
+            page.locator('.hv3-editor').wait_for(state='visible',timeout=10000)
+            page.locator('#dialog-form [name="inboundId"]').select_option(str(inbound_id))
+            page.locator('#dialog-form [name="address"]').fill('public-browser.example.test')
+            page.locator('#dialog-form [name="port"]').fill('20443')
+            page.locator('#dialog-form [name="remark"]').fill('BROWSER PUBLIC ENDPOINT')
+            assert page.locator('#dialog-form input[name="mode"][value="direct"]').is_checked()
+            assert page.locator('[data-hv3-preview]').inner_text().find('public-browser.example.test:20443')>=0
+            page.locator('#submit-dialog').click()
+            page.locator('.hv3-editor').wait_for(state='detached',timeout=10000)
+            hosts=page.evaluate("()=>api('/api/settings/hosts').then(x=>x.value)")
+            endpoint=next((x for x in hosts if x.get('remark')=='BROWSER PUBLIC ENDPOINT'),None)
+            assert endpoint and endpoint['inboundId']==inbound_id
+            assert endpoint['address']=='public-browser.example.test' and endpoint['port']==20443
+            assert endpoint['security']=='same' and endpoint['host']=='' and endpoint['path']==''
+            mark('Public Endpoints V3 distinguishes Xray listener from customer-facing address and previews delivery impact')
+            page.screenshot(path=str(OUT/'browser-public-endpoints-v3.png'),full_page=True)
+
             visit(page,'clients')
             page.locator('.clients-v4').wait_for(state='visible',timeout=10000)
             rows=page.locator('.cv4-row')
@@ -190,7 +210,6 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-clients-v4.png'),full_page=True)
             page.locator('[data-act="close"]').first.click()
 
-            inbound_id=saved[0]['id']
             delivery_client=page.evaluate("""({inboundId})=>api('/api/clients','POST',{
                 owner:state.me.id,client:{email:'browser-delivery',totalGB:0,limitIp:1},
                 inboundIds:[inboundId]
@@ -202,11 +221,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert page.locator('[data-act="cv4dformat"][data-format="clash"]').count()==1
             assert page.locator('[data-act="cv4dformat"][data-format="json"]').count()==1
             assert page.locator('.cv4d-config.primary').count()>=1
+            assert 'public-browser.example.test:20443' in page.locator('.cv4d-config.primary').first.locator('code').inner_text()
             assert page.locator('.cv4d-empty').count()==1
             assert page.locator('#cv4d-qr svg').count()==1
             page.locator('[data-act="cv4dformat"][data-format="clash"]').click()
             assert 'format=clash' in page.locator('#cv4d-sub-url').inner_text()
-            mark('Clients V5 Delivery Center exposes subscription formats, direct configs and failover readiness')
+            mark('Clients V5 Delivery Center consumes the Guided Public Endpoint and exposes subscription formats plus failover readiness')
             page.screenshot(path=str(OUT/'browser-client-delivery-v5.png'),full_page=True)
             page.locator('[data-act="close"]').first.click()
 
