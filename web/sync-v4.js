@@ -70,7 +70,7 @@ function filterBar(s){
 }
 function managerCard(s){
  const st=s.manager_state||'stale',tone=st==='healthy'?'ok':st==='error'?'error':'warn';
- return `<article class="panel sy4-control-card ${tone}"><small>01 / RECONCILER</small><h3>${L('Manager loop','چرخه Manager')}</h3><b>${e(String(st).toUpperCase())}</b>
+ return `<article class="panel sy4-control-card ${tone}"><small>01 / RECONCILER</small><h3>${L('Manager loop','چرخه مدیر')}</h3><b>${e(String(st).toUpperCase())}</b>
   <div class="sy4-kv"><div><span>${L('Last poll','آخرین Poll')}</span><strong>${date(s.last_poll)}</strong></div><div><span>${L('Poll age','سن Poll')}</span><strong>${s.poll_age_seconds==null?'—':fa(s.poll_age_seconds)+'s'}</strong></div><div><span>${L('Writes','نوشتن')}</span><strong>${s.writes_enabled?L('Enabled','فعال'):L('Read only','فقط خواندنی')}</strong></div></div>
   ${s.error?`<div class="sy4-error">${e(s.error)}</div>`:''}</article>`;
 }
@@ -101,8 +101,8 @@ function nodeCard(s){
  const n=s.nodes;if(!n)return'';
  const issues=(n.offline||0)+(n.assignment_errors||0)+(n.pending_deploys||0);
  return `<article class="panel sy4-control-card ${issues?'warn':'ok'}"><small>04 / NODES</small><h3>${L('Node synchronization','همگام‌سازی نودها')}</h3><b>${issues?fa(issues)+' '+L('ISSUES','مورد'):L('READY','آماده')}</b>
-  <div class="sy4-kv"><div><span>${L('Online','آنلاین')}</span><strong>${fa(n.online||0)} / ${fa(n.total||0)}</strong></div><div><span>${L('Deploy errors','خطای Deploy')}</span><strong>${fa(n.assignment_errors||0)}</strong></div><div><span>${L('Pending deploy','Deploy در انتظار')}</span><strong>${fa(n.pending_deploys||0)}</strong></div></div>
-  <footer>${button(L('Open Nodes','بازکردن Nodes'),'sy4nodes','server')}</footer></article>`;
+  <div class="sy4-kv"><div><span>${L('Online','آنلاین')}</span><strong>${fa(n.online||0)} / ${fa(n.total||0)}</strong></div><div><span>${L('Deploy errors','خطای استقرار')}</span><strong>${fa(n.assignment_errors||0)}</strong></div><div><span>${L('Pending deploy','استقرار در انتظار')}</span><strong>${fa(n.pending_deploys||0)}</strong></div></div>
+  <footer>${button(L('Open Nodes','بازکردن نودها'),'sy4nodes','server')}</footer></article>`;
 }
 syncPage=function(){
  const s=state.sync||{},items=filtered(s.items||[]),q=s.summary||{};
@@ -135,7 +135,7 @@ function identityConfirm(id,kind){
  dialog(title+` · ${id}`,`<div class="notice warning">${e(notice)}</div>${field(L('Client identity confirmation','تأیید شناسه کاربر'),'confirmation','','text',`required autocomplete="off" data-expected="${e(id)}"`) }`,async f=>{
    const value=String(f.get('confirmation')||'').trim();if(value!==id)throw Error(L('Client identity does not match.','شناسه کاربر مطابقت ندارد.'));
    const endpoint=restore?'/api/clients/'+enc(id)+'/restore-missing':'/api/clients/'+enc(id)+'/resolve-reset';
-   await api(endpoint,'POST',{confirmation:value});await refresh();closeDialog();toast(restore?L('Missing client recovery completed.','Recovery کاربر گم‌شده انجام شد.'):L('Uncertain reset resolved without replay.','ریست نامشخص بدون تکرار حل شد.'));
+   await api(endpoint,'POST',{confirmation:value});await refresh();closeDialog();toast(restore?L('Missing client recovery completed.','بازیابی کاربر گم‌شده انجام شد.'):L('Uncertain reset resolved without replay.','ریست نامشخص بدون تکرار حل شد.'));
  });
 }
 function inspectSync(id){
