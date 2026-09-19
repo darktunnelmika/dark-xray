@@ -156,7 +156,7 @@ function previewForm(d){
       <label class="wide"><span>HTTP attrs JSON</span><textarea name="attrs" spellcheck="false" dir="ltr" placeholder='{"accept":"text/html"}'></textarea></label>
     </div></details>
    </div>
-   <footer><button type="submit" class="btn btn-primary">${icon('activity')}${L('Preview route','پیش‌نمایش مسیر')}</button></footer>
+   <footer><button type="button" class="btn btn-primary" data-act="te4preview">${icon('activity')}${L('Preview route','پیش‌نمایش مسیر')}</button></footer>
   </form>
   <div id="te4-preview-result">${state.te4.preview?previewResult(state.te4.preview):`<div class="te4-preview-empty">${L('Enter a synthetic connection and preview which saved rule would receive it.','یک اتصال فرضی وارد کن تا ببینی کدام Rule ذخیره‌شده آن را می‌گیرد.')}</div>`}</div>
  </section>`;
@@ -229,13 +229,13 @@ runAction=async function(act,el){
  if(act==='te4balnew'){await guided.openBalancer();return;}
  if(act==='te4baledit'){await guided.openBalancer(Number(el.dataset.index));return;}
  if(act==='te4obsedit'){await guided.openObservatory();return;}
+ if(act==='te4preview'){await previewFromForm(el.closest('#te4-preview-form'));return;}
  return baseRunAction(act,el);
 };
 
-document.addEventListener('submit',async ev=>{
- if(ev.target?.id!=='te4-preview-form')return;
- ev.preventDefault();
- const form=ev.target,submit=form.querySelector('button[type=submit]');if(submit)submit.disabled=true;
+async function previewFromForm(form){
+ if(!form)throw Error(L('Route preview form is unavailable.','فرم Route Preview در دسترس نیست.'));
+ const submit=form.querySelector('[data-act="te4preview"]');if(submit)submit.disabled=true;
  try{
   const fd=new FormData(form),attrsText=String(fd.get('attrs')||'').trim();let attrs={};
   if(attrsText){try{attrs=JSON.parse(attrsText);}catch{throw Error(L('HTTP attrs must be valid JSON.','Attrs باید JSON معتبر باشد.'));}if(!attrs||Array.isArray(attrs)||typeof attrs!=='object')throw Error(L('HTTP attrs must be a JSON object.','Attrs باید JSON Object باشد.'));}
@@ -249,8 +249,8 @@ document.addEventListener('submit',async ev=>{
   };
   state.te4.preview=await api('/api/traffic-engine/preview','POST',body);
   const box=document.querySelector('#te4-preview-result');if(box)box.innerHTML=previewResult(state.te4.preview);
- }catch(ex){toast(ex.message,true);}
- finally{if(submit?.isConnected)submit.disabled=false;}
-});
-globalThis.DarkTrafficEngineV4={previewResult,endpoint,conditionRows};
+  return state.te4.preview;
+ }finally{if(submit?.isConnected)submit.disabled=false;}
+}
+globalThis.DarkTrafficEngineV4={previewResult,endpoint,conditionRows,previewFromForm};
 })();
