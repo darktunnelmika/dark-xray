@@ -424,7 +424,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert page.locator('.ip4-arch-card').count()==4
             sec_text=page.locator('.ip4').inner_text()
             assert 'nftables' in sec_text.lower()
-            assert 'fail2ban dependency' in sec_text.lower()
+            assert 'fail2ban' not in sec_text.lower()
             sec_card=page.locator('.ip4-client').filter(has_text='browser-hwid-policy')
             assert sec_card.count()==1
             assert sec_card.locator('.ip4-count b').nth(0).inner_text().strip()=='2'
