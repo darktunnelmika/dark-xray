@@ -312,8 +312,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             page.locator('#te4-preview-form [name="domain"]').fill('api.browser.example')
             page.locator('#te4-preview-form [name="port"]').fill('443')
-            page.locator('#te4-preview-form button[type="submit"]').click()
-            page.wait_for_function("()=>state.te4?.preview?.result==='matched'&&state.te4.preview.selected_outbound==='browser-proxy'",timeout=10000)
+            preview_errors=page.locator('.toast.error').count()
+            page.locator('#te4-preview-form [data-act="te4preview"]').click()
+            page.wait_for_function("""n=>!!state.te4?.preview||document.querySelectorAll('.toast.error').length>n""",arg=preview_errors,timeout=10000)
+            if not page.evaluate("()=>!!state.te4?.preview"):
+                raise RuntimeError('Traffic Engine direct preview: '+page.locator('.toast.error').last.inner_text())
+            preview_state=page.evaluate("()=>state.te4.preview")
+            assert preview_state['result']=='matched' and preview_state['selected_outbound']=='browser-proxy',preview_state
             preview_text=page.locator('#te4-preview-result').inner_text()
             assert 'RULE #1' in preview_text and 'OUT browser-proxy' in preview_text,preview_text
             mark('Traffic Engine V4 previews literal routing decisions without sending traffic')
@@ -354,8 +359,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#submit-dialog').click()
             page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
             page.locator('#te4-preview-form [name="domain"]').fill('www.balance.example')
-            page.locator('#te4-preview-form button[type="submit"]').click()
-            page.wait_for_function("()=>state.te4?.preview?.target_type==='balancer'&&state.te4.preview.target==='browser-bal'",timeout=10000)
+            preview_errors=page.locator('.toast.error').count()
+            page.locator('#te4-preview-form [data-act="te4preview"]').click()
+            page.wait_for_function("""n=>!!state.te4?.preview||document.querySelectorAll('.toast.error').length>n""",arg=preview_errors,timeout=10000)
+            if not page.evaluate("()=>!!state.te4?.preview"):
+                raise RuntimeError('Traffic Engine balancer preview: '+page.locator('.toast.error').last.inner_text())
+            preview_state=page.evaluate("()=>state.te4.preview")
+            assert preview_state['target_type']=='balancer' and preview_state['target']=='browser-bal',preview_state
             bal_preview=page.locator('#te4-preview-result').inner_text()
             assert 'browser-proxy' in bal_preview and 'browser-proxy-backup' in bal_preview,bal_preview
 
