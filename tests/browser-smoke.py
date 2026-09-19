@@ -454,9 +454,9 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert drift.count()==1
             assert 'EXTERNAL DISABLE' in drift.inner_text()
             drift.locator('[data-act="sy4control"]').click()
-            page.wait_for_timeout(150)
+            page.wait_for_function("()=>state.sync?.items?.find(x=>x.email==='browser-hwid-policy')?.reason_code==='clean'",timeout=10000)
             external_flag=page.evaluate("()=>api('/api/clients/browser-hwid-policy').then(x=>x.client.enable)")
-            assert external_flag is True
+            assert external_flag is True,'external control was not restored'
             page.locator('[data-act="sy4filter"][data-view="all"]').click()
             clean=page.locator('.sy4-item').filter(has_text='browser-hwid-policy')
             assert clean.count()==1 and 'IN SYNC' in clean.inner_text()
@@ -474,9 +474,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#dialog-form [name="confirmation"]').fill('browser-delivery')
             page.locator('#submit-dialog').click()
             page.locator('.dialog').wait_for(state='detached',timeout=10000)
+            page.wait_for_function("()=>state.sync?.items?.find(x=>x.email==='browser-delivery')?.reason_code==='clean'",timeout=10000)
             restored=page.evaluate("()=>api('/api/clients/browser-delivery')")
             assert restored['state']=='applied',restored
-            assert page.locator('.sy4-item').filter(has_text='browser-delivery').count()==0
+            assert page.locator('.sy4-item').filter(has_text='browser-delivery').count()==0,'restored client remained in issues filter'
             mark('Sync Runtime V4 restores external control and explicitly recovers a missing runtime client')
             page.screenshot(path=str(OUT/'browser-sync-runtime-v4.png'),full_page=True)
 
