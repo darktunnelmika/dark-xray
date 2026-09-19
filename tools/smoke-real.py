@@ -11,6 +11,7 @@ import argparse,base64,hashlib,http.cookiejar,http.server,json,os,socket,struct,
 from pathlib import Path
 from urllib.parse import urlsplit,parse_qs
 from urllib.request import Request,build_opener,HTTPCookieProcessor,ProxyHandler
+from urllib.error import HTTPError
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
 from core import Config,CoreEngine
@@ -84,13 +85,26 @@ def run(binary:Path,report_path:Path):
                 headers={'Content-Type':'application/json','X-Dark-CSRF':csrf}
                 req=Request(cfg.public_origin+path,data=json.dumps(body).encode() if body is not None else None,headers=headers,method=method)
                 with opener.open(req,timeout=20) as response:return json.load(response)
+            def api_result(path,body=None,method=None):
+                headers={'Content-Type':'application/json','X-Dark-CSRF':csrf}
+                req=Request(cfg.public_origin+path,data=json.dumps(body).encode() if body is not None else None,headers=headers,method=method)
+                try:
+                    with opener.open(req,timeout=20) as response:return response.status,json.load(response)
+                except HTTPError as ex:
+                    try:doc=json.load(ex)
+                    except Exception:doc={'detail':ex.read().decode(errors='replace')[:500]}
+                    return ex.code,doc
             login=api('/api/auth/login',{'username':'qa-owner','password':'Temporary-QA-password-06'});csrf=login['csrf']
             report['checks'].append('real local HTTP login and CSRF-authenticated writes')
             ib=api('/api/inbounds',{'remark':'DARK REAL E2E','protocol':'vless','listen':'127.0.0.1','port':data_port,
                 'enable':True,'tag':'real-test','settings':{'decryption':'none'},'streamSettings':{'network':'tcp','security':'none'},'sniffing':{}})
             for owner in ['alpha','beta']:
-                api('/api/owners/'+owner,{'name':owner,'allowed':[ib['id']]},'PUT')
-                api('/api/clients',{'owner':owner,'client':{'email':owner+'-client','limitIp':0},'inboundIds':[ib['id']]})
+                api('/api/resellers/'+owner,{
+                    'name':owner,'password':'Temporary-Rep-Password-082','enabled':True,
+                    'allowed':[ib['id']],'volume_credit_bytes':0,'unlimited_credit':1,
+                    'max_clients':10,'prefix':'','max_client_ips':0,'max_client_hwid':0
+                },'PUT')
+                api('/api/clients',{'owner':owner,'client':{'email':owner+'-client','limitIp':0,'totalGB':0},'inboundIds':[ib['id']]})
             api('/api/core/start',{})
             report['checks'].append('real Xray -test and owned process start')
             socks={}
@@ -115,22 +129,32 @@ def run(binary:Path,report_path:Path):
             report.update(live_proxy_connection_tested=True)
             report['checks'].append('two real VLESS clients on one inbound using generated DARK subscription credentials')
             api('/api/sync',{})
-            used=next(x for x in api('/api/owners') if x['id']=='alpha')['used_bytes']
+            alpha_stats=next(x for x in api('/api/owners') if x['id']=='alpha')
+            used=alpha_stats['used_bytes']
             assert used>0,'No user traffic was metered from real Xray'
-            report['checks'].append('real core traffic reaches independent reseller ledger')
-            api('/api/owners/alpha',{'name':'alpha','allowed':[ib['id']],'quota_bytes':1},'PUT')
-            blocked=False
-            try:blocked=not proxied_request(socks['alpha'],target.server_port)
-            except (OSError,RuntimeError,AssertionError):blocked=True
-            assert blocked,'Exhausted reseller still connects'
-            assert proxied_request(socks['beta'],target.server_port),'Other reseller was interrupted permanently'
-            report['checks'].append('reseller quota removes only its client, not the shared inbound')
-            api('/api/owners/alpha',{'name':'alpha','allowed':[ib['id']],'quota_bytes':10*1024*1024},'PUT')
-            assert proxied_request(socks['alpha'],target.server_port)
+            assert alpha_stats['unlimited_credit_remaining']==0,'Existing unlimited service did not reserve its credit'
+            assert proxied_request(socks['alpha'],target.server_port),'Observed traffic incorrectly disabled an exhausted-credit service'
+            report['checks'].append('real traffic is metered without spending or disabling reserved resource credit')
+
+            code,doc=api_result('/api/clients',{
+                'owner':'alpha','client':{'email':'alpha-extra','limitIp':0,'totalGB':0},'inboundIds':[ib['id']]},'POST')
+            assert code==400 and 'unlimited credit' in str(doc).lower(),f'Expected exhausted Unlimited Credit rejection, got {code}: {doc}'
+            assert proxied_request(socks['beta'],target.server_port),'Other representative was interrupted by alpha credit exhaustion'
+            report['checks'].append('exhausted Unlimited Credit blocks only new allocation, not existing shared-inbound traffic')
+
+            topup=api('/api/resellers/alpha/credits',{
+                'volume_bytes':0,'unlimited_units':1,'event_id':'real-core-alpha-credit-0001'},'POST')
+            assert topup['recorded'] is True
+            api('/api/clients',{'owner':'alpha','client':{'email':'alpha-extra','limitIp':0,'totalGB':0},'inboundIds':[ib['id']]})
+            alpha_stats=next(x for x in api('/api/owners') if x['id']=='alpha')
+            assert alpha_stats['allocated_unlimited']==2 and alpha_stats['unlimited_credit_remaining']==0
+            report['checks'].append('Unlimited Credit top-up permits a new service allocation')
+
             api('/api/clients/alpha-client/action',{'action':'disable'})
-            api('/api/owners/alpha',{'name':'alpha','allowed':[ib['id']],'quota_bytes':20*1024*1024},'PUT')
+            api('/api/resellers/alpha/credits',{
+                'volume_bytes':0,'unlimited_units':1,'event_id':'real-core-alpha-credit-0002'},'POST')
             assert 'client_manual' in api('/api/clients/alpha-client')['block_reasons']
-            report['checks'].append('top-up recovers quota-only clients and preserves manual disable')
+            report['checks'].append('resource-credit top-up preserves manual client disable')
             before=next(x for x in api('/api/owners') if x['id']=='alpha')['used_bytes']
             api('/api/clients/alpha-client/action',{'action':'reset'})
             api('/api/clients/alpha-client/action',{'action':'delete'})
