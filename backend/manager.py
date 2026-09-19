@@ -62,9 +62,6 @@ class Manager:
               email TEXT PRIMARY KEY,days INTEGER NOT NULL,next_at REAL NOT NULL,
               completed INTEGER NOT NULL DEFAULT 0,max_resets INTEGER NOT NULL DEFAULT 0,
               mode TEXT NOT NULL DEFAULT 'interval',reset_day INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS live_orders(
-              id TEXT PRIMARY KEY,owner TEXT NOT NULL,email TEXT NOT NULL,kind TEXT NOT NULL,
-              price INTEGER NOT NULL,at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS client_groups(
               owner TEXT NOT NULL,name TEXT NOT NULL,color TEXT NOT NULL DEFAULT '',
               created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,name));
