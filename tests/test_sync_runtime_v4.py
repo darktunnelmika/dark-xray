@@ -102,17 +102,14 @@ def test_sync_v4_excludes_deleted_history_but_audit_remains(env):
 
 
 def test_sync_v4_node_summary_uses_persisted_assignment_state(env):
-    store,_,_,auth,c=env
+    store,_,_,_,c=env
     create(c,'node-sync-v4')
+    r=c.post('/api/nodes',json={'id':'sync-node','name':'SYNC NODE','origin':'https://sync-node.example.test',
+        'dataAddress':'sync-node.example.test','priority':10,'failoverEnabled':True,
+        'token':'dkn_'+('R'*60),'enabled':True,'inboundIds':[1]})
+    assert r.status_code==200,r.text
     with store.transaction() as db:
-        db.execute("""INSERT INTO remote_nodes(
-          id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health,
-          data_address,priority,failover_enabled)
-          VALUES(?,?,?,?,1,?,?,?,?,?,'{}',?,?,1)""",
-          ('sync-node','SYNC NODE','https://sync-node.example.test',auth.cipher.encrypt(b'dkn_'+b'R'*60).decode(),
-           time.time(),time.time(),time.time(),7,'','sync-node.example.test',10))
-        db.execute("""INSERT INTO remote_node_inbounds(node_id,local_inbound_id,remote_inbound_id,updated_at,last_sync,last_error)
-          VALUES('sync-node',1,0,?,?, '')""",(time.time(),0))
+        db.execute("UPDATE remote_nodes SET last_seen=?,last_latency_ms=7,last_error='' WHERE id='sync-node'",(time.time(),))
     doc=c.get('/api/sync').json()
     assert doc['nodes']['total']==1
     assert doc['nodes']['online']==1
