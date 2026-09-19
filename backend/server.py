@@ -579,6 +579,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def resolve_reset(email:str,body:ResolveReset,p:Principal=Depends(owner)):
         writable();return manager.resolve_reset(p.actor,email,body.confirmation)
 
+    @app.post('/api/clients/{email}/sync-retry')
+    def retry_client_sync(email:str,p:Principal=Depends(current)):
+        writable();return manager.retry_operation(p.actor,email)
+
+    @app.post('/api/clients/{email}/restore-missing')
+    def restore_missing_client(email:str,body:ResolveReset,p:Principal=Depends(owner)):
+        writable();return manager.restore_missing(p.actor,email,body.confirmation)
+
 
     def rewrite_failover_uri(uri:str,address:str,remark:str,port_override:int=0)->str:
         if port_override and not 1<=int(port_override)<=65535:raise PolicyError('Invalid failover data port')
@@ -1151,19 +1159,96 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'global_account_policy':True,
             'global_policy_note':'Central can block a client from verified Local + Node observations; nftables bans remain local to the host where they are applied.',
             'packet_test_performed_here':False}
-    @app.get('/api/sync')
-    def sync(p:Principal=Depends(current)):
+    def sync_status_doc(p:Principal):
+        now=time.time()
         with store.lock:
-            rows=[dict(r) for r in store.db.execute('SELECT m.email,m.op,m.state,m.error,m.updated_at,c.owner FROM managed_clients m LEFT JOIN clients c ON c.id=m.email ORDER BY m.updated_at DESC LIMIT 250')]
+            raw=[dict(r) for r in store.db.execute('''SELECT m.email,m.op,m.op_id,m.state,m.error,m.updated_at,m.retry_at,
+                    m.attempts,m.expected_enable,m.external_disabled,c.owner
+                    FROM managed_clients m LEFT JOIN clients c ON c.id=m.email
+                    WHERE m.state!='deleted' ORDER BY m.updated_at DESC''')]
+        visible=[r for r in raw if p.actor.role=='owner' or (r.get('owner') and p.actor.can('clients','read',r['owner']))]
+
+        def classify(r):
+            state=str(r.get('state') or '');op=str(r.get('op') or 'none');external=bool(r.get('external_disabled'))
+            retry_in=max(0,int(float(r.get('retry_at') or 0)-now))
+            code='clean';severity='ok';automatic=False;action='none'
+            if state=='uncertain':
+                code='uncertain_reset' if op=='reset' else 'uncertain_operation';severity='error'
+                action='resolve_reset' if p.actor.role=='owner' and op=='reset' else 'inspect'
+            elif state=='conflict':
+                code='identity_conflict';severity='error';action='inspect'
+            elif state=='missing':
+                code='runtime_missing';severity='error';action='restore_missing' if p.actor.role=='owner' else 'inspect'
+            elif state=='reset_inflight':
+                code='reset_inflight';severity='warn';automatic=False;action='none'
+            elif state=='error':
+                code='retry_wait' if retry_in else 'operation_error';severity='warn';automatic=op!='none'
+                owner_id=r.get('owner')
+                can_retry=bool(owner_id and p.actor.can('clients','delete' if op=='delete' else 'reset' if op=='reset' else 'edit',owner_id))
+                action='retry_now' if op!='none' and can_retry else 'inspect'
+            elif state=='pending':
+                code='queued';severity='info';automatic=op!='none';action='none'
+            elif external:
+                code='external_disabled';severity='warn'
+                owner_id=r.get('owner');action='restore_control' if owner_id and p.actor.can('clients','edit',owner_id) else 'inspect'
+            elif state!='applied':
+                code='state_'+state;severity='warn';action='inspect'
+            out=dict(r);out['reason_code']=code;out['severity']=severity;out['automatic_retry']=automatic
+            out['retry_in_seconds']=retry_in;out['next_action']=action
+            out['drift']=code in {'identity_conflict','runtime_missing','external_disabled'}
+            out['operation_pending']=op!='none'
+            out.pop('op_id',None)
+            return out
+
+        items=[classify(r) for r in visible]
+        rank={'error':0,'warn':1,'info':2,'ok':3}
+        items.sort(key=lambda x:(rank.get(x['severity'],9),-float(x.get('updated_at') or 0),x['email']))
+        summary={'total':len(items)}
+        for key in ('clean','queued','retry_wait','operation_error','uncertain_reset','uncertain_operation',
+                    'identity_conflict','runtime_missing','external_disabled','reset_inflight'):
+            summary[key]=sum(1 for x in items if x['reason_code']==key)
+        summary['action_required']=sum(1 for x in items if x['severity']=='error')
+        summary['warnings']=sum(1 for x in items if x['severity']=='warn')
+        summary['automatic_retry']=sum(1 for x in items if x['automatic_retry'])
+
         runtime=engine.runtime_state()
+        if runtime.get('last_error'):generation='runtime_error'
+        elif runtime.get('running') and not runtime.get('dirty'):generation='running_clean'
+        elif runtime.get('running') and runtime.get('dirty'):generation='running_dirty'
+        elif not runtime.get('running') and runtime.get('desired_running'):generation='stopped_unexpected'
+        elif runtime.get('dirty'):generation='stopped_staged'
+        else:generation='stopped_clean'
+        runtime['generation_state']=generation
+        runtime['next_action']='restart_apply' if generation=='running_dirty' else 'start_apply' if generation in {'stopped_staged','stopped_unexpected','runtime_error'} else 'none'
         if p.actor.role!='owner':
-            runtime={k:runtime.get(k) for k in ('state','running','dirty','desired_running')}
-        return {'last_poll':manager.last_poll,'error':manager.last_error if p.actor.role=='owner' else ('CoreEngine synchronization unavailable' if manager.last_error else ''),
+            runtime={k:runtime.get(k) for k in ('state','running','dirty','desired_running','generation_state','next_action')}
+
+        poll_age=None if not manager.last_poll else max(0,int(now-manager.last_poll))
+        poll_stale=manager.last_poll==0 or poll_age>max(15,int(config.poll_seconds)*3)
+        manager_state='error' if manager.last_error else 'stale' if poll_stale else 'healthy'
+        node_summary=None
+        if p.actor.role=='owner':
+            node_rows=nodes.list();assignments=[a for n in node_rows for a in n.get('assignments',[])]
+            node_summary={'total':len(node_rows),'online':sum(1 for n in node_rows if n.get('online')),
+                'offline':sum(1 for n in node_rows if n.get('enabled') and not n.get('online')),
+                'assignment_errors':sum(1 for a in assignments if a.get('deployment_state')=='sync_error'),
+                'pending_deploys':sum(1 for a in assignments if a.get('deployment_state')=='pending'),
+                'deployed':sum(1 for a in assignments if a.get('deployment_state')=='deployed'),
+                'subscription_ready':sum(1 for a in assignments if a.get('failover_ready'))}
+
+        limited=items[:500]
+        return {'last_poll':manager.last_poll,'poll_age_seconds':poll_age,'poll_stale':poll_stale,
+                'manager_state':manager_state,
+                'error':manager.last_error if p.actor.role=='owner' else ('CoreEngine synchronization unavailable' if manager.last_error else ''),
                 'writes_enabled':config.writes_enabled,'engine_version':engine.version,'runtime':runtime,
-                'items':[r for r in rows if p.actor.role=='owner' or p.actor.can('clients','read',r['owner'])]}
+                'summary':summary,'nodes':node_summary,'items':limited,'items_total':len(items),'truncated':len(items)>len(limited)}
+
+    @app.get('/api/sync')
+    def sync(p:Principal=Depends(current)):return sync_status_doc(p)
+
     @app.post('/api/sync')
     def force_sync(p:Principal=Depends(owner)):
-        manager.tick(suppress=False);return {'last_poll':manager.last_poll}
+        manager.tick(suppress=False);return sync_status_doc(p)
     @app.post('/api/core/{action}')
     def core(action:str,p:Principal=Depends(owner)):
         writable()
