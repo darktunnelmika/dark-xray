@@ -54,3 +54,13 @@ test('Traffic Engine V4 assets are loaded after Guided V3',()=>{
   assert.match(css,/\.te4-preview/);
   assert.match(css,/\.te4-graph/);
 });
+
+
+test('Traffic Engine V4 calls exported Guided editors directly',()=>{
+  for(const action of ['te4outnew','te4outedit','te4outclone','te4rulenew','te4ruleedit','te4balnew','te4baledit','te4obsedit'])
+    assert.match(traffic,new RegExp(action));
+  for(const method of ['openOutbound','openRule','openBalancer','openObservatory'])
+    assert.match(guided,new RegExp(method));
+  assert.match(traffic,/guided\.openOutbound/);
+  assert.match(traffic,/guided\.openRule/);
+});
