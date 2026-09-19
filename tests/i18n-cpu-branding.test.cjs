@@ -7,6 +7,8 @@ const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
 const i18n=read('web/i18n-en.js');
 const live=read('web/live.js');
 const inbounds=read('web/inbounds-v3.js');
+const webDir=path.join(__dirname,'..','web');
+const allUi=fs.readdirSync(webDir).filter(n=>/\.(?:js|html)$/.test(n)).map(n=>fs.readFileSync(path.join(webDir,n),'utf8')).join('\n');
 const overview=read('web/overview-v4.js');
 const core=read('backend/core.py');
 const server=read('backend/server.py');
@@ -21,8 +23,7 @@ test('language normalizer is bidirectional instead of English-only',()=>{
 });
 
 test('user-facing panel UI does not mention legacy Sanaei or Mirza products',()=>{
-  const ui=live+'\n'+inbounds;
-  assert.doesNotMatch(ui,/sanaei|sanayi|mirza|سنایی|میرزا/i);
+  assert.doesNotMatch(allUi,/sanaei|sanayi|mirza|سنایی|میرزا/i);
   assert.match(inbounds,/DARK-native essentials/);
   assert.match(live,/authorized DARK XRAY integrations|اتصال ابزارهای مجاز به DARK XRAY/);
 });
