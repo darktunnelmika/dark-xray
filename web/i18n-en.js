@@ -390,11 +390,6 @@ function replaceFaWord(text,faText,enText){
   const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(faText)+'(?=$|[\\s·:()،,/|+\\-])','g');
   return text.replace(re,(m,prefix)=>prefix+enText);
 }
-function translateRaw(raw){');}
-function replaceFaWord(text,faText,enText){
-  const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(faText)+'(?=$|[\\s·:()،,/|+\\-])','g');
-  return text.replace(re,(m,prefix)=>prefix+enText);
-}
 function translateRaw(raw){
   if(!raw)return raw;
   let out=selected==='en'?digits(raw):raw;
