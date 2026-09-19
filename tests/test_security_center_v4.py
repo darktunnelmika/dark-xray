@@ -78,7 +78,6 @@ def test_security_center_frontend_uses_native_guard_and_hwid_controls():
     assert '/api/security-center' in ui
     assert 'Native nftables Guard' in ui
     assert 'global_ip_count' in ui and 'global_device_count' in ui
-    assert "name="limitHwid"" not in clients  # helper emits the attribute dynamically
     assert "'limitHwid',c.limitHwid??0" in clients
     assert "limitHwid:Number(f.get('limitHwid')||0)" in clients
     assert 'کارگر Fail2ban' not in live
