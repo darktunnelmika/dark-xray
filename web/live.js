@@ -121,7 +121,7 @@ async function ownerForm(id=null){
    ${field('بیشترین IP هر مشتری · صفر آزاد','max_client_ips',o.max_client_ips||0,'number','min="0" max="1000"')}
    ${field('بیشترین HWID هر مشتری · صفر آزاد','max_client_hwid',o.max_client_hwid||0,'number','min="0" max="1000"')}
    <div class="span-2"><label>اینباندهای مجاز</label>${selection(o.allowed||[])}</div>
-   <div class="span-2 notice">اعتبار پولی در DARK وجود ندارد. مشتری حجمی به اندازه حجم تعریف‌شده از Volume Credit رزرو می‌کند؛ مشتری نامحدود یک واحد Unlimited Credit رزرو می‌کند. غیرفعال‌کردن مشتری رزرو را آزاد نمی‌کند؛ حذف یا تغییر پلن آن را آزاد می‌کند. کاهش اعتبار پایین‌تر از رزرو فعلی رد می‌شود.</div>
+   <div class="span-2 notice">نماینده Role یا Permission قابل انتخاب ندارد؛ سطح دسترسی نماینده ثابت و محدود به منابع خودش است. اعتبار پولی در DARK وجود ندارد. مشتری حجمی به اندازه حجم تعریف‌شده از Volume Credit رزرو می‌کند؛ مشتری نامحدود یک واحد Unlimited Credit رزرو می‌کند. غیرفعال‌کردن مشتری رزرو را آزاد نمی‌کند؛ حذف یا تغییر پلن آن را آزاد می‌کند. کاهش اعتبار پایین‌تر از رزرو فعلی رد می‌شود.</div>
  </div>`,async f=>{
    const rid=f.get('id');
    const body={name:f.get('name'),enabled:f.get('enabled')==='true',allowed:inputIds(f),
