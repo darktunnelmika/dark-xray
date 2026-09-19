@@ -385,7 +385,11 @@ const words=[
 ];
 
 function digits(s){return s.replace(/[۰-۹]/g,d=>latinDigits[persianDigits.indexOf(d)]);}
-function escRe(s){return s.replace(/[.*+?^{}()|[\]\\]/g,'\\function digits(s){return s.replace(/[۰-۹]/g,d=>latinDigits[persianDigits.indexOf(d)]);}
+function escRe(s){return s.replace(/[.*+?^\${}()|[\]\\]/g,'\\$&');}
+function replaceFaWord(text,faText,enText){
+  const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(faText)+'(?=$|[\\s·:()،,/|+\\-])','g');
+  return text.replace(re,(m,prefix)=>prefix+enText);
+}
 function translateRaw(raw){');}
 function replaceFaWord(text,faText,enText){
   const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(faText)+'(?=$|[\\s·:()،,/|+\\-])','g');
