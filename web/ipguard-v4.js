@@ -88,11 +88,7 @@ async function securityPage(){
 ipPage=securityPage;
 
 async function inspectClient(id){
- const [global,ips,devices]=await Promise.all([
-  api('/api/clients/'+enc(id)+'/security-global'),
-  api('/api/clients/'+enc(id)+'/ips'),
-  api('/api/clients/'+enc(id)+'/devices')
- ]);
+ const global=await api('/api/clients/'+enc(id)+'/security-global');
  const localIps=global.local_ips||[],remoteIps=global.remote_ips||[],localDevices=global.local_devices||[],remoteDevices=global.remote_devices||[];
  const ipRows=[...localIps.map(x=>({...x,source:'LOCAL'})),...remoteIps.map(x=>({...x,source:'NODE '+x.node_id}))];
  const devRows=[...localDevices.map(x=>({...x,source:'LOCAL',device_id:x.id})),...remoteDevices.map(x=>({...x,source:'NODE '+x.node_id}))];
