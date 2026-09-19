@@ -122,7 +122,7 @@ function backupCard(){
  return `<article class="ov4-card ov4-backup-card"><header class="ov4-card-head"><div><span>${L('BACKUP & RECOVERY','بکاپ و بازیابی')}</span><small>${L('Rollback-safe operations','عملیات امن با قابلیت بازگشت')}</small></div><button class="ov4-link" data-act="ov4backup">${L('Open','بازکردن')} →</button></header>
  <div class="ov4-backup-main"><div><span>${L('Database snapshot','اسنپ‌شات دیتابیس')}</span><b>${b.database_bytes===undefined?'—':bytes(b.database_bytes)}</b></div><div><span>${L('Managed clients','کاربران')}</span><b>${b.managed_clients===undefined?'—':fa(b.managed_clients)}</b></div></div>
  <div class="ov4-safe"><i></i><span>${b.restore_isolated===false?L('Restore isolation unavailable','ایزوله‌سازی بازیابی در دسترس نیست'):L('Isolated restore enforced','بازیابی ایزوله اجباری است')}</span></div>
- <div class="ov4-card-actions"><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('بررسی / بازیابی','بررسی / بازیابی')}</button></div></article>`;
+ <div class="ov4-card-actions"><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('Verify / Restore','بررسی / بازیابی')}</button></div></article>`;
 }
 
 function repsCard(){
