@@ -53,7 +53,9 @@ class Login(Model):
 class OwnerBody(Model):
     name:str=Field(min_length=1,max_length=128)
     allowed:list[StrictInt]=Field(default_factory=list,max_length=4096)
-    quota_bytes:StrictInt=Field(default=0,ge=0,le=MAX_INT)
+    volume_credit_bytes:StrictInt|None=Field(default=None,ge=0,le=MAX_INT)
+    unlimited_credit:StrictInt|None=Field(default=None,ge=0,le=1000000)
+    quota_bytes:StrictInt|None=Field(default=None,ge=0,le=MAX_INT,description='Deprecated alias for volume_credit_bytes')
     max_clients:StrictInt=Field(default=0,ge=0,le=1000000)
     manual:bool|None=None
     prefix:str=Field(default='',max_length=64)
@@ -82,7 +84,9 @@ class RepresentativeBody(Model):
     password:str|None=Field(default=None,min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
     enabled:bool=True
     allowed:list[StrictInt]=Field(default_factory=list,max_length=4096)
-    quota_bytes:StrictInt=Field(default=0,ge=0,le=MAX_INT)
+    volume_credit_bytes:StrictInt|None=Field(default=None,ge=0,le=MAX_INT)
+    unlimited_credit:StrictInt|None=Field(default=None,ge=0,le=1000000)
+    quota_bytes:StrictInt|None=Field(default=None,ge=0,le=MAX_INT,description='Deprecated alias for volume_credit_bytes')
     max_clients:StrictInt=Field(default=0,ge=0,le=1000000)
     prefix:str=Field(default='',max_length=64)
     max_client_ips:StrictInt=Field(default=0,ge=0,le=1000)
@@ -116,6 +120,10 @@ class BulkInbounds(Model):
     mode:Literal['attach','detach']
 class Credit(Model):
     amount:StrictInt=Field(ge=1,le=MAX_INT)
+    event_id:str=Field(min_length=16,max_length=256)
+class ResourceCredit(Model):
+    volume_bytes:int=Field(default=0,ge=-MAX_INT,le=MAX_INT)
+    unlimited_units:int=Field(default=0,ge=-1000000,le=1000000)
     event_id:str=Field(min_length=16,max_length=256)
 class KeyBody(Model):
     name:str=Field(min_length=1,max_length=128)
@@ -411,6 +419,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if account and account['role']!='reseller':raise HTTPException(409,'Account ID belongs to a legacy non-representative role')
         if not account and not body.password:raise HTTPException(400,'Password is required when creating a representative')
         manager.owner_put(p.actor,reseller_id,name=body.name,allowed=body.allowed,
+                          volume_credit_bytes=body.volume_credit_bytes,unlimited_credit=body.unlimited_credit,
                           quota_bytes=body.quota_bytes,max_clients=body.max_clients,manual=not body.enabled,
                           prefix=body.prefix,max_client_ips=body.max_client_ips,max_client_hwid=body.max_client_hwid)
         if not account:
@@ -419,8 +428,22 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                         permissions=DEFAULTS['reseller'])
         manager.tick(suppress=True)
         manager.audit(p.actor,reseller_id,'representative.save',reseller_id,
-                      'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed)))
+                      'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed))+
+                      '; volume_credit_bytes='+str(body.volume_credit_bytes)+
+                      '; unlimited_credit='+str(body.unlimited_credit))
         return next(r for r in representative_rows(p) if r['id']==reseller_id)
+
+    @app.post('/api/resellers/{reseller_id}/credits')
+    def representative_credit_adjust(reseller_id:str,body:ResourceCredit,p:Principal=Depends(owner)):
+        writable()
+        recorded=store.adjust_resource_credit(p.actor,reseller_id,body.volume_bytes,body.unlimited_units,body.event_id)
+        if recorded:
+            manager.audit(p.actor,reseller_id,'representative.credit_adjust',reseller_id,
+                          f'volume_bytes={body.volume_bytes}; unlimited_units={body.unlimited_units}; event={body.event_id}')
+        manager.tick(suppress=True)
+        row=next((r for r in representative_rows(p) if r['id']==reseller_id),None)
+        if not row:raise HTTPException(404,'Representative not found')
+        return {'recorded':recorded,'representative':row}
 
     @app.delete('/api/resellers/{reseller_id}')
     def representative_delete(reseller_id:str,p:Principal=Depends(owner)):
@@ -453,10 +476,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'saved':True,'engine_error':manager.last_error or None}
     @app.post('/api/owners/{owner_id}/credit')
     def credit(owner_id:str,body:Credit,p:Principal=Depends(owner)):
-        result=store.credit(p.actor,owner_id,body.amount,body.event_id)
-        if result:
-            manager.audit(p.actor,owner_id,'finance.credit',owner_id,f'amount={body.amount}; event={body.event_id}')
-        return {'recorded':result}
+        raise HTTPException(410,'Financial reseller credit is retired; use volume/unlimited resource credits')
     @app.post('/api/owners/{owner_id}/reset-period')
     def reset_period(owner_id:str,p:Principal=Depends(owner)):
         manager.tick(suppress=False);store.reset_owner_period(p.actor,owner_id)
@@ -1035,10 +1055,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         all_=p.actor.role=='owner' or p.actor.permissions.get('audit.read')=='all'
         with store.lock:return [dict(r) for r in store.db.execute('SELECT * FROM live_audit'+('' if all_ else ' WHERE owner=?')+' ORDER BY id DESC LIMIT 250',() if all_ else (p.actor.id,))]
     @app.get('/api/ledger/{kind}')
-    def ledger(kind:Literal['traffic','money'],p:Principal=Depends(current)):
-        resource='finance' if kind=='money' else 'owners';p.actor.require(resource,'read',p.actor.id)
+    def ledger(kind:Literal['traffic','credits'],p:Principal=Depends(current)):
+        resource='finance' if kind=='credits' else 'owners';p.actor.require(resource,'read',p.actor.id)
         all_=p.actor.role=='owner' or p.actor.permissions.get(resource+'.read')=='all'
-        with store.lock:return [dict(r) for r in store.db.execute('SELECT * FROM '+('money_ledger' if kind=='money' else 'traffic_ledger')+('' if all_ else ' WHERE owner=?')+' ORDER BY rowid DESC LIMIT 250',() if all_ else (p.actor.id,))]
+        table='resource_credit_ledger' if kind=='credits' else 'traffic_ledger'
+        with store.lock:return [dict(r) for r in store.db.execute('SELECT * FROM '+table+('' if all_ else ' WHERE owner=?')+' ORDER BY rowid DESC LIMIT 250',() if all_ else (p.actor.id,))]
 
     @app.get('/api/logs/{kind}')
     def logs(kind:Literal['process','error','access'],limit:int=400,p:Principal=Depends(owner)):
@@ -1116,7 +1137,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         except PolicyError:profile={'name':p.actor.id,'allowed':[]}
         with store.lock:stat=store.db.execute('SELECT * FROM owners WHERE id=?',(p.actor.id,)).fetchone()
         manager.owner_put(p.actor,p.actor.id,name=profile['name'],allowed=profile['allowed']+[result['id']],
-            quota_bytes=stat['quota_bytes'] if stat else 0,max_clients=stat['max_clients'] if stat else 0)
+            volume_credit_bytes=stat['volume_credit_bytes'] if stat else None,
+            unlimited_credit=stat['unlimited_credit'] if stat else None,
+            max_clients=stat['max_clients'] if stat else 0)
         manager.audit(p.actor,p.actor.id,'inbound.create',str(result['id']))
         return result
 

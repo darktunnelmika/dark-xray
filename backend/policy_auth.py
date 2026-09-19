@@ -25,7 +25,7 @@ from dark_policy import Actor, MAX_INT, NAME_RE, PermissionDenied, PolicyError, 
 CAPABILITIES={
  'auth':'password + expiring revocable bearer sessions',
  'ownership':'server-side per-client ownership and explicit permission scopes',
- 'ledger':'atomic immutable traffic / financial entries + idempotency',
+ 'ledger':'atomic immutable traffic / representative resource-credit entries + idempotency',
  'ip':'read IP observations from the separate guard database',
  'system':'actual OS metrics on THIS API host',
  'xray':False,'subscriptions':False,'node_sync':False,'frontend_api_binding':False,
@@ -117,7 +117,9 @@ class AdminEdit(StrictModel):
     permissions: dict[str,str]|None=None
 
 class OwnerEdit(StrictModel):
-    quota_bytes: StrictInt=Field(default=0,ge=0,le=MAX_INT)
+    volume_credit_bytes: StrictInt|None=Field(default=None,ge=0,le=MAX_INT)
+    unlimited_credit: StrictInt|None=Field(default=None,ge=0,le=1000000)
+    quota_bytes: StrictInt|None=Field(default=None,ge=0,le=MAX_INT,description='Deprecated alias for volume_credit_bytes')
     max_clients: StrictInt=Field(default=0,ge=0,le=1000000)
     manual: bool|None=None
 
@@ -126,8 +128,6 @@ class ClientCreate(StrictModel):
     owner: str=Field(min_length=1,max_length=128)
     limit_ip: StrictInt=Field(default=1,ge=0,le=1000)
     quota_bytes: StrictInt=Field(default=0,ge=0,le=MAX_INT)
-    price: StrictInt=Field(default=0,ge=0,le=MAX_INT)
-    order_id: str|None=Field(default=None,min_length=1,max_length=256)
 
 class ClientEdit(StrictModel):
     limit_ip: StrictInt|None=Field(default=None,ge=0,le=1000)
@@ -135,16 +135,13 @@ class ClientEdit(StrictModel):
     manual: bool|None=None
     expires_at: StrictInt|None=Field(default=None,ge=0,le=MAX_INT)
 
-class Credit(StrictModel):
-    amount: StrictInt=Field(ge=1,le=MAX_INT)
-    event_id: str=Field(min_length=1,max_length=256)
+class ResourceCredit(StrictModel):
+    volume_bytes: int=Field(default=0,ge=-MAX_INT,le=MAX_INT)
+    unlimited_units: int=Field(default=0,ge=-1000000,le=1000000)
+    event_id: str=Field(min_length=16,max_length=256)
 
 class Usage(StrictModel):
     event_id: str=Field(min_length=1,max_length=256)
     client_id: str=Field(min_length=1,max_length=128)
     up_bytes: StrictInt=Field(ge=0,le=MAX_INT)
     down_bytes: StrictInt=Field(ge=0,le=MAX_INT)
-
-class Refund(StrictModel):
-    order_id: str=Field(min_length=1,max_length=256)
-    event_id: str=Field(min_length=1,max_length=256)

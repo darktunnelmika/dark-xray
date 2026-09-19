@@ -17,10 +17,10 @@ from policy_api import password_hash,verify_password
 
 PERMISSIONS={
  'clients.read','clients.create','clients.edit','clients.delete','clients.reset','clients.credentials',
- 'clients.ip','clients.attach','owners.read','owners.edit','owners.reset','finance.read','finance.credit',
- 'finance.refund','system.read','audit.read','api.manage','inbounds.read'}
-NON_DELEGABLE={'finance.credit','finance.refund'}
-KEY_FORBIDDEN=NON_DELEGABLE|{'api.manage'}
+ 'clients.ip','clients.attach','owners.read','owners.edit','owners.reset','finance.read',
+ 'system.read','audit.read','api.manage','inbounds.read'}
+NON_DELEGABLE=set()
+KEY_FORBIDDEN={'api.manage'}
 GLOBAL_SCOPE_ONLY={'system.read'}
 ROLE_ALLOWED={
  'reseller':{
@@ -51,8 +51,6 @@ def valid_permissions(role: str,values: dict|None)->dict:
     allowed=ROLE_ALLOWED[role]
     if any(v!='none' and k not in allowed for k,v in p.items()):
         raise PolicyError('Permission exceeds the selected role ceiling')
-    if any(p.get(k,'none')!='none' for k in NON_DELEGABLE):
-        raise PolicyError('Credit/refund permissions are owner-only and cannot be delegated')
     if any(p.get(k)=='own' for k in GLOBAL_SCOPE_ONLY):
         raise PolicyError('Global permissions use scope all, not own')
     return p
@@ -248,7 +246,7 @@ class Auth:
         if not 1<=days<=365 or not 1<=len(name)<=128:raise PolicyError('Invalid key metadata')
         if any(k not in PERMISSIONS or v not in ('none','own','all') for k,v in permissions.items()):raise PolicyError('Invalid key permissions')
         if any(permissions.get(k,'none')!='none' for k in KEY_FORBIDDEN):
-            raise PolicyError('Robot keys cannot manage key lifecycle or mutate financial credit/refunds')
+            raise PolicyError('Robot keys cannot manage key lifecycle or owner-only representative credit controls')
         if any(permissions.get(k)=='own' for k in GLOBAL_SCOPE_ONLY):
             raise PolicyError('Global permissions use scope all, not own')
         for k,v in permissions.items():

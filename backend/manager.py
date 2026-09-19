@@ -62,9 +62,6 @@ class Manager:
               email TEXT PRIMARY KEY,days INTEGER NOT NULL,next_at REAL NOT NULL,
               completed INTEGER NOT NULL DEFAULT 0,max_resets INTEGER NOT NULL DEFAULT 0,
               mode TEXT NOT NULL DEFAULT 'interval',reset_day INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE IF NOT EXISTS live_orders(
-              id TEXT PRIMARY KEY,owner TEXT NOT NULL,email TEXT NOT NULL,kind TEXT NOT NULL,
-              price INTEGER NOT NULL,at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS client_groups(
               owner TEXT NOT NULL,name TEXT NOT NULL,color TEXT NOT NULL DEFAULT '',
               created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,name));
@@ -100,7 +97,8 @@ class Manager:
         return dict(r) | {'allowed':json.loads(r['allowed'])}
 
     def owner_put(self, actor: Actor, owner: str, *, name: str, allowed: list[int],
-                  quota_bytes: int = 0,max_clients: int = 0,manual: bool | None = None,
+                  volume_credit_bytes: int | None = None,unlimited_credit: int | None = None,
+                  max_clients: int = 0,manual: bool | None = None,quota_bytes: int | None = None,
                   prefix: str = '',max_client_ips: int = 0,max_client_hwid: int = 0):
         if actor.role != 'owner': raise PermissionDenied('Only the primary owner may configure resellers')
         if not NAME_RE.fullmatch(owner) or not 1<=len(name)<=128: raise PolicyError('Invalid owner identity')
@@ -129,14 +127,17 @@ class Manager:
                         raise PolicyError('Reduce existing client HWID limits before lowering the reseller max-client-HWID policy')
             if prefix and any(not str(r['id']).lower().startswith(prefix) for r in rows):
                 raise PolicyError('Existing client identities must match the reseller prefix before enabling it')
-            self.store.register_owner(actor,owner,quota_bytes,max_clients,manual)
+            self.store.register_owner(actor,owner,volume_credit_bytes=volume_credit_bytes,
+                                      unlimited_credit=unlimited_credit,max_clients=max_clients,
+                                      manual=manual,quota_bytes=quota_bytes)
             with self.store.transaction() as db:
                 db.execute('''INSERT INTO owner_profiles(id,name,allowed,prefix,max_client_ips,max_client_hwid)
                               VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                               name=excluded.name,allowed=excluded.allowed,prefix=excluded.prefix,
                               max_client_ips=excluded.max_client_ips,max_client_hwid=excluded.max_client_hwid''',
                            (owner,name,json.dumps(sorted(set(allowed))),prefix,max_client_ips,max_client_hwid))
-            self.audit(actor,owner,'owner.update',owner)
+            self.audit(actor,owner,'owner.update',owner,
+                       'resource credits and representative policy updated')
             # Reconcile synchronously when possible, otherwise the worker retries.
             self.tick(suppress=True)
 
@@ -411,7 +412,7 @@ class Manager:
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(email,json.dumps(data),json.dumps(ids),secrets.token_urlsafe(32),'none','applied',up,down,1,int(bool(data.get('enable',True))),time.time(),time.time()))
             except Exception:
                 self.store.delete_client(SYSTEM,email);raise
-            self.audit(actor,owner,'client.adopt',email,'Historical engine bytes are a baseline, not a new reseller charge')
+            self.audit(actor,owner,'client.adopt',email,'Historical engine bytes are a baseline; resource credit is reserved from the configured client plan')
             self.tick(suppress=True)
             return self.detail(actor,email)
 
@@ -692,9 +693,20 @@ class Manager:
                     if meta['state']=='missing':
                         with self.store.transaction() as db:db.execute("UPDATE managed_clients SET state='applied',error='' WHERE email=?",(meta['email'],))
                     self._charge_snapshot(self.meta(meta['email']),rec)
+                    observed_quota=int(rec.get('totalGB',0))
+                    observed_expiry=max(0,int(rec.get('expiryTime',0))//1000)
+                    with self.store.lock:
+                        policy_row=self.store.db.execute('SELECT owner,quota_bytes FROM clients WHERE id=?',(meta['email'],)).fetchone()
+                    if policy_row and observed_quota!=int(policy_row['quota_bytes']):
+                        try:
+                            self.store.edit_client(SYSTEM,meta['email'],quota_bytes=observed_quota)
+                        except PolicyError as exc:
+                            self.audit(SYSTEM,policy_row['owner'],'resource_credit.external_quota_rejected',meta['email'],str(exc)[:300])
+                            if self.engine.config.writes_enabled:
+                                payload=CoreEngine.writable(rec);payload['totalGB']=int(policy_row['quota_bytes'])
+                                self.engine.update(meta['email'],payload);rec['totalGB']=int(policy_row['quota_bytes'])
                     with self.store.transaction() as db:
-                        db.execute('UPDATE clients SET quota_bytes=?,expires_at=? WHERE id=?',
-                            (int(rec.get('totalGB',0)),max(0,int(rec.get('expiryTime',0))//1000),meta['email']))
+                        db.execute('UPDATE clients SET expires_at=? WHERE id=?',(observed_expiry,meta['email']))
                     reasons=self.store.client_reasons(meta['email'])
                     # Preserve unexpected external disables. Never automatically
                     # resurrect a client whose enable flag changed outside DARK.

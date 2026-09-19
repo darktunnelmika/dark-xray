@@ -155,7 +155,7 @@ def test_web_admin_api_keeps_single_primary_owner(env):
 def test_reseller_scope_and_shared_inbound(env):
     store,engine,m,auth,c=env
     create(c,'dark-a')
-    assert c.put('/api/owners/arda',json={'name':'ARDA','allowed':[1],'max_clients':1,'quota_bytes':100}).status_code==200
+    assert c.put('/api/owners/arda',json={'name':'ARDA','allowed':[1],'max_clients':1,'volume_credit_bytes':0,'unlimited_credit':1}).status_code==200
     assert c.post('/api/admins',json={'username':'arda','password':'AnotherTestOnly123','role':'reseller'}).status_code==200
     create(c,'arda-a','arda')
     token,p=auth.login('arda','AnotherTestOnly123','', '127.0.0.2')
@@ -168,7 +168,9 @@ def test_reseller_scope_and_shared_inbound(env):
         assert other.post('/api/clients',json={'owner':'arda','client':{'email':'arda-b'},'inboundIds':[1]}).status_code==400
     with store.transaction() as db:db.execute('UPDATE core_clients SET up=150 WHERE email=?',('arda-a',))
     m.tick()
-    assert engine.client_detail('arda-a')['client']['enable'] is False
+    assert engine.client_detail('arda-a')['client']['enable'] is True
+    assert store.owner_stats(OWNER,'arda')['used_bytes']==150
+    assert store.owner_stats(OWNER,'arda')['unlimited_credit_remaining']==0
     assert engine.client_detail('dark-a')['client']['enable'] is True
     assert engine.inbound(1)['enable'] is True
 
@@ -181,10 +183,10 @@ def test_traffic_ledger_survives_reset_and_delete(env):
     assert c.post('/api/clients/dark-test/action',json={'action':'delete'}).status_code==202
     assert store.owner_stats(OWNER,'dark')['used_bytes']==23
 
-def test_manual_disable_survives_credit(env):
+def test_manual_disable_survives_owner_profile_update(env):
     _,engine,m,_,c=env;create(c)
     c.post('/api/clients/dark-test/action',json={'action':'disable'})
-    c.put('/api/owners/dark',json={'name':'DARK','allowed':[1],'quota_bytes':1000000})
+    c.put('/api/owners/dark',json={'name':'DARK','allowed':[1],'volume_credit_bytes':1000000,'unlimited_credit':5})
     assert engine.client_detail('dark-test')['client']['enable'] is False
 
 def test_local_hosts_change_link(env):

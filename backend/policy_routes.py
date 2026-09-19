@@ -5,7 +5,7 @@ import psutil
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dark_policy import Actor, PermissionDenied, PolicyError, Store
-from policy_auth import (CAPABILITIES, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, Credit, Usage, Refund, create_admin, password_hash, verify_password, permissions_for, effective_permissions)
+from policy_auth import (CAPABILITIES, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, ResourceCredit, Usage, create_admin, password_hash, verify_password, permissions_for, effective_permissions)
 
 def create_app(store: Store) -> FastAPI:
     app=FastAPI(title='DARK XRAY Policy API',version='0.3.0-dev',
@@ -145,9 +145,8 @@ def create_app(store: Store) -> FastAPI:
 
     @app.post('/v1/clients',status_code=201)
     def add_client(data: ClientCreate,actor: Annotated[Actor,Depends(current)]):
-        if data.price or data.order_id:owner_only(actor)
-        created=store.register_client(actor,data.id,data.owner,data.limit_ip,data.quota_bytes,data.price,data.order_id)
-        return {'created':created,'note':'Policy record only; not an Xray credential/listener'}
+        created=store.register_client(actor,data.id,data.owner,data.limit_ip,data.quota_bytes)
+        return {'created':created,'note':'Policy record only; resource credits are allocation-based, not price-based'}
 
     @app.patch('/v1/clients/{client_id}')
     def edit_client(client_id: str,data: ClientEdit,actor: Annotated[Actor,Depends(current)]):
@@ -166,20 +165,15 @@ def create_app(store: Store) -> FastAPI:
         owner_only(actor)
         return {'recorded':store.record_usage(data.event_id,data.client_id,data.up_bytes,data.down_bytes)}
 
-    @app.post('/v1/owners/{owner_id}/credit')
-    def credit_owner(owner_id: str,data: Credit,actor: Annotated[Actor,Depends(current)]):
+    @app.post('/v1/owners/{owner_id}/credits')
+    def resource_credit_owner(owner_id: str,data: ResourceCredit,actor: Annotated[Actor,Depends(current)]):
         owner_only(actor)
-        return {'recorded':store.credit(actor,owner_id,data.amount,data.event_id)}
-
-    @app.post('/v1/refunds')
-    def refund(data: Refund,actor: Annotated[Actor,Depends(current)]):
-        owner_only(actor)
-        return {'recorded':store.refund(actor,data.order_id,data.event_id)}
+        return {'recorded':store.adjust_resource_credit(actor,owner_id,data.volume_bytes,data.unlimited_units,data.event_id)}
 
     @app.get('/v1/ledger/{kind}')
-    def ledger(kind: Literal['traffic','money'],actor: Annotated[Actor,Depends(current)],limit: int=100):
+    def ledger(kind: Literal['traffic','credits'],actor: Annotated[Actor,Depends(current)],limit: int=100):
         if not 1<=limit<=1000:raise PolicyError('Limit must be 1..1000')
-        resource='finance' if kind=='money' else 'owners';table='money_ledger' if kind=='money' else 'traffic_ledger'
+        resource='finance' if kind=='credits' else 'owners';table='resource_credit_ledger' if kind=='credits' else 'traffic_ledger'
         all_allowed=actor.role=='owner' or actor.permissions.get(resource+'.read')=='all'
         own_allowed=actor.can(resource,'read',actor.id)
         if not (all_allowed or own_allowed):raise PermissionDenied('Ledger read is not allowed')
