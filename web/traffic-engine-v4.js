@@ -39,10 +39,10 @@ function summary(d){
  const s=d.status,r=s.routing||{},chainCount=(s.outbounds||[]).filter(x=>x.dials_via).length,dirty=!!d.core.dirty;
  return `<section class="te4-summary">
   ${metric(L('Outbounds','اوتباند'),fa((s.outbounds||[]).length),L('first = default','اولی = پیش‌فرض'))}
-  ${metric(L('Routing rules','Rule روتینگ'),fa(r.rule_count||0),r.domain_strategy||'AsIs')}
+  ${metric(L('Routing rules','قانون مسیریابی'),fa(r.rule_count||0),r.domain_strategy||'AsIs')}
   ${metric(L('Balancers','بالانسر'),fa((s.balancers||[]).length),L('selector = prefix','گزینشگر = پیشوند'))}
   ${metric(L('Chained outbounds','خروجی زنجیره‌ای'),fa(chainCount),L('dialerProxy','dialerProxy'))}
-  ${metric(L('Default outbound','خروجی پیش‌فرض'),r.default_outbound||'—',L('no-rule fallback','Fallback بدون Rule'))}
+  ${metric(L('Default outbound','خروجی پیش‌فرض'),r.default_outbound||'—',L('no-rule fallback','مسیر جایگزین بدون قانون'))}
   ${metric(L('Runtime config','پیکربندی اجرا'),dirty?L('DIRTY','اعمال‌نشده'):L('CLEAN','همسان'),d.core.running?L('Xray running','Xray روشن'):L('Xray stopped','Xray خاموش'))}
  </section>`;
 }
@@ -126,7 +126,7 @@ function ruleCard(r,index){
 function balancerCard(b){
  const obsMissing=(b.candidates||[]).filter(x=>!(b.observed_candidates||[]).includes(x));
  return `<article class="panel te4-bal ${obsMissing.length&&b.strategy==='leastPing'?'warn':''}">
-  <header><div><small>${esc(String(b.strategy||'random').toUpperCase())}</small><h3>${esc(b.tag)}</h3></div>${b.rule_refs?.length?chip(L('USED','در حال استفاده'),'good'):chip(L('UNUSED','بدون Rule'))}</header>
+  <header><div><small>${esc(String(b.strategy||'random').toUpperCase())}</small><h3>${esc(b.tag)}</h3></div>${b.rule_refs?.length?chip(L('USED','در حال استفاده'),'good'):chip(L('UNUSED','بدون قانون'))}</header>
   <div class="te4-bal-row"><span>${L('PREFIX SELECTORS','گزینشگرهای پیشوندی')}</span><div>${(b.selectors||[]).map(x=>chip(x,'info')).join('')}</div></div>
   <div class="te4-bal-row"><span>${L('MATCHED OUTBOUNDS','اوتباندهای تطبیق‌یافته')}</span><div>${(b.candidates||[]).length?(b.candidates||[]).map(x=>chip(x,(b.observed_candidates||[]).includes(x)?'good':'')).join(''):`<b>—</b>`}</div></div>
   ${b.fallback_tag?`<div class="te4-chain"><span>FALLBACK</span><b>${esc(b.fallback_tag)}</b></div>`:''}
@@ -158,7 +158,7 @@ function previewForm(d){
    </div>
    <footer><button type="button" class="btn btn-primary" data-act="te4preview">${icon('activity')}${L('Preview route','پیش‌نمایش مسیر')}</button></footer>
   </form>
-  <div id="te4-preview-result">${state.te4.preview?previewResult(state.te4.preview):`<div class="te4-preview-empty">${L('Enter a synthetic connection and preview which saved rule would receive it.','یک اتصال فرضی وارد کن تا ببینی کدام Rule ذخیره‌شده آن را می‌گیرد.')}</div>`}</div>
+  <div id="te4-preview-result">${state.te4.preview?previewResult(state.te4.preview):`<div class="te4-preview-empty">${L('Enter a synthetic connection and preview which saved rule would receive it.','یک اتصال فرضی وارد کن تا ببینی کدام قانون ذخیره‌شده آن را می‌گیرد.')}</div>`}</div>
  </section>`;
 }
 function previewResult(r){
@@ -189,7 +189,7 @@ function routingPage(d){
  state.te4.data=d;
  const rules=d.routing.rules||[],bals=d.status.balancers||[];
  return heading(L('Traffic Engine · Routing','موتور ترافیک · مسیریابی'),L('Model the complete traffic decision: match conditions → outbound/balancer → optional dial chain.','تصمیم کامل ترافیک را ببین: شرایط تطبیق ← اوتباند/بالانسر ← زنجیرهٔ اختیاری.'),
-  `${button(L('Routing settings','تنظیمات Routing'),'te4routesettings','settings')}${button(L('Add rule','افزودن Rule'),'te4rulenew','plus','',true)}`)+
+  `${button(L('Routing settings','تنظیمات Routing'),'te4routesettings','settings')}${button(L('Add rule','افزودن قانون'),'te4rulenew','plus','',true)}`)+
   `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
    ${previewForm(d)}
    <section class="te4-section"><header><div><small>DARK / RULE ORDER</small><h2>${L('Routing rules','قوانین مسیریابی')}</h2><p>${L('First matching rule wins. Empty conditions mean catch-all.','اولین قانونی که تطبیق پیدا کند اجرا می‌شود؛ شرط خالی یعنی شامل همه.')}</p></div><span>${fa(rules.length)}</span></header>
