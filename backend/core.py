@@ -135,7 +135,7 @@ class CoreEngine:
         if access.exists():
             info=access.stat();self._access_inode=(info.st_dev,info.st_ino);self._access_position=info.st_size
         self._net_sample=None
-        self._cpu_sample=(time.monotonic(),psutil.cpu_times())
+        self._cpu_value=0.0;self._cpu_sample_at=0.0
         self.ip_error=''
         self._guard_status={'state':'pending','requested_mode':'observe','applied':False,'checked_at':0}
         self._guard_boot=''
@@ -902,17 +902,10 @@ class CoreEngine:
                 'independent':True,'restart_disconnects_existing_sessions':True}
 
     def _host_cpu_percent(self,now:float)->float:
-        current=psutil.cpu_times();previous=self._cpu_sample;self._cpu_sample=(now,current)
-        if previous:
-            then,old=previous
-            total=max(0.0,sum(current)-sum(old))
-            idle_now=float(getattr(current,'idle',0.0))+float(getattr(current,'iowait',0.0))
-            idle_old=float(getattr(old,'idle',0.0))+float(getattr(old,'iowait',0.0))
-            idle=max(0.0,idle_now-idle_old)
-            if total>0 and now-then>=0.25:
-                return round(max(0.0,min(100.0,100.0*(1.0-idle/total))),1)
-        # First/too-fast sample: use a longer real interval instead of the old 50 ms window.
-        return round(float(psutil.cpu_percent(interval=.2)),1)
+        if self._cpu_sample_at and now-self._cpu_sample_at<1.0:return self._cpu_value
+        # A 200 ms psutil sample avoids the false-looking zeros caused by the old 50 ms window.
+        self._cpu_value=round(float(psutil.cpu_percent(interval=.2)),1);self._cpu_sample_at=time.monotonic()
+        return self._cpu_value
 
     def system(self)->dict:
         vm=psutil.virtual_memory();disk=psutil.disk_usage(self.runtime);swap=psutil.swap_memory();net=psutil.net_io_counters()
