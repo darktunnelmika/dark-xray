@@ -75,9 +75,9 @@ function outboundCard(o,index,meta){
   <div class="te4-deps"><span>${L('DEPENDENCIES','وابستگی‌ها')}</span>${deps.length?deps.map(x=>`<small>${esc(x)}</small>`).join(''):`<small>${L('No routing/balancer dependency','وابستگی Routing/Balancer ندارد')}</small>`}</div>
   <footer>
    ${!meta.default?button(L('Make default','پیش‌فرض شود'),'te4default','check',`data-index="${index}"`,true):''}
-   ${button(L('Edit','ویرایش'),'xv2outedit','edit',`data-index="${index}"`)}
-   ${button(L('Clone','کپی'),'xv2outclone','copy',`data-index="${index}"`)}
-   ${button(L('Advanced JSON','JSON پیشرفته'),'xv3outraw','terminal',`data-index="${index}"`)}
+   ${button(L('Edit','ویرایش'),'te4outedit','edit',`data-index="${index}"`)}
+   ${button(L('Clone','کپی'),'te4outclone','copy',`data-index="${index}"`)}
+   ${button(L('Advanced JSON','JSON پیشرفته'),'te4outraw','terminal',`data-index="${index}"`)}
    ${button(L('Delete','حذف'),'xv2outdelete','trash',`data-index="${index}"`)}
   </footer>
  </article>`;
@@ -92,7 +92,7 @@ function graph(d){
 function outboundsPage(d){
  const list=d.outbounds||[],meta=new Map((d.status.outbounds||[]).map(x=>[x.tag,x]));
  return heading(L('Traffic Engine · Outbounds','موتور ترافیک · Outbounds'),L('Build egress paths, chains and proxy transports with explicit dependency visibility.','مسیرهای خروج، Chain و Proxy transport را با وابستگی‌های کاملاً شفاف مدیریت کن.'),
-  `${button(L('Import link','Import لینک'),'xv3outimport','download')}${button(L('New outbound','اوتباند جدید'),'xv2outnew','plus','',true)}`)+
+  `${button(L('Import link','Import لینک'),'te4outimport','download')}${button(L('New outbound','اوتباند جدید'),'te4outnew','plus','',true)}`)+
   `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
    <div class="notice">${L('Xray uses the first outbound when no routing rule matches. Use Make default to change that behavior explicitly.','اگر هیچ Ruleای Match نشود Xray اولین Outbound را استفاده می‌کند. برای تغییر این رفتار از «پیش‌فرض شود» استفاده کن.')}</div>
    <section class="te4-out-grid">${list.length?list.map((o,i)=>outboundCard(o,i,meta.get(o.tag)||{})).join(''):empty(L('No outbound configured.','Outboundی تنظیم نشده است.'))}</section>
@@ -120,7 +120,7 @@ function ruleCard(r,index){
  const target=r.outboundTag?`OUT → ${r.outboundTag}`:`BAL → ${r.balancerTag||'—'}`;
  return `<article class="panel te4-rule"><header><div><small>#${index+1}${r.ruleTag?' · '+esc(r.ruleTag):''}</small><h3>${esc(target)}</h3></div><span class="te4-order">${fa(index+1)}</span></header>
   <div class="te4-conditions">${conditionRows(r)}</div>
-  <footer>${button('↑','xv2ruleup','arrow',`data-index="${index}"`)}${button('↓','xv2ruledown','arrow',`data-index="${index}"`)}${button(L('Edit','ویرایش'),'xv2ruleedit','edit',`data-index="${index}"`)}${button(L('Delete','حذف'),'xv2ruledelete','trash',`data-index="${index}"`)}</footer>
+  <footer>${button('↑','xv2ruleup','arrow',`data-index="${index}"`)}${button('↓','xv2ruledown','arrow',`data-index="${index}"`)}${button(L('Edit','ویرایش'),'te4ruleedit','edit',`data-index="${index}"`)}${button(L('Delete','حذف'),'xv2ruledelete','trash',`data-index="${index}"`)}</footer>
  </article>`;
 }
 function balancerCard(b){
@@ -131,7 +131,7 @@ function balancerCard(b){
   <div class="te4-bal-row"><span>${L('MATCHED OUTBOUNDS','Outboundهای Match')}</span><div>${(b.candidates||[]).length?(b.candidates||[]).map(x=>chip(x,(b.observed_candidates||[]).includes(x)?'good':'')).join(''):`<b>—</b>`}</div></div>
   ${b.fallback_tag?`<div class="te4-chain"><span>FALLBACK</span><b>${esc(b.fallback_tag)}</b></div>`:''}
   ${b.strategy==='leastPing'&&obsMissing.length?`<div class="notice warning">${L('Some candidates are outside Observatory selectors: ','بعضی Candidateها خارج از Observatory هستند: ')}${esc(obsMissing.join(', '))}</div>`:''}
-  <footer>${button(L('Edit','ویرایش'),'xv2baledit','edit',`data-index="${(state.te4.data?.routing?.balancers||[]).findIndex(x=>x.tag===b.tag)}"`)}${button(L('Delete','حذف'),'xv2baldelete','trash',`data-index="${(state.te4.data?.routing?.balancers||[]).findIndex(x=>x.tag===b.tag)}"`)}</footer>
+  <footer>${button(L('Edit','ویرایش'),'te4baledit','edit',`data-index="${(state.te4.data?.routing?.balancers||[]).findIndex(x=>x.tag===b.tag)}"`)}${button(L('Delete','حذف'),'xv2baldelete','trash',`data-index="${(state.te4.data?.routing?.balancers||[]).findIndex(x=>x.tag===b.tag)}"`)}</footer>
  </article>`;
 }
 function previewForm(d){
@@ -183,19 +183,19 @@ function observatoryCard(d){
  return `<article class="panel te4-observatory"><header><div><small>DARK / OBSERVATORY</small><h2>Observatory</h2></div>${chip(o.enabled?L('CONFIGURED','تنظیم‌شده'):L('OFF','خاموش'),o.enabled?'good':'')}</header>
  <div class="te4-ob-kv"><div><span>subjectSelector</span><b>${esc((o.selectors||[]).join(', ')||'—')}</b></div><div><span>probeURL</span><b>${esc(o.probe_url||'—')}</b></div><div><span>probeInterval</span><b>${esc(o.probe_interval||'—')}</b></div></div>
  <div class="notice">${L('Traffic Engine does not invent live latency/health. leastPing final selection remains a runtime Xray decision unless a verified live API is available.','Traffic Engine برای Latency/Health عدد ساختگی نمی‌سازد. انتخاب نهایی leastPing تا زمانی که Live API تأییدشده نداشته باشیم تصمیم Runtime خود Xray است.')}</div>
- <footer>${button(L('Edit Observatory','ویرایش Observatory'),'xv2obsedit','edit','',true)}</footer></article>`;
+ <footer>${button(L('Edit Observatory','ویرایش Observatory'),'te4obsedit','edit','',true)}</footer></article>`;
 }
 function routingPage(d){
  state.te4.data=d;
  const rules=d.routing.rules||[],bals=d.status.balancers||[];
  return heading(L('Traffic Engine · Routing','موتور ترافیک · Routing'),L('Model the complete traffic decision: match conditions → outbound/balancer → optional dial chain.','تصمیم کامل ترافیک را ببین: Match conditions → Outbound/Balancer → Chain اختیاری.'),
-  `${button(L('Routing settings','تنظیمات Routing'),'xv2routesettings','settings')}${button(L('Add rule','افزودن Rule'),'xv2rulenew','plus','',true)}`)+
+  `${button(L('Routing settings','تنظیمات Routing'),'te4routesettings','settings')}${button(L('Add rule','افزودن Rule'),'te4rulenew','plus','',true)}`)+
   `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
    ${previewForm(d)}
    <section class="te4-section"><header><div><small>DARK / RULE ORDER</small><h2>${L('Routing rules','Ruleهای Routing')}</h2><p>${L('First matching rule wins. Empty conditions mean catch-all.','اولین Rule که Match شود برنده است؛ شرط خالی یعنی Catch-all.')}</p></div><span>${fa(rules.length)}</span></header>
     <div class="te4-rule-list">${rules.length?rules.map(ruleCard).join(''):empty(L('No routing rules. Xray will use the first outbound.','Rule وجود ندارد؛ Xray از اولین Outbound استفاده می‌کند.'))}</div>
    </section>
-   <section class="te4-section"><header><div><small>DARK / BALANCERS</small><h2>${L('Balancer pools','Poolهای Balancer')}</h2><p>${L('Selectors use Xray prefix matching, not exact-tag membership.','Selectorها در Xray Prefix-match هستند، نه عضویت Exact Tag.')}</p></div><div>${button(L('New balancer','Balancer جدید'),'xv2balnew','plus','',true)}</div></header>
+   <section class="te4-section"><header><div><small>DARK / BALANCERS</small><h2>${L('Balancer pools','Poolهای Balancer')}</h2><p>${L('Selectors use Xray prefix matching, not exact-tag membership.','Selectorها در Xray Prefix-match هستند، نه عضویت Exact Tag.')}</p></div><div>${button(L('New balancer','Balancer جدید'),'te4balnew','plus','',true)}</div></header>
     <div class="te4-bal-grid">${bals.length?bals.map(balancerCard).join(''):empty(L('No balancer configured.','Balancerی تنظیم نشده است.'))}</div>
    </section>
    ${observatoryCard(d)}
@@ -214,8 +214,20 @@ async function makeDefault(index){
  const [item]=list.splice(index,1);list.unshift(item);await api('/api/settings/outbounds','PUT',{value:list});toast(L('Default outbound changed to ','Outbound پیش‌فرض تغییر کرد به ')+tag);await refresh();
 }
 runAction=async function(act,el){
+ const guided=globalThis.DarkXrayGuidedV3;
  if(act==='te4xray'){await go('xray');return;}
  if(act==='te4default'){await makeDefault(Number(el.dataset.index));return;}
+ if(act==='te4outnew'){await guided.openOutbound();return;}
+ if(act==='te4outedit'){await guided.openOutbound(Number(el.dataset.index));return;}
+ if(act==='te4outclone'){await guided.openOutbound(Number(el.dataset.index),true);return;}
+ if(act==='te4outimport'){await guided.openImport();return;}
+ if(act==='te4outraw'){await guided.openRawOutbound(Number(el.dataset.index));return;}
+ if(act==='te4routesettings'){await guided.openRouteSettings();return;}
+ if(act==='te4rulenew'){await guided.openRule();return;}
+ if(act==='te4ruleedit'){await guided.openRule(Number(el.dataset.index));return;}
+ if(act==='te4balnew'){await guided.openBalancer();return;}
+ if(act==='te4baledit'){await guided.openBalancer(Number(el.dataset.index));return;}
+ if(act==='te4obsedit'){await guided.openObservatory();return;}
  return baseRunAction(act,el);
 };
 
