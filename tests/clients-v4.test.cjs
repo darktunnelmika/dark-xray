@@ -29,13 +29,14 @@ test('Clients V4 removes the permanent sidebar and reduces row actions',()=>{
   const html=ctx.clientsPage();
   assert.match(html,/clients-v4/);
   assert.match(html,/OPEN/);
-  assert.match(html,/>QR</);
+  assert.match(html,/>LINK</);
   assert.doesNotMatch(html,/•••/);
   assert.doesNotMatch(html,/More actions/);
   assert.doesNotMatch(html,/IP \\d/);
   assert.doesNotMatch(html,/HWID/);
   assert.doesNotMatch(html,/cv3-side/);
   assert.doesNotMatch(html,/Organization/);
+  assert.match(html,/cv4delivery/);
 });
 
 test('Clients V4 create editor is basic-first and low-frequency fields stay advanced or removed',()=>{
@@ -87,4 +88,27 @@ test('Clients V4 online signal uses a CSS triangle instead of a bidi-sensitive g
   assert.match(css,/\.cv4-signal \.cv4-beam:after\{content:"";[^}]*top:50%/);
   assert.match(css,/border-left:5px solid currentColor/);
   assert.match(css,/transform:translateY\(-50%\)/);
+});
+
+
+test('Clients V5 delivery center owns link UX and exposes backend node failover routes',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/async function deliveryV4\(id\)/);
+  assert.match(src,/result\.engine\?\.failover/);
+  assert.match(src,/failoverPriority/);
+  assert.match(src,/failoverLatencyMs/);
+  assert.match(src,/Generated from deployed nodes/);
+  assert.match(src,/data-act="cv4dformat"/);
+  for(const fmt of ['base64','raw','clash','json'])assert.match(src,new RegExp("'"+fmt+"'"));
+  assert.doesNotMatch(src,/['"]cv3links['"]/);
+});
+
+test('Clients V5 delivery QR resolves subscription, direct and failover payloads separately',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/function deliveryPayload\(kind,index=0\)/);
+  assert.match(src,/kind==='sub'/);
+  assert.match(src,/kind==='failover'/);
+  assert.match(src,/d\.direct\[Number\(index\)\]/);
+  assert.match(src,/function renderDeliveryQr\(/);
+  assert.match(src,/QR always contains the exact selected subscription or config route/);
 });
