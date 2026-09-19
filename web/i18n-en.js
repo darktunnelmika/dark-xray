@@ -418,7 +418,7 @@ function languageButton(){
   let b=document.querySelector('.cyber-lang-switch');if(b)return;
   b=document.createElement('button');b.type='button';b.className='cyber-lang-switch';
   b.textContent=selected==='en'?'EN · فارسی':'FA · English';
-  b.title=selected==='en'?'Switch to Persian':'Switch to English';
+  b.title=selected==='en'?'Switch to Persian':'تغییر زبان به انگلیسی';
   b.addEventListener('click',()=>{localStorage.setItem(KEY,selected==='en'?'fa':'en');location.reload();});
   document.body.appendChild(b);
 }
