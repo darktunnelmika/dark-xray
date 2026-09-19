@@ -413,8 +413,15 @@ class CoreEngine:
                 while current in links:
                     if current in seen:raise CoreError('Outbound chaining cycle')
                     seen.add(current);current=links[current]
-            for r in self.section('routing').get('rules',[]):
+            routing_now=self.section('routing')
+            for r in routing_now.get('rules',[]):
                 if r.get('outboundTag') and r['outboundTag'] not in tags: raise CoreError('Routing still refers to an outbound being removed')
+            for b in routing_now.get('balancers',[]):
+                fallback=b.get('fallbackTag')
+                if fallback and fallback not in tags:raise CoreError('Balancer fallback still refers to an outbound being removed')
+                selectors=b.get('selector',[])
+                if selectors and not any(any(tag.startswith(sel) for sel in selectors) for tag in tags):
+                    raise CoreError('Outbound removal would leave a balancer selector with no matching outbound')
         if name=='routing':
             if value.get('domainStrategy','AsIs') not in {'AsIs','IPIfNonMatch','IPOnDemand'}:raise CoreError('Invalid routing domainStrategy')
             if not isinstance(value.get('rules',[]),list): raise CoreError('rules must be a list')
@@ -424,17 +431,54 @@ class CoreEngine:
             btags=set()
             for b in balancers:
                 if not isinstance(b,dict) or not isinstance(b.get('tag'),str) or not TAG_RE.fullmatch(b['tag']) or b['tag'] in btags:raise CoreError('Invalid or duplicate balancer tag')
-                if not isinstance(b.get('selector'),list) or not b['selector'] or any(not isinstance(x,str) or not x for x in b['selector']):raise CoreError('Balancer requires nonempty tag selectors')
+                selectors=b.get('selector')
+                if not isinstance(selectors,list) or not selectors or any(not isinstance(x,str) or not x or len(x)>128 for x in selectors):raise CoreError('Balancer requires nonempty tag selectors')
+                if not any(any(tag.startswith(sel) for sel in selectors) for tag in tags):
+                    raise CoreError('Balancer selectors do not match any configured outbound tag')
                 strategy=b.get('strategy',{'type':'random'})
                 if not isinstance(strategy,dict) or strategy.get('type','random') not in {'random','roundRobin','leastPing','leastLoad'}:raise CoreError('Unsupported balancer strategy')
                 if b.get('fallbackTag') and b['fallbackTag'] not in tags:raise CoreError('Unknown balancer fallback outbound')
                 btags.add(b['tag'])
+
+            def port_expr(raw,label,allow_zero=False):
+                if raw is None or raw=='':return
+                low=0 if allow_zero else 1
+                if type(raw)is int:
+                    if not low<=raw<=65535:raise CoreError('Invalid routing '+label)
+                    return
+                if not isinstance(raw,str) or len(raw)>512:raise CoreError('Invalid routing '+label)
+                for part in raw.split(','):
+                    part=part.strip()
+                    if not part:raise CoreError('Invalid routing '+label)
+                    if '-' in part:
+                        bits=part.split('-')
+                        if len(bits)!=2 or not all(x.isdigit() for x in bits):raise CoreError('Invalid routing '+label)
+                        lo,hi=map(int,bits)
+                        if not low<=lo<=hi<=65535:raise CoreError('Invalid routing '+label)
+                    elif not part.isdigit() or not low<=int(part)<=65535:raise CoreError('Invalid routing '+label)
+
+            list_fields={'domain','ip','sourceIP','source','localIP','user','inboundTag','protocol','process'}
             for rule in value.get('rules',[]):
                 if not isinstance(rule,dict): raise CoreError('Every rule must be an object')
                 if rule.get('outboundTag') and rule['outboundTag'] not in tags: raise CoreError('Unknown routing outbound')
                 if bool(rule.get('outboundTag'))==bool(rule.get('balancerTag')): raise CoreError('Rule needs exactly one outbound or balancer tag')
                 if rule.get('balancerTag') and rule['balancerTag'] not in btags:raise CoreError('Unknown routing balancer')
                 if rule.get('type','field')!='field': raise CoreError('Unsupported routing rule type')
+                if rule.get('network') not in (None,'','tcp','udp','tcp,udp'):raise CoreError('Invalid routing network')
+                for key in ('port','sourcePort','localPort'):port_expr(rule.get(key),key)
+                port_expr(rule.get('vlessRoute'),'vlessRoute',allow_zero=True)
+                for key in list_fields:
+                    if key not in rule:continue
+                    raw=rule[key]
+                    if key=='protocol' and isinstance(raw,str):
+                        raw=[x.strip() for x in raw.split(',') if x.strip()];rule[key]=raw
+                    if not isinstance(raw,list) or not raw or any(not isinstance(x,str) or not x or len(x)>2048 for x in raw):
+                        raise CoreError('Routing '+key+' must be a nonempty list of strings')
+                if 'attrs' in rule and (not isinstance(rule['attrs'],dict) or
+                    any(not isinstance(k,str) or not k or not isinstance(v,str) or len(k)>256 or len(v)>2048 for k,v in rule['attrs'].items())):
+                    raise CoreError('Routing attrs must be a string map')
+                if 'ruleTag' in rule and (not isinstance(rule['ruleTag'],str) or len(rule['ruleTag'])>128):
+                    raise CoreError('Invalid routing ruleTag')
         if name=='hosts':
             known={i['id'] for i in self.inbounds()}
             for host in value:

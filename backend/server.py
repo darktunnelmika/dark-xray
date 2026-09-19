@@ -9,8 +9,10 @@ import contextlib
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -147,6 +149,21 @@ class RealityProbe(Model):
     target:str=Field(min_length=1,max_length=300)
 class RealitySearch(Model):
     targets:list[str]=Field(default_factory=list,max_length=20)
+class TrafficRoutePreview(Model):
+    domain:str=Field(default='',max_length=2048)
+    ip:str=Field(default='',max_length=80)
+    port:StrictInt=Field(default=0,ge=0,le=65535)
+    source_ip:str=Field(default='',max_length=80)
+    source_port:StrictInt=Field(default=0,ge=0,le=65535)
+    local_ip:str=Field(default='',max_length=80)
+    local_port:StrictInt=Field(default=0,ge=0,le=65535)
+    network:Literal['tcp','udp']='tcp'
+    protocol:str=Field(default='',max_length=64)
+    user:str=Field(default='',max_length=128)
+    inbound_tag:str=Field(default='',max_length=128)
+    process:str=Field(default='',max_length=1024)
+    vless_route:StrictInt=Field(default=0,ge=0,le=65535)
+    attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
 class NodeCreate(Model):
     id:str=Field(min_length=1,max_length=128)
     name:str=Field(min_length=1,max_length=128)
@@ -1147,6 +1164,212 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'global_policy':'central Local + Node verified-source aggregation',
                 'global_action':'client service block across synchronized DARK runtime',
                 'global_remote_firewall_ban':False}}
+
+    def traffic_engine_doc():
+        outbounds=engine.section('outbounds');routing=engine.section('routing');observatory=engine.section('observatory') or {}
+        tags=[str(o.get('tag','')) for o in outbounds];rules=routing.get('rules',[]) if isinstance(routing,dict) else []
+        balancers=routing.get('balancers',[]) if isinstance(routing,dict) else []
+        obs_selectors=observatory.get('subjectSelector',[]) if isinstance(observatory,dict) else []
+        rows=[]
+        for index,out in enumerate(outbounds):
+            tag=str(out.get('tag',''));stream=out.get('streamSettings',{}) if isinstance(out.get('streamSettings'),dict) else {}
+            sock=stream.get('sockopt',{}) if isinstance(stream.get('sockopt'),dict) else {}
+            rule_refs=[i+1 for i,r in enumerate(rules) if isinstance(r,dict) and r.get('outboundTag')==tag]
+            bal_refs=[str(b.get('tag')) for b in balancers if isinstance(b,dict) and
+                      any(tag.startswith(str(sel)) for sel in b.get('selector',[]) if isinstance(sel,str))]
+            fallback_refs=[str(b.get('tag')) for b in balancers if isinstance(b,dict) and b.get('fallbackTag')==tag]
+            dialed_by=[]
+            for other in outbounds:
+                st=other.get('streamSettings',{}) if isinstance(other.get('streamSettings'),dict) else {}
+                so=st.get('sockopt',{}) if isinstance(st.get('sockopt'),dict) else {}
+                if so.get('dialerProxy')==tag:dialed_by.append(str(other.get('tag','')))
+            rows.append({'tag':tag,'protocol':out.get('protocol',''),'default':index==0,
+                         'dials_via':str(sock.get('dialerProxy') or ''),'dialed_by':dialed_by,
+                         'rule_refs':rule_refs,'balancer_refs':bal_refs,'fallback_refs':fallback_refs,
+                         'observed':any(tag.startswith(str(sel)) for sel in obs_selectors if isinstance(sel,str))})
+        bal_rows=[];warnings=[]
+        for b in balancers:
+            if not isinstance(b,dict):continue
+            selectors=[str(x) for x in b.get('selector',[]) if isinstance(x,str)]
+            candidates=[tag for tag in tags if any(tag.startswith(sel) for sel in selectors)]
+            observed=[tag for tag in candidates if any(tag.startswith(str(sel)) for sel in obs_selectors if isinstance(sel,str))]
+            strategy=(b.get('strategy') or {}).get('type','random') if isinstance(b.get('strategy',{}),dict) else 'random'
+            bal_rows.append({'tag':b.get('tag',''),'strategy':strategy,'selectors':selectors,'candidates':candidates,
+                             'observed_candidates':observed,'fallback_tag':b.get('fallbackTag',''),
+                             'rule_refs':[i+1 for i,r in enumerate(rules) if isinstance(r,dict) and r.get('balancerTag')==b.get('tag')]})
+            if not candidates:warnings.append('Balancer '+str(b.get('tag',''))+' has no outbound candidate')
+            if strategy=='leastPing' and set(candidates)-set(observed):
+                warnings.append('leastPing balancer '+str(b.get('tag',''))+' has candidates outside Observatory selectors')
+        return {'outbounds':rows,'balancers':bal_rows,'routing':{'domain_strategy':routing.get('domainStrategy','AsIs'),
+                'rule_count':len(rules),'default_outbound':tags[0] if tags else ''},
+                'observatory':{'enabled':bool(observatory),'selectors':obs_selectors,
+                               'probe_url':observatory.get('probeURL',observatory.get('probeUrl','')) if isinstance(observatory,dict) else '',
+                               'probe_interval':observatory.get('probeInterval','') if isinstance(observatory,dict) else ''},
+                'warnings':warnings,'preview_mode':'saved_config_static',
+                'live_route_api':False}
+
+    def _port_match(expr,value:int):
+        if expr in (None,''):return True
+        if not value:return False
+        parts=[str(expr)] if type(expr)is int else str(expr).split(',')
+        for raw in parts:
+            part=raw.strip()
+            if '-' in part:
+                try:lo,hi=map(int,part.split('-',1))
+                except ValueError:continue
+                if lo<=value<=hi:return True
+            else:
+                try:
+                    if int(part)==value:return True
+                except ValueError:continue
+        return False
+
+    def _domain_match(patterns,domain:str):
+        if not patterns:return True
+        if not domain:return False
+        domain_l=domain.lower().rstrip('.');unknown=False
+        for raw in patterns:
+            p=str(raw)
+            if p.startswith(('geosite:','ext:')):unknown=True;continue
+            if p.startswith('full:'):
+                if domain_l==p[5:].lower().rstrip('.'):return True
+            elif p.startswith('domain:'):
+                base=p[7:].lower().rstrip('.')
+                if domain_l==base or domain_l.endswith('.'+base):return True
+            elif p.startswith('regexp:'):
+                try:
+                    if re.search(p[7:],domain):return True
+                except re.error:unknown=True
+            elif p.startswith('keyword:'):
+                if p[8:].lower() in domain_l:return True
+            elif p.startswith('dotless:'):
+                if '.' not in domain and p[8:] in domain:return True
+            elif p.lower() in domain_l:return True
+        return None if unknown else False
+
+    def _ip_item(raw:str,address:ipaddress._BaseAddress):
+        inverse=raw.startswith('!');token=raw[1:] if inverse else raw
+        if token.startswith(('geoip:','ext:')):return None
+        try:matched=address in ipaddress.ip_network(token,strict=False)
+        except ValueError:return None
+        return (not matched) if inverse else matched
+
+    def _ip_match(patterns,raw_ip:str,*,dns_indeterminate:bool=False):
+        if not patterns:return True
+        if not raw_ip:return None if dns_indeterminate else False
+        try:address=ipaddress.ip_address(raw_ip)
+        except ValueError:return False
+        positives=[];inverses=[];unknown=False
+        for raw in patterns:
+            raw=str(raw);v=_ip_item(raw,address)
+            if v is None:unknown=True;continue
+            (inverses if raw.startswith('!') else positives).append(v)
+        if any(positives):return True
+        inverse_ok=bool(inverses) and all(inverses)
+        if inverse_ok:return True
+        if unknown:return None
+        return False
+
+    def _string_list_match(values,current:str,*,regex_allowed:bool=False,process:bool=False):
+        if not values:return True
+        if not current:return False
+        unknown=False
+        for raw in values:
+            token=str(raw)
+            if process and token.startswith(('self/','xray/')):unknown=True;continue
+            if regex_allowed and token.startswith('regexp:'):
+                try:
+                    if re.search(token[7:],current):return True
+                except re.error:unknown=True
+            elif token==current:return True
+        return None if unknown else False
+
+    def _rule_eval(rule:dict,body:TrafficRoutePreview,domain_strategy:str):
+        checks=[]
+        if rule.get('domain'):checks.append(_domain_match(rule['domain'],body.domain))
+        if rule.get('ip'):checks.append(_ip_match(rule['ip'],body.ip,dns_indeterminate=bool(body.domain and domain_strategy!='AsIs')))
+        if rule.get('port') not in (None,''):checks.append(_port_match(rule.get('port'),body.port))
+        if rule.get('sourcePort') not in (None,''):checks.append(_port_match(rule.get('sourcePort'),body.source_port))
+        if rule.get('localPort') not in (None,''):checks.append(_port_match(rule.get('localPort'),body.local_port))
+        if rule.get('vlessRoute') not in (None,''):checks.append(_port_match(rule.get('vlessRoute'),body.vless_route))
+        source=rule.get('sourceIP',rule.get('source',[]));local_ip=rule.get('localIP',[])
+        if source:checks.append(_ip_match(source,body.source_ip))
+        if local_ip:checks.append(_ip_match(local_ip,body.local_ip))
+        if rule.get('network'):checks.append(body.network in str(rule['network']).split(','))
+        if rule.get('protocol'):
+            vals=rule['protocol'] if isinstance(rule['protocol'],list) else [x.strip() for x in str(rule['protocol']).split(',') if x.strip()]
+            checks.append(_string_list_match(vals,body.protocol))
+        if rule.get('inboundTag'):checks.append(_string_list_match(rule['inboundTag'],body.inbound_tag))
+        if rule.get('user'):checks.append(_string_list_match(rule['user'],body.user,regex_allowed=True))
+        if rule.get('process'):checks.append(_string_list_match(rule['process'],body.process,process=True))
+        if rule.get('attrs'):
+            if not body.attrs:checks.append(False)
+            else:
+                attr_ok=True;attr_unknown=False
+                lowered={str(k).lower():str(v) for k,v in body.attrs.items()}
+                for key,pattern in rule['attrs'].items():
+                    value=lowered.get(str(key).lower())
+                    if value is None:attr_ok=False;break
+                    try:
+                        if not re.search(str(pattern),value):attr_ok=False;break
+                    except re.error:attr_unknown=True
+                checks.append(None if attr_unknown and attr_ok else attr_ok)
+        if any(x is False for x in checks):return False
+        if any(x is None for x in checks):return None
+        return True
+
+    def _outbound_chain(tag:str,outbounds:list[dict]):
+        by={str(o.get('tag','')):o for o in outbounds};chain=[];seen=set();current=tag
+        while current and current in by and current not in seen:
+            seen.add(current);chain.append(current)
+            st=by[current].get('streamSettings',{}) if isinstance(by[current].get('streamSettings'),dict) else {}
+            so=st.get('sockopt',{}) if isinstance(st.get('sockopt'),dict) else {}
+            current=str(so.get('dialerProxy') or '')
+        return chain
+
+    def traffic_preview(body:TrafficRoutePreview):
+        if body.ip:
+            try:ipaddress.ip_address(body.ip)
+            except ValueError:raise HTTPException(400,'Invalid target IP')
+        for raw,label in ((body.source_ip,'source IP'),(body.local_ip,'local IP')):
+            if raw:
+                try:ipaddress.ip_address(raw)
+                except ValueError:raise HTTPException(400,'Invalid '+label)
+        outbounds=engine.section('outbounds');routing=engine.section('routing');rules=routing.get('rules',[])
+        balancers={str(b.get('tag','')):b for b in routing.get('balancers',[]) if isinstance(b,dict)}
+        domain_strategy=str(routing.get('domainStrategy','AsIs'));trace=[]
+        for index,rule in enumerate(rules):
+            result=_rule_eval(rule,body,domain_strategy)
+            trace.append({'index':index+1,'rule_tag':rule.get('ruleTag',''),'result':'match' if result is True else 'indeterminate' if result is None else 'no_match',
+                          'target':rule.get('outboundTag') or rule.get('balancerTag') or ''})
+            if result is None:
+                return {'result':'indeterminate','rule_index':index+1,'rule_tag':rule.get('ruleTag',''),
+                        'reason':'This earlier rule needs DNS/geodata/process information that DARK cannot safely infer offline.',
+                        'trace':trace,'preview_mode':'saved_config_static','live_core_verified':False}
+            if result is not True:continue
+            if rule.get('outboundTag'):
+                tag=str(rule['outboundTag'])
+                return {'result':'matched','rule_index':index+1,'rule_tag':rule.get('ruleTag',''),
+                        'target_type':'outbound','target':tag,'selected_outbound':tag,'chain':_outbound_chain(tag,outbounds),
+                        'trace':trace,'preview_mode':'saved_config_static','live_core_verified':False}
+            tag=str(rule.get('balancerTag',''));b=balancers.get(tag,{})
+            selectors=[str(x) for x in b.get('selector',[]) if isinstance(x,str)]
+            candidates=[str(o.get('tag','')) for o in outbounds if any(str(o.get('tag','')).startswith(s) for s in selectors)]
+            selected=candidates[0] if len(candidates)==1 else ''
+            return {'result':'matched','rule_index':index+1,'rule_tag':rule.get('ruleTag',''),
+                    'target_type':'balancer','target':tag,'balancer_strategy':(b.get('strategy') or {}).get('type','random'),
+                    'candidates':candidates,'selected_outbound':selected,'chain':_outbound_chain(selected,outbounds) if selected else [],
+                    'reason':'' if selected else 'Balancer strategy/live Observatory decides the final outbound at runtime.',
+                    'trace':trace,'preview_mode':'saved_config_static','live_core_verified':False}
+        default=str(outbounds[0].get('tag','')) if outbounds else ''
+        return {'result':'default','rule_index':0,'target_type':'outbound','target':default,'selected_outbound':default,
+                'chain':_outbound_chain(default,outbounds),'trace':trace,'preview_mode':'saved_config_static','live_core_verified':False}
+
+    @app.get('/api/traffic-engine')
+    def traffic_engine(p:Principal=Depends(owner)):return traffic_engine_doc()
+
+    @app.post('/api/traffic-engine/preview')
+    def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
 
     @app.get('/api/security-center')
     def security_center(p:Principal=Depends(current)):return security_center_payload(p)

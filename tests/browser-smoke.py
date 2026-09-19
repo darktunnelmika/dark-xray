@@ -35,6 +35,21 @@ def visit(page,name):
     page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
     report['pages'].append(name)
 
+def open_guided(page,locator,stage):
+    errors_before=page.locator('.toast.error').count()
+    locator.click()
+    page.wait_for_function("""n=>{
+      const editor=document.querySelector('.xv3-editor');
+      const errors=document.querySelectorAll('.toast.error');
+      return !!editor || errors.length>n;
+    }""",arg=errors_before,timeout=10000)
+    editor=page.locator('.xv3-editor')
+    if editor.count()==0:
+        msg=page.locator('.toast.error').last.inner_text() if page.locator('.toast.error').count()>errors_before else 'no editor and no error toast'
+        raise RuntimeError(stage+': '+msg)
+    editor.wait_for(state='visible',timeout=10000)
+    mark(stage+' opened')
+
 
 with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
     tmp=Path(d);sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1];sock.close()
@@ -232,8 +247,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('[data-act="close"]').first.click()
 
             visit(page,'outbounds')
-            page.locator('[data-act="xv2outnew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            page.locator('.te4').wait_for(state='visible',timeout=10000)
+            assert page.locator('.te4-summary').count()==1
+            assert page.locator('.te4-graph').count()==1
+            open_guided(page,page.locator('[data-act="te4outnew"]'),'Traffic Engine V4 new outbound editor')
             assert page.locator('#dialog-form [name="settings"]').count()==0
             assert page.locator('#dialog-form [name="stream"]').count()==0
             assert page.locator('#dialog-form [name="protocol"]').count()==1
@@ -251,7 +268,18 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert browser_out and browser_out['protocol']=='vless',browser_out
             assert browser_out['settings']['address']=='edge.example.test'
             assert browser_out['streamSettings']['grpcSettings']['serviceName']=='browser-grpc'
-            mark('Xray Guided V3 creates VLESS outbound without raw Settings/StreamSettings JSON')
+
+            proxy_card=page.locator('.te4-out').filter(has_text='browser-proxy')
+            open_guided(page,proxy_card.locator('[data-act="te4outclone"]'),'Traffic Engine V4 clone outbound editor')
+            page.locator('#dialog-form [name="tag"]').fill('browser-proxy-backup')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            page.once('dialog',lambda d:d.accept())
+            page.locator('.te4-out').filter(has_text='browser-proxy').first.locator('[data-act="te4default"]').click()
+            page.wait_for_function("()=>document.querySelector('.te4-out.default h3')?.textContent==='browser-proxy'",timeout=10000)
+            outbounds=page.evaluate("()=>api('/api/settings/outbounds').then(x=>x.value)")
+            assert outbounds[0]['tag']=='browser-proxy',outbounds
+            mark('Traffic Engine V4 creates guided outbounds, clones them and explicitly controls Xray default egress')
 
             visit(page,'xray')
             page.locator('[data-act="xv2tab"][data-tab="dns"]').click()
@@ -267,20 +295,37 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('DNS Guided V3 exposes safe structured controls instead of raw JSON')
 
             visit(page,'routing')
-            page.locator('[data-act="xv2rulenew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            page.locator('.te4-preview').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4rulenew"]'),'Traffic Engine V4 routing rule editor')
             assert page.locator('#dialog-form [name="targetType"]').count()==1
+            assert page.locator('#dialog-form [name="ruleSourceIP"]').count()==1
+            assert page.locator('#dialog-form [name="ruleUser"]').count()==1
+            assert page.locator('#dialog-form [name="ruleAttrs"]').count()==1
             assert page.locator('#dialog-form [name="targetOutbound"] option[value="browser-proxy"]').count()==1
+            page.locator('#dialog-form [name="ruleTag"]').fill('BROWSER-DIRECT')
             page.locator('#dialog-form [name="domain"]').fill('domain:browser.example')
             page.locator('#dialog-form [name="targetOutbound"]').select_option('browser-proxy')
             page.locator('#submit-dialog').click()
             page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
             routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
-            assert any(r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
-            mark('Routing Guided V3 selects existing outbound tags instead of free-typing destinations')
+            assert any(r.get('ruleTag')=='BROWSER-DIRECT' and r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
 
-            page.locator('[data-act="xv2routesettings"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-DIRECT')",timeout=10000)
+            page.locator('#te4-preview-form [name="domain"]').fill('api.browser.example')
+            page.locator('#te4-preview-form [name="port"]').fill('443')
+            preview_errors=page.locator('.toast.error').count()
+            preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
+            page.locator('#te4-preview-form [data-act="te4preview"]').click()
+            page.wait_for_function("""x=>(state.te4?.preview_seq||0)>x.seq||document.querySelectorAll('.toast.error').length>x.errors""",arg={'seq':preview_seq,'errors':preview_errors},timeout=10000)
+            if page.evaluate("()=>state.te4?.preview_seq||0")<=preview_seq:
+                raise RuntimeError('Traffic Engine direct preview: '+page.locator('.toast.error').last.inner_text())
+            preview_state=page.evaluate("()=>state.te4.preview")
+            assert preview_state['result']=='matched' and preview_state['selected_outbound']=='browser-proxy',preview_state
+            preview_text=page.locator('#te4-preview-result').inner_text()
+            assert 'RULE #1' in preview_text and 'OUT browser-proxy' in preview_text,preview_text
+            mark('Traffic Engine V4 previews literal routing decisions without sending traffic')
+
+            open_guided(page,page.locator('[data-act="te4routesettings"]'),'Traffic Engine V4 routing settings editor')
             assert page.locator('#dialog-form [name="routeDomainStrategy"] option[value="IPIfNonMatch"]').count()==1
             page.locator('#dialog-form [name="routeDomainStrategy"]').select_option('IPIfNonMatch')
             page.locator('#submit-dialog').click()
@@ -288,12 +333,9 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
             assert routing.get('domainStrategy')=='IPIfNonMatch',routing
             assert any(r.get('outboundTag')=='browser-proxy' for r in routing.get('rules',[])),routing
-            mark('Routing Guided V3 changes domain strategy without overwriting rules')
+            mark('Routing Guided V4 changes domain strategy without overwriting rules')
 
-            visit(page,'xray')
-            page.locator('[data-act="xv2tab"][data-tab="balancers"]').click()
-            page.locator('[data-act="xv2balnew"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4balnew"]'),'Traffic Engine V4 balancer editor')
             assert page.locator('#dialog-form [name="balStrategy"] option[value="leastPing"]').count()==1
             assert page.locator('#dialog-form [name="balStrategy"] option[value="leastLoad"]').count()==0
             page.locator('#dialog-form [name="balTag"]').fill('browser-bal')
@@ -306,11 +348,32 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert bal and bal['strategy']['type']=='leastPing' and 'browser-proxy' in bal['selector'],bal
             observatory=page.evaluate("()=>api('/api/settings/observatory').then(x=>x.value)")
             assert 'browser-proxy' in observatory.get('subjectSelector',[]),observatory
-            mark('Balancer Guided V3 configures leastPing with Observatory automatically')
+            bal_card=page.locator('.te4-bal').filter(has_text='browser-bal')
+            bal_text=bal_card.inner_text()
+            assert 'browser-proxy' in bal_text and 'browser-proxy-backup' in bal_text,bal_text
+            mark('Traffic Engine V4 makes Xray prefix-selector expansion visible for leastPing balancers')
 
-            page.locator('[data-act="xv2tab"][data-tab="observatory"]').click()
-            page.locator('[data-act="xv2obsedit"]').click()
-            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            open_guided(page,page.locator('[data-act="te4rulenew"]'),'Traffic Engine V4 balancer-target rule editor')
+            page.locator('#dialog-form [name="ruleTag"]').fill('BROWSER-BAL')
+            page.locator('#dialog-form [name="domain"]').fill('domain:balance.example')
+            page.locator('#dialog-form [name="targetType"]').select_option('balancer')
+            page.locator('#dialog-form [name="targetBalancer"]').select_option('browser-bal')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-BAL')&&state.te4.preview===null",timeout=10000)
+            page.locator('#te4-preview-form [name="domain"]').fill('www.balance.example')
+            preview_errors=page.locator('.toast.error').count()
+            preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
+            page.locator('#te4-preview-form [data-act="te4preview"]').click()
+            page.wait_for_function("""x=>(state.te4?.preview_seq||0)>x.seq||document.querySelectorAll('.toast.error').length>x.errors""",arg={'seq':preview_seq,'errors':preview_errors},timeout=10000)
+            if page.evaluate("()=>state.te4?.preview_seq||0")<=preview_seq:
+                raise RuntimeError('Traffic Engine balancer preview: '+page.locator('.toast.error').last.inner_text())
+            preview_state=page.evaluate("()=>state.te4.preview")
+            assert preview_state['target_type']=='balancer' and preview_state['target']=='browser-bal',preview_state
+            bal_preview=page.locator('#te4-preview-result').inner_text()
+            assert 'browser-proxy' in bal_preview and 'browser-proxy-backup' in bal_preview,bal_preview
+
+            open_guided(page,page.locator('[data-act="te4obsedit"]'),'Traffic Engine V4 Observatory editor')
             assert page.locator('#dialog-form input[name="obsSelector"][value="browser-proxy"]').is_checked()
             page.locator('#dialog-form [name="obsInterval"]').fill('45s')
             page.locator('#submit-dialog').click()
@@ -318,7 +381,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             observatory=page.evaluate("()=>api('/api/settings/observatory').then(x=>x.value)")
             assert observatory.get('probeInterval')=='45s',observatory
             assert 'browser-proxy' in observatory.get('subjectSelector',[]),observatory
-            mark('Observatory Guided V3 edits probe behavior with outbound selectors')
+            mark('Traffic Engine V4 keeps Observatory configuration visible without fabricating live health')
+            page.screenshot(path=str(OUT/'browser-traffic-engine-v4.png'),full_page=True)
 
             now=time.time()
             with store.transaction() as db:
