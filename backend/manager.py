@@ -730,15 +730,25 @@ class Manager:
         with self.lock:
             meta=self.meta(email);op=str(meta.get('op') or 'none');state=str(meta.get('state') or '')
             action='delete' if op=='delete' else 'reset' if op=='reset' else 'edit'
-            row=self.own_row(actor,email,action)
+            with self.store.lock:policy=self.store.db.execute('SELECT owner FROM clients WHERE id=?',(email,)).fetchone()
+            if policy:
+                owner=str(policy['owner']);actor.require('clients',action,owner)
+            elif actor.role=='owner':
+                owner=actor.id
+            else:
+                raise PermissionDenied('Only the primary owner may retry an operation after its policy row is gone')
             if op=='none' or state not in ('pending','error'):
                 raise PolicyError('Only pending/error durable operations can be retried')
             with self.store.transaction() as db:
                 db.execute("UPDATE managed_clients SET state='pending',error='',retry_at=0,updated_at=? WHERE email=?",
                            (time.time(),email))
-            self.audit(actor,row['owner'],'sync.retry_now',email,'operation='+op+'; previous_state='+state)
+            self.audit(actor,owner,'sync.retry_now',email,'operation='+op+'; previous_state='+state)
             self.tick(suppress=True)
-            return {'detail':self.detail(actor,email),'meta':self.meta(email)}
+            meta=self.meta(email)
+            detail=None
+            try:detail=self.detail(actor,email)
+            except PolicyError:pass
+            return {'detail':detail,'meta':meta}
 
     def restore_missing(self,actor: Actor,email: str,confirmation: str) -> dict:
         if actor.role!='owner' or confirmation!=email:
