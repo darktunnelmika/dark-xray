@@ -10,7 +10,7 @@ PW='test-only-strong-password-42'
 @pytest.fixture
 def env(tmp_path):
     store=Store(tmp_path/'api.db');bootstrap(store,'root',PW)
-    owner=Actor('root','owner');store.register_owner(owner,'arda');store.register_owner(owner,'dark')
+    owner=Actor('root','owner');store.register_owner(owner,'arda',volume_credit_bytes=1_000_000,unlimited_credit=10);store.register_owner(owner,'dark')
     create_admin(store,owner,'arda',PW);create_admin(store,owner,'read',PW,'readonly')
     app=create_app(store)
     with TestClient(app) as client:
@@ -44,12 +44,12 @@ def test_scoped_client_crud(env):
 def test_no_owner_escalation_or_unknown_fields(env):
     s,c,auth=env;h=auth('arda')
     assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','role':'owner'}).status_code==422
-    assert c.put('/v1/owners/arda',headers=h,json={'quota_bytes':100}).status_code==403
+    assert c.put('/v1/owners/arda',headers=h,json={'volume_credit_bytes':100,'unlimited_credit':1}).status_code==403
     assert c.post('/v1/admins',headers=h,json={'username':'evil','password':PW,'role':'owner'}).status_code==403
 
-def test_paid_order_owner_only(env):
-    s,c,auth=env;h=auth('arda')
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','price':1,'order_id':'one'}).status_code==403
+def test_customer_price_fields_are_not_part_of_policy_api(env):
+    _,c,auth=env;h=auth('arda')
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','price':1,'order_id':'one'}).status_code==422
 
 def test_usage_not_writeable_by_reseller(env):
     s,c,auth=env;root=auth();h=auth('arda')
@@ -114,13 +114,16 @@ def test_health_explicit_not_full_backend(env):
     _,c,_=env;cap=c.get('/health').json()['capabilities']
     assert cap['xray'] is False and cap['production_ready'] is False
 
-def test_money_api_idempotency(env):
-    _,c,auth=env;h=auth();data={'amount':300000,'event_id':'c1'}
-    assert c.post('/v1/owners/arda/credit',headers=h,json=data).json()['recorded']
-    assert not c.post('/v1/owners/arda/credit',headers=h,json=data).json()['recorded']
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','price':100000,'order_id':'s1'}).status_code==201
-    r=c.post('/v1/refunds',headers=h,json={'order_id':'s1','event_id':'r1'});assert r.status_code==200
-    rows=c.get('/v1/ledger/money',headers=auth('arda')).json();assert len(rows)==3 and all(r['owner']=='arda' for r in rows)
+def test_resource_credit_api_idempotency(env):
+    _,c,auth=env;h=auth()
+    data={'volume_bytes':300000,'unlimited_units':2,'event_id':'resource-credit-0001'}
+    assert c.post('/v1/owners/arda/credits',headers=h,json=data).json()['recorded']
+    assert not c.post('/v1/owners/arda/credits',headers=h,json=data).json()['recorded']
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','quota_bytes':100000}).status_code==201
+    rows=c.get('/v1/ledger/credits',headers=auth('arda')).json()
+    assert len(rows)==1 and rows[0]['owner']=='arda' and rows[0]['volume_bytes']==300000
+    assert c.get('/v1/ledger/money',headers=h).status_code==422
+
 
 def test_bootstrap_refuses_overwrite(env):
     s,_,_=env
