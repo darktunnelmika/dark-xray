@@ -302,6 +302,7 @@ jobs:
             -re {Start installation\? \[Y/n\]: $} { send "y\r"; exp_continue }
             -re {DARK owner password \([0-9]+-[0-9]+ characters\): $} { send "$pass\r"; exp_continue }
             -re {Repeat owner password: $} { send "$pass\r"; exp_continue }
+            -re {Enable BBR congestion control\? \[Y/n\]: $} { send "n\r"; exp_continue }
             timeout { exit 124 }
             eof
           }
