@@ -52,3 +52,26 @@
 .cv4-detail-grid section>b{font-size:12px}
 .cv4-detail-grid section>small{font-size:10px}
 @media(max-width:1200px){.cv4-head,.cv4-row{grid-template-columns:28px minmax(180px,1.15fr) minmax(155px,.9fr) minmax(120px,.72fr) minmax(120px,.72fr) minmax(135px,.78fr) 115px}}
+
+
+/* Clients V5 delivery center — subscription + primary + node failover */
+.cv4-delivery-dialog{width:min(1120px,calc(100vw - 28px));background:#050e11;border-color:rgba(43,230,201,.2);box-shadow:0 35px 180px #000d,0 0 70px rgba(37,224,196,.04)}
+.cv4-delivery-dialog .dialog-body{padding:12px}
+.cv4-delivery{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:12px;align-items:start}
+.cv4d-main{display:grid;gap:10px;min-width:0}
+.cv4d-sub,.cv4d-group,.cv4d-empty{border:1px solid rgba(51,204,198,.1);background:linear-gradient(145deg,#061216,#03090c);border-radius:11px;padding:12px;min-width:0}
+.cv4d-sub{border-color:rgba(42,235,194,.2);box-shadow:inset 0 0 28px rgba(34,215,184,.025)}
+.cv4d-title{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.cv4d-title>div{flex:1;min-width:0}.cv4d-title small,.cv4d-title b{display:block}.cv4d-title small{font:9px var(--mono);letter-spacing:.09em;color:#4f7779}.cv4d-title b{font-size:11px;color:#d8f8f1;margin-top:3px}
+.cv4d-title>span,.cv4d-good{font-size:8px;color:#65c9b7;border:1px solid rgba(49,215,186,.15);background:rgba(35,210,179,.035);padding:4px 6px;border-radius:5px}
+.cv4d-sub>code,.cv4d-config>code{display:block;direction:ltr;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid rgba(255,255,255,.045);background:#020709;color:#89aaa8;border-radius:7px;padding:9px;font:9px/1.45 var(--mono)}
+.cv4d-sub>code{color:#a9e4d8}
+.cv4d-formats{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.cv4d-formats button{border:1px solid rgba(50,194,190,.1);background:#030a0d;color:#68898d;border-radius:6px;padding:6px 8px;font-size:8px;cursor:pointer}.cv4d-formats button.active{color:#d9fff6;border-color:rgba(40,235,195,.3);background:rgba(34,218,184,.07)}
+.cv4d-actions,.cv4d-config footer{display:flex;gap:6px;margin-top:8px}.cv4d-actions button,.cv4d-config footer button{display:flex;align-items:center;gap:5px;border:1px solid rgba(50,199,194,.12);background:#041014;color:#7ca19f;border-radius:6px;padding:7px 9px;font-size:8px;cursor:pointer}.cv4d-actions button:hover,.cv4d-config footer button:hover{border-color:rgba(41,235,198,.3);color:#dffbf4}.cv4d-actions svg,.cv4d-config footer svg{width:13px}
+.cv4d-configs{display:grid;gap:7px}.cv4d-config{border:1px solid rgba(49,191,190,.08);background:#030a0d;border-radius:8px;padding:9px;min-width:0}.cv4d-config.failover{border-color:rgba(87,175,255,.13);background:linear-gradient(145deg,rgba(6,17,22,.98),rgba(5,12,18,.98))}
+.cv4d-config header{display:flex;gap:8px;align-items:start;margin-bottom:7px}.cv4d-config header>div{flex:1;min-width:0}.cv4d-config header small{display:flex;gap:5px;flex-wrap:wrap;color:#57747a;font-size:8px}.cv4d-config header small span{border:1px solid rgba(255,255,255,.05);border-radius:4px;padding:2px 4px}.cv4d-config header b{display:block;font-size:10px;margin-top:5px;color:#cbe5e2}.cv4d-route{font:8px var(--mono);letter-spacing:.08em;color:#5faaa0}.cv4d-config.failover .cv4d-route{color:#78aee4}.cv4d-node{color:#8bbce8!important}
+.cv4d-empty{display:grid;gap:4px;color:#58727a}.cv4d-empty b{font-size:10px;color:#829da0}.cv4d-empty small{font-size:9px}
+.cv4d-qr{position:sticky;top:0;display:grid;justify-items:center;gap:8px;border:1px solid rgba(44,218,195,.12);background:linear-gradient(160deg,#061216,#020709);border-radius:11px;padding:13px;text-align:center}.cv4d-qr>div:first-child{position:relative;width:205px;min-height:205px;display:grid;place-items:center;background:#dffaf4;border-radius:10px;overflow:hidden}.cv4d-qr svg{max-width:190px;max-height:190px}.cv4d-scanline{position:absolute;z-index:2;left:8px;right:8px;height:1px;top:20%;background:rgba(0,83,67,.38);box-shadow:0 0 8px rgba(0,83,67,.25);animation:cv4dscan 2.8s ease-in-out infinite alternate}.cv4d-qr>b{font-size:9px;color:#9fc1bd}.cv4d-qr>small{font-size:8px;line-height:1.5;color:#58747a}.cv4d-qr-error{color:#632b31;font-size:9px;padding:20px}.cv4d-qr .btn{font-size:9px}
+@keyframes cv4dscan{from{top:14%}to{top:86%}}
+@media(max-width:800px){.cv4-delivery{grid-template-columns:1fr}.cv4d-qr{position:static}.cv4d-title{align-items:flex-start;flex-wrap:wrap}.cv4d-title>span{margin-inline-start:0}}
+@media(prefers-reduced-motion:reduce){.cv4d-scanline{animation:none}}

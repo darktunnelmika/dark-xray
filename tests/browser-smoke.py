@@ -190,6 +190,26 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-clients-v4.png'),full_page=True)
             page.locator('[data-act="close"]').first.click()
 
+            inbound_id=saved[0]['id']
+            delivery_client=page.evaluate("""({inboundId})=>api('/api/clients','POST',{
+                owner:state.me.id,client:{email:'browser-delivery',totalGB:0,limitIp:1},
+                inboundIds:[inboundId]
+            })""",{'inboundId':inbound_id})
+            assert delivery_client.get('email')=='browser-delivery',delivery_client
+            page.evaluate("refresh()")
+            page.locator('[data-act="cv4delivery"][data-id="browser-delivery"]').click()
+            page.locator('.cv4-delivery').wait_for(state='visible',timeout=10000)
+            assert page.locator('[data-act="cv4dformat"][data-format="clash"]').count()==1
+            assert page.locator('[data-act="cv4dformat"][data-format="json"]').count()==1
+            assert page.locator('.cv4d-config.primary').count()>=1
+            assert page.locator('.cv4d-empty').count()==1
+            assert page.locator('#cv4d-qr svg').count()==1
+            page.locator('[data-act="cv4dformat"][data-format="clash"]').click()
+            assert 'format=clash' in page.locator('#cv4d-sub-url').inner_text()
+            mark('Clients V5 Delivery Center exposes subscription formats, direct configs and failover readiness')
+            page.screenshot(path=str(OUT/'browser-client-delivery-v5.png'),full_page=True)
+            page.locator('[data-act="close"]').first.click()
+
             visit(page,'outbounds')
             page.locator('[data-act="xv2outnew"]').click()
             page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
