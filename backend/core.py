@@ -135,6 +135,7 @@ class CoreEngine:
         if access.exists():
             info=access.stat();self._access_inode=(info.st_dev,info.st_ino);self._access_position=info.st_size
         self._net_sample=None
+        self._cpu_value=0.0;self._cpu_sample_at=0.0
         self.ip_error=''
         self._guard_status={'state':'pending','requested_mode':'observe','applied':False,'checked_at':0}
         self._guard_boot=''
@@ -900,6 +901,12 @@ class CoreEngine:
                 'last_exit_code':self.last_exit_code,'last_exit_at':self.last_exit_at,
                 'independent':True,'restart_disconnects_existing_sessions':True}
 
+    def _host_cpu_percent(self,now:float)->float:
+        if self._cpu_sample_at and now-self._cpu_sample_at<1.0:return self._cpu_value
+        # A 200 ms psutil sample avoids the false-looking zeros caused by the old 50 ms window.
+        self._cpu_value=round(float(psutil.cpu_percent(interval=.2)),1);self._cpu_sample_at=time.monotonic()
+        return self._cpu_value
+
     def system(self)->dict:
         vm=psutil.virtual_memory();disk=psutil.disk_usage(self.runtime);swap=psutil.swap_memory();net=psutil.net_io_counters()
         now=time.monotonic();rates={}
@@ -940,7 +947,7 @@ class CoreEngine:
                     if len(addresses)>=16:break
                 if len(addresses)>=16:break
         except (psutil.Error,OSError):pass
-        return {'cpu':psutil.cpu_percent(interval=.05),'cpuInfo':cpu_info,
+        return {'cpu':self._host_cpu_percent(now),'cpuInfo':cpu_info,
                 'mem':{'current':vm.used,'total':vm.total},
                 'disk':{'current':disk.used,'total':disk.total,'free':disk.free},
                 'swap':{'current':swap.used,'total':swap.total},

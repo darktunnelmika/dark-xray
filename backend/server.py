@@ -1102,7 +1102,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/gateway-system')
     def gateway_system(p:Principal=Depends(owner)):
         mem=psutil.virtual_memory();disk=psutil.disk_usage('/');swap=psutil.swap_memory()
-        return {'source':'DARK API host','sample':False,'cpu':psutil.cpu_percent(interval=.05),
+        return {'source':'DARK API host','sample':False,'cpu':round(float(psutil.cpu_percent(interval=.2)),1),
                 'memory_percent':mem.percent,'disk_percent':disk.percent,'swap_percent':swap.percent,
                 'uptime':int(time.time()-psutil.boot_time())}
     def security_center_payload(p:Principal):

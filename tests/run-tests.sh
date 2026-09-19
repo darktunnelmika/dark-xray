@@ -61,5 +61,6 @@ node --test tests/nodes-v3.test.cjs
 node --test tests/representatives-v2.test.cjs
 node --test tests/cyber-classic.test.cjs
 node --test tests/overview-v4.test.cjs
+node --test tests/i18n-cpu-branding.test.cjs
 node --test tests/xray-guided-v3.test.cjs
 node --test tests/settings-operations.test.cjs

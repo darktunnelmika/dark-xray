@@ -25,6 +25,7 @@ function linePoints(values,w,h,maxValue=null){
 }
 function spark(values,max=100){return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
 function fmtRate(v){return bytes(number(v))+'/s';}
+function fmtCpu(v){v=number(v);return v<=0?'<0.1':v.toFixed(1);}
 function fmtUptime(sec){sec=Math.max(0,number(sec));let d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+'d ':'')+h+'h '+m+'m';}
 
 function commandBar(){
@@ -54,7 +55,7 @@ function resourceCard(key,label,value,detail,history,extra=''){
 function resourceRow(){
  const n=state.system?.engine||{},h=state.ov4.history,ci=n.cpuInfo||{},freq=number(ci.mhz);
  return `<section class="ov4-resource-grid">
- ${resourceCard('cpu','CPU',number(n.cpu).toFixed(1),`${ci.physical||'—'} Cores / ${ci.logical||'—'}T${freq?' · '+(freq/1000).toFixed(2)+' GHz':''}`,h.cpu)}
+ ${resourceCard('cpu','CPU',fmtCpu(n.cpu),`${ci.physical||'—'} ${L('Cores','هسته')} / ${ci.logical||'—'}T${freq?' · '+(freq/1000).toFixed(2)+' GHz':''}`,h.cpu)}
  ${resourceCard('ram','RAM',pct(n.mem).toFixed(1),`${bytes(n.mem?.current)} / ${bytes(n.mem?.total)}`,h.mem)}
  ${resourceCard('swap','SWAP',pct(n.swap).toFixed(1),`${bytes(n.swap?.current)} / ${bytes(n.swap?.total)}`,h.swap)}
  ${resourceCard('disk',L('STORAGE','فضای دیسک'),pct(n.disk).toFixed(1),`${bytes(n.disk?.current)} / ${bytes(n.disk?.total)} · ${L('free','آزاد')} ${bytes(n.disk?.free)}`,h.disk)}
@@ -87,8 +88,8 @@ function connectionCard(){
 function telemetryStrip(){
  const n=state.system?.engine||{},addresses=(n.addresses||[]).slice(0,3);
  return `<section class="ov4-telemetry-strip">
- <div><span>${icon('activity')} UPTIME</span><section><p><small>XRAY</small><b>${fmtUptime(n.xray?.uptime)}</b></p><p><small>OS</small><b>${fmtUptime(n.uptime)}</b></p></section></div>
- <div><span>${icon('server')} PANEL</span><section><p><small>RAM</small><b>${bytes(n.panel?.mem)}</b></p><p><small>THREADS</small><b>${fa(n.panel?.threads||0)}</b></p></section></div>
+ <div><span>${icon('activity')} ${L('UPTIME','آپ‌تایم')}</span><section><p><small>XRAY</small><b>${fmtUptime(n.xray?.uptime)}</b></p><p><small>OS</small><b>${fmtUptime(n.uptime)}</b></p></section></div>
+ <div><span>${icon('server')} ${L('PANEL','پنل')}</span><section><p><small>RAM</small><b>${bytes(n.panel?.mem)}</b></p><p><small>${L('THREADS','تردها')}</small><b>${fa(n.panel?.threads||0)}</b></p></section></div>
  <div class="ov4-addresses"><span>${icon('globe')} IP ADDRESSES</span><section>${addresses.length?addresses.map(a=>`<p><small>${e(a.interface)}</small><b class="mono">${e(a.address)}</b></p>`).join(''):`<p><b class="muted">${L('No non-loopback address reported','آدرس غیرلوپ‌بک گزارش نشده')}</b></p>`}</section></div>
  </section>`;
 }
@@ -99,11 +100,11 @@ function darkSummary(){
  const reps=state.resellers||[],activeReps=reps.filter(r=>r.enabled).length,n=state.system?.engine||{};
  const item=(label,value,sub,act='')=>`<button class="ov4-summary-item" ${act?`data-act="${act}"`:'disabled'}><span>${label}</span><b>${value}</b><small>${sub}</small></button>`;
  return `<section class="ov4-summary-grid">
- ${item(L('ACTIVE CLIENTS','کاربران فعال'),fa(active),`${clients.length} total`,'ov4clients')}
+ ${item(L('ACTIVE CLIENTS','کاربران فعال'),fa(active),`${clients.length} ${L('total','کل')}`,'ov4clients')}
  ${item(L('BLOCKED','محدود'),fa(blocked),L('policy / quota','سیاست / سهمیه'),'ov4clients')}
  ${item(L('INBOUNDS','اینباندها'),fa(state.inbounds?.length||0),'Xray','ov4config')}
  ${item(L('NODES ONLINE','نود آنلاین'),`${online}/${enabled.length}`,L('multi-node','چندنودی'),'ov4nodes')}
- ${item(L('REPRESENTATIVES','نمایندگان'),fa(activeReps),`${reps.length} total`,'ov4reps')}
+ ${item(L('REPRESENTATIVES','نمایندگان'),fa(activeReps),`${reps.length} ${L('total','کل')}`,'ov4reps')}
  ${item(L('XRAY MEMORY','حافظه Xray'),bytes(n.xray?.mem),e(n.xray?.state||'—'),'ov4metrics')}
  </section>`;
 }
