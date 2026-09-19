@@ -347,7 +347,7 @@ async function guidedDNS(){
   +'</section>'
   +'<section class="xv3-summary"><span>'+L('Safe workflow','روند امن')+'</span><b>'+L('Save → Validate → Apply','ذخیره ← اعتبارسنجی ← اعمال')+'</b><small>'+L('Hosts and uncommon DNS fields already present are preserved; use Advanced JSON only for fields not shown here.','Hosts و فیلدهای خاص موجود حفظ می‌شوند؛ برای مواردی که اینجا نیست فقط از JSON پیشرفته استفاده کن.')+'</small></section>'
   +'</div>';
- dialog(L('DNS · هدایت‌شده V3','DNS · هدایت‌شده V3'),body,async function(fd){await api('/api/settings/dns','PUT',{value:dnsFromForm(fd,d)});toast(L('DNS saved. Validate before applying Xray.','DNS ذخیره شد؛ قبل از اعمال، Xray را اعتبارسنجی کن.'));closeDialog();await refresh();});
+ dialog(L('DNS · Guided V3','DNS · هدایت‌شده V3'),body,async function(fd){await api('/api/settings/dns','PUT',{value:dnsFromForm(fd,d)});toast(L('DNS saved. Validate before applying Xray.','DNS ذخیره شد؛ قبل از اعمال، Xray را اعتبارسنجی کن.'));closeDialog();await refresh();});
 }
 function routingSettingsFromForm(fd,old){
  const v=clone(old||{});v.domainStrategy=String(fd.get('routeDomainStrategy')||'AsIs');return v;
