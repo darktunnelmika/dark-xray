@@ -3,7 +3,7 @@
 'use strict';
 if(typeof clientsPage!=='function'||typeof runAction!=='function'||typeof clientForm!=='function')return;
 const baseClientsPage=clientsPage,baseRunAction=runAction,baseClientForm=clientForm;
-state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',filters:false};
+state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',filters:false,delivery:null};
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 const pct=(u,t)=>t?Math.min(100,Math.max(0,100*Number(u||0)/Number(t))):0;
 const statusOf=r=>{const x=r.block_reasons||[];if(x.includes('client_manual')||r.client?.enable===false||r.observed_enable===false)return'disabled';if(x.length)return'blocked';return'active';};
@@ -45,7 +45,7 @@ function row(r){
   <div class="cv4-service">${ins.slice(0,2).map(x=>`<span>${e(x)}</span>`).join('')}${ins.length>2?`<small>+${ins.length-2}</small>`:''}</div>
   <div class="cv4-usage"><b class="mono">${bytes(used)}</b><small>${total?bytes(total):L('Unlimited','نامحدود')}</small>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</div>
   <div class="cv4-expiry"><b>${e(expiry)}</b><small>${statusOf(r)==='active'?L('Service active','سرویس فعال'):statusOf(r)==='blocked'?L('Service limited','سرویس محدود'):L('Service disabled','سرویس قطع')}</small></div>
-  <div class="cv4-row-actions">${mini(L('OPEN','بازکردن'),'cv4detail',r.email,'open')}${can('clients.credentials',r.owner)?mini('QR','cv3links',r.email):''}</div>
+  <div class="cv4-row-actions">${mini(L('OPEN','بازکردن'),'cv4detail',r.email,'open')}${can('clients.credentials',r.owner)?mini(L('LINK','لینک'),'cv4delivery',r.email):''}</div>
  </article>`;
 }
 function stats(){
@@ -134,8 +134,71 @@ clientForm=clientFormV4;
 
 async function detail(id){
  const r=await api('/api/clients/'+enc(id)),c=r.client||{},ins=inboundNames(r),used=Number(r.used_bytes||0),total=Number(c.totalGB||0),expiry=c.expiryTime>0?new Date(c.expiryTime).toLocaleString():L('Unlimited','نامحدود');
- dialog(L('Client command','فرمان کاربر')+' · '+id,`<div class="cv4-detail"><header><span class="cv4-avatar big">${e(id.slice(0,1).toUpperCase())}</span><div><small>${e(r.owner)} · ${e(c.group||L('Ungrouped','بدون گروه'))}</small><h2>${e(id)}</h2></div>${signal(r)}</header><div class="cv4-detail-grid"><section><span>${L('USAGE','مصرف')}</span><b>${bytes(used)} / ${total?bytes(total):L('Unlimited','نامحدود')}</b>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</section><section><span>${L('EXPIRY','انقضا')}</span><b>${e(expiry)}</b><small>${statusOf(r)==='active'?L('Service active','سرویس فعال'):statusOf(r)==='blocked'?L('Service limited','سرویس محدود'):L('Service disabled','سرویس قطع')}</small></section><section class="wide"><span>${L('SERVICE','سرویس')}</span><div class="cv4-tags">${ins.map(x=>`<i>${e(x)}</i>`).join('')}</div></section></div><footer>${can('clients.credentials',r.owner)?button(L('QR & Links','QR و لینک'),'cv3links','link',`data-id="${e(id)}"`,true):''}${can('clients.edit',r.owner)?button(L('Edit','ویرایش'),'cv4edit','edit',`data-id="${e(id)}"`):''}</footer></div>`);document.querySelector('#overlay .dialog')?.classList.add('cv4-detail-dialog');
+ dialog(L('Client command','فرمان کاربر')+' · '+id,`<div class="cv4-detail"><header><span class="cv4-avatar big">${e(id.slice(0,1).toUpperCase())}</span><div><small>${e(r.owner)} · ${e(c.group||L('Ungrouped','بدون گروه'))}</small><h2>${e(id)}</h2></div>${signal(r)}</header><div class="cv4-detail-grid"><section><span>${L('USAGE','مصرف')}</span><b>${bytes(used)} / ${total?bytes(total):L('Unlimited','نامحدود')}</b>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</section><section><span>${L('EXPIRY','انقضا')}</span><b>${e(expiry)}</b><small>${statusOf(r)==='active'?L('Service active','سرویس فعال'):statusOf(r)==='blocked'?L('Service limited','سرویس محدود'):L('Service disabled','سرویس قطع')}</small></section><section class="wide"><span>${L('SERVICE','سرویس')}</span><div class="cv4-tags">${ins.map(x=>`<i>${e(x)}</i>`).join('')}</div></section></div><footer>${can('clients.credentials',r.owner)?button(L('Delivery / QR','تحویل / QR'),'cv4delivery','link',`data-id="${e(id)}"`,true):''}${can('clients.edit',r.owner)?button(L('Edit','ویرایش'),'cv4edit','edit',`data-id="${e(id)}"`):''}</footer></div>`);document.querySelector('#overlay .dialog')?.classList.add('cv4-detail-dialog');
 }
+
+function deliverySubUrl(base,format){
+ if(!base)return'';
+ if(!format||format==='auto')return base;
+ return base+(base.includes('?')?'&':'?')+'format='+encodeURIComponent(format);
+}
+function deliveryPayload(kind,index=0){
+ const d=state.cv4.delivery;if(!d)return'';
+ if(kind==='sub')return deliverySubUrl(d.result.subscription_url,d.format);
+ if(kind==='failover')return d.failover[Number(index)]?.uri||'';
+ return d.direct[Number(index)]?.uri||'';
+}
+async function copyDelivery(text){
+ if(!text)return;
+ try{await navigator.clipboard.writeText(text);}
+ catch(_){const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();}
+ toast(L('Copied.','کپی شد.'));
+}
+function renderDeliveryQr(kind='sub',index=0){
+ const d=state.cv4.delivery,box=document.querySelector('#cv4d-qr');if(!d||!box)return;
+ d.selected={kind,index:Number(index)||0};
+ const payload=deliveryPayload(kind,index),label=document.querySelector('#cv4d-qr-label');
+ if(!payload){box.innerHTML=`<div class="cv4d-qr-error">${L('No QR payload.','داده‌ای برای QR نیست.')}</div>`;return;}
+ try{
+  const q=qrcode(0,'L');q.addData(payload);q.make();box.innerHTML=q.createSvgTag();
+  if(label){
+   if(kind==='sub')label.textContent=L('Subscription · ','اشتراک · ')+String(d.format||'auto').toUpperCase();
+   else if(kind==='failover')label.textContent=d.failover[Number(index)]?.remark||L('Failover config','کانفیگ فیل‌اور');
+   else label.textContent=d.direct[Number(index)]?.remark||L('Primary config','کانفیگ اصلی');
+  }
+ }catch(ex){box.innerHTML=`<div class="cv4d-qr-error">${e(L('QR generation failed: ','ساخت QR ناموفق: ')+ex.message)}</div>`;}
+}
+function updateDeliveryFormat(format){
+ const d=state.cv4.delivery;if(!d)return;d.format=format;
+ const url=deliverySubUrl(d.result.subscription_url,format),node=document.querySelector('#cv4d-sub-url');
+ if(node)node.textContent=url;
+ document.querySelectorAll('[data-act="cv4dformat"]').forEach(x=>x.classList.toggle('active',x.dataset.format===format));
+ if(d.selected?.kind==='sub')renderDeliveryQr('sub',0);
+}
+function downloadDeliveryQr(){
+ const svg=document.querySelector('#cv4d-qr svg');if(!svg)return toast(L('No QR to download.','QR برای ذخیره وجود ندارد.'),true);
+ const blob=new Blob([svg.outerHTML],{type:'image/svg+xml'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=url;a.download='dark-xray-'+(state.cv4.delivery?.id||'client')+'.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),500);
+}
+function deliveryConfigCard(row,index,kind){
+ const fail=kind==='failover';
+ const meta=fail?`<span class="cv4d-node">${L('Node','نود')} ${e(row.failoverNode||'—')}</span><span>P${fa(row.failoverPriority??'—')}</span><span>${row.failoverLatencyMs==null?'—':fa(row.failoverLatencyMs)+' ms'}</span>`:`<span>#${e(row.inboundId)}</span><span>${L('Primary','اصلی')}</span>`;
+ return `<article class="cv4d-config ${fail?'failover':'primary'}"><header><div><small>${meta}</small><b>${e(row.remark||L('Config','کانفیگ'))}</b></div><span class="cv4d-route">${fail?L('FAILOVER','فیل‌اور'):L('DIRECT','مستقیم')}</span></header><code>${e(row.uri||'')}</code><footer><button data-act="cv4dcopy" data-kind="${kind}" data-index="${index}">${icon('copy')}${L('Copy','کپی')}</button><button data-act="cv4dqr" data-kind="${kind}" data-index="${index}">QR</button></footer></article>`;
+}
+async function deliveryV4(id){
+ const result=await api('/api/clients/'+enc(id)+'/links'),direct=result.engine?.links||[],failover=result.engine?.failover||[],warnings=result.engine?.warnings||[];
+ state.cv4.delivery={id,result,direct,failover,format:'auto',selected:{kind:result.subscription_url?'sub':direct.length?'direct':'failover',index:0}};
+ const formats=[['auto',L('Auto','خودکار')],['base64','Base64'],['raw','Raw'],['clash','Clash / Mihomo'],['json','DARK JSON']];
+ const formatChips=formats.map(([v,l])=>`<button class="${v==='auto'?'active':''}" data-act="cv4dformat" data-format="${v}">${l}</button>`).join('');
+ const sub=result.subscription_url?`<section class="cv4d-sub"><div class="cv4d-title"><div><small>01 · ${L('SUBSCRIPTION','اشتراک')}</small><b>${L('Recommended customer delivery','روش پیشنهادی تحویل به مشتری')}</b></div><span>${L('Auto-update','آپدیت خودکار')}</span></div><code id="cv4d-sub-url">${e(result.subscription_url)}</code><div class="cv4d-formats">${formatChips}</div><div class="cv4d-actions"><button data-act="cv4dcopy" data-kind="sub">${icon('copy')}${L('Copy subscription','کپی اشتراک')}</button><button data-act="cv4dqr" data-kind="sub">QR</button></div></section>`:'';
+ const directHtml=direct.length?`<section class="cv4d-group"><div class="cv4d-title"><div><small>02 · ${L('PRIMARY CONFIGS','کانفیگ‌های اصلی')}</small><b>${fa(direct.length)} ${L('generated endpoints','Endpoint ساخته‌شده')}</b></div></div><div class="cv4d-configs">${direct.map((x,i)=>deliveryConfigCard(x,i,'direct')).join('')}</div></section>`:'';
+ const failHtml=failover.length?`<section class="cv4d-group"><div class="cv4d-title"><div><small>03 · ${L('NODE FAILOVER','فیل‌اور نودها')}</small><b>${fa(failover.length)} ${L('healthy failover routes','مسیر فیل‌اور سالم')}</b></div><span class="cv4d-good">${L('Generated from deployed nodes','ساخته‌شده از نودهای Deploy‌شده')}</span></div><div class="cv4d-configs">${failover.map((x,i)=>deliveryConfigCard(x,i,'failover')).join('')}</div></section>`:`<section class="cv4d-empty"><b>${L('No failover route is currently available.','فعلاً مسیر فیل‌اور در دسترس نیست.')}</b><small>${L('Assign this inbound to a healthy node with failover enabled to populate this section.','برای نمایش این بخش، اینباند را به یک نود سالم با Failover فعال اختصاص بده.')}</small></section>`;
+ const warningHtml=warnings.map(x=>`<div class="notice warning">${e(x)}</div>`).join('');
+ dialog(L('Delivery Center','مرکز تحویل')+' · '+id,`<div class="cv4-delivery"><div class="cv4d-main">${sub}${directHtml}${failHtml}${warningHtml}</div><aside class="cv4d-qr"><div><span class="cv4d-scanline"></span><div id="cv4d-qr"></div></div><b id="cv4d-qr-label"></b><button class="btn" data-act="cv4ddownload">${L('Save QR SVG','ذخیره QR')}</button><small>${L('QR always contains the exact selected subscription or config route.','QR همیشه دقیقاً مسیر اشتراک یا کانفیگ انتخاب‌شده را دارد.')}</small></aside></div>`);
+ document.querySelector('#overlay .dialog')?.classList.add('cv4-delivery-dialog');
+ renderDeliveryQr(state.cv4.delivery.selected.kind,state.cv4.delivery.selected.index);
+}
+
 async function bulkCreate(){
  const owner=defaultOwner();
  dialog(L('Bulk create','ساخت گروهی'),`<div class="cv4-editor-shell"><section class="cv4-edit-section"><header><span>01</span><div><b>${L('Batch','دسته')}</b><small>${L('Create many clients with one clean template.','چند کاربر با یک الگوی ساده بساز.')}</small></div></header><div class="cv4-edit-grid">${isOwner()&&ownerOptions().length>1?fSelect(L('Owner','مالک'),'owner',ownerOptions(),owner):`<input type="hidden" name="owner" value="${e(owner)}">`}${fInput(L('Quantity','تعداد'),'quantity',10,'number','min="1" max="500" required')}${fInput(L('Prefix','پیشوند'),'prefix','dark-','text','maxlength="64"')}${fInput(L('Start number','شماره شروع'),'first',1,'number','min="0" max="999999"')}</div></section><section class="cv4-edit-section"><header><span>02</span><div><b>${L('Service','سرویس')}</b></div></header><div id="cv4-inbounds">${inboundTiles([],owner)}</div></section><section class="cv4-edit-section"><header><span>03</span><div><b>${L('Plan','پلن')}</b></div></header><div class="cv4-edit-grid">${fInput(L('Quota GiB · 0 unlimited','حجم GiB · صفر نامحدود'),'totalGB',0,'number','min="0" step="0.1"')}${fInput(L('Expiry days · 0 unlimited','روز اعتبار · صفر نامحدود'),'days',0,'number','min="0" max="36500"')}${fInput(L('IP limit · 0 unlimited','محدودیت IP'),'limitIp',1,'number','min="0" max="1000"')}</div></section></div>`,async f=>{const selected=f.getAll('inbound').map(Number);if(!selected.length)throw Error(L('Select at least one inbound.','حداقل یک اینباند انتخاب کن.'));const days=Number(f.get('days')||0),client={totalGB:Math.round(Number(f.get('totalGB')||0)*gb),limitIp:Number(f.get('limitIp')||0)};if(days)client.expiryTime=Date.now()+days*86400000;const out=await api('/api/clients/bulk-create','POST',{owner:f.get('owner'),prefix:f.get('prefix'),postfix:'',first:Number(f.get('first')||0),quantity:Number(f.get('quantity')||0),inboundIds:selected,client});closeDialog();dialog(L('Bulk result','نتیجه ساخت گروهی'),jsonBox(out));await refresh();},L('Create batch','ساخت دسته'));decorateEditor();
@@ -147,6 +210,11 @@ runAction=async function(act,el){
  if(act==='cv4quick'){if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
  if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity'});state.selected.clear();return renderPage();}
  if(act==='cv4detail')return detail(id);
+ if(act==='cv4delivery')return deliveryV4(id);
+ if(act==='cv4dcopy')return copyDelivery(deliveryPayload(el.dataset.kind,Number(el.dataset.index||0)));
+ if(act==='cv4dqr')return renderDeliveryQr(el.dataset.kind,Number(el.dataset.index||0));
+ if(act==='cv4dformat'){updateDeliveryFormat(el.dataset.format);return;}
+ if(act==='cv4ddownload')return downloadDeliveryQr();
  if(act==='cv4bulk')return bulkCreate();
  if(act==='cv4edit'){closeDialog();return clientFormV4(id);}
  return baseRunAction(act,el);
