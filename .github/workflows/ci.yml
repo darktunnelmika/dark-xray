@@ -45,13 +45,14 @@ jobs:
           grep -q 'tools/check.py' darkxray
           grep -q 'vps-verify)' darkxray
           grep -q 'production-gate)' darkxray
+          grep -q 'target-vps-gate)' darkxray
           grep -q 'node-wan-gate)' darkxray
           grep -q 'tools/production-gate.py' darkxray
           grep -q 'stage-runtime|stage-panel-path)' darkxray
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/update.py
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/provision.py
           python -m py_compile \
-            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/smoke-real.py \
+            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/smoke-real.py \
             tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
@@ -311,12 +312,15 @@ jobs:
           EOF
           expect /tmp/dark-fresh-install.exp
       - name: Verify installed services and production gate
+        env:
+          DARK_INSTALL_REF: "${{ github.event.pull_request.head.sha || github.sha }}"
         run: |
           systemctl is-enabled dark-xray.service
           systemctl is-active dark-xray.service
           systemctl is-enabled dark-xray-update.service
           systemctl is-active dark-xray-update.service
           sudo darkxray check
+          sudo python3 -c 'import json,sys; from pathlib import Path; expected=sys.argv[1].lower(); doc=json.loads(Path("/var/lib/dark-xray/installed-source.json").read_text()); assert doc.get("commit","").lower()==expected,(doc,expected); assert doc.get("version")' "$DARK_INSTALL_REF"
           sudo darkxray vps-verify | tee qa/fresh-install-vps-verify.txt
           sudo darkxray production-gate --json-only | tee qa/fresh-install-production-gate.json
       - name: Capture fresh-install diagnostics on failure

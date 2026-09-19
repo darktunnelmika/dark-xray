@@ -101,7 +101,7 @@ def validate_source(src:Path):
     if any(not p.is_file() or p.is_symlink() for p in required):raise SystemExit('Invalid update source: required application files are missing or unsafe')
     source_version(src)
     run([sys.executable,src/'tools/repo-check.py'],stdout=subprocess.DEVNULL)
-    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'backend/updated.py',src/'backend/update_bridge.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py'])
+    run([sys.executable,'-m','py_compile',src/'backend/server.py',src/'backend/core.py',src/'backend/manager.py',src/'backend/auth.py',src/'backend/owner_recovery.py',src/'backend/updated.py',src/'backend/update_bridge.py',src/'tools/menu.py',src/'tools/settings_apply.py',src/'tools/doctor.py',src/'tools/backup_cli.py',src/'tools/guard-control.py',src/'tools/target-vps-gate.py'])
     run(['bash','-n',src/'darkxray',src/'setup.sh',src/'install-online.sh'])
 
 

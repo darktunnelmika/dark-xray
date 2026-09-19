@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Stateful validation gate for a real DARK XRAY target VPS.
+
+This gate builds on production-gate.py and records the extra evidence that CI
+cannot prove: exact installed source identity, local HTTPS/HSTS behavior,
+certificate-renewal plumbing, optional real-WAN node health, and an actual
+machine reboot observed across two invocations.
+
+Typical reboot proof:
+  sudo darkxray target-vps-gate --phase pre-reboot --expect-source-commit <sha>
+  sudo reboot
+  sudo darkxray target-vps-gate --phase post-reboot --expect-source-commit <sha>
+
+The gate does not reboot the machine, issue/renew certificates, alter firewall
+rules, or inject node outages. Optional node checks can update normal node health
+metadata through the existing node-wan-gate.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import socket
+import ssl
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'backend'))
+from core import Config
+
+VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip() if (ROOT/'VERSION').is_file() else 'unknown'
+BOOT_ID_PATH=Path('/proc/sys/kernel/random/boot_id')
+TLS_SOURCE=Path('/etc/dark-xray/tls-source.json')
+TLS_HOOK=Path('/etc/letsencrypt/renewal-hooks/deploy/dark-xray-panel')
+LE_LIVE=Path('/etc/letsencrypt/live')
+SHA_RE=re.compile(r'[0-9a-f]{40}')
+
+
+def _child(args:list[str|Path],timeout:float)->subprocess.CompletedProcess[str]:
+    return subprocess.run([str(x) for x in args],capture_output=True,text=True,check=False,timeout=timeout)
+
+
+def _json_text(text:str)->dict[str,Any]:
+    value=json.loads(text)
+    if not isinstance(value,dict):raise ValueError('child result must be a JSON object')
+    return value
+
+
+def atomic_report(path:Path,payload:dict[str,Any],prefix:str='.target-vps-')->None:
+    path=path.expanduser();path.parent.mkdir(parents=True,exist_ok=True)
+    if path.is_symlink():raise RuntimeError('Refusing to replace a symlink report path')
+    fd,name=tempfile.mkstemp(prefix=prefix,suffix='.json',dir=path.parent);tmp=Path(name)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as f:
+            json.dump(payload,f,ensure_ascii=False,indent=2);f.write('\n');f.flush();os.fsync(f.fileno())
+        os.chmod(tmp,0o600);os.replace(tmp,path)
+        dfd=os.open(path.parent,os.O_RDONLY)
+        try:os.fsync(dfd)
+        finally:os.close(dfd)
+    finally:tmp.unlink(missing_ok=True)
+
+
+def safe_json(path:Path)->dict[str,Any]:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size>1024*1024:return {}
+    try:value=json.loads(path.read_text(encoding='utf-8'))
+    except Exception:return {}
+    return value if isinstance(value,dict) else {}
+
+
+def boot_identity()->dict[str,Any]:
+    value=BOOT_ID_PATH.read_text(encoding='utf-8').strip() if BOOT_ID_PATH.is_file() else ''
+    return {'boot_id':value,'uptime_seconds':round(float(Path('/proc/uptime').read_text().split()[0]),3) if Path('/proc/uptime').is_file() else None}
+
+
+def config_sha256(path:Path)->str:
+    if path.is_symlink() or not path.is_file():return ''
+    h=hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
+    return h.hexdigest()
+
+
+def installed_source(data:Path)->dict[str,Any]:
+    value=safe_json(data/'installed-source.json')
+    return {
+        'present':bool(value),
+        'commit':str(value.get('commit') or ''),
+        'version':str(value.get('version') or VERSION),
+        'ref':str(value.get('ref') or ''),
+        'installed_at':value.get('installed_at'),
+    }
+
+
+def source_evidence(data:Path,expected_commit:str)->dict[str,Any]:
+    current=installed_source(data);expected=(expected_commit or '').strip().lower()
+    if expected:
+        ok=bool(SHA_RE.fullmatch(expected) and current['present'] and current['commit'].lower()==expected)
+        detail='exact installed source commit matches' if ok else 'installed source does not match expected immutable commit'
+    else:
+        ok=True;detail='installed source recorded' if current['present'] else 'no immutable installed-source record; version-only evidence'
+    return {'ok':ok,'expected_commit':expected,'detail':detail,**current}
+
+
+def _systemctl_check(action:str,unit:str)->bool:
+    try:return _child(['systemctl',action,'--quiet',unit],8).returncode==0
+    except (OSError,subprocess.TimeoutExpired):return False
+
+
+def https_evidence(config:Path)->dict[str,Any]:
+    try:cfg=Config.load(config)
+    except Exception as ex:return {'ok':False,'https':False,'error':'config load failed: '+type(ex).__name__+': '+str(ex)}
+    origin=urlsplit(cfg.public_origin)
+    if origin.scheme!='https':
+        return {'ok':True,'https':False,'public_origin':cfg.public_origin,'detail':'panel is not configured for HTTPS'}
+    target='127.0.0.1' if cfg.bind_host in {'0.0.0.0','::'} else cfg.bind_host
+    path=(cfg.panel_path if cfg.panel_path!='/' else '')+'/'
+    raw=None
+    try:
+        raw=socket.create_connection((target,cfg.bind_port),timeout=5)
+        ctx=ssl.create_default_context()
+        with ctx.wrap_socket(raw,server_hostname=origin.hostname) as sock:
+            raw=None
+            cert=sock.getpeercert()
+            req=f'GET {path} HTTP/1.1\r\nHost: {origin.netloc}\r\nConnection: close\r\nUser-Agent: darkxray-target-vps-gate\r\n\r\n'.encode()
+            sock.sendall(req);head=b''
+            while b'\r\n\r\n' not in head and len(head)<65536:
+                part=sock.recv(2048)
+                if not part:break
+                head+=part
+        lines=head.decode('iso-8859-1','replace').split('\r\n')
+        status=int(lines[0].split()[1]) if lines and len(lines[0].split())>=2 and lines[0].split()[1].isdigit() else 0
+        headers={}
+        for row in lines[1:]:
+            if ':' not in row:continue
+            k,v=row.split(':',1);headers[k.strip().lower()]=v.strip()
+        hsts=headers.get('strict-transport-security','')
+        ok=bool(status==200 and cfg.secure_cookie and cfg.tls_certificate and cfg.tls_private_key and hsts)
+        return {'ok':ok,'https':True,'public_origin':cfg.public_origin,'status':status,
+                'secure_cookie':bool(cfg.secure_cookie),'hsts':hsts,'certificate_verified':True,
+                'certificate_not_after':cert.get('notAfter',''),'certificate_subject_alt_name':cert.get('subjectAltName',[])}
+    except Exception as ex:
+        return {'ok':False,'https':True,'public_origin':cfg.public_origin,'certificate_verified':False,
+                'error':type(ex).__name__+': '+str(ex)}
+    finally:
+        if raw is not None:
+            try:raw.close()
+            except Exception:pass
+
+
+def renewal_evidence(config:Path)->dict[str,Any]:
+    try:cfg=Config.load(config)
+    except Exception as ex:return {'ok':False,'configured':False,'renewal_rehearsed':False,'error':type(ex).__name__+': '+str(ex)}
+    origin=urlsplit(cfg.public_origin)
+    if origin.scheme!='https':
+        return {'ok':True,'configured':False,'renewal_rehearsed':False,'detail':'not applicable without HTTPS'}
+    state=safe_json(TLS_SOURCE);lineage=Path(str(state.get('lineage') or ''))
+    try:lineage_parent=lineage.parent.resolve()
+    except Exception:lineage_parent=Path()
+    source_ok=bool(state and str(state.get('domain') or '').lower()==str(origin.hostname or '').lower() and
+                   lineage.is_dir() and lineage_parent==LE_LIVE.resolve())
+    hook_ok=TLS_HOOK.is_file() and not TLS_HOOK.is_symlink() and os.access(TLS_HOOK,os.X_OK)
+    timer_enabled=_systemctl_check('is-enabled','certbot.timer')
+    timer_active=_systemctl_check('is-active','certbot.timer')
+    return {'ok':bool(source_ok and hook_ok and timer_enabled and timer_active),'configured':True,
+            'source_ok':source_ok,'hook_ok':hook_ok,'certbot_timer_enabled':timer_enabled,
+            'certbot_timer_active':timer_active,'domain':state.get('domain',''),'lineage':str(lineage) if state else '',
+            'renewal_rehearsed':False,'detail':'renewal plumbing verified; a real/dry-run renewal is a separate target test'}
+
+
+def production_phase(config:Path,data:Path,timeout:float)->dict[str,Any]:
+    report=data/'qa/target-production-gate.json'
+    try:cp=_child([sys.executable,ROOT/'tools/production-gate.py','--config',config,'--data',data,'--report',report,'--json-only'],timeout)
+    except subprocess.TimeoutExpired:return {'production_gate_passed':False,'exit_code':124,'error':'production gate timed out'}
+    try:result=_json_text(cp.stdout)
+    except Exception as ex:result={'production_gate_passed':False,'error':'invalid production gate JSON: '+type(ex).__name__}
+    result['exit_code']=cp.returncode
+    if cp.stderr.strip():result['stderr']=cp.stderr.strip()[-3000:]
+    if cp.returncode!=0:result['production_gate_passed']=False
+    return result
+
+
+def node_phase(config:Path,data:Path,min_nodes:int,timeout:float,watch_seconds:float,expected_outages:list[str])->dict[str,Any]:
+    if min_nodes<=0:return {'passed':True,'skipped':True,'minimum_nodes':0,'detail':'node WAN gate not requested'}
+    args=[sys.executable,ROOT/'tools/node-wan-gate.py','--config',config,'--data',data,'--min-nodes',str(min_nodes),
+          '--timeout',str(timeout),'--watch-seconds',str(watch_seconds),'--report',data/'qa/target-node-wan-gate.json','--json-only']
+    for node_id in expected_outages:args.extend(['--expect-outage',node_id])
+    total=max(30.0,watch_seconds+timeout*max(2,min_nodes)+20.0)
+    try:cp=_child(args,total)
+    except subprocess.TimeoutExpired:return {'passed':False,'skipped':False,'exit_code':124,'error':'node WAN gate timed out'}
+    try:result=_json_text(cp.stdout)
+    except Exception as ex:result={'passed':False,'error':'invalid node WAN gate JSON: '+type(ex).__name__}
+    result['exit_code']=cp.returncode
+    if cp.stderr.strip():result['stderr']=cp.stderr.strip()[-3000:]
+    if cp.returncode!=0:result['passed']=False
+    return result
+
+
+def base_evidence(config:Path,data:Path,*,expected_commit:str,require_domain_tls:bool,
+                  production_timeout:float,min_nodes:int,node_timeout:float,node_watch_seconds:float,
+                  expected_outages:list[str])->dict[str,Any]:
+    source=source_evidence(data,expected_commit)
+    production=production_phase(config,data,production_timeout)
+    https=https_evidence(config);renewal=renewal_evidence(config)
+    tls_ok=bool(https.get('ok') and renewal.get('ok') and (https.get('https') or not require_domain_tls))
+    nodes=node_phase(config,data,min_nodes,node_timeout,node_watch_seconds,expected_outages)
+    passed=bool(production.get('production_gate_passed') is True and source.get('ok') is True and tls_ok and nodes.get('passed') is True)
+    return {'passed':passed,'production':production,'source':source,
+            'tls':{'passed':tls_ok,'domain_tls_required':require_domain_tls,'https':https,'renewal':renewal},
+            'nodes':nodes}
+
+
+def reboot_evidence(pre:dict[str,Any],current_boot:dict[str,Any],current_source:dict[str,Any],current_config_sha:str)->dict[str,Any]:
+    old_boot=str((pre.get('boot') or {}).get('boot_id') or '');new_boot=str(current_boot.get('boot_id') or '')
+    old_source=pre.get('source') or {}
+    old_commit=str(old_source.get('commit') or '');new_commit=str(current_source.get('commit') or '')
+    old_version=str(old_source.get('version') or '');new_version=str(current_source.get('version') or '')
+    if old_commit or new_commit:
+        same_source=bool(old_commit and new_commit and old_commit.lower()==new_commit.lower())
+        source_basis='commit'
+    else:
+        same_source=bool(old_version and new_version and old_version==new_version);source_basis='version'
+    same_config=bool(pre.get('config_sha256') and pre.get('config_sha256')==current_config_sha)
+    changed=bool(old_boot and new_boot and old_boot!=new_boot)
+    return {'ok':bool(changed and same_source and same_config),'boot_changed':changed,'previous_boot_id':old_boot,'current_boot_id':new_boot,
+            'same_source':same_source,'source_basis':source_basis,'same_config':same_config}
+
+
+def main()->None:
+    ap=argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--config',type=Path,required=True)
+    ap.add_argument('--data',type=Path,required=True)
+    ap.add_argument('--phase',choices=['single','pre-reboot','post-reboot'],default='single')
+    ap.add_argument('--report',type=Path)
+    ap.add_argument('--state-file',type=Path)
+    ap.add_argument('--expect-source-commit',default='')
+    ap.add_argument('--require-domain-tls',action='store_true')
+    ap.add_argument('--production-timeout',type=float,default=360.0)
+    ap.add_argument('--min-nodes',type=int,default=0)
+    ap.add_argument('--node-timeout',type=float,default=8.0)
+    ap.add_argument('--node-watch-seconds',type=float,default=0.0)
+    ap.add_argument('--expect-outage',action='append',default=[],metavar='NODE_ID')
+    ap.add_argument('--json-only',action='store_true')
+    a=ap.parse_args()
+    if os.geteuid()!=0:raise SystemExit('Target VPS gate requires root so service/TLS evidence is complete')
+    if a.production_timeout<=0 or a.node_timeout<=0 or a.node_watch_seconds<0:raise SystemExit('Timeouts must be positive')
+    if a.min_nodes<0:raise SystemExit('--min-nodes must be >= 0')
+    expected=a.expect_source_commit.strip().lower()
+    if expected and not SHA_RE.fullmatch(expected):raise SystemExit('--expect-source-commit must be an immutable 40-character SHA')
+    if a.expect_outage and (a.min_nodes<1 or a.node_watch_seconds<=0):
+        raise SystemExit('--expect-outage requires --min-nodes >= 1 and --node-watch-seconds > 0')
+
+    report_path=a.report or (a.data/'qa/target-vps-gate.json')
+    state_path=a.state_file or (a.data/'qa/target-vps-pre-reboot.json')
+    started=time.time();boot=boot_identity();source=installed_source(a.data);cfg_sha=config_sha256(a.config)
+    base=base_evidence(a.config,a.data,expected_commit=expected,require_domain_tls=a.require_domain_tls,
+                       production_timeout=a.production_timeout,min_nodes=a.min_nodes,node_timeout=a.node_timeout,
+                       node_watch_seconds=a.node_watch_seconds,expected_outages=a.expect_outage)
+    reboot={'ok':False,'required':a.phase=='post-reboot','detail':'reboot proof not requested in single phase'}
+    passed=base['passed']
+
+    if a.phase=='pre-reboot':
+        reboot={'ok':False,'required':True,'detail':'baseline recorded; reboot has not been proven yet'}
+        if base['passed']:
+            atomic_report(state_path,{'version':VERSION,'created_at':time.time(),'boot':boot,'source':source,
+                                      'config_sha256':cfg_sha,'expected_source_commit':expected},'.target-vps-state-')
+    elif a.phase=='post-reboot':
+        pre=safe_json(state_path)
+        if not pre:
+            reboot={'ok':False,'required':True,'detail':'pre-reboot state is missing or invalid'}
+        else:
+            reboot=reboot_evidence(pre,boot,source,cfg_sha)|{'required':True}
+        passed=bool(base['passed'] and reboot.get('ok') is True)
+
+    phase_passed=bool(passed)
+    full_gate_passed=bool(a.phase=='post-reboot' and phase_passed and reboot.get('ok') is True)
+    result={'version':VERSION,'phase':a.phase,'target_vps_phase_passed':phase_passed,'target_vps_gate_passed':full_gate_passed,'started_at':started,'finished_at':time.time(),
+            'boot':boot,'reboot':reboot,'config_sha256':cfg_sha,'base':base,
+            'changes_made':'private validation reports only; optional node gate may update normal node health metadata',
+            'limitations':{'certificate_issuance_performed':False,'certificate_renewal_rehearsed':False,
+                           'reboot_injected_by_gate':False,'node_outage_injected_by_gate':False}}
+    if a.phase=='pre-reboot':result['state_file']=str(state_path)
+    try:
+        atomic_report(report_path,result);result['report_path']=str(report_path)
+    except Exception as ex:
+        result['target_vps_phase_passed']=False;result['target_vps_gate_passed']=False;result['report_error']=type(ex).__name__+': '+str(ex)
+    if not a.json_only:
+        print('DARK XRAY TARGET VPS GATE',VERSION)
+        print('PASS' if result['target_vps_phase_passed'] else 'FAIL','·',a.phase)
+        print(' Production :','PASS' if base['production'].get('production_gate_passed') is True else 'FAIL')
+        print(' Source     :','PASS' if base['source'].get('ok') is True else 'FAIL')
+        print(' TLS        :','PASS' if base['tls']['passed'] else 'FAIL')
+        print(' Nodes      :','SKIP' if base['nodes'].get('skipped') else ('PASS' if base['nodes'].get('passed') else 'FAIL'))
+        if a.phase in {'pre-reboot','post-reboot'}:print(' Reboot     :','PASS' if reboot.get('ok') else ('BASELINE' if a.phase=='pre-reboot' else 'FAIL'))
+        print(' Report     :',result.get('report_path',report_path))
+        if a.phase=='pre-reboot' and base['passed']:
+            print(' Next       : reboot the VPS, then run the same command with --phase post-reboot')
+        print('\nJSON RESULT')
+    print(json.dumps(result,ensure_ascii=False,indent=2))
+    raise SystemExit(0 if result['target_vps_phase_passed'] else 1)
+
+
+if __name__=='__main__':main()
