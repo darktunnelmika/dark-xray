@@ -57,3 +57,11 @@ def test_darkxray_exposes_target_vps_gate():
     source=(ROOT/'darkxray').read_text(encoding='utf-8')
     assert 'target-vps-gate)' in source
     assert 'tools/target-vps-gate.py' in source
+
+
+def test_fresh_installer_persists_source_identity_and_uses_neutral_branding():
+    source=(ROOT/'install-online.sh').read_text(encoding='utf-8')
+    assert 'record_installed_source' in source
+    assert '/var/lib/dark-xray/installed-source.json' in source
+    assert 'SOURCE_VERSION=' in source
+    assert 'No Sanayi runtime' not in source
