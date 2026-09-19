@@ -7,14 +7,14 @@ const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 state.sv4=state.sv4||{view:'issues'};
 
 const reasonMap={
- clean:{tone:'ok',title:['IN SYNC','همسان'],desc:['DARK desired state and managed runtime record are reconciled.','وضعیت موردنظر DARK و رکورد Runtime همگام هستند.']},
+ clean:{tone:'ok',title:['IN SYNC','همسان'],desc:['DARK desired state and managed runtime record are reconciled.','وضعیت موردنظر DARK و رکورد محیط اجرا همگام هستند.']},
  queued:{tone:'info',title:['QUEUED','در صف'],desc:['A durable operation is queued and will be reconciled automatically.','یک عملیات ماندگار در صف است و خودکار تطبیق داده می‌شود.']},
- retry_wait:{tone:'warn',title:['RETRY SCHEDULED','Retry زمان‌بندی‌شده'],desc:['The last apply failed. DARK will retry after the backoff window.','اعمال قبلی خطا داده و DARK بعد از Backoff دوباره تلاش می‌کند.']},
- operation_error:{tone:'warn',title:['RETRY DUE','آماده Retry'],desc:['The operation failed and its automatic retry window is due.','عملیات خطا داده و زمان Retry خودکار آن رسیده است.']},
+ retry_wait:{tone:'warn',title:['RETRY SCHEDULED','تلاش مجدد زمان‌بندی‌شده'],desc:['The last apply failed. DARK will retry after the backoff window.','اعمال قبلی خطا داده و DARK پس از وقفهٔ افزایشی دوباره تلاش می‌کند.']},
+ operation_error:{tone:'warn',title:['RETRY DUE','آمادهٔ تلاش مجدد'],desc:['The operation failed and its automatic retry window is due.','عملیات خطا داده و زمان تلاش مجدد خودکار آن رسیده است.']},
  uncertain_reset:{tone:'error',title:['UNCERTAIN RESET','ریست نامشخص'],desc:['A destructive reset may have partially completed. DARK will never replay it automatically.','ممکن است ریست مخرب بخشی از کار را انجام داده باشد؛ DARK هرگز آن را خودکار تکرار نمی‌کند.']},
  uncertain_operation:{tone:'error',title:['UNCERTAIN','نتیجه نامشخص'],desc:['The outcome cannot be proven safely. Manual inspection is required.','نتیجه عملیات با اطمینان قابل اثبات نیست و بررسی دستی لازم است.']},
- identity_conflict:{tone:'error',title:['IDENTITY CONFLICT','تعارض هویت'],desc:['The runtime identity no longer matches DARK metadata. Automatic overwrite is refused.','هویت Runtime با متادیتای DARK همسان نیست و overwrite خودکار رد می‌شود.']},
- runtime_missing:{tone:'error',title:['MISSING IN RUNTIME','در Runtime نیست'],desc:['The managed client disappeared from Xray. Automatic recreation is intentionally refused.','کاربر مدیریت‌شده از Xray ناپدید شده و بازسازی خودکار عمداً انجام نمی‌شود.']},
+ identity_conflict:{tone:'error',title:['IDENTITY CONFLICT','تعارض هویت'],desc:['The runtime identity no longer matches DARK metadata. Automatic overwrite is refused.','هویت محیط اجرا با متادیتای DARK همسان نیست و بازنویسی خودکار رد می‌شود.']},
+ runtime_missing:{tone:'error',title:['MISSING IN RUNTIME','در محیط اجرا نیست'],desc:['The managed client disappeared from Xray. Automatic recreation is intentionally refused.','کاربر مدیریت‌شده از Xray در محیط اجرا ناپدید شده و بازسازی خودکار عمداً انجام نمی‌شود.']},
  external_disabled:{tone:'warn',title:['EXTERNAL DISABLE','قطع خارجی'],desc:['Xray was disabled outside DARK. DARK preserves that drift until you explicitly restore control.','Xray خارج از DARK غیرفعال شده و تا تأیید صریح شما همان Drift حفظ می‌شود.']},
  reset_inflight:{tone:'warn',title:['RESET IN FLIGHT','ریست در حال اجرا'],desc:['A destructive reset is currently being finalized.','ریست مخرب در حال نهایی‌شدن است.']}
 };
@@ -25,7 +25,7 @@ function rt(code){
   running_dirty:['warn','RUNNING / DIRTY','در حال اجرا / تغییر اعمال‌نشده','Saved configuration differs from the running Xray generation.','Config ذخیره‌شده با نسل در حال اجرای Xray فرق دارد.'],
   stopped_staged:['warn','STOPPED / STAGED','متوقف / آماده اعمال','Configuration exists but no Xray generation is active.','Config آماده است ولی نسل فعالی از Xray اجرا نیست.'],
   stopped_unexpected:['error','STOPPED / RECOVERY','توقف غیرمنتظره','DARK expects Xray to be running but the process is down.','DARK انتظار دارد Xray روشن باشد ولی Process متوقف است.'],
-  runtime_error:['error','RUNTIME ERROR','خطای Runtime','The last Xray apply/start recorded an error.','آخرین Apply/Start هسته با خطا ثبت شده است.'],
+  runtime_error:['error','RUNTIME ERROR','خطای محیط اجرا','The last Xray apply/start recorded an error.','آخرین اعمال/اجرای هسته با خطا ثبت شده است.'],
   stopped_clean:['info','STOPPED','متوقف','Xray is intentionally stopped with no pending generation change.','Xray عمداً متوقف است و تغییر نسل در انتظار ندارد.']
  };
  return m[code]||['warn',String(code||'UNKNOWN').toUpperCase(),String(code||'نامشخص'),'',''];
@@ -35,9 +35,9 @@ function stateChip(code){const m=rm(code);return `<span class="sy4-chip ${m.tone
 function opLabel(op){return ({none:L('None','هیچ'),upsert:L('Upsert','اعمال/ویرایش'),reset:L('Reset traffic','ریست ترافیک'),delete:L('Delete','حذف')})[op]||String(op||'—');}
 function itemAction(x){
  const id=e(x.email),act=x.next_action;
- if(act==='retry_now')return button(L('Retry now','Retry همین حالا'),'sy4retry','refresh',`data-id="${id}"`,true);
+ if(act==='retry_now')return button(L('Retry now','تلاش مجدد همین حالا'),'sy4retry','refresh',`data-id="${id}"`,true);
  if(act==='resolve_reset')return button(L('Resolve reset','حل وضعیت ریست'),'sy4resolve','check',`data-id="${id}"`,true);
- if(act==='restore_missing')return button(L('Restore to runtime','بازسازی در Runtime'),'sy4restore','refresh',`data-id="${id}"`,true);
+ if(act==='restore_missing')return button(L('Restore to runtime','بازسازی در محیط اجرا'),'sy4restore','refresh',`data-id="${id}"`,true);
  if(act==='restore_control')return button(L('Restore DARK control','بازگرداندن کنترل DARK'),'sy4control','power',`data-id="${id}"`,true);
  return button(L('Inspect','بررسی'),'sy4inspect','eye',`data-id="${id}"`);
 }
@@ -49,7 +49,7 @@ function itemCard(x){
   <div class="sy4-item-grid">
    <div><span>${L('STATE','وضعیت')}</span><b>${e(x.state||'—')}</b></div>
    <div><span>${L('ATTEMPTS','تلاش‌ها')}</span><b>${fa(x.attempts||0)}</b></div>
-   <div><span>${L('RETRY IN','Retry بعدی')}</span><b>${e(retry)}</b></div>
+   <div><span>${L('RETRY IN','تلاش مجدد بعدی')}</span><b>${e(retry)}</b></div>
    <div><span>${L('UPDATED','آخرین تغییر')}</span><b>${date(x.updated_at)}</b></div>
   </div>
   ${x.error?`<div class="sy4-error">${e(x.error)}</div>`:''}
@@ -65,7 +65,7 @@ function filtered(items){
  return items.filter(x=>x.reason_code!=='clean');
 }
 function filterBar(s){
- const defs=[['issues',L('Issues','مشکلات')],['action',L('Action required','نیازمند اقدام')],['automatic',L('Automatic retry','Retry خودکار')],['drift',L('Drift','اختلاف خارجی')],['all',L('All clients','همه کاربران')]];
+ const defs=[['issues',L('Issues','مشکلات')],['action',L('Action required','نیازمند اقدام')],['automatic',L('Automatic retry','تلاش مجدد خودکار')],['drift',L('Drift','اختلاف خارجی')],['all',L('All clients','همه کاربران')]];
  return `<div class="sy4-filters">${defs.map(([v,l])=>`<button type="button" data-act="sy4filter" data-view="${v}" class="${state.sv4.view===v?'active':''}">${e(l)}</button>`).join('')}<span>${fa(s.items_total||0)} ${L('managed','مدیریت‌شده')}</span></div>`;
 }
 function managerCard(s){
@@ -87,7 +87,7 @@ function runtimeCard(s){
  let actions='';
  if(isOwner()&&action==='restart_apply')actions=button(L('Restart / Apply','ری‌استارت / اعمال'),'sy4core','refresh','data-core="restart"',true);
  if(isOwner()&&action==='start_apply')actions=button(L('Start / Apply','شروع / اعمال'),'sy4core','power','data-core="start"',true);
- return `<article class="panel sy4-control-card ${m[0]}"><small>02 / LOCAL XRAY</small><h3>${L('Runtime generation','نسل Runtime')}</h3><b>${e(L(m[1],m[2]))}</b><p>${e(L(m[3],m[4]))}</p>
+ return `<article class="panel sy4-control-card ${m[0]}"><small>02 / LOCAL XRAY</small><h3>${L('Runtime generation','نسل محیط اجرا')}</h3><b>${e(L(m[1],m[2]))}</b><p>${e(L(m[3],m[4]))}</p>
   <div class="sy4-kv"><div><span>${L('Process','Process')}</span><strong>${r.running?L('Running','در حال اجرا'):L('Stopped','متوقف')}</strong></div><div><span>Dirty</span><strong>${r.dirty?L('Yes','بله'):L('No','خیر')}</strong></div><div><span>${L('Desired','وضعیت مطلوب')}</span><strong>${r.desired_running?L('Running','روشن'):L('Stopped','خاموش')}</strong></div></div>
   ${r.last_error?`<div class="sy4-error">${e(r.last_error)}</div>`:''}${actions?`<footer>${actions}</footer>`:''}</article>`;
 }
@@ -107,22 +107,22 @@ function nodeCard(s){
 syncPage=function(){
  const s=state.sync||{},items=filtered(s.items||[]),q=s.summary||{};
  const issueCount=(q.action_required||0)+(q.warnings||0);
- return heading(L('Sync & Runtime','همگام‌سازی و Runtime'),L('One view for Manager reconciliation, Xray generation, client drift and node deployment state.','یک نمای واحد برای تطبیق Manager، نسل Xray، Drift کاربران و وضعیت Deploy نودها.'),
+ return heading(L('Sync & Runtime','همگام‌سازی و محیط اجرا'),L('One view for Manager reconciliation, Xray generation, client drift and node deployment state.','یک نمای واحد برای تطبیق مدیر، نسل Xray، اختلاف کاربران و وضعیت استقرار نودها.'),
    isOwner()?button(L('Reconcile now','تطبیق همین حالا'),'sy4force','refresh','',true):'')+
  `<div class="sy4">
    <section class="sy4-control-grid">${managerCard(s)}${runtimeCard(s)}${queueCard(s)}${nodeCard(s)}</section>
    <section class="sy4-summary">
     ${metric(L('Action required','نیازمند اقدام'),fa(q.action_required||0))}
     ${metric(L('Warnings','هشدار'),fa(q.warnings||0))}
-    ${metric(L('Automatic retry','Retry خودکار'),fa(q.automatic_retry||0))}
-    ${metric(L('External drift','Drift خارجی'),fa(q.external_disabled||0))}
+    ${metric(L('Automatic retry','تلاش مجدد خودکار'),fa(q.automatic_retry||0))}
+    ${metric(L('External drift','اختلاف خارجی'),fa(q.external_disabled||0))}
     ${metric(L('Identity conflict','تعارض هویت'),fa(q.identity_conflict||0))}
-    ${metric(L('Runtime missing','گم‌شده در Runtime'),fa(q.runtime_missing||0))}
+    ${metric(L('Runtime missing','گم‌شده در محیط اجرا'),fa(q.runtime_missing||0))}
    </section>
    ${filterBar(s)}
    ${s.truncated?`<div class="notice warning">${L('Only the highest-priority 500 reconciliation records are shown; summary counts cover all visible managed clients.','فقط ۵۰۰ رکورد با اولویت بالاتر نمایش داده می‌شود؛ Summary همه کاربران قابل‌مشاهده را پوشش می‌دهد.')}</div>`:''}
    <section class="sy4-items">${items.length?items.map(itemCard).join(''):empty(issueCount?L('No records match this filter.','رکوردی با این فیلتر نیست.'):L('All managed clients are reconciled.','همه کاربران مدیریت‌شده همسان هستند.'))}</section>
-   <div class="notice">${L('DARK never auto-replays an uncertain destructive reset, never overwrites an identity conflict, and never recreates a missing runtime client without an explicit owner recovery action.','DARK ریست مخرب نامشخص را خودکار تکرار نمی‌کند، تعارض هویت را overwrite نمی‌کند و کاربر گم‌شده Runtime را بدون Recovery صریح مالک بازسازی نمی‌کند.')}</div>
+   <div class="notice">${L('DARK never auto-replays an uncertain destructive reset, never overwrites an identity conflict, and never recreates a missing runtime client without an explicit owner recovery action.','DARK ریست مخرب نامشخص را خودکار تکرار نمی‌کند، تعارض هویت را بازنویسی نمی‌کند و کاربر گم‌شدهٔ محیط اجرا را بدون بازیابی صریح مالک بازسازی نمی‌کند.')}</div>
  </div>`;
 };
 
@@ -142,7 +142,7 @@ function inspectSync(id){
  const x=(state.sync?.items||[]).find(r=>r.email===id);if(!x)return;
  const m=rm(x.reason_code);
  dialog(L('Sync inspection','بررسی Sync')+` · ${id}`,`<div class="sy4-inspect"><div class="notice ${m.tone==='error'?'error':m.tone==='warn'?'warning':''}"><b>${e(L(m.title[0],m.title[1]))}</b><br>${e(L(m.desc[0],m.desc[1]))}</div>
-  <div class="sy4-inspect-grid"><div><span>${L('Operation','عملیات')}</span><b>${e(opLabel(x.op))}</b></div><div><span>${L('State','وضعیت')}</span><b>${e(x.state)}</b></div><div><span>${L('Attempts','تلاش‌ها')}</span><b>${fa(x.attempts||0)}</b></div><div><span>${L('Automatic retry','Retry خودکار')}</span><b>${x.automatic_retry?L('Yes','بله'):L('No','خیر')}</b></div><div><span>${L('External drift','Drift خارجی')}</span><b>${x.drift?L('Yes','بله'):L('No','خیر')}</b></div><div><span>${L('Updated','آخرین تغییر')}</span><b>${date(x.updated_at)}</b></div></div>
+  <div class="sy4-inspect-grid"><div><span>${L('Operation','عملیات')}</span><b>${e(opLabel(x.op))}</b></div><div><span>${L('State','وضعیت')}</span><b>${e(x.state)}</b></div><div><span>${L('Attempts','تلاش‌ها')}</span><b>${fa(x.attempts||0)}</b></div><div><span>${L('Automatic retry','تلاش مجدد خودکار')}</span><b>${x.automatic_retry?L('Yes','بله'):L('No','خیر')}</b></div><div><span>${L('External drift','اختلاف خارجی')}</span><b>${x.drift?L('Yes','بله'):L('No','خیر')}</b></div><div><span>${L('Updated','آخرین تغییر')}</span><b>${date(x.updated_at)}</b></div></div>
   ${x.error?`<pre class="sy4-inspect-error">${e(x.error)}</pre>`:''}</div>`);
 }
 
@@ -150,7 +150,7 @@ runAction=async function(act,el){
  const id=el?.dataset?.id;
  if(act==='sy4filter'){state.sv4.view=el.dataset.view;await renderPage();return;}
  if(act==='sy4force'){state.sync=await api('/api/sync','POST',{});toast(L('Reconciliation pass completed.','دور تطبیق انجام شد.'));await renderPage();return;}
- if(act==='sy4retry'){await api('/api/clients/'+enc(id)+'/sync-retry','POST',{});toast(L('Retry requested.','Retry درخواست شد.'));await refresh();return;}
+ if(act==='sy4retry'){await api('/api/clients/'+enc(id)+'/sync-retry','POST',{});toast(L('Retry requested.','درخواست تلاش مجدد ثبت شد.'));await refresh();return;}
  if(act==='sy4resolve'){identityConfirm(id,'resolve');return;}
  if(act==='sy4restore'){identityConfirm(id,'restore');return;}
  if(act==='sy4control'){await api('/api/clients/'+enc(id)+'/action','POST',{action:'enable'});toast(L('DARK control restored.','کنترل DARK بازگردانده شد.'));await refresh();return;}
