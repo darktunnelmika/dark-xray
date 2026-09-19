@@ -151,6 +151,28 @@ def test_representative_resource_credits_reserve_configured_plans(env):
     assert 'owner_quota' not in store.client_reasons('s_limited')
 
 
+def test_external_core_quota_drift_cannot_bypass_representative_credit(env):
+    store,engine,manager,_,c=env
+    inbound_id=create_inbound(c)
+    gib=1024**3
+    assert c.put('/api/resellers/seller',json=rep_body(
+        inbound_id,volume_credit_bytes=2*gib,unlimited_credit=1,max_clients=10)).status_code==200
+    assert c.post('/api/clients',json={
+        'owner':'seller','client':{'email':'s_guard','totalGB':gib,'limitIp':1,'limitHwid':1},
+        'inboundIds':[inbound_id]}).status_code==202
+    external=engine.client_detail('s_guard')['client']
+    external['totalGB']=3*gib
+    engine.update('s_guard',external)
+    manager.tick()
+    assert engine.client_detail('s_guard')['client']['totalGB']==gib
+    rep=next(x for x in c.get('/api/resellers').json() if x['id']=='seller')
+    assert rep['allocated_volume_bytes']==gib
+    assert rep['volume_credit_remaining_bytes']==gib
+    with store.lock:
+        row=store.db.execute("SELECT action FROM live_audit WHERE target='s_guard' ORDER BY id DESC LIMIT 1").fetchone()
+    assert row and row['action']=='resource_credit.external_quota_rejected'
+
+
 def test_representative_credit_adjustment_is_idempotent(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
