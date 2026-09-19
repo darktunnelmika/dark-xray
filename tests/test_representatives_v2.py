@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,6 +39,50 @@ def env(tmp_path):
         c.headers['X-Dark-CSRF']=login.json()['csrf']
         yield store,engine,manager,auth,c
     manager.close();engine.close();store.close()
+
+
+def test_v2_database_migrates_to_resource_credit_pools_without_losing_history(tmp_path):
+    path=tmp_path/'v2.sqlite3'
+    db=sqlite3.connect(path)
+    db.executescript("""
+    CREATE TABLE owners(
+      id TEXT PRIMARY KEY, quota_bytes INTEGER NOT NULL DEFAULT 0,
+      max_clients INTEGER NOT NULL DEFAULT 0, manual INTEGER NOT NULL DEFAULT 0,
+      account_disabled INTEGER NOT NULL DEFAULT 0, period INTEGER NOT NULL DEFAULT 0,
+      credit INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE clients(
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, limit_ip INTEGER NOT NULL DEFAULT 0,
+      quota_bytes INTEGER NOT NULL DEFAULT 0, used_bytes INTEGER NOT NULL DEFAULT 0,
+      manual INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL DEFAULT 0,
+      global_ip_block INTEGER NOT NULL DEFAULT 0, global_device_block INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE api_admins(
+      id TEXT PRIMARY KEY, role TEXT NOT NULL, password_hash TEXT NOT NULL,
+      permissions TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE money_ledger(
+      event_id TEXT PRIMARY KEY, owner TEXT NOT NULL, amount INTEGER NOT NULL,
+      kind TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', at REAL NOT NULL);
+    INSERT INTO owners(id,quota_bytes,max_clients) VALUES('seller',1000,20),('dark',900,0);
+    INSERT INTO api_admins(id,role,password_hash,permissions) VALUES
+      ('seller','reseller','x','{}'),('dark','owner','x','{}');
+    INSERT INTO clients(id,owner,quota_bytes) VALUES
+      ('limited','seller',600),('unlimited','seller',0);
+    INSERT INTO money_ledger VALUES('historical-money','seller',123,'credit','',1.0);
+    PRAGMA user_version=2;
+    """)
+    db.close()
+    store=Store(path)
+    try:
+        with store.lock:
+            seller=store.db.execute("SELECT quota_bytes,volume_credit_bytes,unlimited_credit FROM owners WHERE id='seller'").fetchone()
+            primary=store.db.execute("SELECT quota_bytes,volume_credit_bytes,unlimited_credit FROM owners WHERE id='dark'").fetchone()
+            version=store.db.execute("PRAGMA user_version").fetchone()[0]
+            historical=store.db.execute("SELECT amount FROM money_ledger WHERE event_id='historical-money'").fetchone()[0]
+        assert tuple(seller)==(0,1000,1)
+        assert tuple(primary)==(0,0,0)
+        assert version==3
+        assert historical==123
+    finally:
+        store.close()
 
 
 def create_inbound(c):
