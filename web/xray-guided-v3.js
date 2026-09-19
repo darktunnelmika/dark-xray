@@ -40,7 +40,7 @@ function firstServer(o){
  const x=s.servers?.[0]||{},u=x.users?.[0]||{};
  return {address:x.address||s.address||'',port:x.port||s.port||443,password:x.password||'',method:x.method||'',username:u.user||'',proxyPassword:u.pass||''};
 }
-function wgState(o){const s=o?.settings||{},p=s.peers?.[0]||{};return {secretKey:s.secretKey||'',address:(s.address||[]).join(','),publicKey:p.publicKey||'',endpoint:p.endpoint||'',preSharedKey:p.preSharedKey||'',allowedIPs:(p.allowedIPs||['0.0.0.0/0','::/0']).join(','),keepAlive:p.keepAlive||0,mtu:s.mtu||1420,reserved:(s.reserved||[]).join(','),domainStrategy:s.domainStrategy||'',noKernelTun:!!s.noKernelTun};}
+function wgState(o){const s=o?.settings||{},p=Array.isArray(s.peers)?(s.peers[0]||{}):{};const address=Array.isArray(s.address)?s.address:[],allowed=Array.isArray(p.allowedIPs)?p.allowedIPs:['0.0.0.0/0','::/0'],reserved=Array.isArray(s.reserved)?s.reserved:[];return {secretKey:s.secretKey||'',address:address.join(','),publicKey:p.publicKey||'',endpoint:p.endpoint||'',preSharedKey:p.preSharedKey||'',allowedIPs:allowed.join(','),keepAlive:p.keepAlive||0,mtu:s.mtu||1420,reserved:reserved.join(','),domainStrategy:s.domainStrategy||'',noKernelTun:!!s.noKernelTun};}
 function streamState(o){const st=o?.streamSettings||{},net=st.network||'tcp',sec=st.security||'none',so=st.sockopt||{};return {
  network:net,security:sec,
  host:st.wsSettings?.host||st.wsSettings?.headers?.Host||st.httpupgradeSettings?.host||st.xhttpSettings?.host||'',
@@ -415,5 +415,5 @@ runAction=async function(act,el){
  return baseRunAction(act,el);
 };
 
-globalThis.DarkXrayGuidedV3={buildOutbound,buildSettings,buildStream,parseLink,linkStream,dnsFromForm,routingSettingsFromForm,observatoryFromForm,validDuration,protocols:PROTOCOLS.map(x=>x[0]),openOutbound:guidedOutbound,openRule:guidedRule,openBalancer:guidedBalancer,openObservatory:guidedObservatory,openRouteSettings:guidedRouteSettings,openImport:importOutbound,openRawOutbound:rawOutbound};
+globalThis.DarkXrayGuidedV3={buildOutbound,buildSettings,buildStream,parseLink,linkStream,dnsFromForm,routingSettingsFromForm,observatoryFromForm,validDuration,protocols:PROTOCOLS.map(x=>x[0]),openOutbound:guidedOutbound,openRule:guidedRule,openBalancer:guidedBalancer,openObservatory:guidedObservatory,openRouteSettings:guidedRouteSettings,openImport:importOutbound,openRawOutbound:rawOutbound,wgState};
 })();
