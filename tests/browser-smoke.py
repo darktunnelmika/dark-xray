@@ -312,10 +312,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             page.locator('#te4-preview-form [name="domain"]').fill('api.browser.example')
             page.locator('#te4-preview-form [name="port"]').fill('443')
+            page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-DIRECT')",timeout=10000)
             preview_errors=page.locator('.toast.error').count()
+            preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
             page.locator('#te4-preview-form [data-act="te4preview"]').click()
-            page.wait_for_function("""n=>!!state.te4?.preview||document.querySelectorAll('.toast.error').length>n""",arg=preview_errors,timeout=10000)
-            if not page.evaluate("()=>!!state.te4?.preview"):
+            page.wait_for_function("""x=>(state.te4?.preview_seq||0)>x.seq||document.querySelectorAll('.toast.error').length>x.errors""",arg={'seq':preview_seq,'errors':preview_errors},timeout=10000)
+            if page.evaluate("()=>state.te4?.preview_seq||0")<=preview_seq:
                 raise RuntimeError('Traffic Engine direct preview: '+page.locator('.toast.error').last.inner_text())
             preview_state=page.evaluate("()=>state.te4.preview")
             assert preview_state['result']=='matched' and preview_state['selected_outbound']=='browser-proxy',preview_state
@@ -359,10 +361,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#submit-dialog').click()
             page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
             page.locator('#te4-preview-form [name="domain"]').fill('www.balance.example')
+            page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-BAL')&&state.te4.preview===null",timeout=10000)
             preview_errors=page.locator('.toast.error').count()
+            preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
             page.locator('#te4-preview-form [data-act="te4preview"]').click()
-            page.wait_for_function("""n=>!!state.te4?.preview||document.querySelectorAll('.toast.error').length>n""",arg=preview_errors,timeout=10000)
-            if not page.evaluate("()=>!!state.te4?.preview"):
+            page.wait_for_function("""x=>(state.te4?.preview_seq||0)>x.seq||document.querySelectorAll('.toast.error').length>x.errors""",arg={'seq':preview_seq,'errors':preview_errors},timeout=10000)
+            if page.evaluate("()=>state.te4?.preview_seq||0")<=preview_seq:
                 raise RuntimeError('Traffic Engine balancer preview: '+page.locator('.toast.error').last.inner_text())
             preview_state=page.evaluate("()=>state.te4.preview")
             assert preview_state['target_type']=='balancer' and preview_state['target']=='browser-bal',preview_state
