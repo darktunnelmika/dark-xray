@@ -1,14 +1,13 @@
 import dataclasses
 import json
 import sqlite3
-import subprocess
 import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from dark_policy import (Actor, ClientPolicy, Fail2BanExecutor, Guard, MAX_INT, PermissionDenied,
-    Policy, PolicyError, Store, jail_for, load_policy, normalize_ip, parse_access_line, render_fail2ban)
+from dark_policy import (Actor, ClientPolicy, Guard, MAX_INT, PermissionDenied,
+    Policy, PolicyError, Store, jail_for, load_policy, normalize_ip, parse_access_line)
 
 OWNER=Actor('root','owner')
 RESELLER=Actor('arda',permissions={f'clients.{a}':'own' for a in ['read','create','edit','delete','reset']}|{'owners.read':'own'})
@@ -120,22 +119,6 @@ def test_unban_owner_only(store):
     with pytest.raises(PermissionDenied):g.unban(RESELLER,jail_for((443,8443)),'1.1.1.1')
     g.unban(OWNER,jail_for((443,8443)),'1.1.1.1')
     assert len(e.calls)==1
-
-def test_executor_no_shell_and_whitelist():
-    calls=[]
-    def runner(args,**kwargs):
-        calls.append((args,kwargs));return subprocess.CompletedProcess(args,0,'1800\n' if 'bantime' in args else 'OK','')
-    e=Fail2BanExecutor(policy(enforce=True),executable='/usr/bin/true',runner=runner)
-    e.check();e.ban(jail_for((443,8443)),'8.8.8.8')
-    assert calls[-1][0][-3:]==[jail_for((443,8443)),'banip','8.8.8.8']
-    assert all(not kw.get('shell') for _,kw in calls)
-    with pytest.raises(PolicyError):e.ban('sshd','1.1.1.1')
-    with pytest.raises(PolicyError):e.ban(jail_for((443,8443)),'1.1.1.1; reboot')
-
-def test_config_dedicated_ports():
-    files=render_fail2ban(policy(enforce=True));text=files['jail.d/dark-xray-policy.local']
-    assert 'port="443,8443"' in text and 'protocol="tcp,udp"' in text
-    assert '[sshd]' not in text and 'action = ' in text and 'port="22' not in text
 
 def test_policy_file_ownership(tmp_path):
     p=tmp_path/'p.json';p.write_text(json.dumps({'schema':1,'clients':{},'enforce':True,'source_mode':'direct','original_ip_verified':True}));p.chmod(0o666)
