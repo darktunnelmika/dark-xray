@@ -415,5 +415,5 @@ runAction=async function(act,el){
  return baseRunAction(act,el);
 };
 
-globalThis.DarkXrayGuidedV3={buildOutbound,buildSettings,buildStream,parseLink,linkStream,dnsFromForm,routingSettingsFromForm,observatoryFromForm,validDuration,protocols:PROTOCOLS.map(x=>x[0])};
+globalThis.DarkXrayGuidedV3={buildOutbound,buildSettings,buildStream,parseLink,linkStream,dnsFromForm,routingSettingsFromForm,observatoryFromForm,validDuration,protocols:PROTOCOLS.map(x=>x[0]),openOutbound:guidedOutbound,openRule:guidedRule,openBalancer:guidedBalancer,openObservatory:guidedObservatory,openRouteSettings:guidedRouteSettings,openImport:importOutbound,openRawOutbound:rawOutbound};
 })();
