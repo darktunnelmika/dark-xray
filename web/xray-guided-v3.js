@@ -66,9 +66,9 @@ function protocolHelp(p){
   socks:L('Use an upstream SOCKS5 proxy, with optional username/password.','استفاده از پراکسی SOCKS5 بالادست با یوزر/پسورد اختیاری.'),
   http:L('Use an upstream HTTP CONNECT proxy, with optional credentials.','استفاده از HTTP Proxy بالادست با احراز هویت اختیاری.'),
   wireguard:L('Route traffic through a WireGuard peer. Keys and peer endpoint are required.','عبور ترافیک از Peer وایرگارد؛ کلیدها و Endpoint لازم هستند.'),
-  dns:L('Send DNS queries through Xray DNS outbound rewriting.','ارسال درخواست‌های DNS از طریق DNS Outbound خود Xray.'),
+  dns:L('Send DNS queries through Xray DNS outbound rewriting.','ارسال درخواست‌های DNS از طریق اوتباند DNS خود Xray.'),
   loopback:L('Loop traffic back into an existing inbound tag. Advanced topology use.','برگرداندن ترافیک به یک Inbound موجود؛ مناسب توپولوژی پیشرفته.'),
-  hysteria:L('Native Hysteria v2 outbound when supported by the installed Xray core.','Hysteria v2 بومی؛ فقط وقتی Core نصب‌شده آن را پشتیبانی کند.')
+  hysteria:L('Native Hysteria v2 outbound when supported by the installed Xray core.','Hysteria v2 بومی؛ فقط وقتی هستهٔ نصب‌شده آن را پشتیبانی کند.')
  };
  return map[p]||'';
 }
@@ -77,9 +77,9 @@ function inboundTags(){return (state.inbounds||[]).map(x=>[x.tag||('inbound-'+x.
 
 function guidedBody(o,list){
  const p=o.protocol||'freedom',sv=firstServer(o),wg=wgState(o),st=streamState(o),settings=o.settings||{},mux=o.mux||{};
- const proto=sel(L('Outbound type','نوع Outbound'),'protocol',PROTOCOLS,p,L('Choose the purpose first. Fields below change automatically.','اول نوع خروجی را انتخاب کن؛ فیلدهای پایین خودکار تغییر می‌کنند.'));
+ const proto=sel(L('Outbound type','نوع اوتباند'),'protocol',PROTOCOLS,p,L('Choose the purpose first. Fields below change automatically.','اول نوع خروجی را انتخاب کن؛ فیلدهای پایین خودکار تغییر می‌کنند.'));
  const common=`<section class="xv3-section"><div class="xv3-section-head"><b>1 · ${L('Identity & type','هویت و نوع')}</b><small>${L('Give the outbound a unique tag and choose its behavior.','یک Tag یکتا بده و نوع عملکرد را انتخاب کن.')}</small></div><div class="xv3-grid">${fld('Tag','tag',o.tag||'proxy','text','required pattern="[A-Za-z0-9_.-]{1,128}" dir="ltr"',L('Routing and chaining refer to this tag.','Routing و Chain با این Tag کار می‌کنند.'))}${proto}<div class="xv3-span-2 xv3-protocol-help" data-xv3-help>${protocolHelp(p)}</div></div></section>`;
- const server=`<section class="xv3-section" data-xv3-protocols="vless vmess trojan shadowsocks socks http hysteria"><div class="xv3-section-head"><b>2 · ${L('Remote server','سرور مقصد')}</b><small>${L('Where this outbound connects.','این Outbound به کجا وصل می‌شود.')}</small></div><div class="xv3-grid">
+ const server=`<section class="xv3-section" data-xv3-protocols="vless vmess trojan shadowsocks socks http hysteria"><div class="xv3-section-head"><b>2 · ${L('Remote server','سرور مقصد')}</b><small>${L('Where this outbound connects.','این اوتباند به کجا وصل می‌شود.')}</small></div><div class="xv3-grid">
  ${fld(L('Address / domain','آدرس / دامنه'),'address',sv.address,'text','dir="ltr"',L('Example: edge.example.com or 1.2.3.4','مثال: edge.example.com یا 1.2.3.4'))}
  ${fld(L('Port','پورت'),'port',sv.port,'number','min="1" max="65535"')}
  <div data-xv3-protocols="vless vmess" class="xv3-grid xv3-span-2">
@@ -124,7 +124,7 @@ function guidedBody(o,list){
  <div data-xv3-security="reality" class="xv3-grid xv3-span-2">${fld('Server Name / SNI','sniReality',st.sni,'text','dir="ltr"')}${sel('Fingerprint','realityFingerprint',[['chrome','chrome'],['firefox','firefox'],['safari','safari'],['edge','edge'],['randomized','randomized']],st.fingerprint)}${fld('Public Key','realityPublicKey',st.publicKey,'text','dir="ltr"')}${fld('Short ID','realityShortId',st.shortId,'text','dir="ltr"')}${fld('SpiderX','realitySpiderX',st.spiderX,'text','dir="ltr"')}</div>
  </div></section>`;
  const advanced=`<section class="xv3-section"><details class="xv3-advanced"><summary>4 · ${L('Chain & advanced','زنجیره و پیشرفته')}</summary><div class="xv3-grid">
- ${sel(L('Dial through outbound','عبور از Outbound دیگر'),'dialerProxy',outboundTags(list,o.tag),st.dialerProxy,L('Equivalent to Xray sockopt.dialerProxy. Cycles are rejected by DARK.','معادل dialerProxy در Xray؛ چرخه توسط DARK رد می‌شود.'))}
+ ${sel(L('Dial through outbound','عبور از اوتباند دیگر'),'dialerProxy',outboundTags(list,o.tag),st.dialerProxy,L('Equivalent to Xray sockopt.dialerProxy. Cycles are rejected by DARK.','معادل dialerProxy در Xray؛ چرخه توسط DARK رد می‌شود.'))}
  ${fld('sendThrough','sendThrough',st.sendThrough,'text','dir="ltr"',L('Optional local source IP. Leave blank for normal routing.','IP مبدا محلی اختیاری؛ معمولاً خالی بماند.'))}
  ${fld(L('Network interface','اینترفیس شبکه'),'sockInterface',st.iface,'text','dir="ltr"')}
  ${fld('SO_MARK','sockMark',st.mark,'number','min="0"')}
@@ -213,32 +213,32 @@ async function guidedOutbound(index=null,cloneMode=false){
  let original=index==null?{tag:'proxy',protocol:'freedom',settings:{}}:clone(list[index]);
  if(!PROTOCOLS.some(x=>x[0]===original.protocol)){await rawOutbound(index);return;}
  if(cloneMode)original.tag=(original.tag||'out')+'-copy';
- dialog(index==null?L('New outbound · Guided V3','Outbound جدید · Guided V3'):L('Edit outbound · Guided V3','ویرایش Outbound · Guided V3'),guidedBody(original,list),async(fd,form)=>{
+ dialog(index==null?L('New outbound · Guided V3','اوتباند جدید · هدایت‌شده V3'):L('Edit outbound · Guided V3','ویرایش اوتباند · هدایت‌شده V3'),guidedBody(original,list),async(fd,form)=>{
    const out=buildOutbound(fd,original);
-   if(list.some((x,i)=>i!==index&&x.tag===out.tag))throw Error(L('Outbound tag already exists.','این Tag قبلاً استفاده شده است.'));
+   if(list.some((x,i)=>i!==index&&x.tag===out.tag))throw Error(L('Outbound tag already exists.','این تگ قبلاً استفاده شده است.'));
    if(index==null||cloneMode)list.push(out);else list[index]=out;
    await api('/api/settings/outbounds','PUT',{value:list});
-   toast(L('Outbound saved. Validate before applying Xray.','Outbound ذخیره شد؛ قبل از اعمال Xray Validate کن.'));
+   toast(L('Outbound saved. Validate before applying Xray.','اوتباند ذخیره شد؛ قبل از اعمال، Xray را اعتبارسنجی کن.'));
    closeDialog();await refresh();
  });
  const form=document.querySelector('#dialog-form');if(form){form._darkOutboundOriginal=clone(original);form.addEventListener('input',()=>syncEditor(form));form.addEventListener('change',()=>syncEditor(form));syncEditor(form);}
 }
 async function rawOutbound(index){
  const list=(await api('/api/settings/outbounds')).value||[],o=list[index];if(!o)throw Error('Outbound not found');
- dialog(L('Advanced outbound JSON','JSON پیشرفته Outbound'),`<div class="notice warning">${L('Advanced mode bypasses the guided form. DARK still validates tag/chaining and Xray Validate should be run before apply.','حالت پیشرفته فرم ساده را دور می‌زند؛ DARK همچنان Tag/Chain را بررسی می‌کند و قبل از اعمال باید Xray Validate اجرا شود.')}</div>${textarea('Outbound JSON','raw',JSON.stringify(o,null,2),'','dir="ltr" spellcheck="false"')}`,async fd=>{let v;try{v=JSON.parse(String(fd.get('raw')||''));}catch{throw Error(L('Invalid JSON.','JSON نامعتبر است.'));}if(!v||typeof v!=='object'||Array.isArray(v))throw Error(L('Outbound JSON must be an object.','JSON Outbound باید Object باشد.'));list[index]=v;await api('/api/settings/outbounds','PUT',{value:list});closeDialog();await refresh();});
+ dialog(L('Advanced outbound JSON','JSON پیشرفتهٔ اوتباند'),`<div class="notice warning">${L('Advanced mode bypasses the guided form. DARK still validates tag/chaining and Xray Validate should be run before apply.','حالت پیشرفته فرم ساده را دور می‌زند؛ DARK همچنان تگ/زنجیره را بررسی می‌کند و قبل از اعمال باید Xray اعتبارسنجی شود.')}</div>${textarea('Outbound JSON','raw',JSON.stringify(o,null,2),'','dir="ltr" spellcheck="false"')}`,async fd=>{let v;try{v=JSON.parse(String(fd.get('raw')||''));}catch{throw Error(L('Invalid JSON.','JSON نامعتبر است.'));}if(!v||typeof v!=='object'||Array.isArray(v))throw Error(L('Outbound JSON must be an object.','JSON Outbound باید Object باشد.'));list[index]=v;await api('/api/settings/outbounds','PUT',{value:list});closeDialog();await refresh();});
 }
 function parseLink(raw){
  raw=String(raw||'').trim();if(!raw)throw Error(L('Paste a share link first.','ابتدا لینک را وارد کن.'));
  if(raw.startsWith('vmess://')){let txt=raw.slice(8).replace(/-/g,'+').replace(/_/g,'/');txt+= '='.repeat((4-txt.length%4)%4);let j;try{j=JSON.parse(atob(txt));}catch{throw Error('Invalid VMess link');}return {tag:decodeURIComponent(j.ps||'vmess-import'),protocol:'vmess',settings:{vnext:[{address:j.add||'',port:Number(j.port)||443,users:[{id:j.id||'',security:j.scy||'auto'}]}]},streamSettings:linkStream({type:j.net||'tcp',security:j.tls||'none',host:j.host||'',path:j.path||'',serviceName:j.path||j.serviceName||'',sni:j.sni||'',fp:j.fp||''})};}
  if(raw.startsWith('vless://')||raw.startsWith('trojan://')){const u=new URL(raw),p=raw.startsWith('vless://')?'vless':'trojan',q=u.searchParams,tag=decodeURIComponent((u.hash||'#'+p+'-import').slice(1));const server={address:u.hostname,port:Number(u.port)||443};let settings=p==='vless'?{...server,id:decodeURIComponent(u.username),flow:q.get('flow')||'',encryption:'none'}:{servers:[{...server,password:decodeURIComponent(u.username)}]};return {tag:tag||p+'-import',protocol:p,settings,streamSettings:linkStream({type:q.get('type')||'tcp',security:q.get('security')||'none',host:q.get('host')||'',path:q.get('path')||'',serviceName:q.get('serviceName')||'',sni:q.get('sni')||'',fp:q.get('fp')||'chrome',pbk:q.get('pbk')||'',sid:q.get('sid')||'',spx:q.get('spx')||'/'})};}
- throw Error(L('Guided import currently supports VLESS, VMess and Trojan links.','Import ساده فعلاً لینک‌های VLESS، VMess و Trojan را پشتیبانی می‌کند.'));
+ throw Error(L('Guided import currently supports VLESS, VMess and Trojan links.','ورود ساده فعلاً لینک‌های VLESS، VMess و Trojan را پشتیبانی می‌کند.'));
 }
 function linkStream(x){const st={network:x.type||'tcp',security:x.security||'none'};if(st.network==='tcp')st.tcpSettings={header:{type:'none'}};if(st.network==='ws')st.wsSettings={path:x.path||'/',host:x.host||''};if(st.network==='grpc')st.grpcSettings={serviceName:x.serviceName||'',multiMode:false};if(st.network==='httpupgrade')st.httpupgradeSettings={path:x.path||'/',host:x.host||''};if(st.network==='xhttp')st.xhttpSettings={path:x.path||'/',host:x.host||'',mode:'auto'};if(st.security==='tls')st.tlsSettings={serverName:x.sni||'',fingerprint:x.fp||'chrome'};if(st.security==='reality')st.realitySettings={serverName:x.sni||'',fingerprint:x.fp||'chrome',publicKey:x.pbk||'',shortId:x.sid||'',spiderX:x.spx||'/'};return st;}
 async function importOutbound(){
- dialog(L('Import outbound link','Import لینک Outbound'),`<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>${L('Paste share link','لینک را وارد کن')}</b><small>VLESS · VMess · Trojan</small></div>${textarea(L('Share link','لینک'),'share','',L('The link is parsed locally in your browser before saving.','لینک داخل مرورگر شما Parse می‌شود و بعد ذخیره می‌شود.'),'dir="ltr" spellcheck="false"')}</section></div>`,async fd=>{const o=parseLink(fd.get('share')),list=(await api('/api/settings/outbounds')).value||[];if(list.some(x=>x.tag===o.tag))o.tag=o.tag+'-'+Date.now().toString(36).slice(-4);closeDialog();await guidedOutboundFromObject(o,list);},L('Continue','ادامه'));
+ dialog(L('Import outbound link','ورود لینک اوتباند'),`<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>${L('Paste share link','لینک را وارد کن')}</b><small>VLESS · VMess · Trojan</small></div>${textarea(L('Share link','لینک'),'share','',L('The link is parsed locally in your browser before saving.','لینک داخل مرورگر شما تجزیه می‌شود و بعد ذخیره می‌شود.'),'dir="ltr" spellcheck="false"')}</section></div>`,async fd=>{const o=parseLink(fd.get('share')),list=(await api('/api/settings/outbounds')).value||[];if(list.some(x=>x.tag===o.tag))o.tag=o.tag+'-'+Date.now().toString(36).slice(-4);closeDialog();await guidedOutboundFromObject(o,list);},L('Continue','ادامه'));
 }
 async function guidedOutboundFromObject(o,list){
- dialog(L('Review imported outbound','بررسی Outbound واردشده'),guidedBody(o,list),async(fd,form)=>{const out=buildOutbound(fd,o);if(list.some(x=>x.tag===out.tag))throw Error(L('Outbound tag already exists.','این Tag قبلاً وجود دارد.'));list.push(out);await api('/api/settings/outbounds','PUT',{value:list});closeDialog();await refresh();});
+ dialog(L('Review imported outbound','بررسی اوتباند واردشده'),guidedBody(o,list),async(fd,form)=>{const out=buildOutbound(fd,o);if(list.some(x=>x.tag===out.tag))throw Error(L('Outbound tag already exists.','این تگ قبلاً وجود دارد.'));list.push(out);await api('/api/settings/outbounds','PUT',{value:list});closeDialog();await refresh();});
  const form=document.querySelector('#dialog-form');if(form){form.addEventListener('input',()=>syncEditor(form));form.addEventListener('change',()=>syncEditor(form));syncEditor(form);}
 }
 
@@ -252,8 +252,8 @@ async function guidedRule(index=null){
  const attrs=JSON.stringify(r.attrs||{},null,2);
  const protocols=Array.isArray(r.protocol)?r.protocol.join('\n'):String(r.protocol||'').split(',').map(x=>x.trim()).filter(Boolean).join('\n');
  const sourceIPs=r.sourceIP||r.source||[];
- const body=`<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>1 · ${L('Match destination','شرط مقصد')}</b><small>${L('All non-empty conditions must match. Rules run top to bottom.','همه شرط‌های پرشده باید Match شوند و Ruleها از بالا به پایین اجرا می‌شوند.')}</small></div><div class="xv3-grid">
- ${fld(L('Rule name / tag','نام Rule'),'ruleTag',r.ruleTag||'','text','maxlength="128" dir="ltr"',L('Used for debugging and Route Preview.','برای Debug و Route Preview استفاده می‌شود.'))}
+ const body=`<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>1 · ${L('Match destination','شرط مقصد')}</b><small>${L('All non-empty conditions must match. Rules run top to bottom.','همهٔ شرط‌های پرشده باید تطبیق پیدا کنند و قوانین از بالا به پایین اجرا می‌شوند.')}</small></div><div class="xv3-grid">
+ ${fld(L('Rule name / tag','نام قانون'),'ruleTag',r.ruleTag||'','text','maxlength="128" dir="ltr"',L('Used for debugging and Route Preview.','برای اشکال‌زدایی و پیش‌نمایش مسیر استفاده می‌شود.'))}
  ${sel(L('Network','شبکه'),'ruleNetwork',[['',L('Any','همه')],['tcp','TCP'],['udp','UDP'],['tcp,udp','TCP + UDP']],r.network||'')}
  ${listField(L('Domains / GeoSite','دامنه / GeoSite'),'domain',r.domain||[],L('full:, domain:, keyword:, regexp:, geosite:, ext:','full: / domain: / keyword: / regexp: / geosite: / ext:'))}
  ${listField(L('Target IPs / GeoIP','IP مقصد / GeoIP'),'ip',r.ip||[],L('CIDR, geoip:, ext: and ! inverse forms are supported.','CIDR، geoip:، ext: و حالت معکوس ! پشتیبانی می‌شوند.'))}
@@ -265,8 +265,8 @@ async function guidedRule(index=null){
  ${textarea(L('Extra inbound tags','Inbound Tag اضافه'),'ruleInboundExtra',(r.inboundTag||[]).filter(x=>!knownInboundTags.has(x)).join('\n'),'','dir="ltr"')}
  ${checks?`<div class="xv3-span-2"><span class="xv3-label">${L('Known inbounds','اینباندهای موجود')}</span><div class="xv3-check-grid">${checks}</div></div>`:''}
  </div></section>
- <section class="xv3-section"><details class="xv3-advanced"><summary>3 · ${L('Source / local / advanced match','Source / Local / شرط پیشرفته')}</summary><div class="xv3-grid">
- ${listField(L('Source IP / CIDR','IP مبدأ / CIDR'),'ruleSourceIP',sourceIPs,L('Matches the remote source address seen by Xray.','Source address مشاهده‌شده توسط Xray.'))}
+ <section class="xv3-section"><details class="xv3-advanced"><summary>3 · ${L('Source / local / advanced match','مبدأ / محلی / شرط پیشرفته')}</summary><div class="xv3-grid">
+ ${listField(L('Source IP / CIDR','IP مبدأ / CIDR'),'ruleSourceIP',sourceIPs,L('Matches the remote source address seen by Xray.','آدرس مبدأ مشاهده‌شده توسط Xray.'))}
  ${fld(L('Source Port','پورت مبدأ'),'ruleSourcePort',r.sourcePort||'','text','dir="ltr" placeholder="1024-65535"')}
  ${listField(L('Local IP','IP محلی'),'ruleLocalIP',r.localIP||[],L('Local inbound destination IP.','IP محلی که Inbound روی آن ترافیک را دریافت کرده.'))}
  ${fld(L('Local Port','پورت محلی'),'ruleLocalPort',r.localPort||'','text','dir="ltr" placeholder="443"')}
@@ -274,9 +274,9 @@ async function guidedRule(index=null){
  ${listField(L('Local process','Process محلی'),'ruleProcess',r.process||[],L('Linux/Windows local-origin traffic only; self/ and xray/ are supported by Xray.','فقط ترافیک Local-origin؛ Xray از self/ و xray/ پشتیبانی می‌کند.'))}
  ${textarea(L('HTTP attrs JSON','JSON ویژگی‌های HTTP'),'ruleAttrs',attrs,L('Example: {":method":"GET",":path":"^/api"}','مثال: {":method":"GET",":path":"^/api"}'),'dir="ltr" spellcheck="false"')}
  </div></details></section>
- <section class="xv3-section"><div class="xv3-section-head"><b>4 · ${L('Destination','مقصد')}</b><small>${L('Choose an existing outbound or balancer instead of typing a tag.','به‌جای تایپ Tag، از Outbound یا Balancer موجود انتخاب کن.')}</small></div><div class="xv3-grid">${sel(L('Destination type','نوع مقصد'),'targetType',[['outbound','Outbound'],['balancer','Balancer']],targetType)}${sel(L('Outbound','اوتباند'),'targetOutbound',outs.map(x=>[x.tag,`${x.tag} · ${x.protocol}`]),targetType==='outbound'?target:(outs[0]?.tag||''))}${sel(L('Balancer','بالانسر'),'targetBalancer',bals.length?bals.map(x=>[x.tag,x.tag]):[['',L('No balancer configured','بالانسری ساخته نشده')]],targetType==='balancer'?target:'')}</div></section>
- <section class="xv3-summary"><span>${L('Rule result','خلاصه Rule')}</span><b data-xv3-rule-summary></b><small>${L('Traffic Engine V4 can preview literal rules without sending traffic. GeoSite/GeoIP/DNS-dependent matches are reported as indeterminate.','Traffic Engine V4 شرط‌های Literal را بدون ارسال ترافیک Preview می‌کند؛ GeoSite/GeoIP/DNS به‌صورت Indeterminate گزارش می‌شوند.')}</small></section></div>`;
- dialog(index==null?L('New routing rule · Guided V4','Rule جدید · Guided V4'):L('Edit routing rule · Guided V4','ویرایش Rule · Guided V4'),body,async(fd)=>{
+ <section class="xv3-section"><div class="xv3-section-head"><b>4 · ${L('Destination','مقصد')}</b><small>${L('Choose an existing outbound or balancer instead of typing a tag.','به‌جای تایپ تگ، از اوتباند یا بالانسر موجود انتخاب کن.')}</small></div><div class="xv3-grid">${sel(L('Destination type','نوع مقصد'),'targetType',[['outbound',L('Outbound','اوتباند')],['balancer',L('Balancer','بالانسر')]],targetType)}${sel(L('Outbound','اوتباند'),'targetOutbound',outs.map(x=>[x.tag,`${x.tag} · ${x.protocol}`]),targetType==='outbound'?target:(outs[0]?.tag||''))}${sel(L('Balancer','بالانسر'),'targetBalancer',bals.length?bals.map(x=>[x.tag,x.tag]):[['',L('No balancer configured','بالانسری ساخته نشده')]],targetType==='balancer'?target:'')}</div></section>
+ <section class="xv3-summary"><span>${L('Rule result','خلاصهٔ قانون')}</span><b data-xv3-rule-summary></b><small>${L('Traffic Engine V4 can preview literal rules without sending traffic. GeoSite/GeoIP/DNS-dependent matches are reported as indeterminate.','موتور ترافیک V4 قوانین صریح را بدون ارسال ترافیک پیش‌نمایش می‌کند؛ موارد وابسته به GeoSite/GeoIP/DNS به‌صورت نامعین گزارش می‌شوند.')}</small></section></div>`;
+ dialog(index==null?L('New routing rule · Guided V4','قانون جدید · هدایت‌شده V4'):L('Edit routing rule · Guided V4','ویرایش قانون · هدایت‌شده V4'),body,async(fd)=>{
    const x=clone(r);x.type='field';
    for(const k of ['domain','ip','sourceIP','source','localIP','user','process','inboundTag','port','sourcePort','localPort','vlessRoute','network','protocol','attrs','ruleTag','outboundTag','balancerTag'])delete x[k];
    const putList=(field,key)=>{const v=csv(fd.get(field));if(v.length)x[key]=v;};
@@ -294,8 +294,8 @@ async function guidedRule(index=null){
 async function guidedBalancer(index=null){
  const routing=(await api('/api/settings/routing')).value||{},bs=routing.balancers||[],outs=(await api('/api/settings/outbounds')).value||[],b=index==null?{tag:'balance',selector:[],strategy:{type:'random'}}:clone(bs[index]),selected=new Set(b.selector||[]);
  const checks=outs.map(o=>`<label class="xv3-check"><input type="checkbox" name="selector" value="${esc(o.tag)}" ${selected.has(o.tag)?'checked':''}><span>${esc(o.tag)}<small>${esc(o.protocol)}</small></span></label>`).join('');
- const body=`<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>1 · ${L('Balancer identity','هویت Balancer')}</b><small>${L('Selectors are Xray tag prefixes; a selector can match more than one outbound.','Selector در Xray Prefix است؛ یک Selector می‌تواند چند Outbound با ابتدای Tag یکسان را Match کند.')}</small></div><div class="xv3-grid">${fld(L('Tag','تگ'),'balTag',b.tag||'balance','text','required pattern="[A-Za-z0-9_.-]{1,128}"')}${sel(L('Strategy','استراتژی'),'balStrategy',[['random',L('Random','تصادفی')],['roundRobin',L('Round Robin','چرخشی')],['leastPing',L('Least Ping','کمترین پینگ')]],b.strategy?.type||'random',L('Least Ping automatically requires Observatory.','Least Ping به‌صورت خودکار Observatory را لازم دارد.'))}<div class="xv3-span-2"><span class="xv3-label">${L('Members','اعضا')}</span><div class="xv3-check-grid">${checks||L('Create an outbound first.','ابتدا یک Outbound بساز.')}</div></div>${sel(L('Fallback outbound','Fallback Outbound'),'fallbackTag',[['',L('None','ندارد')],...outs.map(o=>[o.tag,`${o.tag} · ${o.protocol}`])],b.fallbackTag||'')}</div></section><section class="xv3-summary"><span>${L('Balancer behavior','رفتار')}</span><b data-xv3-bal-summary></b><small>${L('leastLoad is intentionally hidden until DARK emits burstObservatory.','leastLoad تا زمان پشتیبانی burstObservatory در DARK نمایش داده نمی‌شود.')}</small></section></div>`;
- dialog(index==null?L('New balancer · Guided V3','Balancer جدید · Guided V3'):L('Edit balancer · Guided V3','ویرایش Balancer · Guided V3'),body,async(fd)=>{const tag=required(fd,'balTag','Tag');if(!TAG.test(tag))throw Error('Invalid balancer tag');const selectors=fd.getAll('selector').map(String);if(!selectors.length)throw Error(L('Choose at least one outbound member.','حداقل یک Outbound عضو انتخاب کن.'));const strategy=String(fd.get('balStrategy')||'random'),x={...b,tag,selector:selectors,strategy:{...(b.strategy||{}),type:strategy}};const fallback=String(fd.get('fallbackTag')||'');if(fallback)x.fallbackTag=fallback;else delete x.fallbackTag;if(index==null)bs.push(x);else bs[index]=x;routing.balancers=bs;await api('/api/settings/routing','PUT',{value:routing});if(strategy==='leastPing'){const obs=(await api('/api/settings/observatory')).value||{},subjects=[...new Set([...(obs.subjectSelector||[]),...selectors])];await api('/api/settings/observatory','PUT',{value:{...obs,subjectSelector:subjects,probeURL:obs.probeURL||'https://www.gstatic.com/generate_204',probeInterval:obs.probeInterval||'30s',enableConcurrency:obs.enableConcurrency!==false}});}closeDialog();await refresh();});
+ const body=`<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>1 · ${L('Balancer identity','هویت بالانسر')}</b><small>${L('Selectors are Xray tag prefixes; a selector can match more than one outbound.','گزینشگر در Xray مبتنی بر پیشوند است؛ یک گزینشگر می‌تواند چند اوتباند با ابتدای تگ یکسان را تطبیق دهد.')}</small></div><div class="xv3-grid">${fld(L('Tag','تگ'),'balTag',b.tag||'balance','text','required pattern="[A-Za-z0-9_.-]{1,128}"')}${sel(L('Strategy','استراتژی'),'balStrategy',[['random',L('Random','تصادفی')],['roundRobin',L('Round Robin','چرخشی')],['leastPing',L('Least Ping','کمترین پینگ')]],b.strategy?.type||'random',L('Least Ping automatically requires Observatory.','Least Ping به‌صورت خودکار Observatory را لازم دارد.'))}<div class="xv3-span-2"><span class="xv3-label">${L('Members','اعضا')}</span><div class="xv3-check-grid">${checks||L('Create an outbound first.','ابتدا یک Outbound بساز.')}</div></div>${sel(L('Fallback outbound','اوتباند جایگزین'),'fallbackTag',[['',L('None','ندارد')],...outs.map(o=>[o.tag,`${o.tag} · ${o.protocol}`])],b.fallbackTag||'')}</div></section><section class="xv3-summary"><span>${L('Balancer behavior','رفتار')}</span><b data-xv3-bal-summary></b><small>${L('leastLoad is intentionally hidden until DARK emits burstObservatory.','leastLoad تا زمان پشتیبانی burstObservatory در DARK نمایش داده نمی‌شود.')}</small></section></div>`;
+ dialog(index==null?L('New balancer · Guided V3','بالانسر جدید · هدایت‌شده V3'):L('Edit balancer · Guided V3','ویرایش بالانسر · هدایت‌شده V3'),body,async(fd)=>{const tag=required(fd,'balTag','Tag');if(!TAG.test(tag))throw Error('Invalid balancer tag');const selectors=fd.getAll('selector').map(String);if(!selectors.length)throw Error(L('Choose at least one outbound member.','حداقل یک اوتباند عضو انتخاب کن.'));const strategy=String(fd.get('balStrategy')||'random'),x={...b,tag,selector:selectors,strategy:{...(b.strategy||{}),type:strategy}};const fallback=String(fd.get('fallbackTag')||'');if(fallback)x.fallbackTag=fallback;else delete x.fallbackTag;if(index==null)bs.push(x);else bs[index]=x;routing.balancers=bs;await api('/api/settings/routing','PUT',{value:routing});if(strategy==='leastPing'){const obs=(await api('/api/settings/observatory')).value||{},subjects=[...new Set([...(obs.subjectSelector||[]),...selectors])];await api('/api/settings/observatory','PUT',{value:{...obs,subjectSelector:subjects,probeURL:obs.probeURL||'https://www.gstatic.com/generate_204',probeInterval:obs.probeInterval||'30s',enableConcurrency:obs.enableConcurrency!==false}});}closeDialog();await refresh();});
  const form=document.querySelector('#dialog-form');if(form){const sync=()=>{const sum=form.querySelector('[data-xv3-bal-summary]'),members=form.querySelectorAll('input[name=selector]:checked').length;if(sum)sum.textContent=`${form.elements.balStrategy.value} · ${members} ${L('members','عضو')}`;};form.addEventListener('change',sync);sync();}
 }
 
@@ -347,18 +347,18 @@ async function guidedDNS(){
   +'</section>'
   +'<section class="xv3-summary"><span>'+L('Safe workflow','روند امن')+'</span><b>'+L('Save → Validate → Apply','ذخیره ← اعتبارسنجی ← اعمال')+'</b><small>'+L('Hosts and uncommon DNS fields already present are preserved; use Advanced JSON only for fields not shown here.','Hosts و فیلدهای خاص موجود حفظ می‌شوند؛ برای مواردی که اینجا نیست فقط از JSON پیشرفته استفاده کن.')+'</small></section>'
   +'</div>';
- dialog(L('DNS · Guided V3','DNS · Guided V3'),body,async function(fd){await api('/api/settings/dns','PUT',{value:dnsFromForm(fd,d)});toast(L('DNS saved. Validate before applying Xray.','DNS ذخیره شد؛ قبل از اعمال Xray Validate کن.'));closeDialog();await refresh();});
+ dialog(L('DNS · هدایت‌شده V3','DNS · هدایت‌شده V3'),body,async function(fd){await api('/api/settings/dns','PUT',{value:dnsFromForm(fd,d)});toast(L('DNS saved. Validate before applying Xray.','DNS ذخیره شد؛ قبل از اعمال، Xray را اعتبارسنجی کن.'));closeDialog();await refresh();});
 }
 function routingSettingsFromForm(fd,old){
  const v=clone(old||{});v.domainStrategy=String(fd.get('routeDomainStrategy')||'AsIs');return v;
 }
 async function guidedRouteSettings(){
  const v=(await api('/api/settings/routing')).value||{};
- const body='<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>'+L('Domain resolution strategy','استراتژی Resolve دامنه')+'</b><small>'+L('This changes when Xray resolves domains while evaluating IP routing rules.','مشخص می‌کند Xray هنگام بررسی Ruleهای IP چه زمانی دامنه را Resolve کند.')+'</small></div><div class="xv3-grid">'
-  +sel('domainStrategy','routeDomainStrategy',[['AsIs',L('AsIs · do not resolve for routing','AsIs · برای Routing Resolve نکن')],['IPIfNonMatch',L('IPIfNonMatch · resolve only after no domain rule matches','IPIfNonMatch · فقط بعد از Match نشدن Rule دامنه')],['IPOnDemand',L('IPOnDemand · resolve when an IP rule needs it','IPOnDemand · هنگام نیاز Ruleهای IP')]],v.domainStrategy||'AsIs')
-  +'<div class="xv3-span-2 notice">'+L('Existing Rules and Balancers are preserved. AsIs is the safest default unless you intentionally route by GeoIP/CIDR for domain destinations.','Ruleها و Balancerهای فعلی دست‌نخورده می‌مانند. AsIs پیش‌فرض امن است مگر اینکه عمداً مقصدهای دامنه‌ای را با GeoIP/CIDR روت کنی.')+'</div>'
+ const body='<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>'+L('Domain resolution strategy','استراتژی تفکیک دامنه')+'</b><small>'+L('This changes when Xray resolves domains while evaluating IP routing rules.','مشخص می‌کند Xray هنگام بررسی قوانین IP چه زمانی دامنه را تفکیک کند.')+'</small></div><div class="xv3-grid">'
+  +sel('domainStrategy','routeDomainStrategy',[['AsIs',L('AsIs · do not resolve for routing','AsIs · برای مسیریابی دامنه را تفکیک نکن')],['IPIfNonMatch',L('IPIfNonMatch · resolve only after no domain rule matches','IPIfNonMatch · فقط بعد از تطبیق‌نکردن قانون دامنه')],['IPOnDemand',L('IPOnDemand · resolve when an IP rule needs it','IPOnDemand · هنگام نیاز قوانین IP')]],v.domainStrategy||'AsIs')
+  +'<div class="xv3-span-2 notice">'+L('Existing Rules and Balancers are preserved. AsIs is the safest default unless you intentionally route by GeoIP/CIDR for domain destinations.','قوانین و بالانسرهای فعلی دست‌نخورده می‌مانند. AsIs پیش‌فرض امن است مگر اینکه عمداً مقصدهای دامنه‌ای را با GeoIP/CIDR روت کنی.')+'</div>'
   +'</div></section></div>';
- dialog(L('Routing settings · Guided V3','تنظیمات Routing · Guided V3'),body,async function(fd){await api('/api/settings/routing','PUT',{value:routingSettingsFromForm(fd,v)});closeDialog();await refresh();});
+ dialog(L('Routing settings · Guided V3','تنظیمات مسیریابی · هدایت‌شده V3'),body,async function(fd){await api('/api/settings/routing','PUT',{value:routingSettingsFromForm(fd,v)});closeDialog();await refresh();});
 }
 function validDuration(v){
  return /^(?:\d+(?:ns|us|ms|s|m|h))+$/.test(String(v||''));
@@ -367,7 +367,7 @@ function observatoryFromForm(fd){
  if(!formBool(fd,'obsEnabled'))return {};
  const selected=fd.getAll('obsSelector').map(String),custom=csv(fd.get('obsCustomSelectors'));
  const subjectSelector=Array.from(new Set(selected.concat(custom)));
- if(!subjectSelector.length)throw Error(L('Choose at least one outbound selector.','حداقل یک Selector برای Outbound انتخاب کن.'));
+ if(!subjectSelector.length)throw Error(L('Choose at least one outbound selector.','حداقل یک گزینشگر برای اوتباند انتخاب کن.'));
  const probeURL=String(fd.get('obsProbeURL')||'').trim();
  let u;try{u=new URL(probeURL);}catch(_){throw Error(L('Probe URL is invalid.','آدرس Probe معتبر نیست.'));}
  if(!['http:','https:'].includes(u.protocol)||!u.hostname||u.username||u.password)throw Error(L('Probe URL must be a normal http/https URL without credentials.','Probe URL باید http/https معتبر و بدون نام کاربری/رمز باشد.'));
@@ -382,19 +382,19 @@ async function guidedObservatory(){
  const checks=outs.map(function(x){return '<label class="xv3-check"><input type="checkbox" name="obsSelector" value="'+esc(x.tag)+'" '+(existing.includes(x.tag)?'checked':'')+'><span>'+esc(x.tag)+'<small>'+esc(x.protocol)+'</small></span></label>';}).join('');
  const enabled=Object.keys(o).length>0;
  const body='<div class="xv3-editor">'
-  +'<section class="xv3-section"><div class="xv3-section-head"><b>1 · '+L('Observatory state','وضعیت Observatory')+'</b><small>'+L('Used by leastPing balancers to measure outbound health/latency.','برای سنجش سلامت و تاخیر Outboundها در Balancer نوع leastPing استفاده می‌شود.')+'</small></div>'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>1 · '+L('Observatory state','وضعیت Observatory')+'</b><small>'+L('Used by leastPing balancers to measure outbound health/latency.','برای سنجش سلامت و تأخیر اوتباندها در بالانسر نوع leastPing استفاده می‌شود.')+'</small></div>'
   +toggle(L('Enable Observatory','فعال‌سازی Observatory'),'obsEnabled',enabled||!existing.length,L('Uncheck and save to remove Observatory from the generated Xray config.','برای حذف Observatory از کانفیگ Xray تیک را بردار و ذخیره کن.'))
   +'</section>'
-  +'<section class="xv3-section"><div class="xv3-section-head"><b>2 · '+L('Outbound selectors','Selectorهای Outbound')+'</b><small>'+L('Xray selectors are prefix-based. Exact outbound tags below are convenient safe picks.','Selector در Xray بر اساس Prefix است؛ Tagهای دقیق پایین انتخاب‌های ساده و قابل‌فهم هستند.')+'</small></div>'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>2 · '+L('Outbound selectors','گزینشگرهای اوتباند')+'</b><small>'+L('Xray selectors are prefix-based. Exact outbound tags below are convenient safe picks.','گزینشگر در Xray بر اساس پیشوند است؛ تگ‌های دقیق پایین انتخاب‌های ساده و قابل‌فهم هستند.')+'</small></div>'
   +'<div class="xv3-check-grid">'+(checks||L('Create an outbound first.','ابتدا یک Outbound بساز.'))+'</div>'
-  +textarea(L('Extra prefix selectors','Prefix Selector اضافه'),'obsCustomSelectors',custom.join('\n'),L('Optional. Example: proxy- matches proxy-a, proxy-b, ...','اختیاری. مثال: proxy- همه proxy-a و proxy-b و ... را Match می‌کند.'),'dir="ltr"')
+  +textarea(L('Extra prefix selectors','گزینشگر پیشوندی اضافه'),'obsCustomSelectors',custom.join('\n'),L('Optional. Example: proxy- matches proxy-a, proxy-b, ...','اختیاری. مثال: proxy- همهٔ proxy-a و proxy-b و ... را تطبیق می‌دهد.'),'dir="ltr"')
   +'</section>'
   +'<section class="xv3-section"><div class="xv3-section-head"><b>3 · '+L('Probe behavior','رفتار Probe')+'</b></div><div class="xv3-grid">'
   +fld('Probe URL','obsProbeURL',o.probeURL||o.probeUrl||'https://www.gstatic.com/generate_204','url','required dir="ltr"')
   +fld('Probe interval','obsInterval',o.probeInterval||'30s','text','required dir="ltr" placeholder="30s"',L('Go-style duration such as 10s, 1m, 2h45m.','مدت به شکل 10s، 1m یا 2h45m.'))
-  +'<div class="xv3-span-2">'+toggle(L('Concurrent probes','Probe هم‌زمان'),'obsConcurrency',o.enableConcurrency!==false,L('Faster with multiple outbounds, but creates a burst of probe requests.','برای چند Outbound سریع‌تر است ولی Probeها را هم‌زمان ارسال می‌کند.'))+'</div>'
+  +'<div class="xv3-span-2">'+toggle(L('Concurrent probes','پروب هم‌زمان'),'obsConcurrency',o.enableConcurrency!==false,L('Faster with multiple outbounds, but creates a burst of probe requests.','برای چند اوتباند سریع‌تر است ولی پروب‌ها را هم‌زمان ارسال می‌کند.'))+'</div>'
   +'</div></section>'
-  +'<section class="xv3-summary"><span>'+L('Balancer note','نکته Balancer')+'</span><b>leastPing → Observatory</b><small>'+L('Creating a leastPing balancer already adds its members here automatically.','ساخت Balancer نوع leastPing اعضای آن را خودکار به Observatory اضافه می‌کند.')+'</small></section>'
+  +'<section class="xv3-summary"><span>'+L('Balancer note','نکتهٔ بالانسر')+'</span><b>leastPing → Observatory</b><small>'+L('Creating a leastPing balancer already adds its members here automatically.','ساخت بالانسر نوع leastPing اعضای آن را خودکار به Observatory اضافه می‌کند.')+'</small></section>'
   +'</div>';
  dialog('Observatory · Guided V3',body,async function(fd){await api('/api/settings/observatory','PUT',{value:observatoryFromForm(fd)});closeDialog();await refresh();});
 }
