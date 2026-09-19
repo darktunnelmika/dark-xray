@@ -1087,18 +1087,20 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:
             policy_rows={str(r['id']):dict(r) for r in store.db.execute(
                 'SELECT id,limit_ip,global_ip_block,global_device_block FROM clients')}
-            local_ips={str(r[0]):int(r[1]) for r in store.db.execute(
-                'SELECT client_id,COUNT(DISTINCT ip) FROM observations WHERE last_seen>? GROUP BY client_id',(now-window,))}
-            local_devices={str(r[0]):int(r[1]) for r in store.db.execute(
-                'SELECT email,COUNT(*) FROM core_devices GROUP BY email')}
-            remote_ips={}
+            local_ip_values={}
+            for r in store.db.execute('SELECT client_id,ip FROM observations WHERE last_seen>?',(now-window,)):
+                local_ip_values.setdefault(str(r['client_id']),set()).add(str(r['ip']))
+            local_device_values={}
+            for r in store.db.execute('SELECT email,digest FROM core_devices'):
+                local_device_values.setdefault(str(r['email']),set()).add(str(r['digest']))
+            remote_ip_values={}
             if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_ips'").fetchone():
-                remote_ips={str(r[0]):int(r[1]) for r in store.db.execute(
-                    'SELECT client_id,COUNT(DISTINCT ip) FROM remote_node_ips WHERE verified=1 AND last_seen>? GROUP BY client_id',(now-window,))}
-            remote_devices={}
+                for r in store.db.execute('SELECT client_id,ip FROM remote_node_ips WHERE verified=1 AND last_seen>?',(now-window,)):
+                    remote_ip_values.setdefault(str(r['client_id']),set()).add(str(r['ip']))
+            remote_device_values={}
             if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_devices'").fetchone():
-                remote_devices={str(r[0]):int(r[1]) for r in store.db.execute(
-                    'SELECT client_id,COUNT(DISTINCT digest) FROM remote_node_devices GROUP BY client_id')}
+                for r in store.db.execute('SELECT client_id,digest FROM remote_node_devices'):
+                    remote_device_values.setdefault(str(r['client_id']),set()).add(str(r['digest']))
             active_bans=[dict(r) for r in store.db.execute(
                 "SELECT b.ip,b.client_id,b.node,b.expires_at,b.state FROM bans b JOIN clients c ON c.id=b.client_id "
                 "WHERE b.state='applied' AND b.expires_at>? ORDER BY b.expires_at DESC",(now,)) if str(r['client_id']) in allowed]
@@ -1108,25 +1110,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         client_rows=[]
         for item in rows:
             email=item['email'];client=item.get('client') or {};policy=policy_rows.get(email,{})
-            lip=local_ips.get(email,0);rip=remote_ips.get(email,0);ld=local_devices.get(email,0);rd=remote_devices.get(email,0)
+            local_ip_set=local_ip_values.get(email,set());remote_ip_set=remote_ip_values.get(email,set())
+            local_device_set=local_device_values.get(email,set());remote_device_set=remote_device_values.get(email,set())
             client_rows.append({'email':email,'owner':item.get('owner',''),'limit_ip':int(client.get('limitIp') or 0),
-                'limit_hwid':int(client.get('limitHwid') or 0),'local_ip_count':lip,'remote_ip_count':rip,
-                'global_ip_count':len(set()),'local_device_count':ld,'remote_device_count':rd,
-                'global_device_count':ld+rd,'global_ip_block':bool(policy.get('global_ip_block')),
+                'limit_hwid':int(client.get('limitHwid') or 0),'local_ip_count':len(local_ip_set),'remote_ip_count':len(remote_ip_set),
+                'global_ip_count':len(local_ip_set|remote_ip_set),'local_device_count':len(local_device_set),'remote_device_count':len(remote_device_set),
+                'global_device_count':len(local_device_set|remote_device_set),'global_ip_block':bool(policy.get('global_ip_block')),
                 'global_device_block':bool(policy.get('global_device_block')),
                 'block_reasons':item.get('block_reasons',[]),'presence_state':item.get('presence_state','offline'),
                 'last_seen_at':item.get('last_seen_at',0)})
-        # Exact global distinct-IP cardinality must de-duplicate addresses shared
-        # between local and remote sources rather than summing source counts.
-        with store.lock:
-            for row in client_rows:
-                vals={str(x[0]) for x in store.db.execute(
-                    'SELECT ip FROM observations WHERE client_id=? AND last_seen>?',(row['email'],now-window))}
-                if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_ips'").fetchone():
-                    vals.update(str(x[0]) for x in store.db.execute(
-                        'SELECT ip FROM remote_node_ips WHERE client_id=? AND verified=1 AND last_seen>?',
-                        (row['email'],now-window)))
-                row['global_ip_count']=len(vals)
         node_rows=nodes.list() if p.actor.role=='owner' else []
         fresh_nodes=sum(1 for n in node_rows if n.get('security',{}).get('last_sync') and
                         now-float(n['security']['last_sync'])<180 and not n['security'].get('last_error'))
