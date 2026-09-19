@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""DARK XRAY policy/ledger development module (Python 3.10+, stdlib only).
+"""DARK XRAY policy/ledger module (Python 3.10+, stdlib only).
 
-This is NOT a complete Xray panel backend. It can consume real local Xray access
-logs and, with explicit enablement, use dedicated Fail2ban jails. It never touches
-x-ui.service, x-ui.db, the existing 3x-ipl jail, SSH rules or the Xray binary.
+IP policy observes real Xray source addresses and delegates production packet
+enforcement to DARK's separate root-owned nftables broker. The panel process
+remains unprivileged and never edits the host firewall directly.
 
-An IP quota means distinct recently observed source IPs, NOT exact concurrent
-sessions or people. Address bans can affect other clients behind the same NAT.
-Forwarded original IPs are not necessarily the packet source on this host.
-Enforcement is therefore refused for opaque/proxy/tunnel sources in this module.
+An IP quota means distinct recently observed verified source IPs, NOT exact
+concurrent sessions or people. Address bans can affect other clients behind the
+same NAT. Opaque/proxy/tunnel sources are observe-only unless the packet source
+on the enforcing host has been explicitly verified.
 """
 from __future__ import annotations
 
@@ -20,15 +20,13 @@ import ipaddress
 import json
 import os
 import re
-import shutil
 import sqlite3
 import stat
-import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 
 SCHEMA_VERSION = 3
 MAX_INT = (1 << 63) - 1
@@ -580,38 +578,8 @@ def parse_access_line(line: str, observed_at: float | None = None) -> Observatio
     return Observation(user.group(1),ip,time.time() if observed_at is None else observed_at)
 
 
-class Fail2BanExecutor:
-    """Only dedicated, port-scoped DARK jails; never arbitrary shell commands."""
-    def __init__(self, policy: Policy, runner: Callable[...,Any] = subprocess.run,
-                 executable: str | None = None):
-        policy.assert_enforcement_safe()
-        self.policy=policy;self.runner=runner
-        self.executable=executable or shutil.which("fail2ban-client") or "/usr/bin/fail2ban-client"
-        self.jails={jail_for(c.ports) for c in policy.clients.values()}
-
-    def _run(self,*args: str) -> str:
-        result=self.runner([self.executable,*args],capture_output=True,text=True,timeout=8,check=False)
-        if result.returncode!=0:raise PolicyError("Fail2ban command failed; enforcement was NOT confirmed: "+result.stderr.strip()[:300])
-        return result.stdout.strip()
-
-    def check(self) -> None:
-        self._run("ping")
-        for jail in sorted(self.jails):
-            self._run("status",jail)
-            value=self._run("get",jail,"bantime")
-            if value!=str(self.policy.ban_seconds):raise PolicyError("Jail bantime does not match the reviewed policy")
-
-    def ban(self,jail: str,ip: str) -> None:
-        if jail not in self.jails:raise PolicyError("Unmanaged jail")
-        self._run("set",jail,"banip",normalize_ip(ip))
-
-    def unban(self,jail: str,ip: str) -> None:
-        if jail not in self.jails:raise PolicyError("Unmanaged jail")
-        self._run("set",jail,"unbanip",normalize_ip(ip))
-
-
 class Guard:
-    def __init__(self,policy: Policy,store: Store,executor: Fail2BanExecutor | None = None):
+    def __init__(self,policy: Policy,store: Store,executor: Any | None = None):
         self.policy=policy;self.store=store;self.executor=executor
         if executor:policy.assert_enforcement_safe()
 
@@ -649,14 +617,14 @@ class Guard:
         if not violation:return {"decision":"allow","applied":False,"active_ips":len(active|{ip}),"limit_ip":c.limit_ip}
         if not self.executor:return {"decision":"violation","applied":False,"reason":"monitor_mode","jail":jail}
         try:self.executor.ban(jail,ip)
-        except (PolicyError,subprocess.SubprocessError,OSError) as exc:
+        except (PolicyError,OSError) as exc:
             with self.store.transaction() as db:db.execute("INSERT INTO events(kind,owner,client_id,ip,node,detail,at) VALUES(?,?,?,?,?,?,?)",("enforcement_failed",c.owner,email,ip,p.node_id,str(exc)[:500],now))
             return {"decision":"enforcement_failed","applied":False,"reason":str(exc)}
         until=now+p.ban_seconds
         with self.store.transaction() as db:
             db.execute("""INSERT INTO bans VALUES(?,?,?,?,?,?) ON CONFLICT(jail,ip,node)
             DO UPDATE SET expires_at=excluded.expires_at,state=excluded.state,client_id=excluded.client_id""",(jail,ip,email,p.node_id,until,"applied"))
-        return {"decision":"banned","applied":True,"confirmation":getattr(self.executor,"confirmation","fail2ban_command_accepted"),"packet_block_verified":False,"until":until,"jail":jail,"scope":"source-IP and configured data ports; other clients on this IP may also be affected"}
+        return {"decision":"banned","applied":True,"confirmation":getattr(self.executor,"confirmation","enforcement_command_accepted"),"packet_block_verified":False,"until":until,"jail":jail,"scope":"source-IP and configured data ports; other clients on this IP may also be affected"}
 
     def unban(self,actor: Actor,jail: str,ip: str) -> None:
         # A source-address ban is not safely owned by one reseller behind shared NAT.
@@ -666,30 +634,6 @@ class Guard:
         with self.store.transaction() as db:
             db.execute("UPDATE bans SET state='released',expires_at=? WHERE jail=? AND ip=? AND node=?",(time.time(),jail,ip,self.policy.node_id))
             db.execute("DELETE FROM observations WHERE ip=? AND node=? AND granted=0",(ip,self.policy.node_id))
-
-
-def render_fail2ban(policy: Policy) -> dict[str,str]:
-    """Return reviewable config text; never write /etc or restart a daemon."""
-    policy.assert_enforcement_safe()
-    result={"filter.d/dark-xray-policy.conf":"# DARK XRAY generated filter; policy module invokes banip explicitly.\n[Definition]\nfailregex = ^DARK-XRAY VIOLATION <HOST>$\nignoreregex =\n"}
-    ignore="127.0.0.1/8 ::1 "+" ".join((*policy.trusted_peers,*policy.exempt_ips))
-    sections=[]
-    for ports in sorted({c.ports for c in policy.clients.values()}):
-        name=jail_for(ports)
-        sections.append(f"""[{name}]
-# Review protected ports and shared-NAT implications before enabling.
-enabled = true
-filter = dark-xray-policy
-logpath = /var/log/dark-xray-policy/violations.log
-backend = polling
-maxretry = 1
-findtime = {policy.window_seconds}
-bantime = {policy.ban_seconds}
-ignoreip = {ignore}
-action = nftables[type=multiport, name={name}, port="{','.join(map(str,ports))}", protocol="tcp,udp"]
-""")
-    result["jail.d/dark-xray-policy.local"]="# DARK XRAY — dedicated jails, separate from 3x-ipl\n"+"\n".join(sections)
-    return result
 
 
 def follow_new_lines(path: Path,stop: threading.Event,interval: float=.4) -> Iterator[str]:
@@ -721,34 +665,22 @@ def follow_new_lines(path: Path,stop: threading.Event,interval: float=.4) -> Ite
 
 
 def main(argv: list[str] | None=None) -> int:
+    """Observe-only development CLI. Production enforcement is guardd + nftables."""
     parser=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--policy",type=Path,required=True)
     parser.add_argument("--database",type=Path,default=Path("./data/policy.sqlite3"))
-    parser.add_argument("--access-log",type=Path)
-    parser.add_argument("--once",action="store_true",help="Replay a file in MONITOR mode only")
-    parser.add_argument("--apply",action="store_true",help="Explicitly enable Fail2ban effects after safeguards")
-    parser.add_argument("--acknowledge-shared-nat",action="store_true")
-    parser.add_argument("--render-fail2ban",type=Path,metavar="OUTPUT_DIR")
+    parser.add_argument("--access-log",type=Path,required=True)
+    parser.add_argument("--once",action="store_true",help="Replay a file in observe-only mode")
     args=parser.parse_args(argv)
     try:
-        policy=load_policy(args.policy,args.apply)
-        if args.render_fail2ban:
-            files=render_fail2ban(policy)
-            for relative,text in files.items():
-                target=args.render_fail2ban/relative
-                target.parent.mkdir(parents=True,exist_ok=True)
-                target.write_text(text,encoding="utf8")
-            print("Generated files for review only; nothing installed or restarted.")
-            return 0
-        if not args.access_log:raise PolicyError("--access-log is required")
-        if args.apply and args.once:raise PolicyError("Never replay old logs while enforcement is enabled")
-        if args.apply and not args.acknowledge_shared_nat:raise PolicyError("Explicit shared-NAT acknowledgement is required")
-        if args.apply and os.geteuid()!=0:raise PolicyError("Fail2ban enforcement requires root; monitor mode does not")
+        policy=load_policy(args.policy,False)
+        if policy.enforce:
+            raise PolicyError("Standalone policy CLI is observe-only; production enforcement uses DARK guardd with nftables")
         if args.access_log.is_symlink():raise PolicyError("Access-log symlinks are not accepted")
-        executor=Fail2BanExecutor(policy) if args.apply else None
-        if executor:executor.check()
-        store=Store(args.database);guard=Guard(policy,store,executor)
-        print(json.dumps({"service":"DARK XRAY IP guard","apply":bool(executor),"node":policy.node_id,"note":"recent IP window, not exact concurrent sessions"}))
+        store=Store(args.database);guard=Guard(policy,store)
+        print(json.dumps({"service":"DARK XRAY IP observer","enforcement":"none","node":policy.node_id,
+                          "production_backend":"DARK nftables broker",
+                          "note":"recent distinct source-IP window, not exact concurrent sessions"}))
         stop=threading.Event()
         log_handle=args.access_log.open("r",encoding="utf8",errors="replace") if args.once else None
         lines=log_handle if args.once else follow_new_lines(args.access_log,stop)
