@@ -8,7 +8,9 @@ const i18n=read('web/i18n-en.js');
 const live=read('web/live.js');
 const inbounds=read('web/inbounds-v3.js');
 const webDir=path.join(__dirname,'..','web');
-const allUi=fs.readdirSync(webDir).filter(n=>/\.(?:js|html)$/.test(n)).map(n=>fs.readFileSync(path.join(webDir,n),'utf8')).join('\n');
+const html=fs.readFileSync(path.join(webDir,'index.html'),'utf8');
+const loadedJs=[...html.matchAll(/src="assets\/([^"]+\.js)"/g)].map(m=>m[1]);
+const allUi=html+'\n'+loadedJs.map(n=>fs.readFileSync(path.join(webDir,n),'utf8')).join('\n');
 const overview=read('web/overview-v4.js');
 const core=read('backend/core.py');
 const server=read('backend/server.py');
@@ -30,7 +32,7 @@ test('user-facing panel UI does not mention legacy Sanaei or Mirza products',()=
 
 test('CPU telemetry uses a stable sample and dashboard never renders false 0.0 percent',()=>{
   assert.match(core,/def _host_cpu_percent/);
-  assert.match(core,/psutil\.cpu_times\(\)/);
+  assert.match(core,/self\._cpu_sample_at/);
   assert.match(core,/psutil\.cpu_percent\(interval=\.2\)/);
   assert.doesNotMatch(core,/cpu_percent\(interval=\.05\)/);
   assert.doesNotMatch(server,/cpu_percent\(interval=\.05\)/);
