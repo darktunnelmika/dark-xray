@@ -100,7 +100,8 @@ class Manager:
         return dict(r) | {'allowed':json.loads(r['allowed'])}
 
     def owner_put(self, actor: Actor, owner: str, *, name: str, allowed: list[int],
-                  quota_bytes: int = 0,max_clients: int = 0,manual: bool | None = None,
+                  volume_credit_bytes: int | None = None,unlimited_credit: int | None = None,
+                  max_clients: int = 0,manual: bool | None = None,quota_bytes: int | None = None,
                   prefix: str = '',max_client_ips: int = 0,max_client_hwid: int = 0):
         if actor.role != 'owner': raise PermissionDenied('Only the primary owner may configure resellers')
         if not NAME_RE.fullmatch(owner) or not 1<=len(name)<=128: raise PolicyError('Invalid owner identity')
@@ -129,14 +130,17 @@ class Manager:
                         raise PolicyError('Reduce existing client HWID limits before lowering the reseller max-client-HWID policy')
             if prefix and any(not str(r['id']).lower().startswith(prefix) for r in rows):
                 raise PolicyError('Existing client identities must match the reseller prefix before enabling it')
-            self.store.register_owner(actor,owner,quota_bytes,max_clients,manual)
+            self.store.register_owner(actor,owner,volume_credit_bytes=volume_credit_bytes,
+                                      unlimited_credit=unlimited_credit,max_clients=max_clients,
+                                      manual=manual,quota_bytes=quota_bytes)
             with self.store.transaction() as db:
                 db.execute('''INSERT INTO owner_profiles(id,name,allowed,prefix,max_client_ips,max_client_hwid)
                               VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                               name=excluded.name,allowed=excluded.allowed,prefix=excluded.prefix,
                               max_client_ips=excluded.max_client_ips,max_client_hwid=excluded.max_client_hwid''',
                            (owner,name,json.dumps(sorted(set(allowed))),prefix,max_client_ips,max_client_hwid))
-            self.audit(actor,owner,'owner.update',owner)
+            self.audit(actor,owner,'owner.update',owner,
+                       'resource credits and representative policy updated')
             # Reconcile synchronously when possible, otherwise the worker retries.
             self.tick(suppress=True)
 
@@ -411,7 +415,7 @@ class Manager:
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(email,json.dumps(data),json.dumps(ids),secrets.token_urlsafe(32),'none','applied',up,down,1,int(bool(data.get('enable',True))),time.time(),time.time()))
             except Exception:
                 self.store.delete_client(SYSTEM,email);raise
-            self.audit(actor,owner,'client.adopt',email,'Historical engine bytes are a baseline, not a new reseller charge')
+            self.audit(actor,owner,'client.adopt',email,'Historical engine bytes are a baseline; resource credit is reserved from the configured client plan')
             self.tick(suppress=True)
             return self.detail(actor,email)
 
