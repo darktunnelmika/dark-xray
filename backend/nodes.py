@@ -646,13 +646,15 @@ class NodeRegistry:
         with self.store.lock:
             rows=[dict(r) for r in self.store.db.execute(
                 '''SELECT n.id,n.name,n.data_address,n.priority,n.failover_enabled,n.enabled,n.last_seen,
-                          n.last_latency_ms,n.last_error,n.recovery_count,r.local_inbound_id,r.remote_inbound_id
+                          n.last_latency_ms,n.last_error,n.recovery_count,r.local_inbound_id,r.remote_inbound_id,
+                          r.last_error AS assignment_error
                    FROM remote_node_inbounds r JOIN remote_nodes n ON n.id=r.node_id
                    WHERE r.local_inbound_id IN ('''+marks+''') ORDER BY n.priority,n.name,n.id''',tuple(inbound_ids))]
         grouped={}
         for row in rows:
             if not row['enabled'] or not row['failover_enabled'] or not row['data_address'] or not row['remote_inbound_id']:
                 continue
+            if row['assignment_error']:continue
             if not row['last_seen'] or now-float(row['last_seen'])>=180 or row['last_error']:continue
             target=grouped.setdefault(row['id'],{'node_id':row['id'],'name':row['name'],'address':row['data_address'],
                 'priority':int(row['priority']),'latency_ms':int(row['last_latency_ms'] or 0),
