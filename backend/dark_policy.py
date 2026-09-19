@@ -436,7 +436,7 @@ class Store:
             if not u: raise PolicyError("Client does not exist")
             actor.require("clients", "delete", u["owner"])
             db.execute("DELETE FROM clients WHERE id=?", (client_id,))
-            # Historical traffic/money remain attached to the original owner.
+            # Historical traffic/resource-credit ledgers remain attached to the original owner.
             db.execute("DELETE FROM observations WHERE client_id=?", (client_id,))
 
     def record_usage(self, event_id: str, client_id: str, up: int, down: int,
@@ -543,39 +543,10 @@ class Store:
             return reasons
 
     def credit(self, actor: Actor, owner: str, amount: int, event_id: str) -> bool:
-        actor.require("finance", "credit", owner); integer(amount, 1)
-        if not event_id or len(event_id) > 256: raise PolicyError("Unique event ID required")
-        with self.transaction() as db:
-            old = db.execute("SELECT * FROM money_ledger WHERE event_id=?", (event_id,)).fetchone()
-            if old:
-                if (old["owner"],old["amount"],old["kind"]) != (owner,amount,"credit"): raise PolicyError("Idempotency collision")
-                return False
-            r=db.execute("SELECT * FROM owners WHERE id=?",(owner,)).fetchone()
-            if not r: raise PolicyError("Owner does not exist")
-            if r["credit"]+amount>MAX_INT: raise PolicyError("Credit overflow")
-            db.execute("INSERT INTO money_ledger VALUES(?,?,?,?,?,?)",(event_id,owner,amount,"credit","",time.time()))
-            db.execute("UPDATE owners SET credit=credit+? WHERE id=?",(amount,owner))
-            return True
+        raise PolicyError("Monetary reseller credit is retired; use volume/unlimited resource credits")
 
     def refund(self, actor: Actor, order_id: str, event_id: str) -> bool:
-        if not isinstance(event_id, str) or not 1 <= len(event_id) <= 256:
-            raise PolicyError("A unique refund ID is required")
-        with self.transaction() as db:
-            order=db.execute("SELECT * FROM money_ledger WHERE event_id=? AND kind='sale'",(order_id,)).fetchone()
-            if not order: raise PolicyError("Sale does not exist")
-            actor.require("finance","refund",order["owner"])
-            previous=db.execute("SELECT * FROM money_ledger WHERE event_id=?",(event_id,)).fetchone()
-            if previous:
-                if previous["kind"] != "refund" or previous["reference"] != order_id: raise PolicyError("Idempotency collision")
-                return False
-            if db.execute("SELECT event_id FROM money_ledger WHERE kind='refund' AND reference=?",(order_id,)).fetchone(): raise PolicyError("Sale already refunded")
-            amount=-order["amount"]
-            owner=db.execute("SELECT credit FROM owners WHERE id=?",(order["owner"],)).fetchone()
-            if not owner or owner["credit"]+amount>MAX_INT:
-                raise PolicyError("Owner missing or credit overflow")
-            db.execute("INSERT INTO money_ledger VALUES(?,?,?,?,?,?)",(event_id,order["owner"],amount,"refund",order_id,time.time()))
-            db.execute("UPDATE owners SET credit=credit+? WHERE id=?",(amount,order["owner"]))
-            return True
+        raise PolicyError("Monetary reseller refunds are retired; DARK does not store customer sale prices")
 
     def backup(self, destination: Path) -> None:
         if destination.exists(): raise PolicyError("Backup target already exists")
