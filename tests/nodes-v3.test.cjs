@@ -21,7 +21,7 @@ test('Node workflow replaces manual clone with assignment sync',()=>{
 
 test('Node cards expose assigned inbound names and sync state',()=>{
   assert.match(src,/function assignedNames\(n\)/);
-  assert.match(src,/ASSIGNED INBOUNDS/);
+  assert.match(src,/ASSIGNMENT STATE/);
   assert.match(src,/n\.assignments/);
   assert.match(src,/n\.assignments/);
   assert.match(src,/last_error/);
@@ -43,6 +43,25 @@ test('Node editor exposes failover address priority and security sync',()=>{
   assert.match(src,/name="failoverEnabled"/);
   assert.match(src,/nv2security/);
   assert.match(src,/Security synchronized/);
-  assert.match(src,/failover_ready/);
+  assert.match(src,/failover_reason/);
   assert.match(src,/source_verified/);
+});
+
+
+test('Nodes V4 exposes subscription orchestrator and explicit inclusion reasons',()=>{
+  assert.match(src,/Subscription Orchestrator/);
+  assert.match(src,/\/api\/nodes\/orchestration/);
+  assert.match(src,/IN SUBSCRIPTION/);
+  assert.match(src,/NOT DEPLOYED/);
+  assert.match(src,/NODE OFFLINE/);
+  assert.match(src,/FAILOVER OFF/);
+  assert.match(src,/SYNC ERROR/);
+  assert.match(src,/subscription_included/);
+  assert.match(src,/subscription_reason/);
+});
+
+test('Node failover help explains source inbound port isolation from Public Endpoint',()=>{
+  assert.match(src,/failover port is the source inbound port/i);
+  assert.match(src,/not the primary Public Endpoint tunnel\/CDN port/i);
+  assert.match(src,/data_port/);
 });
