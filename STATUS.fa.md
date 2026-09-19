@@ -1,7 +1,9 @@
-# وضعیت DARK XRAY 0.9.0 RC7
+# وضعیت DARK XRAY — main بعد از 0.9.0 RC7
 
-تاریخ بازبینی: **18 سپتامبر 2026**  
-برچسب فعلی: **`0.9.0-rc7`**
+تاریخ بازبینی: **19 سپتامبر 2026**  
+نسخهٔ سورس فعلی: **`0.9.0-rc7`**  
+Snapshot سبز `main`: **`88e9e5967c3577378f0cca03305b6d127f238176` — Run 761 — 8/8 Gate PASS**  
+Tag `v0.9.0-rc7`: **هنوز منتشر نشده**
 
 > «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
 
@@ -18,16 +20,20 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI، یک Primary Owner، Rep
 | Session / TOTP | revoke + replay-counter hardening |
 | Robot API keys | بدون API-key lifecycle و finance mutation حساس |
 | Settings V2 | stage/apply privileged + rollback-aware activation |
+| Traffic Engine | V4 guided Outbound / Routing / Balancer / Observatory + DNS Guided V3 |
+| Public Endpoints | V3 با تفکیک Xray listener از آدرس تحویل به مشتری |
+| Security / Sync | Security Center V4 + Sync Runtime V4 |
 | Panel/Subscription paths | collision protection در Web و CLI |
 | Domain / TLS | workflow موجود؛ provider/live renewal هنوز گیت VPS است |
 | Finance / Ledger | event-id idempotency، lifetime/current separation، Owner-only credit |
-| Nodes V3 | HTTPS-only + DNS/TLS pinning + inbound/credential mirror + Central traffic + Global IP/device state + subscription failover + reconnect/reset recovery |
+| Nodes V4 | HTTPS-only + DNS/TLS pinning + orchestrator + inbound/credential mirror + Central traffic + Global IP/device state + subscription failover + reconnect/reset recovery |
 | Safe Update / Web Update | root-owned broker + exact-commit CI gate + source/SQLite snapshot + dependency preflight + health-gated rollback |
 | Browser | Chromium واقعی، EN/FA، mobile و Inbounds V3 save |
 | Real Xray | official v26.3.27 data-plane در CI |
 | Kernel nftables | packet-level TCP/UDP enforcement در namespace واقعی Linux |
 | systemd recovery | SIGKILL restart + stop/start + single Xray child در CI |
 | Python | 3.12 و 3.13 کامل |
+| Fresh Install CI | Installer واقعی روی Ubuntu 24.04 + systemd + Xray + vps-verify + production-gate سبز |
 | Load / Scale CI | 1000 Client + SQLite contention smoke سبز |
 
 ## Gateهای واقعی که الان در `main` اجرا می‌شوند
@@ -95,6 +101,24 @@ Chromium واقعی:
 - Backup / Update transaction و permission hardening؛
 - Web contracts و JavaScript regressions.
 
+### 6. Fresh Install end-to-end ✅
+
+Gate جدید `fresh-install` روی Ubuntu 24.04 یک‌بارمصرف، **خود `install-online.sh` تعاملی واقعی** را اجرا می‌کند و سپس موارد زیر را چک می‌کند:
+
+- ساخت service account و SQLite از صفر؛
+- دریافت و verify کردن Xray رسمی `v26.3.27`؛
+- enabled/active بودن `dark-xray.service` و `dark-xray-update.service`؛
+- readiness واقعی endpoint محلی `/health`؛
+- `darkxray check`؛
+- `darkxray vps-verify`؛
+- `darkxray production-gate --json-only`.
+
+این Gate یک race واقعی Installer را پیدا کرد: systemd ممکن بود سرویس را Active گزارش کند ولی HTTP listener هنوز آماده نباشد و Final Doctor فوراً `ConnectionRefusedError` بگیرد. Installer اکنون fail-closed تا آماده‌شدن `/health` صبر می‌کند و اگر سرویس در این فاصله بمیرد نصب را fail می‌کند.
+
+### 7. Load / Scale ✅
+
+`tests/load-scale-smoke.py` با 1000 Client و SQLite contention در Gate اصلی `main` اجرا می‌شود. این تست برای regression و contention مفید است، اما benchmark سخت‌افزار/provider مقصد نیست.
+
 ## ابزارهای Validation نصب‌شده
 
 Readiness فقط خواندنی:
@@ -116,6 +140,18 @@ sudo darkxray production-gate --json-only
 ```
 
 `production-gate` برای lab خودش temporary DB/ports ایجاد می‌کند و customer DB یا firewall نصب‌شده را تغییر نمی‌دهد.
+
+## Hardeningهای main بعد از RC7
+
+- **Traffic Engine V4** Outbound، Routing، Balancer و Observatory را به مسیر Guided/Basic-first تبدیل کرده و تصمیم Routing و selector expansion را قبل از ذخیره قابل مشاهده می‌کند.
+- **DNS Guided V3** کنترل ساخت‌یافتهٔ DNS را بدون اجبار کاربر به Raw JSON ارائه می‌دهد.
+- **Public Endpoints V3** پورت/آدرس listener را از endpoint تحویل‌شده به مشتری جدا و اثر Delivery را preview می‌کند.
+- **Clients V5 Delivery Center** خروجی Subscription و readiness مربوط به endpoint/failover را با مسیر Guided هماهنگ می‌کند.
+- **Nodes V4 Orchestrator** semantics مربوط به Public Endpoint و source-inbound failover port را واضح‌تر کرده است.
+- **Security Center V4** state مربوط به Local + Node IP/HWID را کنار مرز enforcement واقعی nftables نمایش می‌دهد.
+- **Sync Runtime V4** external-disable و missing-runtime را از هم جدا می‌کند و recovery صریح برای credential گمشده دارد.
+- Refreshهای هم‌پوشان UI coalesce می‌شوند و stale async render دیگر صفحهٔ جدیدتر را overwrite نمی‌کند؛ regression Browser برای این raceها سبز است.
+- Gate دائمی **Fresh Install E2E** اضافه شد و race readiness بعد از systemd start در Installer رفع شد.
 
 ## Hardeningهای مهم RC7
 
@@ -187,6 +223,6 @@ sudo darkxray production-gate --json-only
 
 ## مسیر بعدی
 
-مرحله بعد، تست **`0.9.0-rc7`** روی VPS هدف، TLS/Node/Reboot واقعی و سپس promotion همان کاندید به Stable است. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
+مرحله بعد، تست **Snapshot دقیق `88e9e5967c3577378f0cca03305b6d127f238176`** روی VPS هدف است؛ نه یک Tag فرضی. بعد از TLS/Node/Reboot/Capacity/Update-Rollback واقعی، Snapshot نهایی باید به یک Tag/Release Candidate تازه با checksumهای جدید ثابت شود و فقط پس از پاس‌شدن گیت‌های محیط هدف می‌تواند برای Stable promotion بررسی شود. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)
