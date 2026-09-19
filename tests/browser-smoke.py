@@ -447,19 +447,21 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             visit(page,'sync')
             page.locator('.sy4').wait_for(state='visible',timeout=10000)
-            assert page.locator('.sy4-control-card').count()>=3
+            assert page.locator('.sy4-control-card').count()>=3,'Sync V4 control cards missing'
             runtime_text=page.locator('.sy4-control-card').nth(1).inner_text()
-            assert 'STOPPED / STAGED' in runtime_text
+            assert 'STOPPED / STAGED' in runtime_text,runtime_text
             drift=page.locator('.sy4-item').filter(has_text='browser-hwid-policy')
-            assert drift.count()==1
-            assert 'EXTERNAL DISABLE' in drift.inner_text()
+            assert drift.count()==1,'external-disabled client missing from issues view'
+            assert 'EXTERNAL DISABLE' in drift.inner_text(),drift.inner_text()
             drift.locator('[data-act="sy4control"]').click()
             page.wait_for_function("()=>state.sync?.items?.find(x=>x.email==='browser-hwid-policy')?.reason_code==='clean'",timeout=10000)
             external_flag=page.evaluate("()=>api('/api/clients/browser-hwid-policy').then(x=>x.client.enable)")
             assert external_flag is True,'external control was not restored'
             page.locator('[data-act="sy4filter"][data-view="all"]').click()
+            page.wait_for_function("()=>state.sv4?.view==='all'&&document.querySelector('[data-act=sy4filter][data-view=all]')?.classList.contains('active')",timeout=10000)
             clean=page.locator('.sy4-item').filter(has_text='browser-hwid-policy')
-            assert clean.count()==1 and 'IN SYNC' in clean.inner_text()
+            clean.wait_for(state='visible',timeout=10000)
+            assert 'IN SYNC' in clean.inner_text(),clean.inner_text()
 
             with store.transaction() as db:
                 db.execute("DELETE FROM core_clients WHERE email='browser-delivery'")
@@ -467,8 +469,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.evaluate("refresh()")
             page.wait_for_timeout(100)
             page.locator('[data-act="sy4filter"][data-view="issues"]').click()
+            page.wait_for_function("()=>state.sv4?.view==='issues'&&document.querySelector('[data-act=sy4filter][data-view=issues]')?.classList.contains('active')",timeout=10000)
             missing=page.locator('.sy4-item').filter(has_text='browser-delivery')
-            assert missing.count()==1 and 'MISSING IN RUNTIME' in missing.inner_text()
+            missing.wait_for(state='visible',timeout=10000)
+            assert 'MISSING IN RUNTIME' in missing.inner_text(),missing.inner_text()
             missing.locator('[data-act="sy4restore"]').click()
             page.locator('#dialog-form [name="confirmation"]').wait_for(state='visible',timeout=10000)
             page.locator('#dialog-form [name="confirmation"]').fill('browser-delivery')
