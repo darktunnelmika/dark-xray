@@ -4,7 +4,7 @@
 if(typeof enginePage!=='function'||typeof runAction!=='function')return;
 const baseEnginePage=enginePage,baseRunAction=runAction;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
-state.te4=state.te4||{preview:null};
+state.te4=state.te4||{preview:null,preview_seq:0,config_signature:''};
 
 const esc=v=>e(String(v??''));
 function trafficTabs(){
@@ -203,7 +203,9 @@ function routingPage(d){
 }
 enginePage=async function(){
  if(!['outbounds','routing'].includes(state.page))return baseEnginePage();
- const d=await teData();state.te4.data=d;
+ const d=await teData(),signature=JSON.stringify({outbounds:d.outbounds,routing:d.routing,observatory:d.observatory});
+ if(state.te4.config_signature&&state.te4.config_signature!==signature)state.te4.preview=null;
+ state.te4.config_signature=signature;state.te4.data=d;
  return state.page==='outbounds'?outboundsPage(d):routingPage(d);
 };
 
@@ -247,7 +249,7 @@ async function previewFromForm(form){
    user:String(fd.get('user')||'').trim(),inbound_tag:String(fd.get('inbound_tag')||'').trim(),
    process:String(fd.get('process')||'').trim(),vless_route:Number(fd.get('vless_route')||0),attrs
   };
-  state.te4.preview=await api('/api/traffic-engine/preview','POST',body);
+  state.te4.preview=await api('/api/traffic-engine/preview','POST',body);state.te4.preview_seq=(state.te4.preview_seq||0)+1;
   const box=document.querySelector('#te4-preview-result');if(box)box.innerHTML=previewResult(state.te4.preview);
   return state.te4.preview;
  }finally{if(submit?.isConnected)submit.disabled=false;}
