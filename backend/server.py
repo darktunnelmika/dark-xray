@@ -1161,14 +1161,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/sub/{public_token}')
     def subscription(public_token:str,request:Request):
         if not SUB_RE.fullmatch(public_token):raise HTTPException(404)
+        sub=engine.section('subscription')
+        if not sub.get('enabled',True):raise HTTPException(404)
         with store.lock:
             row=store.db.execute("SELECT * FROM managed_clients WHERE public_token=? AND state!='deleted'",(public_token,)).fetchone()
         if not row:raise HTTPException(404)
         if store.client_reasons(row['email']) or row['external_disabled']:raise HTTPException(403,'Subscription suspended')
         if row['state']!='applied':raise HTTPException(503,'Customer configuration has not been saved to the runtime')
         engine.check_device(row['email'],request.headers.get('x-hwid',''),request.headers.get('x-device-os',''),request.headers.get('x-device-model',''))
-        sub=engine.section('subscription')
-        if not sub.get('enabled',True):raise HTTPException(404)
         fmt=request.query_params.get('format')
         if not fmt:
             ua=request.headers.get('user-agent','').lower()
@@ -1208,6 +1208,31 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             for row in db.execute('SELECT id,allowed FROM owner_profiles').fetchall():
                 db.execute('UPDATE owner_profiles SET allowed=? WHERE id=?',(json.dumps([i for i in json.loads(row['allowed']) if i!=inbound_id]),row['id']))
         manager.tick(suppress=True);manager.audit(p.actor,p.actor.id,'inbound.delete',str(inbound_id));return result
+
+    @app.get('/api/subscription/status')
+    def subscription_status(p:Principal=Depends(owner)):
+        sub=engine.section('subscription')
+        with store.lock:
+            managed=int(store.db.execute("SELECT COUNT(*) FROM managed_clients WHERE state!='deleted'").fetchone()[0])
+            hwid_clients=int(store.db.execute("SELECT COUNT(*) FROM managed_clients m JOIN core_clients c ON c.email=m.email WHERE m.state!='deleted' AND CAST(json_extract(c.body,'$.limitHwid') AS INTEGER)>0").fetchone()[0])
+            devices=int(store.db.execute("SELECT COUNT(*) FROM core_devices").fetchone()[0])
+            at_limit=int(store.db.execute("""SELECT COUNT(*) FROM core_clients c
+                WHERE CAST(json_extract(c.body,'$.limitHwid') AS INTEGER)>0
+                  AND (SELECT COUNT(*) FROM core_devices d WHERE d.email=c.email)>=CAST(json_extract(c.body,'$.limitHwid') AS INTEGER)""").fetchone()[0])
+        tmpl=sub.get('remark_template','{remark} | {email}')
+        preview=tmpl.replace('{remark}','TURKEY FAST').replace('{email}','customer@example').replace('{protocol}','VLESS')
+        base=config.public_origin.rstrip('/')+str(sub.get('path','/sub'))+'/<token>'
+        return {'enabled':bool(sub.get('enabled',True)),'base_url':base,
+                'default_format':sub.get('default_format','base64'),'auto_detect':bool(sub.get('auto_detect',True)),
+                'supported_formats':['base64','raw','clash','json'],
+                'profile_update_interval_hours':int(sub.get('profile_update_interval_hours',6)),
+                'profile_title':sub.get('profile_title','DARK XRAY'),
+                'profile_url':sub.get('profile_url',''),'support_url':sub.get('support_url',''),
+                'remark_preview':preview,'traffic_scope':'local_plus_remote_nodes',
+                'device_policy':{'managed_clients':managed,'clients_with_hwid_limit':hwid_clients,
+                                 'registered_devices':devices,'clients_at_device_limit':at_limit,
+                                 'required_header':'x-hwid','optional_headers':['x-device-os','x-device-model']},
+                'auto_detect_rules':[{'contains':'clash','format':'clash'},{'contains':'mihomo','format':'clash'}]}
 
     @app.get('/api/settings/{section}')
     def get_setting(section:str,p:Principal=Depends(owner)):
