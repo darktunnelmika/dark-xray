@@ -348,9 +348,10 @@ class Store:
             volume = int(previous["volume_credit_bytes"]) if previous and volume_credit_bytes is None else integer(0 if volume_credit_bytes is None else volume_credit_bytes)
             unlimited = int(previous["unlimited_credit"]) if previous and unlimited_credit is None else integer(0 if unlimited_credit is None else unlimited_credit,0,1000000)
             allocated_volume,allocated_unlimited=self._allocation(db,owner)
-            if volume<allocated_volume:
+            enforce_credit=self._resource_credit_enforced(db,owner,actor)
+            if enforce_credit and volume<allocated_volume:
                 raise PolicyError("Volume credit cannot be lower than currently allocated client volume")
-            if unlimited<allocated_unlimited:
+            if enforce_credit and unlimited<allocated_unlimited:
                 raise PolicyError("Unlimited credit cannot be lower than current unlimited client count")
             count = db.execute("SELECT COUNT(*) FROM clients WHERE owner=?", (owner,)).fetchone()[0]
             if max_clients and count > max_clients:
