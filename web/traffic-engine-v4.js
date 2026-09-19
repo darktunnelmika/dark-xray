@@ -215,6 +215,7 @@ async function makeDefault(index){
 }
 runAction=async function(act,el){
  const guided=globalThis.DarkXrayGuidedV3;
+ if(act.startsWith('te4')&&['te4outnew','te4outedit','te4outclone','te4outimport','te4outraw','te4routesettings','te4rulenew','te4ruleedit','te4balnew','te4baledit','te4obsedit'].includes(act)&&!guided)throw Error(L('Guided Xray editor module is unavailable.','ماژول Guided Xray در دسترس نیست.'));
  if(act==='te4xray'){await go('xray');return;}
  if(act==='te4default'){await makeDefault(Number(el.dataset.index));return;}
  if(act==='te4outnew'){await guided.openOutbound();return;}
