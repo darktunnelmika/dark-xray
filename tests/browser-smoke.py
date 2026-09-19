@@ -212,6 +212,19 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert browser_out['streamSettings']['grpcSettings']['serviceName']=='browser-grpc'
             mark('Xray Guided V3 creates VLESS outbound without raw Settings/StreamSettings JSON')
 
+            visit(page,'xray')
+            page.locator('[data-act="xv2tab"][data-tab="dns"]').click()
+            page.locator('[data-act="xv2dnsedit"]').click()
+            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="dnsQueryStrategy"]').count()==1
+            assert page.locator('#dialog-form [name="dnsServers"]').count()==1
+            page.locator('#dialog-form [name="dnsQueryStrategy"]').select_option('UseIPv4')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            dns=page.evaluate("()=>api('/api/settings/dns').then(x=>x.value)")
+            assert dns.get('queryStrategy')=='UseIPv4',dns
+            mark('DNS Guided V3 exposes safe structured controls instead of raw JSON')
+
             visit(page,'routing')
             page.locator('[data-act="xv2rulenew"]').click()
             page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
@@ -224,6 +237,17 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
             assert any(r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
             mark('Routing Guided V3 selects existing outbound tags instead of free-typing destinations')
+
+            page.locator('[data-act="xv2routesettings"]').click()
+            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="routeDomainStrategy"] option[value="IPIfNonMatch"]').count()==1
+            page.locator('#dialog-form [name="routeDomainStrategy"]').select_option('IPIfNonMatch')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
+            assert routing.get('domainStrategy')=='IPIfNonMatch',routing
+            assert any(r.get('outboundTag')=='browser-proxy' for r in routing.get('rules',[])),routing
+            mark('Routing Guided V3 changes domain strategy without overwriting rules')
 
             visit(page,'xray')
             page.locator('[data-act="xv2tab"][data-tab="balancers"]').click()
@@ -242,6 +266,18 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             observatory=page.evaluate("()=>api('/api/settings/observatory').then(x=>x.value)")
             assert 'browser-proxy' in observatory.get('subjectSelector',[]),observatory
             mark('Balancer Guided V3 configures leastPing with Observatory automatically')
+
+            page.locator('[data-act="xv2tab"][data-tab="observatory"]').click()
+            page.locator('[data-act="xv2obsedit"]').click()
+            page.locator('.xv3-editor').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form input[name="obsSelector"][value="browser-proxy"]').is_checked()
+            page.locator('#dialog-form [name="obsInterval"]').fill('45s')
+            page.locator('#submit-dialog').click()
+            page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
+            observatory=page.evaluate("()=>api('/api/settings/observatory').then(x=>x.value)")
+            assert observatory.get('probeInterval')=='45s',observatory
+            assert 'browser-proxy' in observatory.get('subjectSelector',[]),observatory
+            mark('Observatory Guided V3 edits probe behavior with outbound selectors')
 
             visit(page,'nodes')
             page.locator('[data-act="nv2new"]').click()

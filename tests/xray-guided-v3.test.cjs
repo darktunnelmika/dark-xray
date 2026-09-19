@@ -104,3 +104,47 @@ test('Guided source keeps routing targets selectable and leastLoad hidden until 
   assert.match(src,/burstObservatory/);
   assert.match(src,/xv3outraw/);
 });
+
+
+test('Guided DNS builder keeps advanced fields while exposing safe common controls',()=>{
+  const g=load(),old={hosts:{'example.test':'127.0.0.1'},servers:['1.1.1.1']};
+  const fd=new FD({
+    dnsServers:'1.1.1.1\nhttps://8.8.8.8/dns-query\n{"address":"9.9.9.9","port":5353}',
+    dnsQueryStrategy:'UseIPv4',dnsParallel:'true',dnsServeStale:'true',dnsServeExpiredTTL:'120',
+    dnsTag:'dns-main',dnsClientIp:'203.0.113.9'
+  });
+  const v=g.dnsFromForm(fd,old);
+  assert.equal(v.queryStrategy,'UseIPv4');
+  assert.equal(v.enableParallelQuery,true);
+  assert.equal(v.serveStale,true);
+  assert.equal(v.serveExpiredTTL,120);
+  assert.equal(v.servers[2].port,5353);
+  assert.deepEqual(JSON.parse(JSON.stringify(v.hosts)),{'example.test':'127.0.0.1'});
+});
+
+test('Guided Routing settings changes strategy without touching rules or balancers',()=>{
+  const g=load(),old={domainStrategy:'AsIs',rules:[{type:'field',outboundTag:'direct'}],balancers:[{tag:'b',selector:['proxy'],strategy:{type:'random'}}]};
+  const v=g.routingSettingsFromForm(new FD({routeDomainStrategy:'IPIfNonMatch'}),old);
+  assert.equal(v.domainStrategy,'IPIfNonMatch');
+  assert.equal(v.rules.length,1);
+  assert.equal(v.balancers[0].tag,'b');
+});
+
+test('Guided Observatory builds selectors and validates URL/duration',()=>{
+  const g=load(),fd=new FD({
+    obsEnabled:'true',obsSelector:['proxy-a','proxy-b'],obsCustomSelectors:'edge-\nbackup-',
+    obsProbeURL:'https://www.gstatic.com/generate_204',obsInterval:'2h45m',obsConcurrency:'true'
+  });
+  const v=g.observatoryFromForm(fd);
+  assert.deepEqual(Array.from(v.subjectSelector),['proxy-a','proxy-b','edge-','backup-']);
+  assert.equal(v.enableConcurrency,true);
+  assert.equal(g.validDuration('30s'),true);
+  assert.equal(g.validDuration('2h45m'),true);
+  assert.equal(g.validDuration('tomorrow'),false);
+  assert.throws(()=>g.observatoryFromForm(new FD({
+    obsEnabled:'true',obsSelector:['proxy'],obsProbeURL:'file:///tmp/x',obsInterval:'30s'
+  })));
+  assert.throws(()=>g.observatoryFromForm(new FD({
+    obsEnabled:'true',obsSelector:['proxy'],obsProbeURL:'https://example.com',obsInterval:'soon'
+  })));
+});

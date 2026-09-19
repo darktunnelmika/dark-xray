@@ -288,6 +288,58 @@ class CoreEngine:
                 from guard_bridge import BrokerClient
                 BrokerClient(self.config.guard_socket).clear()
                 with self.store.transaction() as db: db.execute("UPDATE bans SET state='released',expires_at=? WHERE state='applied'",(time.time(),))
+        if name=='dns':
+            strategy=value.get('queryStrategy','UseIP')
+            if strategy not in {'UseIP','UseIPv4','UseIPv6','UseSystem'}:raise CoreError('Invalid DNS queryStrategy')
+            for key in ('disableCache','serveStale','disableFallback','disableFallbackIfMatch','enableParallelQuery','useSystemHosts'):
+                if key in value and type(value[key]) is not bool:raise CoreError('DNS '+key+' must be boolean')
+            if 'serveExpiredTTL' in value and (type(value['serveExpiredTTL']) is not int or value['serveExpiredTTL']<0):
+                raise CoreError('DNS serveExpiredTTL must be a non-negative integer')
+            if value.get('tag') is not None and value.get('tag')!='' and (not isinstance(value.get('tag'),str) or not TAG_RE.fullmatch(value['tag'])):
+                raise CoreError('Invalid DNS tag')
+            client_ip=value.get('clientIp',value.get('clientIP',''))
+            if client_ip:
+                if not isinstance(client_ip,str):raise CoreError('DNS clientIp must be a string')
+                try:ipaddress.ip_address(client_ip)
+                except ValueError as exc:raise CoreError('DNS clientIp must be an IP address') from exc
+            servers=value.get('servers',[])
+            if not isinstance(servers,list) or not servers:raise CoreError('DNS requires at least one server')
+            for server in servers:
+                if isinstance(server,str):
+                    if not server or len(server)>2048 or any(ord(ch)<32 or ord(ch)==127 for ch in server):raise CoreError('Invalid DNS server')
+                    continue
+                if not isinstance(server,dict):raise CoreError('DNS server must be a string or object')
+                address=server.get('address')
+                if not isinstance(address,str) or not address or len(address)>2048 or any(ord(ch)<32 or ord(ch)==127 for ch in address):
+                    raise CoreError('DNS server object requires a valid address')
+                if 'port' in server and (type(server['port']) is not int or not 1<=server['port']<=65535):raise CoreError('Invalid DNS server port')
+                if 'queryStrategy' in server and server['queryStrategy'] not in {'UseIP','UseIPv4','UseIPv6','UseSystem'}:raise CoreError('Invalid DNS server queryStrategy')
+                for key in ('skipFallback','finalQuery','disableCache','serveStale'):
+                    if key in server and type(server[key]) is not bool:raise CoreError('DNS server '+key+' must be boolean')
+                for key in ('domains','expectedIPs','unexpectedIPs'):
+                    if key in server and (not isinstance(server[key],list) or any(not isinstance(x,str) or not x for x in server[key])):
+                        raise CoreError('DNS server '+key+' must be a list of strings')
+            hosts=value.get('hosts',{})
+            if hosts is not None:
+                if not isinstance(hosts,dict):raise CoreError('DNS hosts must be an object')
+                for domain,target in hosts.items():
+                    if not isinstance(domain,str) or not domain:raise CoreError('Invalid DNS hosts key')
+                    values=target if isinstance(target,list) else [target]
+                    if not values or any(not isinstance(x,str) or not x for x in values):raise CoreError('Invalid DNS hosts target')
+        if name=='observatory' and value:
+            selectors=value.get('subjectSelector')
+            if not isinstance(selectors,list) or not selectors or any(not isinstance(x,str) or not x or len(x)>128 for x in selectors):
+                raise CoreError('Observatory requires nonempty subjectSelector strings')
+            probe=value.get('probeURL',value.get('probeUrl',''))
+            if not isinstance(probe,str) or not probe or len(probe)>2048:raise CoreError('Observatory probe URL is required')
+            parsed=urlsplit(probe)
+            if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.password:
+                raise CoreError('Observatory probe URL must be http/https without credentials')
+            interval=value.get('probeInterval','')
+            if not isinstance(interval,str) or not re.fullmatch(r'(?:\d+(?:ns|us|ms|s|m|h))+',interval):
+                raise CoreError('Invalid Observatory probeInterval')
+            if 'enableConcurrency' in value and type(value['enableConcurrency']) is not bool:
+                raise CoreError('Observatory enableConcurrency must be boolean')
         if name=='outbounds':
             if not value: raise CoreError('At least one outbound is required')
             tags=[]
@@ -364,6 +416,7 @@ class CoreEngine:
             for r in self.section('routing').get('rules',[]):
                 if r.get('outboundTag') and r['outboundTag'] not in tags: raise CoreError('Routing still refers to an outbound being removed')
         if name=='routing':
+            if value.get('domainStrategy','AsIs') not in {'AsIs','IPIfNonMatch','IPOnDemand'}:raise CoreError('Invalid routing domainStrategy')
             if not isinstance(value.get('rules',[]),list): raise CoreError('rules must be a list')
             tags={o['tag'] for o in self.section('outbounds')}
             balancers=value.get('balancers',[])
@@ -372,6 +425,9 @@ class CoreEngine:
             for b in balancers:
                 if not isinstance(b,dict) or not isinstance(b.get('tag'),str) or not TAG_RE.fullmatch(b['tag']) or b['tag'] in btags:raise CoreError('Invalid or duplicate balancer tag')
                 if not isinstance(b.get('selector'),list) or not b['selector'] or any(not isinstance(x,str) or not x for x in b['selector']):raise CoreError('Balancer requires nonempty tag selectors')
+                strategy=b.get('strategy',{'type':'random'})
+                if not isinstance(strategy,dict) or strategy.get('type','random') not in {'random','roundRobin','leastPing','leastLoad'}:raise CoreError('Unsupported balancer strategy')
+                if b.get('fallbackTag') and b['fallbackTag'] not in tags:raise CoreError('Unknown balancer fallback outbound')
                 btags.add(b['tag'])
             for rule in value.get('rules',[]):
                 if not isinstance(rule,dict): raise CoreError('Every rule must be an object')

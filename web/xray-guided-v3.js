@@ -262,7 +262,110 @@ async function guidedBalancer(index=null){
  const form=document.querySelector('#dialog-form');if(form){const sync=()=>{const sum=form.querySelector('[data-xv3-bal-summary]'),members=form.querySelectorAll('input[name=selector]:checked').length;if(sum)sum.textContent=`${form.elements.balStrategy.value} · ${members} ${L('members','عضو')}`;};form.addEventListener('change',sync);sync();}
 }
 
+
+function dnsServerLines(servers){
+ return (servers||[]).map(function(x){return typeof x==='string'?x:JSON.stringify(x);}).join('\n');
+}
+function parseDnsServers(raw){
+ const lines=String(raw||'').split(/\r?\n/).map(function(x){return x.trim();}).filter(Boolean);
+ if(!lines.length)throw Error(L('Add at least one DNS server.','حداقل یک DNS Server اضافه کن.'));
+ return lines.map(function(x){
+  if(x.charAt(0)==='{'){try{const o=JSON.parse(x);if(!o||Array.isArray(o)||typeof o!=='object')throw 0;return o;}catch(_){throw Error(L('One DNS server JSON line is invalid.','یکی از خط‌های JSON مربوط به DNS Server معتبر نیست.'));}}
+  return x;
+ });
+}
+function dnsFromForm(fd,old){
+ const v=clone(old||{});
+ v.servers=parseDnsServers(fd.get('dnsServers'));
+ v.queryStrategy=String(fd.get('dnsQueryStrategy')||'UseIP');
+ v.disableCache=formBool(fd,'dnsDisableCache');
+ v.enableParallelQuery=formBool(fd,'dnsParallel');
+ v.disableFallback=formBool(fd,'dnsDisableFallback');
+ v.disableFallbackIfMatch=formBool(fd,'dnsDisableFallbackIfMatch');
+ v.useSystemHosts=formBool(fd,'dnsUseSystemHosts');
+ v.serveStale=formBool(fd,'dnsServeStale');
+ v.serveExpiredTTL=Math.max(0,Math.floor(n(fd.get('dnsServeExpiredTTL'),0)));
+ const tag=String(fd.get('dnsTag')||'').trim(),client=String(fd.get('dnsClientIp')||'').trim();
+ if(tag)v.tag=tag;else delete v.tag;
+ if(client)v.clientIp=client;else delete v.clientIp;
+ return v;
+}
+async function guidedDNS(){
+ const d=(await api('/api/settings/dns')).value||{};
+ const body='<div class="xv3-editor">'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>1 · '+L('DNS behavior','رفتار DNS')+'</b><small>'+L('Common Xray DNS options without raw JSON.','گزینه‌های اصلی DNS بدون نیاز به JSON خام.')+'</small></div><div class="xv3-grid">'
+  +sel('queryStrategy','dnsQueryStrategy',[['UseIP','UseIP · IPv4 + IPv6'],['UseIPv4','UseIPv4'],['UseIPv6','UseIPv6'],['UseSystem','UseSystem']],d.queryStrategy||'UseIP',L('Global DNS query family used by Xray.','نوع Query سراسری DNS در Xray.'))
+  +fld('Tag','dnsTag',d.tag||'','text','dir="ltr"',L('Optional DNS tag for routing/diagnostics.','Tag اختیاری برای Routing و عیب‌یابی.'))
+  +fld('clientIp / ECS','dnsClientIp',d.clientIp||d.clientIP||'','text','dir="ltr" placeholder="1.2.3.4"',L('Optional EDNS Client Subnet source IP.','IP اختیاری برای EDNS Client Subnet.'))
+  +fld(L('Stale TTL (seconds)','TTL کش منقضی (ثانیه)'),'dnsServeExpiredTTL',d.serveExpiredTTL||0,'number','min="0" step="1"')
+  +'<div>'+toggle(L('Disable cache','غیرفعال‌کردن Cache'),'dnsDisableCache',!!d.disableCache,L('Normally keep cache enabled.','معمولاً Cache روشن بماند.'))+'</div>'
+  +'<div>'+toggle(L('Parallel queries','Query موازی'),'dnsParallel',!!d.enableParallelQuery,L('Race eligible upstream DNS servers in parallel.','سرورهای DNS واجدشرایط را هم‌زمان Query می‌کند.'))+'</div>'
+  +'<div>'+toggle(L('Disable fallback','غیرفعال‌کردن Fallback'),'dnsDisableFallback',!!d.disableFallback)+'</div>'
+  +'<div>'+toggle(L('Disable fallback on match','قطع Fallback هنگام Match'),'dnsDisableFallbackIfMatch',!!d.disableFallbackIfMatch)+'</div>'
+  +'<div>'+toggle(L('Use system hosts','استفاده از Hosts سیستم'),'dnsUseSystemHosts',!!d.useSystemHosts)+'</div>'
+  +'<div>'+toggle(L('Serve stale cache','استفاده از کش قدیمی'),'dnsServeStale',!!d.serveStale,L('Only useful while DNS cache is enabled.','فقط وقتی Cache فعال است کاربرد دارد.'))+'</div>'
+  +'</div></section>'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>2 · '+L('Upstream DNS servers','سرورهای DNS بالادست')+'</b><small>'+L('One address per line: IP, localhost, tcp://, https:// DoH. Advanced server objects can stay as one JSON object per line.','هر خط یک آدرس: IP، localhost، tcp:// یا DoH. آبجکت‌های پیشرفته هم می‌توانند هرکدام یک JSON در یک خط باشند.')+'</small></div>'
+  +textarea(L('DNS servers','DNS Serverها'),'dnsServers',dnsServerLines(d.servers||[]),L('Examples: 1.1.1.1 · 8.8.8.8 · https://1.1.1.1/dns-query','مثال: 1.1.1.1 · 8.8.8.8 · https://1.1.1.1/dns-query'),'dir="ltr" spellcheck="false"')
+  +'</section>'
+  +'<section class="xv3-summary"><span>'+L('Safe workflow','روند امن')+'</span><b>'+L('Save → Validate → Apply','ذخیره ← Validate ← اعمال')+'</b><small>'+L('Hosts and uncommon DNS fields already present are preserved; use Advanced JSON only for fields not shown here.','Hosts و فیلدهای خاص موجود حفظ می‌شوند؛ برای مواردی که اینجا نیست فقط از JSON پیشرفته استفاده کن.')+'</small></section>'
+  +'</div>';
+ dialog(L('DNS · Guided V3','DNS · Guided V3'),body,async function(fd){await api('/api/settings/dns','PUT',{value:dnsFromForm(fd,d)});toast(L('DNS saved. Validate before applying Xray.','DNS ذخیره شد؛ قبل از اعمال Xray Validate کن.'));closeDialog();await refresh();});
+}
+function routingSettingsFromForm(fd,old){
+ const v=clone(old||{});v.domainStrategy=String(fd.get('routeDomainStrategy')||'AsIs');return v;
+}
+async function guidedRouteSettings(){
+ const v=(await api('/api/settings/routing')).value||{};
+ const body='<div class="xv3-editor"><section class="xv3-section"><div class="xv3-section-head"><b>'+L('Domain resolution strategy','استراتژی Resolve دامنه')+'</b><small>'+L('This changes when Xray resolves domains while evaluating IP routing rules.','مشخص می‌کند Xray هنگام بررسی Ruleهای IP چه زمانی دامنه را Resolve کند.')+'</small></div><div class="xv3-grid">'
+  +sel('domainStrategy','routeDomainStrategy',[['AsIs',L('AsIs · do not resolve for routing','AsIs · برای Routing Resolve نکن')],['IPIfNonMatch',L('IPIfNonMatch · resolve only after no domain rule matches','IPIfNonMatch · فقط بعد از Match نشدن Rule دامنه')],['IPOnDemand',L('IPOnDemand · resolve when an IP rule needs it','IPOnDemand · هنگام نیاز Ruleهای IP')]],v.domainStrategy||'AsIs')
+  +'<div class="xv3-span-2 notice">'+L('Existing Rules and Balancers are preserved. AsIs is the safest default unless you intentionally route by GeoIP/CIDR for domain destinations.','Ruleها و Balancerهای فعلی دست‌نخورده می‌مانند. AsIs پیش‌فرض امن است مگر اینکه عمداً مقصدهای دامنه‌ای را با GeoIP/CIDR روت کنی.')+'</div>'
+  +'</div></section></div>';
+ dialog(L('Routing settings · Guided V3','تنظیمات Routing · Guided V3'),body,async function(fd){await api('/api/settings/routing','PUT',{value:routingSettingsFromForm(fd,v)});closeDialog();await refresh();});
+}
+function validDuration(v){
+ return /^(?:\d+(?:ns|us|ms|s|m|h))+$/.test(String(v||''));
+}
+function observatoryFromForm(fd){
+ if(!formBool(fd,'obsEnabled'))return {};
+ const selected=fd.getAll('obsSelector').map(String),custom=csv(fd.get('obsCustomSelectors'));
+ const subjectSelector=Array.from(new Set(selected.concat(custom)));
+ if(!subjectSelector.length)throw Error(L('Choose at least one outbound selector.','حداقل یک Selector برای Outbound انتخاب کن.'));
+ const probeURL=String(fd.get('obsProbeURL')||'').trim();
+ let u;try{u=new URL(probeURL);}catch(_){throw Error(L('Probe URL is invalid.','آدرس Probe معتبر نیست.'));}
+ if(!['http:','https:'].includes(u.protocol)||!u.hostname||u.username||u.password)throw Error(L('Probe URL must be a normal http/https URL without credentials.','Probe URL باید http/https معتبر و بدون نام کاربری/رمز باشد.'));
+ const probeInterval=String(fd.get('obsInterval')||'').trim();
+ if(!validDuration(probeInterval))throw Error(L('Probe interval must look like 10s, 1m or 2h45m.','فاصله Probe باید مثل 10s، 1m یا 2h45m باشد.'));
+ return {subjectSelector:subjectSelector,probeURL:probeURL,probeInterval:probeInterval,enableConcurrency:formBool(fd,'obsConcurrency')};
+}
+async function guidedObservatory(){
+ const o=(await api('/api/settings/observatory')).value||{},outs=(await api('/api/settings/outbounds')).value||[];
+ const existing=o.subjectSelector||[],exact=new Set(outs.map(function(x){return x.tag;}));
+ const custom=existing.filter(function(x){return !exact.has(x);});
+ const checks=outs.map(function(x){return '<label class="xv3-check"><input type="checkbox" name="obsSelector" value="'+esc(x.tag)+'" '+(existing.includes(x.tag)?'checked':'')+'><span>'+esc(x.tag)+'<small>'+esc(x.protocol)+'</small></span></label>';}).join('');
+ const enabled=Object.keys(o).length>0;
+ const body='<div class="xv3-editor">'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>1 · '+L('Observatory state','وضعیت Observatory')+'</b><small>'+L('Used by leastPing balancers to measure outbound health/latency.','برای سنجش سلامت و تاخیر Outboundها در Balancer نوع leastPing استفاده می‌شود.')+'</small></div>'
+  +toggle(L('Enable Observatory','فعال‌سازی Observatory'),'obsEnabled',enabled||!existing.length,L('Uncheck and save to remove Observatory from the generated Xray config.','برای حذف Observatory از کانفیگ Xray تیک را بردار و ذخیره کن.'))
+  +'</section>'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>2 · '+L('Outbound selectors','Selectorهای Outbound')+'</b><small>'+L('Xray selectors are prefix-based. Exact outbound tags below are convenient safe picks.','Selector در Xray بر اساس Prefix است؛ Tagهای دقیق پایین انتخاب‌های ساده و قابل‌فهم هستند.')+'</small></div>'
+  +'<div class="xv3-check-grid">'+(checks||L('Create an outbound first.','ابتدا یک Outbound بساز.'))+'</div>'
+  +textarea(L('Extra prefix selectors','Prefix Selector اضافه'),'obsCustomSelectors',custom.join('\n'),L('Optional. Example: proxy- matches proxy-a, proxy-b, ...','اختیاری. مثال: proxy- همه proxy-a و proxy-b و ... را Match می‌کند.'),'dir="ltr"')
+  +'</section>'
+  +'<section class="xv3-section"><div class="xv3-section-head"><b>3 · '+L('Probe behavior','رفتار Probe')+'</b></div><div class="xv3-grid">'
+  +fld('Probe URL','obsProbeURL',o.probeURL||o.probeUrl||'https://www.gstatic.com/generate_204','url','required dir="ltr"')
+  +fld('Probe interval','obsInterval',o.probeInterval||'30s','text','required dir="ltr" placeholder="30s"',L('Go-style duration such as 10s, 1m, 2h45m.','مدت به شکل 10s، 1m یا 2h45m.'))
+  +'<div class="xv3-span-2">'+toggle(L('Concurrent probes','Probe هم‌زمان'),'obsConcurrency',o.enableConcurrency!==false,L('Faster with multiple outbounds, but creates a burst of probe requests.','برای چند Outbound سریع‌تر است ولی Probeها را هم‌زمان ارسال می‌کند.'))+'</div>'
+  +'</div></section>'
+  +'<section class="xv3-summary"><span>'+L('Balancer note','نکته Balancer')+'</span><b>leastPing → Observatory</b><small>'+L('Creating a leastPing balancer already adds its members here automatically.','ساخت Balancer نوع leastPing اعضای آن را خودکار به Observatory اضافه می‌کند.')+'</small></section>'
+  +'</div>';
+ dialog('Observatory · Guided V3',body,async function(fd){await api('/api/settings/observatory','PUT',{value:observatoryFromForm(fd)});closeDialog();await refresh();});
+}
+
 runAction=async function(act,el){
+ if(act==='xv2dnsedit'){await guidedDNS();return;}
+ if(act==='xv2routesettings'){await guidedRouteSettings();return;}
+ if(act==='xv2obsedit'){await guidedObservatory();return;}
  if(act==='xv2outnew'){await guidedOutbound();return;}
  if(act==='xv2outedit'){await guidedOutbound(Number(el.dataset.index));return;}
  if(act==='xv2outclone'){await guidedOutbound(Number(el.dataset.index),true);return;}
@@ -275,5 +378,5 @@ runAction=async function(act,el){
  return baseRunAction(act,el);
 };
 
-globalThis.DarkXrayGuidedV3={buildOutbound,buildSettings,buildStream,parseLink,linkStream,protocols:PROTOCOLS.map(x=>x[0])};
+globalThis.DarkXrayGuidedV3={buildOutbound,buildSettings,buildStream,parseLink,linkStream,dnsFromForm,routingSettingsFromForm,observatoryFromForm,validDuration,protocols:PROTOCOLS.map(x=>x[0])};
 })();

@@ -291,6 +291,53 @@ def test_missing_balancer_rejected(env):
     *_,c=env
     assert c.put('/api/settings/routing',json={'value':{'rules':[{'type':'field','balancerTag':'missing'}]}}).status_code==422
 
+
+@pytest.mark.parametrize('value,message',[
+ ({'servers':['1.1.1.1'],'queryStrategy':'Anything'},'Invalid DNS queryStrategy'),
+ ({'servers':[{'address':'9.9.9.9','port':70000}]},'Invalid DNS server port'),
+ ({'servers':[]},'DNS requires at least one server'),
+])
+def test_guided_dns_backend_validation(env,value,message):
+    *_,c=env
+    r=c.put('/api/settings/dns',json={'value':value})
+    assert r.status_code==422,r.text
+    assert message in r.text
+
+
+@pytest.mark.parametrize('value,message',[
+ ({'subjectSelector':['proxy'],'probeURL':'file:///tmp/probe','probeInterval':'30s','enableConcurrency':True},'Observatory probe URL'),
+ ({'subjectSelector':['proxy'],'probeURL':'https://example.com','probeInterval':'soon','enableConcurrency':True},'Invalid Observatory probeInterval'),
+ ({'subjectSelector':[],'probeURL':'https://example.com','probeInterval':'30s','enableConcurrency':True},'Observatory requires nonempty'),
+])
+def test_guided_observatory_backend_validation(env,value,message):
+    *_,c=env
+    r=c.put('/api/settings/observatory',json={'value':value})
+    assert r.status_code==422,r.text
+    assert message in r.text
+
+
+def test_guided_dns_observatory_and_routing_shapes_are_saved(env):
+    *_,c=env
+    dns={'servers':['1.1.1.1','https://8.8.8.8/dns-query'],'queryStrategy':'UseIPv4',
+         'disableCache':False,'enableParallelQuery':True,'serveStale':True,'serveExpiredTTL':120}
+    assert c.put('/api/settings/dns',json={'value':dns}).status_code==200
+    obs={'subjectSelector':['direct'],'probeURL':'https://www.gstatic.com/generate_204',
+         'probeInterval':'2h45m','enableConcurrency':True}
+    assert c.put('/api/settings/observatory',json={'value':obs}).status_code==200
+    routing={'domainStrategy':'IPIfNonMatch','rules':[],'balancers':[]}
+    assert c.put('/api/settings/routing',json={'value':routing}).status_code==200
+    assert c.get('/api/settings/dns').json()['value']['queryStrategy']=='UseIPv4'
+    assert c.get('/api/settings/observatory').json()['value']['probeInterval']=='2h45m'
+    assert c.get('/api/settings/routing').json()['value']['domainStrategy']=='IPIfNonMatch'
+
+
+def test_guided_routing_rejects_unknown_strategy_and_fallback(env):
+    *_,c=env
+    assert c.put('/api/settings/routing',json={'value':{'domainStrategy':'AlwaysResolve','rules':[]}}).status_code==422
+    bad={'domainStrategy':'AsIs','rules':[],'balancers':[{
+        'tag':'b','selector':['direct'],'strategy':{'type':'random'},'fallbackTag':'missing'}]}
+    assert c.put('/api/settings/routing',json={'value':bad}).status_code==422
+
 @pytest.mark.parametrize('overrides',[{'privateKey':{}},{'serverNames':42},{'shortIds':None}])
 def test_reality_malformed_types_not_server_500(env,overrides):
     *_,c=env
