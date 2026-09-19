@@ -7,7 +7,7 @@ and HTTP routing independently reviewable. This is not the Xray panel runtime.
 import argparse, sqlite3
 from pathlib import Path
 from dark_policy import PolicyError, Store
-from policy_auth import (CAPABILITIES, ALLOWED_PERMISSIONS, DEFAULT_PERMISSIONS, PASSWORD_MIN_LENGTH, password_hash, verify_password, permissions_for, create_admin, bootstrap, StrictModel, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, Credit, Usage, Refund)
+from policy_auth import (CAPABILITIES, ALLOWED_PERMISSIONS, DEFAULT_PERMISSIONS, PASSWORD_MIN_LENGTH, password_hash, verify_password, permissions_for, create_admin, bootstrap, StrictModel, Login, AdminCreate, AdminEdit, OwnerEdit, ClientCreate, ClientEdit, ResourceCredit, Usage)
 from policy_routes import create_app
 
 def main():
