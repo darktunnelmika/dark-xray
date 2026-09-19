@@ -408,6 +408,17 @@ const uiWords=[
  ['Failed','ناموفق'],['Ready','آماده'],['Session','نشست'],['Language','زبان'],['Calendar','تقویم'],
  ['Timezone','منطقه زمانی'],['Rows','ردیف‌ها'],['Appearance','ظاهر'],['Operations','عملیات'],
  ['System','سیستم'],['Domain','دامنه'],['Panel','پنل'],['Threads','تردها'],['Cores','هسته‌ها'],
+ ['Dashboard','داشبورد'],['Outbound','اوتباند'],['Outbounds','اوتباندها'],['Balancer','بالانسر'],['Balancers','بالانسرها'],
+ ['Rule','قانون'],['Rules','قوانین'],['Tag','تگ'],['Runtime','محیط اجرا'],['Guided','هدایت‌شده'],['Match','تطبیق'],
+ ['Subscription','اشتراک'],['Endpoint','نقطه اتصال'],['Endpoints','نقاط اتصال'],['Node','نود'],['Nodes','نودها'],
+ ['Queue','صف'],['Policy','سیاست'],['Matrix','ماتریس'],['Event','رویداد'],['Events','رویدادها'],['Fleet','ناوگان'],
+ ['Health','سلامت'],['Alerts','هشدارها'],['Activity','فعالیت'],['Memory','حافظه'],['Storage','فضای ذخیره‌سازی'],
+ ['Connection','اتصال'],['Stats','آمار'],['State','وضعیت'],['Attempts','تلاش‌ها'],['Updated','بروزشده'],
+ ['Clean','سالم'],['Dirty','اعمال‌نشده'],['Observed','مشاهده‌شده'],['Configured','پیکربندی‌شده'],['Off','خاموش'],
+ ['Result','نتیجه'],['Behavior','رفتار'],['Identity','هویت'],['Format','فرمت'],['Resolution','تفکیک'],
+ ['Profile','پروفایل'],['Title','عنوان'],['Public','عمومی'],['Proxy','پروکسی'],['Address','آدرس'],['Interval','بازه'],
+ ['Autostart','اجرای خودکار'],['Certificate','گواهی'],['Cookie','کوکی'],['Access','دسترسی'],['Changes','تغییرات'],
+ ['Lifetime','مدت اعتبار'],['Protection','محافظت'],['Representative','نماینده'],['Representatives','نمایندگان'],
  ['Uptime','آپ‌تایم'],['Network','شبکه'],['Path','مسیر'],['Host','هاست'],['Mode','حالت'],
  ['Padding','پدینگ'],['None','هیچ‌کدام']
 ];
@@ -457,7 +468,7 @@ function process(root){
   }
 }
 
-const persianLeakRe=/\b(Overview|Resellers|Settings|Account|Security|Manage|Delete|Edit|Save|Close|Status|Actions|Usage|Quota|Expiry|Search|Showing|New|Enabled|Disabled|Active|Blocked|Refresh|Logout|General|Advanced|Transport|Network|Path|Host|Mode|Padding|Cores|Threads|Uptime|Panel|Owner|Role|Permissions|Traffic|Credit|Comment|Group|None|Default|Current|History|Logs|Backup|Recovery|Members|Strategy|Random|Destination|Source|Local|Fallback|Available|Recent|Download|Open|View|Create|Add|Remove|Apply|Validate|Preview|Details|Required|Optional|Error|Warning|Success|Failed|Ready|Session|Language|Calendar|Timezone|Rows|Appearance|Operations|System|Domain)\b/i;
+const persianLeakRe=/\b(Overview|Resellers|Settings|Account|Security|Manage|Delete|Edit|Save|Close|Status|Actions|Usage|Quota|Expiry|Search|Showing|New|Enabled|Disabled|Active|Blocked|Refresh|Logout|General|Advanced|Transport|Network|Path|Host|Mode|Padding|Cores|Threads|Uptime|Panel|Owner|Role|Permissions|Traffic|Credit|Comment|Group|None|Default|Current|History|Logs|Backup|Recovery|Members|Strategy|Random|Destination|Source|Local|Fallback|Available|Recent|Download|Open|View|Create|Add|Remove|Apply|Validate|Preview|Details|Required|Optional|Error|Warning|Success|Failed|Ready|Session|Language|Calendar|Timezone|Rows|Appearance|Operations|System|Domain|Dashboard|Outbound|Outbounds|Balancer|Balancers|Rule|Rules|Tag|Runtime|Guided|Match|Subscription|Endpoint|Endpoints|Node|Nodes|Queue|Policy|Matrix|Event|Events|Fleet|Health|Alerts|Activity|Memory|Storage|Connection|Stats|State|Attempts|Updated|Clean|Dirty|Observed|Configured|Result|Behavior|Identity|Format|Resolution|Profile|Title|Public|Proxy|Address|Interval|Autostart|Certificate|Cookie|Access|Changes|Lifetime|Protection|Representative|Representatives)\b/i;
 function auditSkip(el){
   return skip(el)||!!el?.closest('.cyber-lang-switch,[data-sv2-segment="language"]');
 }
