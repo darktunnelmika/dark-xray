@@ -15,7 +15,7 @@ def _login(client,username,password=PW):
     return {'Authorization':'Bearer '+r.json()['access_token']}
 
 
-def test_legacy_reseller_cannot_self_credit_even_with_stale_grant(tmp_path):
+def test_legacy_reseller_cannot_self_adjust_resource_credit_even_with_stale_grant(tmp_path):
     store=Store(tmp_path/'policy.db');owner=Actor('root','owner',{})
     bootstrap(store,'root',PW);store.register_owner(owner,'seller')
     create_admin(store,owner,'seller',PW,'reseller')
@@ -26,7 +26,7 @@ def test_legacy_reseller_cannot_self_credit_even_with_stale_grant(tmp_path):
         h=_login(c,'seller')
         me=c.get('/v1/me',headers=h);assert me.status_code==200
         assert 'finance.credit' not in me.json()['permissions']
-        r=c.post('/v1/owners/seller/credit',headers=h,json={'amount':5,'event_id':'legacy-self-credit'})
+        r=c.post('/v1/owners/seller/credits',headers=h,json={'volume_bytes':5,'unlimited_units':1,'event_id':'legacy-self-credit-0001'})
         assert r.status_code==403
     store.close()
 
@@ -48,15 +48,19 @@ def test_legacy_readonly_stale_write_grants_are_ignored(tmp_path):
     store.close()
 
 
-def test_legacy_owner_can_credit_and_refund(tmp_path):
+def test_legacy_owner_can_adjust_resource_credits(tmp_path):
     store=Store(tmp_path/'policy.db');owner=Actor('root','owner',{})
-    bootstrap(store,'root',PW);store.register_owner(owner,'seller')
+    bootstrap(store,'root',PW);store.register_owner(owner,'seller',volume_credit_bytes=0,unlimited_credit=0)
+    create_admin(store,owner,'seller',PW,'reseller')
     with TestClient(create_app(store)) as c:
         h=_login(c,'root')
-        r=c.post('/v1/owners/seller/credit',headers=h,json={'amount':100,'event_id':'owner-credit'})
+        r=c.post('/v1/owners/seller/credits',headers=h,json={
+            'volume_bytes':100,'unlimited_units':1,'event_id':'owner-resource-credit-0001'})
         assert r.status_code==200 and r.json()['recorded'] is True
-        r=c.post('/v1/clients',headers=h,json={'id':'sale-client','owner':'seller','price':25,'order_id':'sale-1'})
+        r=c.post('/v1/clients',headers=h,json={'id':'limited-client','owner':'seller','quota_bytes':25})
         assert r.status_code==201
-        r=c.post('/v1/refunds',headers=h,json={'order_id':'sale-1','event_id':'refund-1'})
-        assert r.status_code==200 and r.json()['recorded'] is True
+        r=c.post('/v1/clients',headers=h,json={'id':'unlimited-client','owner':'seller','quota_bytes':0})
+        assert r.status_code==201
+        assert c.post('/v1/owners/seller/credit',headers=h,json={'amount':1,'event_id':'old-money-credit'}).status_code==404
+        assert c.post('/v1/refunds',headers=h,json={'order_id':'sale-1','event_id':'refund-1'}).status_code==404
     store.close()
