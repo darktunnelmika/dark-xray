@@ -18,6 +18,9 @@ test('representative editor is unified and has no role or permission matrix',()=
   assert.match(live,/max_client_hwid/);
   assert.match(live,/max_client_ips/);
   assert.match(live,/prefix/);
+  assert.match(live,/volume_credit_bytes/);
+  assert.match(live,/unlimited_credit/);
+  assert.match(live,/resourcecredit/);
   assert.match(live,/ownerdelete/);
   assert.match(live,/نماینده Role یا Permission قابل انتخاب ندارد/);
   assert.doesNotMatch(live,/async function adminForm/);
@@ -29,9 +32,13 @@ test('legacy RBAC editor is not loaded by the application shell',()=>{
   assert.doesNotMatch(html,/rbac-v2\.js/);
 });
 
-test('representative cards expose login and policy state',()=>{
+test('representative cards expose login policy and resource-credit state',()=>{
   assert.match(live,/login_ready/);
   assert.match(live,/Max IP \/ HWID/);
   assert.match(live,/Prefix مشتری/);
+  assert.match(live,/Volume Credit باقی‌مانده/);
+  assert.match(live,/Unlimited Credit باقی‌مانده/);
   assert.match(live,/حذف نماینده/);
+  assert.doesNotMatch(live,/شارژ اعتبار مالی/);
+  assert.doesNotMatch(live,/اعتبار مالی<\/span>/);
 });
