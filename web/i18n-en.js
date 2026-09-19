@@ -1,5 +1,5 @@
-/* DARK XRAY English-first presentation layer.
- * The backend remains language-neutral. Persian can be restored with the EN/FA switch.
+/* DARK XRAY bidirectional presentation layer.
+ * The backend remains language-neutral. User-facing DOM text is normalized to EN or FA.
  */
 (function(){
 'use strict';
@@ -207,7 +207,65 @@ const exact=new Map(Object.entries({
  'زمان ساخت نامشخص':'Creation time unknown',
  'User-Agent نامشخص':'Unknown User-Agent',
  'ابطال':'Revoke',
- 'نشست باطل شد.':'Session revoked.'
+ 'نشست باطل شد.':'Session revoked.',
+ 'این API فقط برای اتصال ابزارهای مجاز به DARK XRAY است و سطح دسترسی آن از حساب سازنده فراتر نمی‌رود.':'This API is only for authorized DARK XRAY integrations and cannot exceed the creator account permissions.'
+}));
+
+const faExact=new Map(Object.entries({
+ 'Traffic reset schedule':'برنامه ریست ترافیک',
+ 'Custom reset interval (days)':'بازه سفارشی ریست (روز)',
+ 'Monthly reset day (1-31)':'روز ریست ماهانه (۱ تا ۳۱)',
+ 'Maximum resets · 0 unlimited':'حداکثر تعداد ریست · صفر = نامحدود',
+ 'INDEPENDENT OPERATIONS CONSOLE':'کنسول عملیات مستقل',
+ 'CURRENT':'فعلی',
+ 'UPTIME':'آپ‌تایم',
+ 'PANEL':'پنل',
+ 'THREADS':'تردها',
+ 'Cores':'هسته',
+ 'total':'کل',
+ 'Listen IP':'IP شنونده',
+ 'Path':'مسیر',
+ 'Host':'هاست',
+ 'Mode':'حالت',
+ 'Padding':'پدینگ',
+ 'Sniffing':'شنود پروتکل',
+ 'IPs Excluded':'IPهای مستثنی',
+ 'Domains Excluded':'دامنه‌های مستثنی',
+ 'None':'هیچ‌کدام',
+ 'HTTP camouflage':'پوشش HTTP',
+ 'Network':'شبکه',
+ 'Preset':'پریست',
+ 'Direct / Off':'مستقیم / خاموش',
+ 'Enable sniffing':'فعال‌سازی Sniffing',
+ 'Comma separated':'با کاما جدا کن',
+ 'Search':'جست‌وجو',
+ 'Showing':'نمایش',
+ 'New Inbound':'اینباند جدید',
+ 'No matching inbounds':'اینباندی پیدا نشد',
+ 'Core online':'هسته آنلاین',
+ 'Core stopped':'هسته متوقف',
+ 'Validate':'اعتبارسنجی',
+ 'Transport':'انتقال',
+ 'TCP Header':'هدر TCP',
+ 'Optional XHTTP padding expression.':'عبارت اختیاری Padding برای XHTTP',
+ 'OBSERVED':'مشاهده‌شده',
+ 'CHAIN':'زنجیره',
+ 'FALLBACK':'مسیر جایگزین',
+ 'LIVE CORE':'هسته زنده',
+ 'SAVED CONFIG':'کانفیگ ذخیره‌شده',
+ 'Observatory':'ناظر',
+ 'MANAGER':'مدیر',
+ 'CLIENT QUEUE':'صف کاربران',
+ 'NODES':'نودها',
+ 'STATE':'وضعیت',
+ 'ATTEMPTS':'تلاش‌ها',
+ 'UPDATED':'آخرین تغییر',
+ 'ACTION':'اقدام',
+ 'ISSUES':'مورد',
+ 'READY':'آماده',
+ 'CLEAR':'سالم',
+ 'YES':'بله',
+ 'NO / STALE':'خیر / ناقص'
 }));
 
 const phrases=[
@@ -279,6 +337,37 @@ const phrases=[
  ['مسیر فایل گواهی و کلید TLS لازم است.','TLS certificate and key file paths are required.']
 ];
 phrases.sort((a,b)=>b[0].length-a[0].length);
+const reverseExact=new Map();
+for(const [faText,enText] of exact){
+  if(faChars.test(faText)&&enText&&!reverseExact.has(enText))reverseExact.set(enText,faText);
+}
+for(const [enText,faText] of faExact)reverseExact.set(enText,faText);
+const reversePhrases=phrases
+  .filter(([faText,enText])=>faChars.test(faText)&&enText)
+  .map(([faText,enText])=>[enText,faText])
+  .sort((a,b)=>b[0].length-a[0].length);
+const faPhrases=[
+ ['DARK / DEPENDENCY GRAPH','DARK / گراف وابستگی'],
+ ['DARK / ROUTE PREVIEW','DARK / پیش‌نمایش مسیر'],
+ ['DARK / OBSERVATORY','DARK / ناظر'],
+ ['DARK / RULE ORDER','DARK / ترتیب قوانین'],
+ ['DARK / BALANCERS','DARK / بالانسرها'],
+ ['DARK / CLIENT SECURITY MATRIX','DARK / ماتریس امنیت کاربران'],
+ ['DARK / EVENTS','DARK / رویدادها'],
+ ['DARK / NFTABLES','DARK / NFTABLES'],
+ ['CONFIG PREVIEW','پیش‌نمایش کانفیگ'],
+ ['DEPENDENCIES','وابستگی‌ها'],
+ ['PREFIX SELECTORS','Selectorهای Prefix'],
+ ['MATCHED OUTBOUNDS','Outboundهای Match'],
+ ['BALANCER CANDIDATES','Candidateهای Balancer'],
+ ['01 / MANAGER','۰۱ / مدیر'],
+ ['02 / XRAY RUNTIME','۰۲ / Runtime Xray'],
+ ['03 / CLIENT QUEUE','۰۳ / صف کاربران'],
+ ['04 / NODES','۰۴ / نودها'],
+ ['01 / OBSERVE','۰۱ / مشاهده'],
+ ['02 / LOCAL ENFORCE','۰۲ / اعمال محلی'],
+ ['03 / GLOBAL POLICY','۰۳ / سیاست سراسری']
+].sort((a,b)=>b[0].length-a[0].length);
 
 const words=[
  ['ذخیره','Save'],['فعال','Active'],['غیرفعال','Disabled'],['کاربر','Client'],['مشتری','Client'],['مالک','Owner'],['نماینده','Reseller'],['اینباند','Inbound'],['حساب','Account'],['مجوز','Permission'],['رمز','Password'],['دستگاه','Device'],['ترافیک','Traffic'],['اعتبار','Credit'],['تنظیمات','Settings'],['هسته','Core'],['ورود','Login'],['امنیت','Security'],['عمومی','General'],['انتقال','Transport'],['پیشرفته','Advanced'],['پورت','Port'],['نام','Name'],['وضعیت','Status'],['مدیریت','Manage'],['حذف','Delete'],['ویرایش','Edit'],['ریست','Reset'],['جدید','New']
@@ -287,13 +376,19 @@ const words=[
 function digits(s){return s.replace(/[۰-۹]/g,d=>latinDigits[persianDigits.indexOf(d)]);}
 function translateRaw(raw){
   if(!raw)return raw;
-  let out=digits(raw);
+  let out=selected==='en'?digits(raw):raw;
   const lead=out.match(/^\s*/)?.[0]||'',tail=out.match(/\s*$/)?.[0]||'';
   let core=out.slice(lead.length,out.length-tail.length);
-  if(!faChars.test(core))return out;
-  if(exact.has(core))return lead+exact.get(core)+tail;
-  for(const [a,b] of phrases)core=core.split(a).join(b);
-  if(faChars.test(core))for(const [a,b] of words)core=core.split(a).join(b);
+  if(selected==='en'){
+    if(!faChars.test(core))return out;
+    if(exact.has(core))return lead+exact.get(core)+tail;
+    for(const [a,b] of phrases)core=core.split(a).join(b);
+    if(faChars.test(core))for(const [a,b] of words)core=core.split(a).join(b);
+    return lead+core+tail;
+  }
+  if(reverseExact.has(core))return lead+reverseExact.get(core)+tail;
+  for(const [a,b] of faPhrases)core=core.split(a).join(b);
+  for(const [a,b] of reversePhrases)core=core.split(a).join(b);
   return lead+core+tail;
 }
 
@@ -301,7 +396,7 @@ function skip(el){
   return !el||el.closest('script,style,pre,code,.json-box,.json-preview,.terminal,.client-name,.owner-label,[data-no-i18n]');
 }
 function process(root){
-  if(selected!=='en'||!root)return;
+  if(!root)return;
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
   const list=[];while(walker.nextNode())list.push(walker.currentNode);
   for(const node of list){if(skip(node.parentElement))continue;const next=translateRaw(node.nodeValue);if(next!==node.nodeValue)node.nodeValue=next;}
@@ -322,10 +417,10 @@ function languageButton(){
 function apply(){
   document.documentElement.lang=selected==='en'?'en':'fa';
   document.documentElement.dir=selected==='en'?'ltr':'rtl';
-  if(selected==='en')process(document.body);
+  process(document.body);
   languageButton();
 }
-const observer=new MutationObserver(records=>{if(selected!=='en')return;for(const r of records){for(const n of r.addedNodes)if(n.nodeType===1)process(n);else if(n.nodeType===3&&!skip(n.parentElement))n.nodeValue=translateRaw(n.nodeValue);}});
+const observer=new MutationObserver(records=>{for(const r of records){for(const n of r.addedNodes)if(n.nodeType===1)process(n);else if(n.nodeType===3&&!skip(n.parentElement))n.nodeValue=translateRaw(n.nodeValue);}});
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{apply();observer.observe(document.body,{subtree:true,childList:true});});
 else{apply();observer.observe(document.body,{subtree:true,childList:true});}
 })();
