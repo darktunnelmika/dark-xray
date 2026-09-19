@@ -1,4 +1,4 @@
-/* DARK XRAY Inbounds V3 — Sanaei-inspired capability set, reduced visual noise. */
+/* DARK XRAY Inbounds V3 — DARK-native guided capability set with reduced visual noise. */
 (function(){
 'use strict';
 if(!globalThis.DarkInbound)return;
