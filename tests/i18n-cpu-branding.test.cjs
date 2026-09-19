@@ -61,8 +61,8 @@ test('Persian mode normalizes common user-facing UI concepts while preserving te
 
 
 test('technical literals are excluded from language leakage heuristics without disabling prose audit',()=>{
-  assert.match(i18n,/function auditComparable/);
-  assert.match(i18n,/replace\(\/\\\?\[A-Za-z\]/);
-  assert.match(i18n,/replace\(\/\\\/[A-Za-z0-9_/);
-  assert.match(i18n,/persianLeakRe\.test\(auditComparable\(raw\)\)/);
+  assert.ok(i18n.includes('function auditComparable'));
+  assert.ok(i18n.includes(".replace(/\\?[A-Za-z]"));
+  assert.ok(i18n.includes(".replace(/\\/[A-Za-z0-9_.-]+"));
+  assert.ok(i18n.includes('persianLeakRe.test(auditComparable(raw))'));
 });
