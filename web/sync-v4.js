@@ -74,8 +74,16 @@ function managerCard(s){
   <div class="sy4-kv"><div><span>${L('Last poll','آخرین Poll')}</span><strong>${date(s.last_poll)}</strong></div><div><span>${L('Poll age','سن Poll')}</span><strong>${s.poll_age_seconds==null?'—':fa(s.poll_age_seconds)+'s'}</strong></div><div><span>${L('Writes','نوشتن')}</span><strong>${s.writes_enabled?L('Enabled','فعال'):L('Read only','فقط خواندنی')}</strong></div></div>
   ${s.error?`<div class="sy4-error">${e(s.error)}</div>`:''}</article>`;
 }
+function runtimeCode(r){
+ if(r.generation_state)return r.generation_state;
+ if(r.running&&!r.dirty)return'running_clean';
+ if(r.running&&r.dirty)return'running_dirty';
+ if(!r.running&&r.desired_running)return'stopped_unexpected';
+ if(r.dirty)return'stopped_staged';
+ return'stopped_clean';
+}
 function runtimeCard(s){
- const r=s.runtime||{},m=rt(r.generation_state),action=r.next_action;
+ const r=s.runtime||{},m=rt(runtimeCode(r)),action=r.next_action||'none';
  let actions='';
  if(isOwner()&&action==='restart_apply')actions=button(L('Restart / Apply','ری‌استارت / اعمال'),'sy4core','refresh','data-core="restart"',true);
  if(isOwner()&&action==='start_apply')actions=button(L('Start / Apply','شروع / اعمال'),'sy4core','power','data-core="start"',true);
