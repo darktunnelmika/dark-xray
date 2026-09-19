@@ -269,3 +269,71 @@ jobs:
           path: qa/load-scale.json
           if-no-files-found: error
           retention-days: 14
+
+  fresh-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install fresh-install driver
+        run: sudo apt-get update -qq && sudo apt-get install -y -q expect >/dev/null
+      - name: Fresh online install on disposable Ubuntu
+        env:
+          DARK_INSTALL_REF: "${{ github.event.pull_request.head.sha || github.sha }}"
+        run: |
+          mkdir -p qa
+          export DARK_CI_PASSWORD="DkCi-${GITHUB_RUN_ID}-Aa!9"
+          echo "::add-mask::$DARK_CI_PASSWORD"
+          cat > /tmp/dark-fresh-install.exp <<'EOF'
+          set timeout 1200
+          set ref $env(DARK_INSTALL_REF)
+          set pass $env(DARK_CI_PASSWORD)
+          log_file -noappend qa/fresh-install.log
+          spawn sudo env DARK_XRAY_REF=$ref NO_COLOR=1 bash ./install-online.sh
+          expect {
+            -re {Choose profile \[1\]: $} { send "2\r"; exp_continue }
+            -re {Owner username \[dark\]: $} { send "darkci\r"; exp_continue }
+            -re {Panel URI path \[/\]: $} { send "/ci\r"; exp_continue }
+            -re {Panel port \[2087\]: $} { send "2087\r"; exp_continue }
+            -re {Public proxy IP/DNS \[[^]]+\]: $} { send "127.0.0.1\r"; exp_continue }
+            -re {Start installation\? \[Y/n\]: $} { send "y\r"; exp_continue }
+            -re {DARK owner password \([0-9]+-[0-9]+ characters\): $} { send "$pass\r"; exp_continue }
+            -re {Repeat owner password: $} { send "$pass\r"; exp_continue }
+            -re {Enable BBR congestion control\? \[Y/n\]: $} { send "n\r"; exp_continue }
+            timeout { exit 124 }
+            eof
+          }
+          catch wait result
+          exit [lindex $result 3]
+          EOF
+          expect /tmp/dark-fresh-install.exp
+      - name: Verify installed services and production gate
+        run: |
+          systemctl is-enabled dark-xray.service
+          systemctl is-active dark-xray.service
+          systemctl is-enabled dark-xray-update.service
+          systemctl is-active dark-xray-update.service
+          sudo darkxray check
+          sudo darkxray vps-verify | tee qa/fresh-install-vps-verify.txt
+          sudo darkxray production-gate --json-only | tee qa/fresh-install-production-gate.json
+      - name: Capture fresh-install diagnostics on failure
+        if: failure()
+        run: |
+          systemctl status dark-xray.service dark-xray-update.service --no-pager -l > qa/fresh-install-systemd.txt 2>&1 || true
+          journalctl -u dark-xray.service -u dark-xray-update.service --no-pager -n 250 > qa/fresh-install-journal.txt 2>&1 || true
+      - name: Upload fresh-install evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-xray-fresh-install-qa
+          path: |
+            qa/fresh-install.log
+            qa/fresh-install-vps-verify.txt
+            qa/fresh-install-production-gate.json
+            qa/fresh-install-systemd.txt
+            qa/fresh-install-journal.txt
+          if-no-files-found: warn
+          retention-days: 14

@@ -38,6 +38,15 @@ ssh_port(){ if command -v sshd >/dev/null 2>&1; then sshd -T 2>/dev/null | awk '
 valid_source_ref(){ [[ -n "$1" && ${#1} -le 200 && "$1" != -* && "$1" =~ ^[A-Za-z0-9._/@+-]+$ ]]; }
 supported_arch(){ case "$(uname -m 2>/dev/null || true)" in x86_64|amd64|aarch64|arm64) return 0;; *) return 1;; esac; }
 free_root_kb(){ df -Pk / 2>/dev/null | awk 'NR==2{print $4}'; }
+wait_panel_ready(){
+  local port="$1" tries="${2:-30}" i
+  for ((i=1;i<=tries;i++)); do
+    if curl -fsS --noproxy '*' --max-time 2 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then return 0; fi
+    systemctl is-active --quiet dark-xray.service || return 1
+    sleep 1
+  done
+  return 1
+}
 fetch_source(){
   local dest="$1" ref="$SOURCE_REF"
   valid_source_ref "$ref" || fail "Invalid DARK_XRAY_REF"
@@ -186,6 +195,8 @@ systemctl is-enabled dark-xray.service >/dev/null || fail "dark-xray service is 
 systemctl is-active dark-xray.service >/dev/null || { systemctl status dark-xray.service --no-pager -l || true; fail "dark-xray service is not active"; }
 systemctl is-enabled dark-xray-update.service >/dev/null || fail "DARK update broker is not enabled"
 systemctl is-active dark-xray-update.service >/dev/null || { systemctl status dark-xray-update.service --no-pager -l || true; fail "DARK update broker is not active"; }
+progress 68 "Waiting for panel readiness"
+wait_panel_ready "$PANEL_PORT" 30 || { systemctl status dark-xray.service --no-pager -l || true; fail "DARK panel did not become ready on local health endpoint"; }
 /usr/local/bin/darkxray check >/dev/null || fail "DARK core check failed"
 
 if [[ "$MODE" == 1 && -n "$DOMAIN" ]]; then
