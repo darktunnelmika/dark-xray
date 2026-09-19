@@ -294,14 +294,14 @@ jobs:
           log_file -noappend qa/fresh-install.log
           spawn sudo env DARK_XRAY_REF=$ref NO_COLOR=1 bash ./install-online.sh
           expect {
-            -re {Choose profile.*:} { send "2\r"; exp_continue }
-            -re {Owner username.*:} { send "darkci\r"; exp_continue }
-            -re {Panel URI path.*:} { send "/ci\r"; exp_continue }
-            -re {Panel port.*:} { send "2087\r"; exp_continue }
-            -re {Public proxy IP/DNS.*:} { send "127.0.0.1\r"; exp_continue }
-            -re {Start installation\?.*:} { send "y\r"; exp_continue }
-            -re {DARK owner password.*:} { send "$pass\r"; exp_continue }
-            -re {Repeat owner password:} { send "$pass\r"; exp_continue }
+            -re {Choose profile \[1\]: $} { send "2\r"; exp_continue }
+            -re {Owner username \[dark\]: $} { send "darkci\r"; exp_continue }
+            -re {Panel URI path \[/\]: $} { send "/ci\r"; exp_continue }
+            -re {Panel port \[2087\]: $} { send "2087\r"; exp_continue }
+            -re {Public proxy IP/DNS \[[^]]+\]: $} { send "127.0.0.1\r"; exp_continue }
+            -re {Start installation\? \[Y/n\]: $} { send "y\r"; exp_continue }
+            -re {DARK owner password \([0-9]+-[0-9]+ characters\): $} { send "$pass\r"; exp_continue }
+            -re {Repeat owner password: $} { send "$pass\r"; exp_continue }
             timeout { exit 124 }
             eof
           }
