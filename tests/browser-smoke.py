@@ -506,8 +506,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 body['enable']=False
                 db.execute("UPDATE core_clients SET body=? WHERE email='browser-hwid-policy'",(json.dumps(body),))
                 db.execute("UPDATE managed_clients SET state='applied',op='none',error='',external_disabled=1,expected_enable=1 WHERE email='browser-hwid-policy'")
-            page.evaluate("refresh()")
-            page.wait_for_timeout(100)
+            page.evaluate("async()=>{state.sync=await api('/api/sync');await renderPage();}")
 
             visit(page,'sync')
             page.locator('.sy4').wait_for(state='visible',timeout=10000)
@@ -530,8 +529,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             with store.transaction() as db:
                 db.execute("DELETE FROM core_clients WHERE email='browser-delivery'")
                 db.execute("UPDATE managed_clients SET state='missing',op='none',error='CoreEngine client missing; automatic recreation refused',retry_at=0 WHERE email='browser-delivery'")
-            page.evaluate("refresh()")
-            page.wait_for_timeout(100)
+            page.evaluate("async()=>{state.sync=await api('/api/sync');await renderPage();}")
+            page.wait_for_function("()=>state.sync?.items?.find(x=>x.email==='browser-delivery')?.reason_code==='runtime_missing'",timeout=10000)
             page.locator('[data-act="sy4filter"][data-view="issues"]').click()
             page.wait_for_function("()=>state.sv4?.view==='issues'&&document.querySelector('[data-act=sy4filter][data-view=issues]')?.classList.contains('active')",timeout=10000)
             missing=page.locator('.sy4-item').filter(has_text='browser-delivery')
