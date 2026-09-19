@@ -183,8 +183,32 @@ class NodeRegistry:
                 except PolicyError:continue
                 store.db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',(address,row['id']))
 
+    @staticmethod
+    def _assignment_state(node:dict,assignment:dict,*,now:float|None=None)->dict:
+        now=time.time() if now is None else float(now)
+        remote_id=int(assignment.get('remote_inbound_id') or 0)
+        sync_error=str(assignment.get('last_error') or '')
+        deployed=bool(remote_id and not sync_error)
+        online=bool(node.get('enabled') and node.get('last_seen') and now-float(node.get('last_seen') or 0)<180 and not node.get('last_error'))
+        if sync_error:
+            deployment_state='sync_error'
+        elif remote_id:
+            deployment_state='deployed'
+        else:
+            deployment_state='pending'
+        if not node.get('enabled'):reason='node_disabled'
+        elif sync_error:reason='sync_error'
+        elif not remote_id:reason='not_deployed'
+        elif not node.get('failover_enabled'):reason='failover_disabled'
+        elif not node.get('data_address'):reason='data_address_missing'
+        elif not online:reason='node_offline'
+        else:reason='ready'
+        return {**assignment,'remote_inbound_id':remote_id,'deployment_state':deployment_state,
+                'deployed':deployed,'failover_ready':reason=='ready','failover_reason':reason}
+
     def list(self)->list[dict]:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM remote_nodes ORDER BY name,id')]
+        now=time.time()
         for r in rows:
             r.pop('token_enc',None)
             try:r['health']=json.loads(r.pop('last_health','{}'))
@@ -192,6 +216,8 @@ class NodeRegistry:
             with self.store.lock:
                 assigned=[dict(x) for x in self.store.db.execute(
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
+            r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180 and not r['last_error'])
+            assigned=[self._assignment_state(r,x,now=now) for x in assigned]
             r['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
             r['assignments']=assigned
             with self.store.lock:
@@ -203,8 +229,10 @@ class NodeRegistry:
             with self.store.lock:
                 sec=self.store.db.execute('SELECT source_verified,last_sync,last_error FROM remote_node_security_state WHERE node_id=?',(r['id'],)).fetchone()
             r['security']={'source_verified':bool(sec['source_verified']),'last_sync':float(sec['last_sync']),'last_error':sec['last_error']} if sec else {'source_verified':False,'last_sync':0,'last_error':''}
-            r['online']=bool(r['enabled'] and r['last_seen'] and time.time()-r['last_seen']<180 and not r['last_error'])
-            r['failover_ready']=bool(r['online'] and r.get('failover_enabled') and r.get('data_address'))
+            r['failover_ready']=any(bool(x['failover_ready']) for x in assigned)
+            if r['failover_ready']:r['failover_reason']='ready'
+            elif not assigned:r['failover_reason']='no_assignments'
+            else:r['failover_reason']=next((x['failover_reason'] for x in assigned if x['failover_reason']!='ready'),'not_deployed')
         return rows
 
     def get(self,node_id:str,*,secret:bool=False)->dict:
