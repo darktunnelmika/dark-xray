@@ -1080,10 +1080,85 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'source':'DARK API host','sample':False,'cpu':psutil.cpu_percent(interval=.05),
                 'memory_percent':mem.percent,'disk_percent':disk.percent,'swap_percent':swap.percent,
                 'uptime':int(time.time()-psutil.boot_time())}
+    def security_center_payload(p:Principal):
+        p.actor.require('clients','ip',p.actor.id)
+        rows=manager.list(p.actor);now=time.time();settings=engine.section('ipguard');window=int(settings.get('window_seconds',120))
+        allowed={r['email'] for r in rows}
+        with store.lock:
+            policy_rows={str(r['id']):dict(r) for r in store.db.execute(
+                'SELECT id,limit_ip,global_ip_block,global_device_block FROM clients')}
+            local_ips={str(r[0]):int(r[1]) for r in store.db.execute(
+                'SELECT client_id,COUNT(DISTINCT ip) FROM observations WHERE last_seen>? GROUP BY client_id',(now-window,))}
+            local_devices={str(r[0]):int(r[1]) for r in store.db.execute(
+                'SELECT email,COUNT(*) FROM core_devices GROUP BY email')}
+            remote_ips={}
+            if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_ips'").fetchone():
+                remote_ips={str(r[0]):int(r[1]) for r in store.db.execute(
+                    'SELECT client_id,COUNT(DISTINCT ip) FROM remote_node_ips WHERE verified=1 AND last_seen>? GROUP BY client_id',(now-window,))}
+            remote_devices={}
+            if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_devices'").fetchone():
+                remote_devices={str(r[0]):int(r[1]) for r in store.db.execute(
+                    'SELECT client_id,COUNT(DISTINCT digest) FROM remote_node_devices GROUP BY client_id')}
+            active_bans=[dict(r) for r in store.db.execute(
+                "SELECT b.ip,b.client_id,b.node,b.expires_at,b.state FROM bans b JOIN clients c ON c.id=b.client_id "
+                "WHERE b.state='applied' AND b.expires_at>? ORDER BY b.expires_at DESC",(now,)) if str(r['client_id']) in allowed]
+            events=[dict(r) for r in store.db.execute(
+                'SELECT id,kind,owner,client_id,ip,node,detail,at FROM events ORDER BY id DESC LIMIT 250')
+                if str(r['client_id']) in allowed]
+        client_rows=[]
+        for item in rows:
+            email=item['email'];client=item.get('client') or {};policy=policy_rows.get(email,{})
+            lip=local_ips.get(email,0);rip=remote_ips.get(email,0);ld=local_devices.get(email,0);rd=remote_devices.get(email,0)
+            client_rows.append({'email':email,'owner':item.get('owner',''),'limit_ip':int(client.get('limitIp') or 0),
+                'limit_hwid':int(client.get('limitHwid') or 0),'local_ip_count':lip,'remote_ip_count':rip,
+                'global_ip_count':len(set()),'local_device_count':ld,'remote_device_count':rd,
+                'global_device_count':ld+rd,'global_ip_block':bool(policy.get('global_ip_block')),
+                'global_device_block':bool(policy.get('global_device_block')),
+                'block_reasons':item.get('block_reasons',[]),'presence_state':item.get('presence_state','offline'),
+                'last_seen_at':item.get('last_seen_at',0)})
+        # Exact global distinct-IP cardinality must de-duplicate addresses shared
+        # between local and remote sources rather than summing source counts.
+        with store.lock:
+            for row in client_rows:
+                vals={str(x[0]) for x in store.db.execute(
+                    'SELECT ip FROM observations WHERE client_id=? AND last_seen>?',(row['email'],now-window))}
+                if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_ips'").fetchone():
+                    vals.update(str(x[0]) for x in store.db.execute(
+                        'SELECT ip FROM remote_node_ips WHERE client_id=? AND verified=1 AND last_seen>?',
+                        (row['email'],now-window)))
+                row['global_ip_count']=len(vals)
+        node_rows=nodes.list() if p.actor.role=='owner' else []
+        fresh_nodes=sum(1 for n in node_rows if n.get('security',{}).get('last_sync') and
+                        now-float(n['security']['last_sync'])<180 and not n['security'].get('last_error'))
+        verified_nodes=sum(1 for n in node_rows if n.get('security',{}).get('source_verified') and
+                           n.get('security',{}).get('last_sync') and now-float(n['security']['last_sync'])<180 and
+                           not n['security'].get('last_error'))
+        guard=engine.ip_status()
+        summary={'clients':len(client_rows),'ip_limited':sum(1 for x in client_rows if x['limit_ip']>0),
+            'hwid_limited':sum(1 for x in client_rows if x['limit_hwid']>0),
+            'ip_blocked':sum(1 for x in client_rows if x['global_ip_block']),
+            'device_blocked':sum(1 for x in client_rows if x['global_device_block']),
+            'active_local_bans':len(active_bans),'recent_violations':sum(1 for x in events if x['kind']=='violation' and now-float(x['at'])<=window)}
+        return {'source':'DARK Native Security Center','guard':guard,'settings':settings,'summary':summary,
+            'clients':client_rows,'events':events,'bans':active_bans,
+            'nodes':{'total':len(node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes} if p.actor.role=='owner' else None,
+            'architecture':{'local_observer':'Xray access log source-IP observation',
+                'local_enforcer':'root-owned DARK nftables broker','local_firewall_scope':'this host data ports only',
+                'global_policy':'central Local + Node verified-source aggregation',
+                'global_action':'client service block across synchronized DARK runtime',
+                'global_remote_firewall_ban':False,'fail2ban':False}}
+
+    @app.get('/api/security-center')
+    def security_center(p:Principal=Depends(current)):return security_center_payload(p)
+
     @app.get('/api/ip-status')
     def ip_status(p:Principal=Depends(owner)):
-        return {'source':'DARK IP Guard','engine':engine.ip_status(),
-            'limit_unit':'recent distinct source IPs','global_multi_node_limit':False,'packet_test_performed_here':False}
+        return {'source':'DARK Native IP Guard','engine':engine.ip_status(),
+            'limit_unit':'recent distinct verified source IPs',
+            'global_multi_node_limit':False,
+            'global_account_policy':True,
+            'global_policy_note':'Central can block a client from verified Local + Node observations; nftables bans remain local to the host where they are applied.',
+            'packet_test_performed_here':False}
     @app.get('/api/sync')
     def sync(p:Principal=Depends(current)):
         with store.lock:
