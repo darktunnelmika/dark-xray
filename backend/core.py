@@ -440,10 +440,11 @@ class CoreEngine:
                 if b.get('fallbackTag') and b['fallbackTag'] not in tags:raise CoreError('Unknown balancer fallback outbound')
                 btags.add(b['tag'])
 
-            def port_expr(raw,label):
+            def port_expr(raw,label,allow_zero=False):
                 if raw is None or raw=='':return
+                low=0 if allow_zero else 1
                 if type(raw)is int:
-                    if not 1<=raw<=65535:raise CoreError('Invalid routing '+label)
+                    if not low<=raw<=65535:raise CoreError('Invalid routing '+label)
                     return
                 if not isinstance(raw,str) or len(raw)>512:raise CoreError('Invalid routing '+label)
                 for part in raw.split(','):
@@ -453,8 +454,8 @@ class CoreEngine:
                         bits=part.split('-')
                         if len(bits)!=2 or not all(x.isdigit() for x in bits):raise CoreError('Invalid routing '+label)
                         lo,hi=map(int,bits)
-                        if not 1<=lo<=hi<=65535:raise CoreError('Invalid routing '+label)
-                    elif not part.isdigit() or not 1<=int(part)<=65535:raise CoreError('Invalid routing '+label)
+                        if not low<=lo<=hi<=65535:raise CoreError('Invalid routing '+label)
+                    elif not part.isdigit() or not low<=int(part)<=65535:raise CoreError('Invalid routing '+label)
 
             list_fields={'domain','ip','sourceIP','source','localIP','user','inboundTag','protocol','process'}
             for rule in value.get('rules',[]):
@@ -464,7 +465,8 @@ class CoreEngine:
                 if rule.get('balancerTag') and rule['balancerTag'] not in btags:raise CoreError('Unknown routing balancer')
                 if rule.get('type','field')!='field': raise CoreError('Unsupported routing rule type')
                 if rule.get('network') not in (None,'','tcp','udp','tcp,udp'):raise CoreError('Invalid routing network')
-                for key in ('port','sourcePort','localPort','vlessRoute'):port_expr(rule.get(key),key)
+                for key in ('port','sourcePort','localPort'):port_expr(rule.get(key),key)
+                port_expr(rule.get('vlessRoute'),'vlessRoute',allow_zero=True)
                 for key in list_fields:
                     if key not in rule:continue
                     raw=rule[key]
