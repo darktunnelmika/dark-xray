@@ -10,7 +10,7 @@ const esc=v=>e(String(v??''));
 function trafficTabs(){
  return `<nav class="te4-tabs">
   <button type="button" data-page="outbounds" class="${state.page==='outbounds'?'active':''}">${icon('arrow')}${L('Outbounds','اوتباندها')}</button>
-  <button type="button" data-page="routing" class="${state.page==='routing'?'active':''}">${icon('node')}${L('Routing & Balancers','روتینگ و بالانسر')}</button>
+  <button type="button" data-page="routing" class="${state.page==='routing'?'active':''}">${icon('node')}${L('Routing & Balancers','مسیریابی و بالانسرها')}</button>
   <button type="button" data-act="te4xray">${icon('terminal')}${L('Xray Control','کنترل Xray')}</button>
  </nav>`;
 }
@@ -39,11 +39,11 @@ function summary(d){
  const s=d.status,r=s.routing||{},chainCount=(s.outbounds||[]).filter(x=>x.dials_via).length,dirty=!!d.core.dirty;
  return `<section class="te4-summary">
   ${metric(L('Outbounds','اوتباند'),fa((s.outbounds||[]).length),L('first = default','اولی = پیش‌فرض'))}
-  ${metric(L('Routing rules','Rule روتینگ'),fa(r.rule_count||0),r.domain_strategy||'AsIs')}
-  ${metric(L('Balancers','بالانسر'),fa((s.balancers||[]).length),L('selector = prefix','selector = prefix'))}
+  ${metric(L('Routing rules','قانون مسیریابی'),fa(r.rule_count||0),r.domain_strategy||'AsIs')}
+  ${metric(L('Balancers','بالانسر'),fa((s.balancers||[]).length),L('selector = prefix','گزینشگر = پیشوند'))}
   ${metric(L('Chained outbounds','خروجی زنجیره‌ای'),fa(chainCount),L('dialerProxy','dialerProxy'))}
-  ${metric(L('Default outbound','خروجی پیش‌فرض'),r.default_outbound||'—',L('no-rule fallback','Fallback بدون Rule'))}
-  ${metric(L('Runtime config','Config اجرا'),dirty?L('DIRTY','اعمال‌نشده'):L('CLEAN','همسان'),d.core.running?L('Xray running','Xray روشن'):L('Xray stopped','Xray خاموش'))}
+  ${metric(L('Default outbound','خروجی پیش‌فرض'),r.default_outbound||'—',L('no-rule fallback','مسیر جایگزین بدون قانون'))}
+  ${metric(L('Runtime config','پیکربندی اجرا'),dirty?L('DIRTY','اعمال‌نشده'):L('CLEAN','همسان'),d.core.running?L('Xray running','Xray روشن'):L('Xray stopped','Xray خاموش'))}
  </section>`;
 }
 function warnings(d){
@@ -61,7 +61,7 @@ function endpointMeta(o){
 function dependencyText(m){
  const out=[];
  if(m.rule_refs?.length)out.push(L('Rules','Rule')+' #'+m.rule_refs.join(', #'));
- if(m.balancer_refs?.length)out.push(L('Balancer pools','Pool بالانسر')+': '+m.balancer_refs.join(', '));
+ if(m.balancer_refs?.length)out.push(L('Balancer pools','مجموعه بالانسر')+': '+m.balancer_refs.join(', '));
  if(m.fallback_refs?.length)out.push('Fallback: '+m.fallback_refs.join(', '));
  if(m.dialed_by?.length)out.push(L('Dialed by','Dial شده توسط')+': '+m.dialed_by.join(', '));
  return out;
@@ -72,7 +72,7 @@ function outboundCard(o,index,meta){
   <header><div><small>#${index+1} · ${esc(o.protocol||'')}</small><h3>${esc(o.tag)}</h3></div><div class="te4-badges">${meta.default?chip(L('DEFAULT','پیش‌فرض'),'good'):''}${meta.observed?chip('OBSERVED','info'):''}${chain?chip('CHAIN','warn'):''}</div></header>
   <div class="te4-out-meta"><code>${esc(endpointMeta(o))}</code></div>
   ${chain?`<div class="te4-chain"><span>${L('DIAL PATH','مسیر Dial')}</span><b>${esc(o.tag)} → ${esc(chain)}</b></div>`:''}
-  <div class="te4-deps"><span>${L('DEPENDENCIES','وابستگی‌ها')}</span>${deps.length?deps.map(x=>`<small>${esc(x)}</small>`).join(''):`<small>${L('No routing/balancer dependency','وابستگی Routing/Balancer ندارد')}</small>`}</div>
+  <div class="te4-deps"><span>${L('DEPENDENCIES','وابستگی‌ها')}</span>${deps.length?deps.map(x=>`<small>${esc(x)}</small>`).join(''):`<small>${L('No routing/balancer dependency','وابستگی مسیریابی/بالانسر ندارد')}</small>`}</div>
   <footer>
    ${!meta.default?button(L('Make default','پیش‌فرض شود'),'te4default','check',`data-index="${index}"`,true):''}
    ${button(L('Edit','ویرایش'),'te4outedit','edit',`data-index="${index}"`)}
@@ -86,16 +86,16 @@ function graph(d){
  const rows=d.status.outbounds||[];
  return `<section class="panel te4-graph"><header><div><small>DARK / DEPENDENCY GRAPH</small><h2>${L('Traffic dependency graph','گراف وابستگی ترافیک')}</h2></div></header>
   <div class="te4-graph-list">${rows.map(x=>`<div><b>${esc(x.tag)}</b><span>→</span><code>${esc(x.dials_via||L('network / direct dial','شبکه / Dial مستقیم'))}</code><small>${esc(dependencyText(x).join(' · ')||L('no consumers','بدون مصرف‌کننده'))}</small></div>`).join('')}</div>
-  <div class="notice">${L('Deleting an outbound is refused when a routing rule, fallback, dialerProxy chain, or the last candidate of a balancer would be broken.','حذف Outbound وقتی Rule، Fallback، زنجیره dialerProxy یا آخرین Candidate یک Balancer را خراب کند توسط Backend رد می‌شود.')}</div>
+  <div class="notice">${L('Deleting an outbound is refused when a routing rule, fallback, dialerProxy chain, or the last candidate of a balancer would be broken.','حذف اوتباند وقتی یک قانون، مسیر جایگزین، زنجیره dialerProxy یا آخرین گزینهٔ یک بالانسر را خراب کند، توسط هستهٔ مدیریتی رد می‌شود.')}</div>
  </section>`;
 }
 function outboundsPage(d){
  const list=d.outbounds||[],meta=new Map((d.status.outbounds||[]).map(x=>[x.tag,x]));
- return heading(L('Traffic Engine · Outbounds','موتور ترافیک · Outbounds'),L('Build egress paths, chains and proxy transports with explicit dependency visibility.','مسیرهای خروج، Chain و Proxy transport را با وابستگی‌های کاملاً شفاف مدیریت کن.'),
+ return heading(L('Traffic Engine · Outbounds','موتور ترافیک · اوتباندها'),L('Build egress paths, chains and proxy transports with explicit dependency visibility.','مسیرهای خروج، زنجیره‌ها و انتقال پروکسی را با وابستگی‌های کاملاً شفاف مدیریت کن.'),
   `${button(L('Import link','Import لینک'),'te4outimport','download')}${button(L('New outbound','اوتباند جدید'),'te4outnew','plus','',true)}`)+
   `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
-   <div class="notice">${L('Xray uses the first outbound when no routing rule matches. Use Make default to change that behavior explicitly.','اگر هیچ Ruleای Match نشود Xray اولین Outbound را استفاده می‌کند. برای تغییر این رفتار از «پیش‌فرض شود» استفاده کن.')}</div>
-   <section class="te4-out-grid">${list.length?list.map((o,i)=>outboundCard(o,i,meta.get(o.tag)||{})).join(''):empty(L('No outbound configured.','Outboundی تنظیم نشده است.'))}</section>
+   <div class="notice">${L('Xray uses the first outbound when no routing rule matches. Use Make default to change that behavior explicitly.','اگر هیچ قانونی تطبیق نشود، Xray از اولین اوتباند استفاده می‌کند. برای تغییر این رفتار از «پیش‌فرض شود» استفاده کن.')}</div>
+   <section class="te4-out-grid">${list.length?list.map((o,i)=>outboundCard(o,i,meta.get(o.tag)||{})).join(''):empty(L('No outbound configured.','اوتباندی تنظیم نشده است.'))}</section>
    ${graph(d)}
   </div>`;
 }
@@ -126,17 +126,17 @@ function ruleCard(r,index){
 function balancerCard(b){
  const obsMissing=(b.candidates||[]).filter(x=>!(b.observed_candidates||[]).includes(x));
  return `<article class="panel te4-bal ${obsMissing.length&&b.strategy==='leastPing'?'warn':''}">
-  <header><div><small>${esc(String(b.strategy||'random').toUpperCase())}</small><h3>${esc(b.tag)}</h3></div>${b.rule_refs?.length?chip(L('USED','در حال استفاده'),'good'):chip(L('UNUSED','بدون Rule'))}</header>
-  <div class="te4-bal-row"><span>${L('PREFIX SELECTORS','Selectorهای Prefix')}</span><div>${(b.selectors||[]).map(x=>chip(x,'info')).join('')}</div></div>
-  <div class="te4-bal-row"><span>${L('MATCHED OUTBOUNDS','Outboundهای Match')}</span><div>${(b.candidates||[]).length?(b.candidates||[]).map(x=>chip(x,(b.observed_candidates||[]).includes(x)?'good':'')).join(''):`<b>—</b>`}</div></div>
+  <header><div><small>${esc(String(b.strategy||'random').toUpperCase())}</small><h3>${esc(b.tag)}</h3></div>${b.rule_refs?.length?chip(L('USED','در حال استفاده'),'good'):chip(L('UNUSED','بدون قانون'))}</header>
+  <div class="te4-bal-row"><span>${L('PREFIX SELECTORS','گزینشگرهای پیشوندی')}</span><div>${(b.selectors||[]).map(x=>chip(x,'info')).join('')}</div></div>
+  <div class="te4-bal-row"><span>${L('MATCHED OUTBOUNDS','اوتباندهای تطبیق‌یافته')}</span><div>${(b.candidates||[]).length?(b.candidates||[]).map(x=>chip(x,(b.observed_candidates||[]).includes(x)?'good':'')).join(''):`<b>—</b>`}</div></div>
   ${b.fallback_tag?`<div class="te4-chain"><span>FALLBACK</span><b>${esc(b.fallback_tag)}</b></div>`:''}
-  ${b.strategy==='leastPing'&&obsMissing.length?`<div class="notice warning">${L('Some candidates are outside Observatory selectors: ','بعضی Candidateها خارج از Observatory هستند: ')}${esc(obsMissing.join(', '))}</div>`:''}
+  ${b.strategy==='leastPing'&&obsMissing.length?`<div class="notice warning">${L('Some candidates are outside Observatory selectors: ','بعضی گزینه‌ها خارج از محدوده Observatory هستند: ')}${esc(obsMissing.join(', '))}</div>`:''}
   <footer>${button(L('Edit','ویرایش'),'te4baledit','edit',`data-index="${(state.te4.data?.routing?.balancers||[]).findIndex(x=>x.tag===b.tag)}"`)}${button(L('Delete','حذف'),'xv2baldelete','trash',`data-index="${(state.te4.data?.routing?.balancers||[]).findIndex(x=>x.tag===b.tag)}"`)}</footer>
  </article>`;
 }
 function previewForm(d){
  const inboundOpts=[['',L('Any inbound','هر Inbound')],...(state.inbounds||[]).map(x=>[x.tag||('inbound-'+x.id),x.remark?x.remark+' · '+(x.tag||x.id):x.tag||String(x.id)])];
- return `<section class="panel te4-preview"><header><div><small>DARK / ROUTE PREVIEW</small><h2>${L('Preview a routing decision','پیش‌نمایش تصمیم Routing')}</h2><p>${L('No traffic is sent. Literal rules are evaluated against the saved config. Geodata/DNS/runtime balancer choices are never guessed.','هیچ ترافیکی ارسال نمی‌شود. Ruleهای Literal روی Config ذخیره‌شده بررسی می‌شوند و GeoData/DNS/انتخاب زنده Balancer حدس زده نمی‌شود.')}</p></div></header>
+ return `<section class="panel te4-preview"><header><div><small>DARK / ROUTE PREVIEW</small><h2>${L('Preview a routing decision','پیش‌نمایش تصمیم مسیریابی')}</h2><p>${L('No traffic is sent. Literal rules are evaluated against the saved config. Geodata/DNS/runtime balancer choices are never guessed.','هیچ ترافیکی ارسال نمی‌شود. قوانین صریح روی پیکربندی ذخیره‌شده بررسی می‌شوند و GeoData/DNS یا انتخاب زندهٔ بالانسر حدس زده نمی‌شود.')}</p></div></header>
   <form id="te4-preview-form">
    <div class="te4-preview-grid">
     <label><span>${L('Domain','دامنه')}</span><input class="field-input" name="domain" dir="ltr" placeholder="example.com"></label>
@@ -146,7 +146,7 @@ function previewForm(d){
     <label><span>${L('Inbound','اینباند')}</span><select name="inbound_tag">${inboundOpts.map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label>
     <label><span>${L('Detected protocol','پروتکل تشخیص‌داده‌شده')}</span><select name="protocol"><option value="">${L('Unknown / any','نامشخص')}</option><option value="http">http</option><option value="tls">tls</option><option value="quic">quic</option><option value="bittorrent">bittorrent</option></select></label>
     <label><span>${L('User / email','کاربر / ایمیل')}</span><input class="field-input" name="user" dir="ltr"></label>
-    <details class="te4-preview-advanced"><summary>${L('Advanced source context','Source context پیشرفته')}</summary><div>
+    <details class="te4-preview-advanced"><summary>${L('Advanced source context','زمینهٔ مبدأ پیشرفته')}</summary><div>
       <label><span>Source IP</span><input class="field-input" name="source_ip" dir="ltr"></label>
       <label><span>Source Port</span><input class="field-input" name="source_port" type="number" min="0" max="65535" value="0"></label>
       <label><span>Local IP</span><input class="field-input" name="local_ip" dir="ltr"></label>
@@ -158,7 +158,7 @@ function previewForm(d){
    </div>
    <footer><button type="button" class="btn btn-primary" data-act="te4preview">${icon('activity')}${L('Preview route','پیش‌نمایش مسیر')}</button></footer>
   </form>
-  <div id="te4-preview-result">${state.te4.preview?previewResult(state.te4.preview):`<div class="te4-preview-empty">${L('Enter a synthetic connection and preview which saved rule would receive it.','یک اتصال فرضی وارد کن تا ببینی کدام Rule ذخیره‌شده آن را می‌گیرد.')}</div>`}</div>
+  <div id="te4-preview-result">${state.te4.preview?previewResult(state.te4.preview):`<div class="te4-preview-empty">${L('Enter a synthetic connection and preview which saved rule would receive it.','یک اتصال فرضی وارد کن تا ببینی کدام قانون ذخیره‌شده آن را می‌گیرد.')}</div>`}</div>
  </section>`;
 }
 function previewResult(r){
@@ -168,13 +168,13 @@ function previewResult(r){
  else route.push(L('DEFAULT','پیش‌فرض'));
  if(r.target_type==='balancer')route.push('BAL '+r.target);
  if(r.selected_outbound)route.push('OUT '+r.selected_outbound);
- else if(r.target_type==='balancer')route.push(L('runtime selection','انتخاب Runtime'));
+ else if(r.target_type==='balancer')route.push(L('runtime selection','انتخاب زمان اجرا'));
  for(const tag of (r.chain||[]).slice(1))route.push('via '+tag);
  route.push(L('INTERNET / TARGET','اینترنت / مقصد'));
  return `<div class="te4-preview-result ${tone}">
   <header><div><small>CONFIG PREVIEW · ${esc(String(r.result||'').toUpperCase())}</small><h3>${esc(route.join(' → '))}</h3></div>${chip(r.live_core_verified?'LIVE CORE':'SAVED CONFIG',r.live_core_verified?'good':'info')}</header>
   ${r.reason?`<div class="notice ${r.result==='indeterminate'?'warning':''}">${esc(r.reason)}</div>`:''}
-  ${r.candidates?.length?`<div class="te4-bal-row"><span>${L('BALANCER CANDIDATES','Candidateهای Balancer')}</span><div>${r.candidates.map(x=>chip(x,'info')).join('')}</div></div>`:''}
+  ${r.candidates?.length?`<div class="te4-bal-row"><span>${L('BALANCER CANDIDATES','گزینه‌های بالانسر')}</span><div>${r.candidates.map(x=>chip(x,'info')).join('')}</div></div>`:''}
   <div class="te4-trace">${(r.trace||[]).map(x=>`<span class="${x.result}"><b>#${x.index}</b><i>${esc(x.rule_tag||'')}</i><strong>${esc(x.result)}</strong><code>${esc(x.target||'')}</code></span>`).join('')}</div>
  </div>`;
 }
@@ -182,21 +182,21 @@ function observatoryCard(d){
  const o=d.status.observatory||{};
  return `<article class="panel te4-observatory"><header><div><small>DARK / OBSERVATORY</small><h2>Observatory</h2></div>${chip(o.enabled?L('CONFIGURED','تنظیم‌شده'):L('OFF','خاموش'),o.enabled?'good':'')}</header>
  <div class="te4-ob-kv"><div><span>subjectSelector</span><b>${esc((o.selectors||[]).join(', ')||'—')}</b></div><div><span>probeURL</span><b>${esc(o.probe_url||'—')}</b></div><div><span>probeInterval</span><b>${esc(o.probe_interval||'—')}</b></div></div>
- <div class="notice">${L('Traffic Engine does not invent live latency/health. leastPing final selection remains a runtime Xray decision unless a verified live API is available.','Traffic Engine برای Latency/Health عدد ساختگی نمی‌سازد. انتخاب نهایی leastPing تا زمانی که Live API تأییدشده نداشته باشیم تصمیم Runtime خود Xray است.')}</div>
+ <div class="notice">${L('Traffic Engine does not invent live latency/health. leastPing final selection remains a runtime Xray decision unless a verified live API is available.','موتور ترافیک برای تأخیر/سلامت عدد ساختگی نمی‌سازد. انتخاب نهایی leastPing تا وقتی API زنده و تأییدشده‌ای نداشته باشیم، تصمیم زمان اجرای Xray است.')}</div>
  <footer>${button(L('Edit Observatory','ویرایش Observatory'),'te4obsedit','edit','',true)}</footer></article>`;
 }
 function routingPage(d){
  state.te4.data=d;
  const rules=d.routing.rules||[],bals=d.status.balancers||[];
- return heading(L('Traffic Engine · Routing','موتور ترافیک · Routing'),L('Model the complete traffic decision: match conditions → outbound/balancer → optional dial chain.','تصمیم کامل ترافیک را ببین: Match conditions → Outbound/Balancer → Chain اختیاری.'),
-  `${button(L('Routing settings','تنظیمات Routing'),'te4routesettings','settings')}${button(L('Add rule','افزودن Rule'),'te4rulenew','plus','',true)}`)+
+ return heading(L('Traffic Engine · Routing','موتور ترافیک · مسیریابی'),L('Model the complete traffic decision: match conditions → outbound/balancer → optional dial chain.','تصمیم کامل ترافیک را ببین: شرایط تطبیق ← اوتباند/بالانسر ← زنجیرهٔ اختیاری.'),
+  `${button(L('Routing settings','تنظیمات Routing'),'te4routesettings','settings')}${button(L('Add rule','افزودن قانون'),'te4rulenew','plus','',true)}`)+
   `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
    ${previewForm(d)}
-   <section class="te4-section"><header><div><small>DARK / RULE ORDER</small><h2>${L('Routing rules','Ruleهای Routing')}</h2><p>${L('First matching rule wins. Empty conditions mean catch-all.','اولین Rule که Match شود برنده است؛ شرط خالی یعنی Catch-all.')}</p></div><span>${fa(rules.length)}</span></header>
-    <div class="te4-rule-list">${rules.length?rules.map(ruleCard).join(''):empty(L('No routing rules. Xray will use the first outbound.','Rule وجود ندارد؛ Xray از اولین Outbound استفاده می‌کند.'))}</div>
+   <section class="te4-section"><header><div><small>DARK / RULE ORDER</small><h2>${L('Routing rules','قوانین مسیریابی')}</h2><p>${L('First matching rule wins. Empty conditions mean catch-all.','اولین قانونی که تطبیق پیدا کند اجرا می‌شود؛ شرط خالی یعنی شامل همه.')}</p></div><span>${fa(rules.length)}</span></header>
+    <div class="te4-rule-list">${rules.length?rules.map(ruleCard).join(''):empty(L('No routing rules. Xray will use the first outbound.','قانون مسیریابی وجود ندارد؛ Xray از اولین اوتباند استفاده می‌کند.'))}</div>
    </section>
-   <section class="te4-section"><header><div><small>DARK / BALANCERS</small><h2>${L('Balancer pools','Poolهای Balancer')}</h2><p>${L('Selectors use Xray prefix matching, not exact-tag membership.','Selectorها در Xray Prefix-match هستند، نه عضویت Exact Tag.')}</p></div><div>${button(L('New balancer','Balancer جدید'),'te4balnew','plus','',true)}</div></header>
-    <div class="te4-bal-grid">${bals.length?bals.map(balancerCard).join(''):empty(L('No balancer configured.','Balancerی تنظیم نشده است.'))}</div>
+   <section class="te4-section"><header><div><small>DARK / BALANCERS</small><h2>${L('Balancer pools','مجموعه‌های بالانسر')}</h2><p>${L('Selectors use Xray prefix matching, not exact-tag membership.','گزینشگرها در Xray با پیشوند تطبیق داده می‌شوند، نه با عضویت دقیق تگ.')}</p></div><div>${button(L('New balancer','بالانسر جدید'),'te4balnew','plus','',true)}</div></header>
+    <div class="te4-bal-grid">${bals.length?bals.map(balancerCard).join(''):empty(L('No balancer configured.','بالانسری تنظیم نشده است.'))}</div>
    </section>
    ${observatoryCard(d)}
   </div>`;
@@ -212,12 +212,12 @@ enginePage=async function(){
 async function makeDefault(index){
  const list=(await api('/api/settings/outbounds')).value||[];
  if(index<=0||index>=list.length)return;
- const tag=list[index]?.tag;if(!confirm(L('Make this the first/default outbound? Unmatched traffic will use it.','این Outbound اولین/پیش‌فرض شود؟ ترافیکی که هیچ Ruleای Match نکند از آن استفاده می‌کند.')))return;
- const [item]=list.splice(index,1);list.unshift(item);await api('/api/settings/outbounds','PUT',{value:list});toast(L('Default outbound changed to ','Outbound پیش‌فرض تغییر کرد به ')+tag);await refresh();
+ const tag=list[index]?.tag;if(!confirm(L('Make this the first/default outbound? Unmatched traffic will use it.','این اوتباند اولین/پیش‌فرض شود؟ ترافیکی که با هیچ قانونی تطبیق نکند از آن استفاده می‌کند.')))return;
+ const [item]=list.splice(index,1);list.unshift(item);await api('/api/settings/outbounds','PUT',{value:list});toast(L('Default outbound changed to ','اوتباند پیش‌فرض تغییر کرد به ')+tag);await refresh();
 }
 runAction=async function(act,el){
  const guided=globalThis.DarkXrayGuidedV3;
- if(act.startsWith('te4')&&['te4outnew','te4outedit','te4outclone','te4outimport','te4outraw','te4routesettings','te4rulenew','te4ruleedit','te4balnew','te4baledit','te4obsedit'].includes(act)&&!guided)throw Error(L('Guided Xray editor module is unavailable.','ماژول Guided Xray در دسترس نیست.'));
+ if(act.startsWith('te4')&&['te4outnew','te4outedit','te4outclone','te4outimport','te4outraw','te4routesettings','te4rulenew','te4ruleedit','te4balnew','te4baledit','te4obsedit'].includes(act)&&!guided)throw Error(L('Guided Xray editor module is unavailable.','ماژول هدایت‌شدهٔ Xray در دسترس نیست.'));
  if(act==='te4xray'){await go('xray');return;}
  if(act==='te4default'){await makeDefault(Number(el.dataset.index));return;}
  if(act==='te4outnew'){await guided.openOutbound();return;}
@@ -236,7 +236,7 @@ runAction=async function(act,el){
 };
 
 async function previewFromForm(form){
- if(!form)throw Error(L('Route preview form is unavailable.','فرم Route Preview در دسترس نیست.'));
+ if(!form)throw Error(L('Route preview form is unavailable.','فرم پیش‌نمایش مسیر در دسترس نیست.'));
  const submit=form.querySelector('[data-act="te4preview"]');if(submit)submit.disabled=true;
  try{
   const fd=new FormData(form),attrsText=String(fd.get('attrs')||'').trim();let attrs={};

@@ -39,3 +39,30 @@ test('CPU telemetry uses a stable sample and dashboard never renders false 0.0 p
   assert.match(overview,/function fmtCpu/);
   assert.match(overview,/return v<=0\?'<0\.1':v\.toFixed\(1\)/);
 });
+
+
+test('language purity audit covers the whole live UI and both directions',()=>{
+  assert.match(i18n,/window\.DarkI18nAudit=/);
+  assert.match(i18n,/collectLeaks:auditLeaks/);
+  assert.match(i18n,/const reverseWords=/);
+  assert.match(i18n,/const persianLeakRe=/);
+  assert.match(i18n,/\.cyber-lang-switch/);
+  assert.match(i18n,/\[data-sv2-segment="language"\]/);
+});
+
+test('Persian mode normalizes common user-facing UI concepts while preserving technical surfaces',()=>{
+  for(const token of ["['Outbound','اوتباند']","['Rule','قانون']","['Runtime','محیط اجرا']",
+    "['Subscription','اشتراک']","['Dashboard','داشبورد']","['Certificate','گواهی']"]){
+    assert.ok(i18n.includes(token),token);
+  }
+  assert.match(i18n,/\[dir="ltr"\]/);
+  assert.match(i18n,/\.mono/);
+});
+
+
+test('technical literals are excluded from language leakage heuristics without disabling prose audit',()=>{
+  assert.ok(i18n.includes('function auditComparable'));
+  assert.ok(i18n.includes(".replace(/\\?[A-Za-z]"));
+  assert.ok(i18n.includes(".replace(/\\/[A-Za-z0-9_.-]+"));
+  assert.ok(i18n.includes('persianLeakRe.test(auditComparable(raw))'));
+});

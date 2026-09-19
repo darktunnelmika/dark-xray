@@ -27,10 +27,10 @@ def mark(text):
     report['checks'].append(text)
 
 
-def assert_english_surface(page,name):
-    text=page.locator('#content').inner_text()
-    bad=[line.strip() for line in text.splitlines() if re.search(r'[\u0600-\u06FF]',line)]
-    assert not bad,f'{name} contains untranslated Persian in English mode: {bad[:8]}'
+def assert_language_surface(page,name):
+    page.wait_for_function("()=>window.DarkI18nAudit&&typeof window.DarkI18nAudit.collectLeaks==='function'",timeout=10000)
+    audit=page.evaluate("()=>({language:window.DarkI18nAudit.language,leaks:window.DarkI18nAudit.collectLeaks(document.body)})")
+    assert not audit['leaks'],f"{name} contains language leaks in {audit['language']} mode: {audit['leaks'][:12]}"
 
 
 def visit(page,name):
@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                    'hosts','outbounds','routing','nodes','xray','settings','account']
             for name in pages:
                 visit(page,name)
-                assert_english_surface(page,name)
+                assert_language_surface(page,name)
             mark('all primary owner workspaces render in English without Persian leakage')
             assert page.locator('.nav-btn[data-page="roles"]').count()==0
             assert page.locator('.nav-btn[data-page="logs"]').count()==0
@@ -158,6 +158,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             visit(page,'inbounds')
             page.locator('[data-v3-action="new"]').click()
             form=page.locator('#iv3-editor');form.wait_for(state='visible',timeout=10000)
+            assert_language_surface(page,'inbounds editor / English')
             form.locator('[name=remark]').fill('DARK Browser QA / VLESS')
             form.locator('[name=port]').fill('19443')
             validity=form.evaluate("f=>({valid:f.checkValidity(),invalid:[...f.querySelectorAll(':invalid')].map(x=>({name:x.name,type:x.type,value:x.value,message:x.validationMessage}))})")
@@ -579,6 +580,23 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.wait_for_function("()=>document.documentElement.dir==='rtl'&&document.documentElement.lang==='fa'",timeout=10000)
             page.wait_for_selector('.nav-btn[data-page="inbounds"]',timeout=10000)
             mark('Persian/RTL switch survives reload with authenticated session')
+
+            for name in pages:
+                visit(page,name)
+                assert_language_surface(page,name+' / Persian')
+            mark('all primary owner workspaces render in Persian without English UI leakage')
+
+            visit(page,'inbounds')
+            page.locator('[data-v3-action="new"]').click()
+            page.locator('#iv3-editor').wait_for(state='visible',timeout=10000)
+            assert_language_surface(page,'inbounds editor / Persian')
+            page.evaluate("closeDialog()")
+
+            visit(page,'account')
+            page.locator('[data-act="password"]').click()
+            page.wait_for_function("()=>document.querySelector('#overlay')?.classList.contains('show')",timeout=10000)
+            assert_language_surface(page,'account password dialog / Persian')
+            page.evaluate("closeDialog()")
 
             page.set_viewport_size({'width':390,'height':844})
             page.evaluate("go('inbounds')")

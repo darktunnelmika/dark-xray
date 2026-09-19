@@ -395,12 +395,44 @@ const faPhrases=[
 const words=[
  ['ذخیره','Save'],['فعال','Active'],['غیرفعال','Disabled'],['کاربر','Client'],['مشتری','Client'],['مالک','Owner'],['نماینده','Reseller'],['اینباند','Inbound'],['حساب','Account'],['مجوز','Permission'],['رمز','Password'],['دستگاه','Device'],['ترافیک','Traffic'],['اعتبار','Credit'],['تنظیمات','Settings'],['هسته','Core'],['ورود','Login'],['امنیت','Security'],['عمومی','General'],['انتقال','Transport'],['پیشرفته','Advanced'],['پورت','Port'],['نام','Name'],['وضعیت','Status'],['مدیریت','Manage'],['حذف','Delete'],['ویرایش','Edit'],['ریست','Reset'],['جدید','New']
 ];
+const uiWords=[
+ ['Search','جست‌وجو'],['Actions','عملیات'],['Usage','مصرف'],['Quota','سهمیه'],['Expiry','انقضا'],
+ ['Default','پیش‌فرض'],['Close','بستن'],['Refresh','بروزرسانی'],['Logout','خروج'],['Group','گروه'],
+ ['Comment','یادداشت'],['Role','نقش'],['Current','فعلی'],['History','تاریخچه'],['Logs','لاگ‌ها'],
+ ['Backup','بکاپ'],['Recovery','بازیابی'],['Members','اعضا'],['Strategy','استراتژی'],['Random','تصادفی'],
+ ['Destination','مقصد'],['Source','مبدأ'],['Local','محلی'],['Fallback','مسیر جایگزین'],['Enabled','فعال'],
+ ['Blocked','مسدود'],['Running','در حال اجرا'],['Stopped','متوقف'],['Available','موجود'],['Recent','اخیر'],
+ ['Download','دانلود'],['Open','بازکردن'],['View','مشاهده'],['Create','ساخت'],['Add','افزودن'],
+ ['Remove','حذف'],['Apply','اعمال'],['Validate','اعتبارسنجی'],['Preview','پیش‌نمایش'],['Details','جزئیات'],
+ ['Required','الزامی'],['Optional','اختیاری'],['Error','خطا'],['Warning','هشدار'],['Success','موفق'],
+ ['Failed','ناموفق'],['Ready','آماده'],['Session','نشست'],['Language','زبان'],['Calendar','تقویم'],
+ ['Timezone','منطقه زمانی'],['Rows','ردیف‌ها'],['Appearance','ظاهر'],['Operations','عملیات'],
+ ['System','سیستم'],['Domain','دامنه'],['Panel','پنل'],['Threads','تردها'],['Cores','هسته‌ها'],
+ ['Dashboard','داشبورد'],['Outbound','اوتباند'],['Outbounds','اوتباندها'],['Balancer','بالانسر'],['Balancers','بالانسرها'],
+ ['Rule','قانون'],['Rules','قوانین'],['Tag','تگ'],['Runtime','محیط اجرا'],['Guided','هدایت‌شده'],['Match','تطبیق'],
+ ['Subscription','اشتراک'],['Endpoint','نقطه اتصال'],['Endpoints','نقاط اتصال'],['Node','نود'],['Nodes','نودها'],
+ ['Queue','صف'],['Policy','سیاست'],['Matrix','ماتریس'],['Event','رویداد'],['Events','رویدادها'],['Fleet','ناوگان'],
+ ['Health','سلامت'],['Alerts','هشدارها'],['Activity','فعالیت'],['Memory','حافظه'],['Storage','فضای ذخیره‌سازی'],
+ ['Connection','اتصال'],['Stats','آمار'],['State','وضعیت'],['Attempts','تلاش‌ها'],['Updated','بروزشده'],
+ ['Clean','سالم'],['Dirty','اعمال‌نشده'],['Observed','مشاهده‌شده'],['Configured','پیکربندی‌شده'],['Off','خاموش'],
+ ['Result','نتیجه'],['Behavior','رفتار'],['Identity','هویت'],['Format','فرمت'],['Resolution','تفکیک'],
+ ['Profile','پروفایل'],['Title','عنوان'],['Public','عمومی'],['Proxy','پروکسی'],['Address','آدرس'],['Interval','بازه'],
+ ['Autostart','اجرای خودکار'],['Certificate','گواهی'],['Cookie','کوکی'],['Access','دسترسی'],['Changes','تغییرات'],
+ ['Lifetime','مدت اعتبار'],['Protection','محافظت'],['Representative','نماینده'],['Representatives','نمایندگان'],
+ ['Uptime','آپ‌تایم'],['Network','شبکه'],['Path','مسیر'],['Host','هاست'],['Mode','حالت'],
+ ['Padding','پدینگ'],['None','هیچ‌کدام']
+];
+const reverseWords=[...words.map(([fa,en])=>[en,fa]),...uiWords];
 
 function digits(s){return s.replace(/[۰-۹]/g,d=>latinDigits[persianDigits.indexOf(d)]);}
 function escRe(s){return s.replace(/[.*+?^\${}()|[\]\\]/g,'\\$&');}
 function replaceFaWord(text,faText,enText){
   const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(faText)+'(?=$|[\\s·:()،,/|+\\-])','g');
   return text.replace(re,(m,prefix)=>prefix+enText);
+}
+function replaceEnWord(text,enText,faText){
+  const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(enText)+'(?=$|[\\s·:()،,/|+\\-])','gi');
+  return text.replace(re,(m,prefix)=>prefix+faText);
 }
 function translateRaw(raw){
   if(!raw)return raw;
@@ -417,11 +449,12 @@ function translateRaw(raw){
   if(reverseExact.has(core))return lead+reverseExact.get(core)+tail;
   for(const [a,b] of faPhrases)core=core.split(a).join(b);
   for(const [a,b] of reversePhrases)core=core.split(a).join(b);
+  for(const [a,b] of reverseWords)core=replaceEnWord(core,a,b);
   return lead+core+tail;
 }
 
 function skip(el){
-  return !el||el.closest('script,style,pre,code,.json-box,.json-preview,.terminal,.client-name,.owner-label,[data-no-i18n]');
+  return !el||el.closest('script,style,pre,code,.json-box,.json-preview,.terminal,.client-name,.owner-label,.mono,[dir="ltr"],[data-no-i18n]');
 }
 function process(root){
   if(!root)return;
@@ -434,10 +467,54 @@ function process(root){
     if(el.matches('input[name="password"][minlength="12"],input[type="password"][minlength="12"]'))el.setAttribute('minlength','8');
   }
 }
+
+const persianLeakRe=/\b(Overview|Resellers|Settings|Account|Security|Manage|Delete|Edit|Save|Close|Status|Actions|Usage|Quota|Expiry|Search|Showing|New|Enabled|Disabled|Active|Blocked|Refresh|Logout|General|Advanced|Transport|Network|Path|Host|Mode|Padding|Cores|Threads|Uptime|Panel|Owner|Role|Permissions|Traffic|Credit|Comment|Group|None|Default|Current|History|Logs|Backup|Recovery|Members|Strategy|Random|Destination|Source|Local|Fallback|Available|Recent|Download|Open|View|Create|Add|Remove|Apply|Validate|Preview|Details|Required|Optional|Error|Warning|Success|Failed|Ready|Session|Language|Calendar|Timezone|Rows|Appearance|Operations|System|Domain|Dashboard|Outbound|Outbounds|Balancer|Balancers|Rule|Rules|Tag|Runtime|Guided|Match|Subscription|Endpoint|Endpoints|Node|Nodes|Queue|Policy|Matrix|Event|Events|Fleet|Health|Alerts|Activity|Memory|Storage|Connection|Stats|State|Attempts|Updated|Clean|Dirty|Observed|Configured|Result|Behavior|Identity|Format|Resolution|Profile|Title|Public|Proxy|Address|Interval|Autostart|Certificate|Cookie|Access|Changes|Lifetime|Protection|Representative|Representatives)\b/i;
+function auditSkip(el){
+  return skip(el)||!!el?.closest('.cyber-lang-switch,[data-sv2-segment="language"]');
+}
+function auditComparable(raw){
+  return String(raw||'')
+    .replace(/https?:\/\/\S+/gi,' ')
+    .replace(/\?[A-Za-z][A-Za-z0-9_-]*/g,' ')
+    .replace(/\/[A-Za-z0-9_.-]+/g,' ')
+    .replace(/:[A-Za-z][A-Za-z0-9_-]*/g,' ')
+    .replace(/\b[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+\b/g,' ')
+    .replace(/\b[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\b/g,' ')
+    .replace(/\b[A-Za-z][A-Za-z0-9_]*-(?=\s|,|\.|$)/g,' ');
+}
+function auditLeaks(root=document.body){
+  const leaks=[];
+  if(!root)return leaks;
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  while(walker.nextNode()){
+    const node=walker.currentNode,el=node.parentElement;
+    if(auditSkip(el))continue;
+    const raw=String(node.nodeValue||'').trim();
+    if(!raw)continue;
+    if(selected==='en'&&faChars.test(raw))leaks.push({kind:'text',text:raw.slice(0,240)});
+    if(selected==='fa'&&persianLeakRe.test(auditComparable(raw)))leaks.push({kind:'text',text:raw.slice(0,240)});
+    if(leaks.length>=50)break;
+  }
+  const els=root.querySelectorAll?root.querySelectorAll('[placeholder],[title],[aria-label]'):[];
+  for(const el of els){
+    if(auditSkip(el))continue;
+    for(const attr of ['placeholder','title','aria-label']){
+      const raw=String(el.getAttribute(attr)||'').trim();
+      if(!raw)continue;
+      if(selected==='en'&&faChars.test(raw))leaks.push({kind:attr,text:raw.slice(0,240)});
+      if(selected==='fa'&&persianLeakRe.test(auditComparable(raw)))leaks.push({kind:attr,text:raw.slice(0,240)});
+      if(leaks.length>=50)break;
+    }
+    if(leaks.length>=50)break;
+  }
+  return leaks;
+}
+window.DarkI18nAudit={language:selected,collectLeaks:auditLeaks};
+
 function languageButton(){
   let b=document.querySelector('.cyber-lang-switch');if(b)return;
   b=document.createElement('button');b.type='button';b.className='cyber-lang-switch';
-  b.textContent=selected==='en'?'EN · فارسی':'FA · English';
+  b.textContent=selected==='en'?'فارسی':'English';
   b.title=selected==='en'?'Switch to Persian':'تغییر زبان به انگلیسی';
   b.addEventListener('click',()=>{localStorage.setItem(KEY,selected==='en'?'fa':'en');location.reload();});
   document.body.appendChild(b);
