@@ -1,11 +1,11 @@
-/* DARK XRAY Finance V3 — representative-centric immutable ledgers. */
+/* DARK XRAY Credits & Ledger V4 — representative resource credits + immutable traffic. */
 (function(){
 'use strict';
 if(typeof financePage!=='function'||typeof runAction!=='function')return;
 const oldRunAction=runAction;
-const FV={representative:'all',kind:'all'};
+const FV={representative:'all'};
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
-const moneyTime=r=>Number(r?.at||0);
+const creditTime=r=>Number(r?.at||0);
 const trafficTime=r=>Number(r?.observed_at||0);
 const sum=(rows,fn)=>rows.reduce((a,r)=>a+Number(fn(r)||0),0);
 const ownerMode=()=>typeof isOwner==='function'?isOwner():true;
@@ -25,12 +25,16 @@ function selectedProfiles(){
  if(!ownerMode())return rows;
  return FV.representative==='all'?rows:rows.filter(r=>r.id===FV.representative);
 }
-function moneyRows(rows){let out=filterRepresentative(rows);if(FV.kind!=='all')out=out.filter(r=>r.kind===FV.kind);return out;}
-function kindBadge(kind){const label={credit:L('Credit','شارژ'),sale:L('Sale','فروش'),refund:L('Refund','بازپرداخت')}[kind]||kind;return `<span class="fv2-kind ${e(kind||'other')}">${e(label)}</span>`;}
-function moneyTable(rows){
- rows=moneyRows(rows);
- if(!rows.length)return empty(L('No representative financial entries match these filters.','تراکنش مالی نماینده‌ای مطابق این فیلتر وجود ندارد.'));
- return `<div class="table-wrap"><table class="fv2-table"><thead><tr><th>${L('Time','زمان')}</th><th>${L('Representative','نماینده')}</th><th>${L('Type','نوع')}</th><th>${L('Amount','مبلغ')}</th><th>${L('Reference','مرجع')}</th><th>Event ID</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${date(moneyTime(r))}</td><td><b>${e(repName(r.owner))}</b><small class="fv2-muted">${e(r.owner)}</small></td><td>${kindBadge(r.kind)}</td><td class="mono ${Number(r.amount)<0?'fv2-negative':'fv2-positive'}">${Number(r.amount)>0?'+':''}${fa(r.amount)}</td><td class="mono">${e(r.reference||'—')}</td><td class="mono fv2-event">${e(r.event_id)}</td></tr>`).join('')}</tbody></table></div>`;
+function signedBytes(v){v=Number(v||0);return (v>0?'+':v<0?'-':'')+bytes(Math.abs(v));}
+function signedUnits(v){v=Number(v||0);return (v>0?'+':'')+fa(v);}
+function creditTable(rows){
+ rows=filterRepresentative(rows);
+ if(!rows.length)return empty(L('No representative resource-credit events match this filter.','رویداد اعتبار نماینده‌ای مطابق این فیلتر وجود ندارد.'));
+ return `<div class="table-wrap"><table class="fv2-table"><thead><tr><th>${L('Time','زمان')}</th><th>${L('Representative','نماینده')}</th><th>Volume Credit</th><th>Unlimited Credit</th><th>${L('Type','نوع')}</th><th>Event ID</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${date(creditTime(r))}</td><td><b>${e(repName(r.owner))}</b><small class="fv2-muted">${e(r.owner)}</small></td><td class="mono ${Number(r.volume_bytes)<0?'fv2-negative':'fv2-positive'}">${signedBytes(r.volume_bytes)}</td><td class="mono ${Number(r.unlimited_units)<0?'fv2-negative':'fv2-positive'}">${signedUnits(r.unlimited_units)}</td><td><span class="fv2-kind credit">${e(r.kind||'adjust')}</span></td><td class="mono fv2-event">${e(r.event_id)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function positionTable(rows){
+ if(!rows.length)return empty(L('No representative profiles match this filter.','پروفایل نماینده‌ای مطابق این فیلتر وجود ندارد.'));
+ return `<div class="table-wrap"><table class="fv2-table"><thead><tr><th>${L('Representative','نماینده')}</th><th>${L('Volume total','حجم کل')}</th><th>${L('Volume allocated','حجم رزروشده')}</th><th>${L('Volume remaining','حجم باقی‌مانده')}</th><th>${L('Unlimited total','نامحدود کل')}</th><th>${L('Unlimited allocated','نامحدود رزروشده')}</th><th>${L('Unlimited remaining','نامحدود باقی‌مانده')}</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${e(r.name||r.id)}</b><small class="fv2-muted">${e(r.id)}</small></td><td class="mono">${bytes(r.volume_credit_bytes||0)}</td><td class="mono">${bytes(r.allocated_volume_bytes||0)}</td><td class="mono"><b>${bytes(r.volume_credit_remaining_bytes||0)}</b></td><td class="mono">${fa(r.unlimited_credit||0)}</td><td class="mono">${fa(r.allocated_unlimited||0)}</td><td class="mono"><b>${fa(r.unlimited_credit_remaining||0)}</b></td></tr>`).join('')}</tbody></table></div>`;
 }
 function trafficTable(rows){
  rows=filterRepresentative(rows);
@@ -39,27 +43,27 @@ function trafficTable(rows){
 }
 function stat(label,value,sub=''){return `<div class="fv2-stat"><small>${e(label)}</small><b>${e(value)}</b>${sub?`<span>${e(sub)}</span>`:''}</div>`;}
 financePage=async function(){
- const money=await api('/api/ledger/money');let traffic=[];try{traffic=await api('/api/ledger/traffic');}catch{}
- const profiles=selectedProfiles(),visibleTraffic=filterRepresentative(traffic),filteredMoney=moneyRows(money);
+ const credits=await api('/api/ledger/credits');let traffic=[];try{traffic=await api('/api/ledger/traffic');}catch{}
+ const profiles=selectedProfiles(),visibleTraffic=filterRepresentative(traffic),visibleCredits=filterRepresentative(credits);
  const statsAvailable=profiles.length>0;
  const currentUsage=statsAvailable?sum(profiles,o=>o.used_bytes??o.used??0):null;
  const lifetime=statsAvailable?sum(profiles,o=>o.lifetime_used_bytes??0):null;
- const balance=statsAvailable?sum(profiles,o=>o.credit):null;
- const visibleNet=sum(filteredMoney,r=>r.amount);
+ const volumeRemaining=statsAvailable?sum(profiles,o=>o.volume_credit_remaining_bytes??0):null;
+ const unlimitedRemaining=statsAvailable?sum(profiles,o=>o.unlimited_credit_remaining??0):null;
  const repChips=ownerMode()?[chip(L('All representatives','همه نماینده‌ها'),'representative','all',FV.representative),...reps().map(r=>chip(r.name||r.id,'representative',r.id,FV.representative))].join(''):'';
- const kindChips=[chip(L('All','همه'),'kind','all',FV.kind),chip(L('Credit','شارژ'),'kind','credit',FV.kind),chip(L('Sale','فروش'),'kind','sale',FV.kind),chip(L('Refund','بازپرداخت'),'kind','refund',FV.kind)].join('');
  const missing=L('Representative profile statistics are not available','آمار پروفایل نماینده در دسترس نیست');
  const repControl=ownerMode()?`<div><small>${L('Representative','نماینده')}</small><div class="fv2-chips">${reps().length?repChips:`<span class="fv2-muted">${L('No representatives yet','هنوز نماینده‌ای ساخته نشده')}</span>`}</div></div>`:'';
- return heading(L('Finance & Ledger','دفتر حساب'),L('Representative financial and traffic ledgers; the single primary owner is not a ledger scope.','دفتر مالی و مصرف نماینده‌ها؛ مالک اصلی واحد به‌عنوان محدوده دفتر نمایش داده نمی‌شود.'))+
+ return heading(L('Representative Credits & Ledger','اعتبار و دفتر نمایندگان'),L('Sellable Volume/Unlimited credits are separate from observed Xray traffic. No customer sale price is stored in DARK.','اعتبار قابل‌فروش حجمی/نامحدود از مصرف واقعی Xray جداست؛ قیمت فروش مشتری در DARK ذخیره نمی‌شود.'))+
  `<div class="fv2-shell"><div class="fv2-summary">
- ${stat(L('Representative credit','اعتبار نماینده‌ها'),balance===null?'—':fa(balance),balance===null?missing:L('Current representative balances','موجودی فعلی نماینده‌ها'))}
- ${stat(L('Filtered ledger net','خالص دفتر فیلترشده'),fa(visibleNet),`${fa(filteredMoney.length)} ${L('matching events','رویداد مطابق فیلتر')}`)}
- ${stat(L('Current-period traffic','مصرف دوره جاری'),currentUsage===null?'—':bytes(currentUsage),currentUsage===null?missing:L('Representative quota meter','متر سهمیه نماینده‌ها'))}
- ${stat(L('Lifetime representative traffic','مصرف تاریخی نماینده‌ها'),lifetime===null?'—':bytes(lifetime),lifetime===null?missing:L('Authoritative representative lifetime total','مجموع تاریخی واقعی نماینده‌ها'))}
- </div><article class="panel fv2-controls">${repControl}<div><small>${L('Money event type','نوع رویداد مالی')}</small><div class="fv2-chips">${kindChips}</div></div></article>
- <div class="notice">${L('The primary owner is singular and is not a selectable ledger scope. Representative credit, current traffic periods and immutable history remain separate.','مالک اصلی فقط یک حساب است و در دفتر به‌عنوان محدوده قابل انتخاب نمایش داده نمی‌شود. اعتبار نماینده، دوره مصرف جاری و تاریخچه ماندگار مستقل از هم هستند.')}</div>
- <article class="panel"><div class="panel-head"><div><h2>${L('Representative money ledger','دفتر مالی نمایندگان')}</h2><p>${L('Event IDs are idempotency keys; references connect sales/refunds when available.','Event ID کلید idempotency است؛ Reference ارتباط فروش و بازپرداخت را نشان می‌دهد.')}</p></div><span class="tag">${fa(filteredMoney.length)}</span></div>${moneyTable(money)}</article>
- <article class="panel" style="margin-top:18px"><div class="panel-head"><div><h2>${L('Representative traffic ledger','دفتر مصرف نمایندگان')}</h2><p>${L('Observed timestamps and traffic deltas come from the immutable server ledger.','زمان مشاهده و مصرف از دفتر ماندگار سرور خوانده می‌شود.')}</p></div><span class="tag">${fa(visibleTraffic.length)}</span></div>${trafficTable(traffic)}</article></div>`;
+ ${stat(L('Volume credit remaining','Volume Credit باقی‌مانده'),volumeRemaining===null?'—':bytes(volumeRemaining),volumeRemaining===null?missing:L('Assignable limited-service capacity','ظرفیت قابل تخصیص سرویس حجمی'))}
+ ${stat(L('Unlimited credit remaining','Unlimited Credit باقی‌مانده'),unlimitedRemaining===null?'—':fa(unlimitedRemaining),unlimitedRemaining===null?missing:L('Assignable unlimited-service slots','تعداد سرویس نامحدود قابل تخصیص'))}
+ ${stat(L('Current-period traffic','مصرف واقعی دوره'),currentUsage===null?'—':bytes(currentUsage),currentUsage===null?missing:L('Analytics only; does not spend credit','فقط آمار؛ از اعتبار کم نمی‌کند'))}
+ ${stat(L('Lifetime representative traffic','مصرف تاریخی نماینده‌ها'),lifetime===null?'—':bytes(lifetime),lifetime===null?missing:L('Immutable observed traffic history','تاریخچه ماندگار مصرف مشاهده‌شده'))}
+ </div><article class="panel fv2-controls">${repControl}</article>
+ <div class="notice">${L('A limited client reserves its configured quota from Volume Credit. An unlimited client reserves one Unlimited Credit. Disabling a client does not release its reservation; deleting it or changing its plan does.','کاربر حجمی به اندازه حجم پلن از Volume Credit رزرو می‌کند و کاربر نامحدود یک Unlimited Credit می‌گیرد. قطع‌کردن کاربر رزرو را آزاد نمی‌کند؛ حذف یا تغییر پلن آن را آزاد می‌کند.')}</div>
+ <article class="panel"><div class="panel-head"><div><h2>${L('Current representative credit position','وضعیت فعلی اعتبار نمایندگان')}</h2><p>${L('Total, allocated and remaining sellable capacity.','ظرفیت کل، رزروشده و باقی‌مانده قابل‌فروش.')}</p></div><span class="tag">${fa(profiles.length)}</span></div>${positionTable(profiles)}</article>
+ <article class="panel" style="margin-top:18px"><div class="panel-head"><div><h2>${L('Resource credit ledger','دفتر تغییرات اعتبار')}</h2><p>${L('Every manual credit adjustment has an idempotent Event ID.','هر تغییر دستی اعتبار یک Event ID یکتای idempotent دارد.')}</p></div><span class="tag">${fa(visibleCredits.length)}</span></div>${creditTable(credits)}</article>
+ <article class="panel" style="margin-top:18px"><div class="panel-head"><div><h2>${L('Observed traffic ledger','دفتر مصرف واقعی')}</h2><p>${L('Observed traffic is historical analytics and never automatically consumes sellable credit.','مصرف مشاهده‌شده فقط تاریخچه و آمار است و اعتبار قابل‌فروش را خودکار کم نمی‌کند.')}</p></div><span class="tag">${fa(visibleTraffic.length)}</span></div>${trafficTable(traffic)}</article></div>`;
 };
 runAction=async function(act,el){if(act==='fv2filter'){FV[el.dataset.key]=el.dataset.value;await renderPage();return;}return oldRunAction(act,el);};
 })();
