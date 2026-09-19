@@ -503,6 +503,16 @@ def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
  assert '24103' in text and sub.headers['x-dark-failover-nodes']=='1'
 
  with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET last_error='mirror failed' WHERE node_id='edge1' AND local_inbound_id=?",(a,))
+ assert app.state.nodes.failover_targets('fail-user')==[]
+ orch=c.get('/api/nodes/orchestration').json()
+ route=next(x for x in orch['inbounds'] if x['inbound_id']==a)['routes'][0]
+ assert route['subscription_reason']=='sync_error' and route['subscription_included'] is False
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET last_error='' WHERE node_id='edge1' AND local_inbound_id=?",(a,))
+ assert len(app.state.nodes.failover_targets('fail-user'))==1
+
+ with store.transaction() as db:
   db.execute("UPDATE remote_nodes SET last_error='network down' WHERE id='edge1'")
  assert app.state.nodes.failover_targets('fail-user')==[]
  sub=c.get(client['subscription_url']+'?format=clash')
