@@ -118,6 +118,62 @@ def test_representative_prefix_ip_and_hwid_are_real_client_policies(env):
     assert patch.status_code==400 and 'HWID cap' in patch.text
 
 
+def test_representative_resource_credits_reserve_configured_plans(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    gib=1024**3
+    body=rep_body(inbound_id,volume_credit_bytes=5*gib,unlimited_credit=1,max_clients=10)
+    assert c.put('/api/resellers/seller',json=body).status_code==200
+    limited=c.post('/api/clients',json={
+        'owner':'seller','client':{'email':'s_limited','limitIp':1,'limitHwid':1,'totalGB':3*gib},
+        'inboundIds':[inbound_id]})
+    assert limited.status_code==202,limited.text
+    rep=next(x for x in c.get('/api/resellers').json() if x['id']=='seller')
+    assert rep['allocated_volume_bytes']==3*gib
+    assert rep['volume_credit_remaining_bytes']==2*gib
+    too_large=c.post('/api/clients',json={
+        'owner':'seller','client':{'email':'s_too_large','limitIp':1,'limitHwid':1,'totalGB':3*gib},
+        'inboundIds':[inbound_id]})
+    assert too_large.status_code==400 and 'volume credit' in too_large.text.lower()
+    unlimited=c.post('/api/clients',json={
+        'owner':'seller','client':{'email':'s_unlimited','limitIp':1,'limitHwid':1,'totalGB':0},
+        'inboundIds':[inbound_id]})
+    assert unlimited.status_code==202,unlimited.text
+    no_slot=c.post('/api/clients',json={
+        'owner':'seller','client':{'email':'s_unlimited2','limitIp':1,'limitHwid':1,'totalGB':0},
+        'inboundIds':[inbound_id]})
+    assert no_slot.status_code==400 and 'unlimited credit' in no_slot.text.lower()
+    store.record_usage('rep-usage-does-not-spend-credit','s_limited',50*gib,25*gib)
+    rep=next(x for x in c.get('/api/resellers').json() if x['id']=='seller')
+    assert rep['used_bytes']==75*gib
+    assert rep['volume_credit_remaining_bytes']==2*gib
+    assert rep['unlimited_credit_remaining']==0
+    assert 'owner_quota' not in store.client_reasons('s_limited')
+
+
+def test_representative_credit_adjustment_is_idempotent(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    gib=1024**3
+    assert c.put('/api/resellers/seller',json=rep_body(
+        inbound_id,volume_credit_bytes=2*gib,unlimited_credit=1,max_clients=10)).status_code==200
+    assert c.post('/api/clients',json={
+        'owner':'seller','client':{'email':'s_reserved','totalGB':gib,'limitIp':1,'limitHwid':1},
+        'inboundIds':[inbound_id]}).status_code==202
+    payload={'volume_bytes':gib,'unlimited_units':2,'event_id':'rep-credit-adjust-0001'}
+    first=c.post('/api/resellers/seller/credits',json=payload)
+    second=c.post('/api/resellers/seller/credits',json=payload)
+    assert first.status_code==200 and first.json()['recorded'] is True
+    assert second.status_code==200 and second.json()['recorded'] is False
+    rep=first.json()['representative']
+    assert rep['volume_credit_bytes']==3*gib and rep['unlimited_credit']==3
+    below=c.post('/api/resellers/seller/credits',json={
+        'volume_bytes':-(3*gib),'unlimited_units':0,'event_id':'rep-credit-adjust-0002'})
+    assert below.status_code==400 and 'allocated' in below.text.lower()
+    with store.lock:
+        assert store.db.execute("SELECT COUNT(*) FROM resource_credit_ledger WHERE owner='seller'").fetchone()[0]==1
+
+
 def test_disabling_representative_revokes_login_and_blocks_owned_clients(env):
     store,engine,_,auth,c=env
     inbound_id=create_inbound(c)
