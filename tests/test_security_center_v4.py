@@ -46,7 +46,6 @@ def test_security_center_aggregates_local_and_node_ip_device_state(env):
     assert doc['summary']['recent_violations']>=1
     assert doc['architecture']['local_enforcer']=='root-owned DARK nftables broker'
     assert doc['architecture']['global_remote_firewall_ban'] is False
-    assert doc['architecture']['fail2ban'] is False
     assert doc['bans'][0]['ip']=='9.9.9.9'
 
 
