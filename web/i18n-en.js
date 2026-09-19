@@ -208,6 +208,9 @@ const exact=new Map(Object.entries({
  'User-Agent نامشخص':'Unknown User-Agent',
  'ابطال':'Revoke',
  'نشست باطل شد.':'Session revoked.',
+ 'اعتبار فروش حجمی و نامحدود، حساب ورود، سیاست مشتری و اینباندهای هر نماینده از همین بخش مدیریت می‌شود.':'Volume and unlimited sales credit, login account, client policy, and allowed inbounds are managed here for each representative.',
+ 'DARK فقط یک مالک اصلی دارد. اعتبار نماینده پول نیست: سرویس حجمی از Volume Credit رزرو می‌کند و هر سرویس نامحدود یک Unlimited Credit می‌گیرد. مصرف واقعی Xray فقط گزارش است و از اعتبار فروش کم نمی‌شود.':'DARK has one primary owner. Representative credit is not money: volume services reserve Volume Credit and each unlimited service reserves one Unlimited Credit. Real Xray traffic is reporting only and does not spend sales credit.',
+ 'هنوز نماینده‌ای ساخته نشده است.':'No representatives yet.',
  'این API فقط برای اتصال ابزارهای مجاز به DARK XRAY است و سطح دسترسی آن از حساب سازنده فراتر نمی‌رود.':'This API is only for authorized DARK XRAY integrations and cannot exceed the creator account permissions.'
 }));
 
@@ -382,6 +385,12 @@ const words=[
 ];
 
 function digits(s){return s.replace(/[۰-۹]/g,d=>latinDigits[persianDigits.indexOf(d)]);}
+function escRe(s){return s.replace(/[.*+?^{}()|[\]\\]/g,'\\function digits(s){return s.replace(/[۰-۹]/g,d=>latinDigits[persianDigits.indexOf(d)]);}
+function translateRaw(raw){');}
+function replaceFaWord(text,faText,enText){
+  const re=new RegExp('(^|[\\s·:()،,/|+\\-])'+escRe(faText)+'(?=$|[\\s·:()،,/|+\\-])','g');
+  return text.replace(re,(m,prefix)=>prefix+enText);
+}
 function translateRaw(raw){
   if(!raw)return raw;
   let out=selected==='en'?digits(raw):raw;
@@ -391,7 +400,7 @@ function translateRaw(raw){
     if(!faChars.test(core))return out;
     if(exact.has(core))return lead+exact.get(core)+tail;
     for(const [a,b] of phrases)core=core.split(a).join(b);
-    if(faChars.test(core))for(const [a,b] of words)core=core.split(a).join(b);
+    if(faChars.test(core))for(const [a,b] of words)core=replaceFaWord(core,a,b);
     return lead+core+tail;
   }
   if(reverseExact.has(core))return lead+reverseExact.get(core)+tail;
