@@ -319,13 +319,37 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert 'browser-proxy' in observatory.get('subjectSelector',[]),observatory
             mark('Observatory Guided V3 edits probe behavior with outbound selectors')
 
+            now=time.time()
+            with store.transaction() as db:
+                token_enc=auth.cipher.encrypt(('dkn_'+('R'*60)).encode()).decode()
+                db.execute("""INSERT INTO remote_nodes(
+                    id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health,
+                    data_address,priority,failover_enabled)
+                    VALUES(?,?,?,?,1,?,?,?,?,?,'{}',?,?,1)""",
+                    ('browser-node','BROWSER NODE','https://browser-node-control.example.test',token_enc,
+                     now,now,now,11,'','browser-node.example.test',5))
+                db.execute("""INSERT INTO remote_node_inbounds(
+                    node_id,local_inbound_id,remote_inbound_id,updated_at,last_sync,last_error)
+                    VALUES(?,?,?,?,?,'')""",('browser-node',inbound_id,77,now,now))
+
             visit(page,'nodes')
+            page.locator('.nv4-orchestrator').wait_for(state='visible',timeout=10000)
+            orch=page.locator('.nv4-inbound').filter(has_text='DARK Browser QA / VLESS')
+            assert orch.count()==1
+            orch_text=orch.inner_text()
+            assert 'public-browser.example.test:20443' in orch_text
+            assert 'browser-node.example.test:19443' in orch_text
+            assert 'IN SUBSCRIPTION' in orch_text
+            assert '#77' in orch_text
+            mark('Nodes V4 Orchestrator separates primary Public Endpoint port from source-inbound failover port')
+            page.screenshot(path=str(OUT/'browser-nodes-v4-orchestrator.png'),full_page=True)
+
             page.locator('[data-act="nv2new"]').click()
             page.locator('#dialog-form .nv2-picker').wait_for(state='visible',timeout=10000)
             assert page.locator('#dialog-form [name="inboundIds"]').count()>=1
             assert page.locator('#dialog-form').get_by_text('Clone local inbound to node').count()==0
-            mark('Nodes V3 Add Node exposes assigned-inbound picker instead of manual clone flow')
-            page.screenshot(path=str(OUT/'browser-nodes-v3.png'),full_page=True)
+            assert 'source inbound port' in page.locator('#dialog-form').inner_text().lower()
+            mark('Nodes V4 Add Node explains assignment and failover port semantics')
             page.locator('[data-act="close"]').first.click()
 
             visit(page,'finance')
