@@ -580,19 +580,22 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable();return manager.resolve_reset(p.actor,email,body.confirmation)
 
 
-    def rewrite_failover_uri(uri:str,address:str,remark:str)->str:
+    def rewrite_failover_uri(uri:str,address:str,remark:str,port_override:int=0)->str:
+        if port_override and not 1<=int(port_override)<=65535:raise PolicyError('Invalid failover data port')
         if uri.startswith('vmess://'):
             raw=uri[8:]
             try:
                 doc=json.loads(base64.b64decode(raw+'='*((4-len(raw)%4)%4)).decode())
-                doc['add']=address;doc['ps']=remark
+                doc['add']=address
+                if port_override:doc['port']=str(int(port_override))
+                doc['ps']=remark
                 return 'vmess://'+base64.b64encode(json.dumps(doc,separators=(',',':'),ensure_ascii=False).encode()).decode()
             except Exception as ex:raise PolicyError('Cannot rewrite VMess failover link') from ex
         p=urlsplit(uri)
         if p.scheme not in {'vless','trojan','ss'}:raise PolicyError('Unsupported failover link protocol')
         userinfo=(p.netloc.rsplit('@',1)[0]+'@') if '@' in p.netloc else ''
         host='['+address+']' if ':' in address and not address.startswith('[') else address
-        port=p.port
+        port=int(port_override or (p.port or 0))
         netloc=userinfo+host+((':'+str(port)) if port else '')
         return urlunsplit((p.scheme,netloc,p.path,p.query,quote(remark)))
 
@@ -607,8 +610,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 remark=str(item['remark'])+' · '+str(target['name'])+' ['+str(target['node_id'])+']'
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
-                clone['uri']=rewrite_failover_uri(item['uri'],target['address'],remark)
+                source_port=int(engine.inbound(inbound_id)['port'])
+                clone['uri']=rewrite_failover_uri(item['uri'],target['address'],remark,source_port)
                 clone['failoverNode']=target['node_id'];clone['failoverPriority']=target['priority']
+                clone['failoverPort']=source_port
                 clone['failoverLatencyMs']=target['latency_ms'];out.append(clone)
         return out
 
@@ -937,6 +942,54 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         if action not in {'validate','restart','start','stop'}:raise HTTPException(404,'Unknown node core action')
         return {'engine':engine.command(action),'node_agent':True}
+
+    def node_orchestration_doc():
+        node_rows=nodes.list();inbounds=engine.inbounds();hosts=engine.section('hosts');clients=engine.clients()
+        client_counts={int(i['id']):0 for i in inbounds}
+        for client in clients:
+            for inbound_id in client.get('inboundIds',[]):
+                if inbound_id in client_counts:client_counts[inbound_id]+=1
+        rows=[];ready_routes=deployed_routes=assigned_routes=0
+        for inbound in inbounds:
+            inbound_id=int(inbound['id'])
+            configured=[h for h in hosts if int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True)]
+            primary=[{'address':h['address'],'port':int(h['port']),'remark':h.get('remark') or inbound.get('remark') or inbound.get('tag')}
+                     for h in configured]
+            if not primary:
+                primary=[{'address':config.public_address,'port':int(inbound['port']),'remark':inbound.get('remark') or inbound.get('tag')}]
+            routes=[]
+            for node in node_rows:
+                assignment=next((a for a in node.get('assignments',[]) if int(a['local_inbound_id'])==inbound_id),None)
+                if not assignment:continue
+                assigned_routes+=1
+                if assignment.get('deployed'):deployed_routes+=1
+                if assignment.get('failover_ready'):ready_routes+=1
+                routes.append({
+                    'node_id':node['id'],'name':node['name'],'origin':node['origin'],
+                    'data_address':node.get('data_address',''),'data_port':int(inbound['port']),
+                    'priority':int(node.get('priority') or 100),'latency_ms':int(node.get('last_latency_ms') or 0),
+                    'enabled':bool(node.get('enabled')),'online':bool(node.get('online')),
+                    'failover_enabled':bool(node.get('failover_enabled')),
+                    'remote_inbound_id':int(assignment.get('remote_inbound_id') or 0),
+                    'deployment_state':assignment.get('deployment_state','pending'),
+                    'subscription_included':bool(assignment.get('failover_ready')),
+                    'subscription_reason':assignment.get('failover_reason','not_deployed'),
+                    'last_sync':float(assignment.get('last_sync') or 0),
+                    'last_error':assignment.get('last_error','')
+                })
+            routes.sort(key=lambda x:(x['priority'],x['latency_ms'] or 10**9,x['name'],x['node_id']))
+            stream=inbound.get('streamSettings',{}) if isinstance(inbound.get('streamSettings'),dict) else {}
+            rows.append({'inbound_id':inbound_id,'remark':inbound.get('remark') or inbound.get('tag'),
+                         'protocol':inbound.get('protocol'),'network':stream.get('network','tcp'),
+                         'security':stream.get('security','none'),'listen_port':int(inbound['port']),
+                         'client_count':client_counts.get(inbound_id,0),'primary_endpoints':primary,
+                         'routes':routes,'failover_count':sum(1 for x in routes if x['subscription_included'])})
+        return {'generated_at':time.time(),'summary':{'nodes':len(node_rows),'inbounds':len(inbounds),
+                'assigned_routes':assigned_routes,'deployed_routes':deployed_routes,'subscription_routes':ready_routes},
+                'inbounds':rows}
+
+    @app.get('/api/nodes/orchestration')
+    def remote_node_orchestration(p:Principal=Depends(owner)):return node_orchestration_doc()
 
     @app.get('/api/nodes')
     def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
