@@ -726,6 +726,40 @@ class Manager:
                 self.last_error=(str(e) if isinstance(e,(CoreError,PolicyError)) else type(e).__name__)[:400]
                 if not suppress:raise
 
+    def retry_operation(self,actor: Actor,email: str) -> dict:
+        with self.lock:
+            meta=self.meta(email);op=str(meta.get('op') or 'none');state=str(meta.get('state') or '')
+            action='delete' if op=='delete' else 'reset' if op=='reset' else 'edit'
+            row=self.own_row(actor,email,action)
+            if op=='none' or state not in ('pending','error'):
+                raise PolicyError('Only pending/error durable operations can be retried')
+            with self.store.transaction() as db:
+                db.execute("UPDATE managed_clients SET state='pending',error='',retry_at=0,updated_at=? WHERE email=?",
+                           (time.time(),email))
+            self.audit(actor,row['owner'],'sync.retry_now',email,'operation='+op+'; previous_state='+state)
+            self.tick(suppress=True)
+            return {'detail':self.detail(actor,email),'meta':self.meta(email)}
+
+    def restore_missing(self,actor: Actor,email: str,confirmation: str) -> dict:
+        if actor.role!='owner' or confirmation!=email:
+            raise PermissionDenied('Primary owner and exact client identity confirmation required')
+        with self.lock:
+            row=self.own_row(actor,email,'edit');meta=self.meta(email)
+            if meta['state']!='missing' or meta['op']!='none':
+                raise PolicyError('Only a missing idle managed client can be explicitly restored')
+            records={r['email']:r for r in self.engine.clients()}
+            if email in records:
+                raise PolicyError('CoreEngine already contains this identity; reconcile before restore')
+            desired=json.loads(meta['desired'])
+            if not desired.get('subId'):
+                raise PolicyError('Managed identity metadata is incomplete; automatic restore refused')
+            with self.store.transaction() as db:
+                db.execute("UPDATE managed_clients SET op='upsert',op_id=?,state='pending',error='',retry_at=0,attempts=0,updated_at=? WHERE email=?",
+                           (secrets.token_hex(16),time.time(),email))
+            self.audit(actor,row['owner'],'sync.restore_missing',email,'Explicit owner recovery requested; existing DARK identity retained')
+            self.tick(suppress=True)
+            return {'detail':self.detail(actor,email),'meta':self.meta(email)}
+
     def resolve_reset(self,actor: Actor,email: str,confirmation: str) -> dict:
         if actor.role!='owner' or confirmation!=email:
             raise PermissionDenied('Owner and exact client identity confirmation required')
