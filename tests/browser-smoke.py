@@ -4,7 +4,7 @@
 The browser and session are real. Xray itself is intentionally absent here; the
 real-core/data-plane gate remains tools/smoke-real.py on a VPS.
 """
-import json,socket,sys,tempfile,threading,time
+import json,re,socket,sys,tempfile,threading,time
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -25,6 +25,12 @@ report={'version':VERSION,'browser':'Playwright Chromium','backend':'real local 
 
 def mark(text):
     report['checks'].append(text)
+
+
+def assert_english_surface(page,name):
+    text=page.locator('#content').inner_text()
+    bad=[line.strip() for line in text.splitlines() if re.search(r'[\u0600-\u06FF]',line)]
+    assert not bad,f'{name} contains untranslated Persian in English mode: {bad[:8]}'
 
 
 def visit(page,name):
@@ -138,8 +144,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             # Every owner workspace must render without leaving a busy/blank content surface.
             pages=['dashboard','inbounds','clients','resellers','ipguard','finance','sync',
                    'hosts','outbounds','routing','nodes','xray','settings','account']
-            for name in pages:visit(page,name)
-            mark('all primary owner workspaces render through real navigation')
+            for name in pages:
+                visit(page,name)
+                assert_english_surface(page,name)
+            mark('all primary owner workspaces render in English without Persian leakage')
             assert page.locator('.nav-btn[data-page="roles"]').count()==0
             assert page.locator('.nav-btn[data-page="logs"]').count()==0
             assert page.locator('.nav-btn[data-page="audit"]').count()==0
@@ -576,6 +584,11 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.evaluate("go('inbounds')")
             page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='inbounds'",timeout=10000)
             page.wait_for_timeout(150)
+            fa_text=page.locator('#content').inner_text()
+            assert re.search(r'[\u0600-\u06FF]',fa_text),'Persian page did not render Persian UI text'
+            for stale in ('Sanaei','Sanayi','Mirza','سنایی','میرزا','New Inbound','Search name, tag, port','Core online'):
+                assert stale not in fa_text,(stale,fa_text[:1500])
+            mark('Persian workspace is localized and free of legacy product names')
             width=page.evaluate('document.documentElement.scrollWidth')
             inner=page.evaluate('window.innerWidth')
             assert width<=inner+2,(width,inner)
