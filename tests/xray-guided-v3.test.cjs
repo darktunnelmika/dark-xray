@@ -66,6 +66,13 @@ test('Trojan Shadowsocks SOCKS and HTTP use readable server shapes',()=>{
   assert.deepEqual(Array.from(o.settings.servers[0].users),[]);
 });
 
+test('WireGuard form state ignores flat address fields from non-WireGuard outbounds',()=>{
+  const g=load(),wg=g.wgState({protocol:'vless',settings:{address:'edge.example.com',port:443}});
+  assert.equal(wg.address,'');
+  assert.equal(wg.allowedIPs,'0.0.0.0/0,::/0');
+  assert.equal(wg.reserved,'');
+});
+
 test('WireGuard builder emits peer, allowed IPs and reserved bytes',()=>{
   const g=load(),fd=new FD({...common,protocol:'wireguard',wgSecretKey:'SECRET',wgAddress:'172.16.0.2/32,2606:4700::2/128',
     wgPublicKey:'PUB',wgEndpoint:'engage.example.com:2408',wgAllowed:'0.0.0.0/0,::/0',wgMtu:'1280',
