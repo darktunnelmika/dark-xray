@@ -144,9 +144,33 @@ function healthCard(){
  if(!rows.length)add('good',L('All monitored systems nominal','همه سیستم‌های مانیتورشده سالم هستند'),L('No active runtime, node or update alert.','هشدار فعالی برای محیط اجرا، نود یا آپدیت وجود ندارد.'));
  return `<article class="ov4-card ov4-health-card"><header class="ov4-card-head"><div><span>${L('HEALTH & ALERTS','سلامت و هشدارها')}</span><small>${L('Operational issues first','اولویت با مشکلات عملیاتی')}</small></div><button class="ov4-link" data-act="ov4doctor">Doctor →</button></header><div class="ov4-alert-list">${rows.slice(0,5).map(r=>`<div class="${r.kind}"><i></i><span><b>${e(r.title)}</b><small>${e(r.detail)}</small></span></div>`).join('')}</div></article>`;
 }
+const activityScopes={
+ settings:['Settings','تنظیمات'],client:['Client','کاربر'],reseller:['Representative','نماینده'],owner:['Owner','مالک'],
+ inbound:['Inbound','اینباند'],node:['Node','نود'],security:['Security','امنیت'],system:['System','سیستم'],
+ core:['Xray Core','هسته Xray'],update:['Update','آپدیت'],backup:['Backup','بکاپ'],auth:['Account','حساب'],
+ subscription:['Subscription','اشتراک']
+};
+const activityVerbs={
+ create:['Created','ساخت'],update:['Updated','بروزرسانی'],delete:['Deleted','حذف'],edit:['Edited','ویرایش'],
+ add:['Added','افزودن'],remove:['Removed','حذف'],enable:['Enabled','فعال‌سازی'],disable:['Disabled','غیرفعال‌سازی'],
+ reset:['Reset','ریست'],start:['Started','اجرا'],stop:['Stopped','توقف'],restart:['Restarted','راه‌اندازی مجدد'],
+ login:['Signed in','ورود'],logout:['Signed out','خروج'],sync:['Synchronized','همگام‌سازی'],apply:['Applied','اعمال'],
+ check:['Checked','بررسی'],download:['Downloaded','دانلود'],restore:['Restored','بازیابی']
+};
+function activityLabel(code){
+ const raw=String(code||''),parts=raw.split('.').filter(Boolean);
+ if((localStorage.getItem('dark_lang')||'en')!=='fa'){
+   const scope=activityScopes[parts[0]],verb=activityVerbs[parts[1]];
+   return scope&&verb?scope[0]+' · '+verb[0]:raw;
+ }
+ const scope=activityScopes[parts[0]],verb=activityVerbs[parts[1]];
+ if(scope&&verb)return scope[1]+' · '+verb[1];
+ if(scope)return scope[1]+' · '+L('Event','رویداد');
+ return L('System event','رویداد سیستمی');
+}
 function activityCard(){
  const rows=(state.ov2?.audit||[]).slice(0,7);
- return `<article class="ov4-card ov4-activity-card"><header class="ov4-card-head"><div><span>${L('RECENT ACTIVITY','فعالیت‌های اخیر')}</span><small>${L('Audit-backed events','رویدادهای مبتنی بر گزارش عملیات')}</small></div><button class="ov4-link" data-act="ov4history">${L('View all','همه')} →</button></header><div class="ov4-activity-list">${rows.length?rows.map(r=>`<div><time>${date(r.at)}</time><span>${e(r.actor)}</span><b>${e(r.action)}</b><em>${e(r.target)}</em></div>`).join(''):`<div class="ov4-empty">${L('No recent audit events.','رویداد اخیر وجود ندارد.')}</div>`}</div></article>`;
+ return `<article class="ov4-card ov4-activity-card"><header class="ov4-card-head"><div><span>${L('RECENT ACTIVITY','فعالیت‌های اخیر')}</span><small>${L('Audit-backed events','رویدادهای مبتنی بر گزارش عملیات')}</small></div><button class="ov4-link" data-act="ov4history">${L('View all','همه')} →</button></header><div class="ov4-activity-list">${rows.length?rows.map(r=>`<div><time>${date(r.at)}</time><span>${e(r.actor)}</span><b title="${e(r.action)}">${e(activityLabel(r.action))}</b><em>${e(r.target)}</em></div>`).join(''):`<div class="ov4-empty">${L('No recent audit events.','رویداد اخیر وجود ندارد.')}</div>`}</div></article>`;
 }
 
 dashboard=function(){
