@@ -16,7 +16,7 @@ banner(){
   printf "${C_CYAN}║${C_RESET}${C_PURPLE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "D A R K   V P N"
   printf "${C_CYAN}║${C_RESET}${C_BLUE}%74s${C_RESET}${C_CYAN}║${C_RESET}\n" "DARK XRAY  •  100-STEP CYBER INSTALLER"
   printf "${C_CYAN}╚"; repeat '═' 74; printf "╝${C_RESET}\n"
-  printf "${C_DIM}Standalone panel • Own DB/API/UI • Xray-core engine • No Sanayi runtime${C_RESET}\n\n"
+  printf "${C_DIM}Standalone panel • Own DB/API/UI • Xray-core engine • No external panel runtime${C_RESET}\n\n"
 }
 progress(){
   local n="$1" text="$2"; local filled empty
@@ -47,6 +47,24 @@ wait_panel_ready(){
   done
   return 1
 }
+record_installed_source(){
+  local commit="$1" version="$2" ref="$3"
+  python3 - "$commit" "$version" "$ref" <<'PY'
+import json,os,pwd,sys,tempfile,time
+from pathlib import Path
+commit,version,ref=sys.argv[1:4]
+path=Path('/var/lib/dark-xray/installed-source.json');path.parent.mkdir(parents=True,exist_ok=True)
+fd,name=tempfile.mkstemp(prefix='.installed-source-',suffix='.json',dir=path.parent);tmp=Path(name)
+try:
+    with os.fdopen(fd,'w',encoding='utf-8') as f:
+        json.dump({'commit':commit,'version':version,'ref':ref,'installed_at':time.time()},f,ensure_ascii=False,indent=2)
+        f.write('\n');f.flush();os.fsync(f.fileno())
+    os.chmod(tmp,0o640);os.chown(tmp,0,pwd.getpwnam('darkxray').pw_gid);os.replace(tmp,path)
+finally:
+    tmp.unlink(missing_ok=True)
+PY
+}
+
 fetch_source(){
   local dest="$1" ref="$SOURCE_REF"
   valid_source_ref "$ref" || fail "Invalid DARK_XRAY_REF"
@@ -189,6 +207,8 @@ progress 35 "Checking source before provisioning"; python3 tools/repo-check.py >
 progress 45 "Provisioning isolated service account and application"
 # Prerequisites are already installed above; avoid a second apt pass here.
 bash setup.sh --public-address "$PUBLIC_ADDRESS" --ssh-port "$DETECTED_SSH" --username "$OWNER" --port "$PANEL_PORT" --panel-path "$URI_PATH" --core-version "$CORE_VERSION"
+SOURCE_VERSION="$(tr -d '\r\n' < VERSION)"
+record_installed_source "$FETCHED_SHA" "$SOURCE_VERSION" "$SOURCE_REF" || fail "Could not persist installed source identity"
 
 progress 65 "Verifying systemd services and Xray core"
 systemctl is-enabled dark-xray.service >/dev/null || fail "dark-xray service is not enabled"
