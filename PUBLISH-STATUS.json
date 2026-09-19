@@ -2,7 +2,7 @@
   "project": "DARK XRAY",
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
-  "date": "2026-09-18",
+  "date": "2026-09-19",
   "status": "release_candidate_target_vps_validation",
   "current_version": "0.9.0-rc7",
   "production_ready": false,
@@ -13,14 +13,14 @@
     "optional_web_language": "fa",
     "web_direction_default": "ltr",
     "inbounds_workspace": "V3",
-    "clients_groups_workspace": "V4 cyber command deck / basic-first editor / real-activity presence / per-config QR",
+    "clients_groups_workspace": "V4 command deck + V5 Delivery Center / basic-first editor / real-activity presence / per-config QR",
     "settings_workspace": "V2",
     "finance_workspace": "V2",
-    "subscription_workspace": "V2 raw/base64/dark-json/clash-mihomo",
-    "xray_control_workspace": "V2 dns/outbounds/routing/balancers/observatory",
+    "subscription_workspace": "V3 raw/base64/dark-json/clash-mihomo + policy-driven naming/headers",
+    "xray_control_workspace": "Traffic Engine V4 + DNS Guided V3 / guided outbounds/routing/balancers/observatory",
     "hosts_workspace": "V2",
     "operations_workspace": "V2",
-    "nodes_workspace": "V3 inbound assignment / selected-inbound mirror / attached-client credential sync",
+    "nodes_workspace": "V4 orchestrator / inbound assignment / credential mirror / traffic sync / failover readiness",
     "role_ceiling_enforced_server_side": true,
     "totp_replay_counter_hardened": true,
     "robot_sensitive_scope_ceiling": true,
@@ -69,7 +69,11 @@
     "node_selected_inbound_only_sync": true,
     "node_attached_client_credential_mirror": true,
     "node_manual_clone_primary_flow": false,
-    "node_background_assignment_reconcile": true
+    "node_background_assignment_reconcile": true,
+    "public_endpoints_workspace": "V3 listener vs customer-facing delivery address",
+    "security_workspace": "Security Center V4 / Local + Node IP/HWID state / native nftables enforcement boundary",
+    "sync_workspace": "Sync Runtime V4 / external-disable control + explicit missing-runtime recovery",
+    "fresh_install_readiness_wait": true
   },
   "ci": {
     "runs_on_push_to_main": true,
@@ -83,7 +87,8 @@
       "official_xray_real_data_plane": true,
       "linux_kernel_nftables_packet_path": true,
       "systemd_sigkill_and_stop_start_recovery": true,
-      "load_scale_1000_clients_sqlite_contention": true
+      "load_scale_1000_clients_sqlite_contention": true,
+      "fresh_install_disposable_ubuntu": true
     },
     "real_xray_data_plane_scope": [
       "socks_to_vless_to_http",
@@ -123,6 +128,17 @@
       "mobile_390px_layout",
       "clients_v4_basic_first_editor",
       "update_center_graceful_unavailable_state"
+    ],
+    "fresh_install_scope": [
+      "real_interactive_online_installer",
+      "fresh_service_account_and_sqlite",
+      "verified_official_xray_download",
+      "dark_xray_systemd_enabled_and_active",
+      "root_update_broker_enabled_and_active",
+      "local_health_readiness_wait",
+      "darkxray_check",
+      "darkxray_vps_verify",
+      "darkxray_production_gate"
     ]
   },
   "target_infrastructure_validation": {
@@ -137,24 +153,31 @@
     "exact_release_artifact_update_rollback_rehearsal": false,
     "global_multi_node_ip_limit_complete": false,
     "distributed_client_traffic_convergence_complete": false,
-    "ci_load_scale_1000_clients_complete": true
+    "ci_load_scale_1000_clients_complete": true,
+    "ci_fresh_install_disposable_ubuntu_complete": true
   },
   "claim_boundaries": {
     "kernel_ci_is_not_provider_topology_proof": true,
     "systemd_recovery_ci_is_not_real_machine_reboot": true,
     "real_xray_ci_is_not_target_region_connectivity_proof": true,
     "ip_limit_is_observation_policy_not_physical_device_count": true,
-    "remote_node_traffic_accounting_not_central_aggregated": true
+    "packet_level_nftables_remains_host_local": true,
+    "subscription_failover_is_client_side_not_transparent_server_routing": true
   },
   "release_hygiene": {
     "version_file_current": true,
-    "readmes_current_for_rc": true,
+    "readmes_current_for_rc": false,
     "status_current_for_rc": true,
     "validation_doc_path_current": true,
     "source_sha256sums_regenerated_for_rc": false,
-    "release_archive_sha256sums_generated_with_prerelease": false
+    "release_archive_sha256sums_generated_with_prerelease": false,
+    "exact_main_snapshot_documented": true,
+    "published_tag_for_current_source_version": false
   },
-  "checksum_note": "RC7 source/release checksums will be regenerated only after the final tested snapshot including Nodes V3 is fixed.",
+  "checksum_note": "The current source still reports 0.9.0-rc7, but no v0.9.0-rc7 tag has been published. Generate fresh source/release checksums only when the next exact release snapshot/tag is fixed.",
   "release_candidate": true,
-  "control_center_v2": true
+  "control_center_v2": true,
+  "validated_main_commit": "88e9e5967c3577378f0cca03305b6d127f238176",
+  "validated_main_ci_run": 761,
+  "current_source_version_tag_published": false
 }
