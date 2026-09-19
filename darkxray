@@ -14,6 +14,7 @@ case "${1:-menu}" in
  check) shift; exec "$PY" "$ROOT/tools/check.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  vps-verify) shift; exec "$PY" "$ROOT/tools/vps-verify.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  node-wan-gate) shift; exec "$PY" "$ROOT/tools/node-wan-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
+ target-vps-gate) shift; exec "$PY" "$ROOT/tools/target-vps-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  production-gate) shift; exec "$PY" "$ROOT/tools/production-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
  guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
