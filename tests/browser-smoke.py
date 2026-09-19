@@ -437,6 +437,49 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('Security Center V4 aggregates Local + Node IP/HWID and exposes Native nftables architecture')
             page.screenshot(path=str(OUT/'browser-security-center-v4.png'),full_page=True)
 
+            with store.transaction() as db:
+                body=json.loads(db.execute("SELECT body FROM core_clients WHERE email='browser-hwid-policy'").fetchone()[0])
+                body['enable']=False
+                db.execute("UPDATE core_clients SET body=? WHERE email='browser-hwid-policy'",(json.dumps(body),))
+                db.execute("UPDATE managed_clients SET state='applied',op='none',error='',external_disabled=1,expected_enable=1 WHERE email='browser-hwid-policy'")
+            page.evaluate("refresh()")
+            page.wait_for_timeout(100)
+
+            visit(page,'sync')
+            page.locator('.sy4').wait_for(state='visible',timeout=10000)
+            assert page.locator('.sy4-control-card').count()>=3
+            runtime_text=page.locator('.sy4-control-card').nth(1).inner_text()
+            assert 'STOPPED / STAGED' in runtime_text
+            drift=page.locator('.sy4-item').filter(has_text='browser-hwid-policy')
+            assert drift.count()==1
+            assert 'EXTERNAL DISABLE' in drift.inner_text()
+            drift.locator('[data-act="sy4control"]').click()
+            page.wait_for_timeout(150)
+            external_flag=page.evaluate("()=>api('/api/clients/browser-hwid-policy').then(x=>x.client.enable)")
+            assert external_flag is True
+            page.locator('[data-act="sy4filter"][data-view="all"]').click()
+            clean=page.locator('.sy4-item').filter(has_text='browser-hwid-policy')
+            assert clean.count()==1 and 'IN SYNC' in clean.inner_text()
+
+            with store.transaction() as db:
+                db.execute("DELETE FROM core_clients WHERE email='browser-delivery'")
+                db.execute("UPDATE managed_clients SET state='missing',op='none',error='CoreEngine client missing; automatic recreation refused',retry_at=0 WHERE email='browser-delivery'")
+            page.evaluate("refresh()")
+            page.wait_for_timeout(100)
+            page.locator('[data-act="sy4filter"][data-view="issues"]').click()
+            missing=page.locator('.sy4-item').filter(has_text='browser-delivery')
+            assert missing.count()==1 and 'MISSING IN RUNTIME' in missing.inner_text()
+            missing.locator('[data-act="sy4restore"]').click()
+            page.locator('#dialog-form [name="confirmation"]').wait_for(state='visible',timeout=10000)
+            page.locator('#dialog-form [name="confirmation"]').fill('browser-delivery')
+            page.locator('#submit-dialog').click()
+            page.locator('.dialog').wait_for(state='detached',timeout=10000)
+            restored=page.evaluate("()=>api('/api/clients/browser-delivery')")
+            assert restored['state']=='applied',restored
+            assert page.locator('.sy4-item').filter(has_text='browser-delivery').count()==0
+            mark('Sync Runtime V4 restores external control and explicitly recovers a missing runtime client')
+            page.screenshot(path=str(OUT/'browser-sync-runtime-v4.png'),full_page=True)
+
             visit(page,'settings')
             page.locator('[data-sv2-action="tab"][data-tab="operations"]').click()
             page.locator('.sv2-operations').wait_for(state='visible',timeout=10000)
