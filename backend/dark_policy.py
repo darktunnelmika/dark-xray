@@ -234,11 +234,6 @@ class Store:
           period INTEGER NOT NULL, up_bytes INTEGER NOT NULL, down_bytes INTEGER NOT NULL,
           observed_at REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS ledger_owner_period ON traffic_ledger(owner,period);
-        CREATE TABLE IF NOT EXISTS money_ledger(
-          event_id TEXT PRIMARY KEY, owner TEXT NOT NULL, amount INTEGER NOT NULL,
-          kind TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '', at REAL NOT NULL);
-        CREATE UNIQUE INDEX IF NOT EXISTS one_refund ON money_ledger(reference)
-          WHERE kind='refund';
         CREATE TABLE IF NOT EXISTS resource_credit_ledger(
           event_id TEXT PRIMARY KEY, owner TEXT NOT NULL,
           volume_bytes INTEGER NOT NULL DEFAULT 0,
