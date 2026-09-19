@@ -286,7 +286,7 @@ class Store:
               ELSE COALESCE((SELECT COUNT(*) FROM clients c WHERE c.owner=owners.id AND c.quota_bytes=0),0) END""")
         # Old observed-traffic quota is retired for representatives. Historical
         # traffic remains immutable in traffic_ledger and is still reportable.
-        self.db.execute("UPDATE owners SET quota_bytes=0 WHERE id IN (SELECT id FROM api_admins WHERE role='reseller')")
+        self.db.execute("UPDATE owners SET quota_bytes=0")
         client_columns={row[1] for row in self.db.execute("PRAGMA table_info(clients)")}
         if "global_ip_block" not in client_columns:
             self.db.execute("ALTER TABLE clients ADD COLUMN global_ip_block INTEGER NOT NULL DEFAULT 0")
