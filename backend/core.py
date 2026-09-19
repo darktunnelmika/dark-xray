@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 import psutil
-from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line, render_fail2ban
+from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line
 from reality_scan import reality_target_policy
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')

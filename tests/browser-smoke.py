@@ -203,6 +203,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('.cv4-editor').wait_for(state='visible',timeout=10000)
             assert page.locator('#dialog-form [name="email"]').count()==1
             assert page.locator('#dialog-form [name="limitIp"]').count()==1
+            assert page.locator('#dialog-form [name="limitHwid"]').count()==1
             assert page.locator('#dialog-form [name="tgId"]').count()==0
             assert page.locator('#dialog-form [name="id"]').count()==0
             assert page.locator('#dialog-form details.cv4-advanced').get_attribute('open') is None
@@ -407,6 +408,36 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('Subscription Policy V3 drives real format, headers, naming, announcement and HWID status')
             page.screenshot(path=str(OUT/'browser-subscription-policy-v3.png'),full_page=True)
 
+            sec_now=time.time()
+            with store.transaction() as db:
+                db.execute("INSERT INTO observations(client_id,ip,node,first_seen,last_seen,granted) VALUES(?,?,?,?,?,1)",
+                           ('browser-hwid-policy','8.8.8.8','local',sec_now-5,sec_now))
+                db.execute("INSERT INTO remote_node_ips(node_id,client_id,ip,first_seen,last_seen,verified) VALUES(?,?,?,?,?,1)",
+                           ('browser-node','browser-hwid-policy','1.1.1.1',sec_now-5,sec_now))
+                db.execute("INSERT INTO remote_node_devices(node_id,client_id,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?,?)",
+                           ('browser-node','browser-hwid-policy','c'*64,'android','remote-browser',sec_now-5,sec_now))
+                db.execute("INSERT INTO events(kind,owner,client_id,ip,node,detail,at) VALUES(?,?,?,?,?,?,?)",
+                           ('violation','qa-owner','browser-hwid-policy','1.1.1.1','browser-node','browser security-center QA',sec_now))
+
+            visit(page,'ipguard')
+            page.locator('.ip4').wait_for(state='visible',timeout=10000)
+            assert page.locator('.ip4-arch-card').count()==4
+            sec_text=page.locator('.ip4').inner_text()
+            assert 'nftables' in sec_text.lower()
+            assert 'fail2ban' not in sec_text.lower()
+            sec_card=page.locator('.ip4-client').filter(has_text='browser-hwid-policy')
+            assert sec_card.count()==1
+            assert sec_card.locator('.ip4-count b').nth(0).inner_text().strip()=='2'
+            assert sec_card.locator('.ip4-count b').nth(1).inner_text().strip()=='2'
+            sec_card.locator('[data-act="ip4inspect"]').click()
+            page.locator('.ip4-dialog').wait_for(state='visible',timeout=10000)
+            detail_text=page.locator('.ip4-dialog').inner_text()
+            assert 'LOCAL' in detail_text and 'NODE browser-node' in detail_text
+            page.locator('[data-act="close"]').first.click()
+            mark('Security Center V4 aggregates Local + Node IP/HWID and exposes Native nftables architecture')
+            page.screenshot(path=str(OUT/'browser-security-center-v4.png'),full_page=True)
+
+            visit(page,'settings')
             page.locator('[data-sv2-action="tab"][data-tab="operations"]').click()
             page.locator('.sv2-operations').wait_for(state='visible',timeout=10000)
             assert page.locator('.sv2-terminal').count()==1
