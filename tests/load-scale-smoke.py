@@ -4,7 +4,7 @@
 Runs a real local HTTP server backed by a real temporary SQLite database and the
 DARK test-engine (no fake HTTP API). It is a capacity regression scenario, not a
 production SLA benchmark. PASS means the fixed workload completed correctly with
-no HTTP 5xx, lost writes, duplicate finance events or SQLite integrity failure.
+no HTTP 5xx, lost writes, duplicate resource-credit events or SQLite integrity failure.
 """
 from __future__ import annotations
 
@@ -91,17 +91,21 @@ def main()->int:
                         'streamSettings':{'network':'tcp','security':'none'},'sniffing':{}})
                     if r.status_code!=200:raise RuntimeError('Inbound create failed: '+r.text[:500])
                     inbound_ids.append(r.json()['id'])
-                owner=request(client,'PUT','/api/owners/load-owner',csrf=csrf,json_body={
-                    'name':'Load Owner','allowed':inbound_ids,'max_clients':a.clients+100,'quota_bytes':0})
-                if owner.status_code!=200:raise RuntimeError('Owner setup failed: '+owner.text[:500])
+                plan_bytes=10*1024*1024*1024
+                base_volume_credit=a.clients*plan_bytes
+                representative=request(client,'PUT','/api/resellers/load-rep',csrf=csrf,json_body={
+                    'name':'Load Representative','password':'Temporary-Load-Rep-Password-082','enabled':True,
+                    'allowed':inbound_ids,'volume_credit_bytes':base_volume_credit,'unlimited_credit':0,
+                    'max_clients':a.clients+100,'prefix':'load-','max_client_ips':0,'max_client_hwid':0})
+                if representative.status_code!=200:raise RuntimeError('Representative setup failed: '+representative.text[:500])
                 report['timings_seconds']['setup']=round(time.perf_counter()-t,3)
 
                 t=time.perf_counter();created=0
                 batches=a.clients//500
                 for b in range(batches):
                     r=request(client,'POST','/api/clients/bulk-create',csrf=csrf,json_body={
-                        'owner':'load-owner','prefix':f'load-{b:02d}-','postfix':'@dark.test','first':1,'quantity':500,
-                        'inboundIds':[inbound_ids[0]],'client':{'totalGB':10*1024*1024*1024,'limitIp':0,'limitHwid':0}})
+                        'owner':'load-rep','prefix':f'load-{b:02d}-','postfix':'@dark.test','first':1,'quantity':500,
+                        'inboundIds':[inbound_ids[0]],'client':{'totalGB':plan_bytes,'limitIp':0,'limitHwid':0}})
                     if r.status_code!=200:raise RuntimeError('Bulk create failed: '+r.text[:500])
                     body=r.json();created+=body['created']
                     if body['created']!=500 or any('error' in x for x in body['items']):
@@ -146,7 +150,7 @@ def main()->int:
 
                 # Bulk adjustment and multi-inbound attachment at the API maximum batch size.
                 bulk=emails[:500]
-                request(client,'POST','/api/groups',csrf=csrf,json_body={'owner':'load-owner','name':'LOAD','color':'#123456'})
+                request(client,'POST','/api/groups',csrf=csrf,json_body={'owner':'load-rep','name':'LOAD','color':'#123456'})
                 t=time.perf_counter();adj=request(client,'POST','/api/clients/bulk-adjust',csrf=csrf,json_body={
                     'emails':bulk,'add_days':1,'group':'LOAD'})
                 report['timings_seconds']['bulk_adjust_500']=round(time.perf_counter()-t,3)
@@ -158,33 +162,41 @@ def main()->int:
                 if attach.status_code!=200 or attach.json()['changed']!=500:
                     raise RuntimeError('Bulk inbound attach did not change 500 clients: '+attach.text[:500])
 
-                # Contended finance writes plus idempotent concurrent retries.
-                events=[f'load-credit-{i:04d}-event' for i in range(64)]
+                # Contended resource-credit writes plus idempotent concurrent retries.
+                events=[f'load-resource-{i:04d}-event' for i in range(64)]
                 def credit(event):
                     with httpx.Client(base_url=base,timeout=30,trust_env=False,cookies=client.cookies) as c:
-                        r=request(c,'POST','/api/owners/load-owner/credit',csrf=csrf,json_body={'amount':1,'event_id':event})
+                        r=request(c,'POST','/api/resellers/load-rep/credits',csrf=csrf,json_body={
+                            'volume_bytes':1,'unlimited_units':0,'event_id':event})
                         return (r.status_code,r.json().get('recorded'))
                 t=time.perf_counter()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=a.concurrency) as pool:
                     first=list(pool.map(credit,events))
                     second=list(pool.map(credit,events))
-                report['timings_seconds']['finance_64_plus_retries']=round(time.perf_counter()-t,3)
-                if any(code!=200 or recorded is not True for code,recorded in first):raise RuntimeError('Initial finance events failed')
-                if any(code!=200 or recorded is not False for code,recorded in second):raise RuntimeError('Finance retries were not idempotent')
+                report['timings_seconds']['resource_credit_64_plus_retries']=round(time.perf_counter()-t,3)
+                if any(code!=200 or recorded is not True for code,recorded in first):raise RuntimeError('Initial resource-credit events failed')
+                if any(code!=200 or recorded is not False for code,recorded in second):raise RuntimeError('Resource-credit retries were not idempotent')
 
             with store.lock:
                 quick=store.db.execute('PRAGMA quick_check').fetchone()[0]
                 journal=store.db.execute('PRAGMA journal_mode').fetchone()[0]
                 client_count=store.db.execute('SELECT COUNT(*) FROM core_clients').fetchone()[0]
-                ledger_count=store.db.execute("SELECT COUNT(*) FROM money_ledger WHERE event_id LIKE 'load-credit-%'").fetchone()[0]
-                credit=store.db.execute("SELECT credit FROM owners WHERE id='load-owner'").fetchone()['credit']
+                ledger_count=store.db.execute("SELECT COUNT(*) FROM resource_credit_ledger WHERE event_id LIKE 'load-resource-%'").fetchone()[0]
+                rep=store.db.execute("SELECT volume_credit_bytes,unlimited_credit FROM owners WHERE id='load-rep'").fetchone()
+                allocated_volume=store.db.execute("SELECT COALESCE(SUM(quota_bytes),0) FROM clients WHERE owner='load-rep' AND quota_bytes>0").fetchone()[0]
                 attached=store.db.execute("SELECT COUNT(*) FROM core_clients WHERE inbounds LIKE '%2%'").fetchone()[0]
             report['sqlite']={'quick_check':quick,'journal_mode':journal,'database_bytes':(tmp/'dark.sqlite3').stat().st_size}
-            report['counts'].update({'database_clients':client_count,'finance_events':ledger_count,'owner_credit':credit,
+            report['counts'].update({'database_clients':client_count,'resource_credit_events':ledger_count,
+                                     'representative_volume_credit':int(rep['volume_credit_bytes']),
+                                     'representative_allocated_volume':int(allocated_volume),
+                                     'representative_volume_remaining':int(rep['volume_credit_bytes'])-int(allocated_volume),
                                      'bulk_attached_at_least':attached})
             if quick!='ok':raise RuntimeError('SQLite quick_check failed: '+str(quick))
             if client_count!=a.clients:raise RuntimeError('Client count changed during contention scenario')
-            if ledger_count!=64 or credit!=64:raise RuntimeError(f'Finance contention lost/duplicated writes: ledger={ledger_count} credit={credit}')
+            if ledger_count!=64 or int(rep['volume_credit_bytes'])!=base_volume_credit+64:
+                raise RuntimeError(f'Resource-credit contention lost/duplicated writes: ledger={ledger_count} volume={int(rep["volume_credit_bytes"])}')
+            if int(allocated_volume)!=base_volume_credit:
+                raise RuntimeError(f'Representative allocation drifted: allocated={int(allocated_volume)} expected={base_volume_credit}')
             for email in mutate[:20]:
                 detail=engine.client_detail(email)
                 if int(detail['client'].get('limitHwid',0))<1:raise RuntimeError('Concurrent client patch was lost: '+email)
