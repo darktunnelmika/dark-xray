@@ -79,8 +79,8 @@ function trafficChart(){
 }
 function connectionCard(){
  const n=state.system?.engine||{},c=n.connections||{},h=state.ov4.history,max=Math.max(1,...h.tcp,...h.udp);
- return `<article class="ov4-card ov4-connections"><header class="ov4-card-head"><div><span>${L('CONNECTION STATS','وضعیت اتصال')}</span><small>${c.available===false?L('System socket enumeration unavailable','شمارش Socket در دسترس نیست'):L('Host inet sockets','Socketهای میزبان')}</small></div></header>
- <div class="ov4-connection-total"><b>${c.available===false?'—':fa(c.open||0)}</b><span>${L('open sockets','Socket باز')}</span></div>
+ return `<article class="ov4-card ov4-connections"><header class="ov4-card-head"><div><span>${L('CONNECTION STATS','وضعیت اتصال')}</span><small>${c.available===false?L('System socket enumeration unavailable','شمارش سوکت در دسترس نیست'):L('Host inet sockets','سوکت‌های میزبان')}</small></div></header>
+ <div class="ov4-connection-total"><b>${c.available===false?'—':fa(c.open||0)}</b><span>${L('open sockets','سوکت باز')}</span></div>
  <div class="ov4-connection-legend"><span class="tcp"><i></i>TCP <b>${c.available===false?'—':fa(c.tcp||0)}</b></span><span class="udp"><i></i>UDP <b>${c.available===false?'—':fa(c.udp||0)}</b></span></div>
  <div class="ov4-connection-chart"><svg viewBox="0 0 420 165" preserveAspectRatio="none"><path class="grid" d="M0 40H420M0 80H420M0 120H420"/><polyline class="tcp" points="${linePoints(h.tcp,420,165,max)}"/><polyline class="udp" points="${linePoints(h.udp,420,165,max)}"/></svg></div>
  </article>`;
@@ -112,8 +112,8 @@ function darkSummary(){
 function nodeCard(){
  if(!isOwner())return '';
  const nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online),offline=enabled.filter(n=>!n.online),errors=nodes.filter(n=>n.last_error||(n.assignments||[]).some(a=>a.last_error));
- return `<article class="ov4-card ov4-node-card"><header class="ov4-card-head"><div><span>${L('NODE FLEET','ناوگان نودها')}</span><small>${L('Remote DARK agents','Agentهای راه‌دور DARK')}</small></div><button class="ov4-link" data-act="ov4nodes">${L('Manage','مدیریت')} →</button></header>
- <div class="ov4-node-kpis"><div><b class="good">${online.length}</b><span>${L('Online','آنلاین')}</span></div><div><b class="${offline.length?'bad':''}">${offline.length}</b><span>${L('Offline','آفلاین')}</span></div><div><b class="${errors.length?'warn':''}">${errors.length}</b><span>${L('Sync errors','خطای Sync')}</span></div></div>
+ return `<article class="ov4-card ov4-node-card"><header class="ov4-card-head"><div><span>${L('NODE FLEET','ناوگان نودها')}</span><small>${L('Remote DARK agents','عامل‌های راه‌دور DARK')}</small></div><button class="ov4-link" data-act="ov4nodes">${L('Manage','مدیریت')} →</button></header>
+ <div class="ov4-node-kpis"><div><b class="good">${online.length}</b><span>${L('Online','آنلاین')}</span></div><div><b class="${offline.length?'bad':''}">${offline.length}</b><span>${L('Offline','آفلاین')}</span></div><div><b class="${errors.length?'warn':''}">${errors.length}</b><span>${L('Sync errors','خطای همگام‌سازی')}</span></div></div>
  <div class="ov4-node-list">${nodes.length?nodes.slice(0,5).map(n=>`<div><i class="${!n.enabled?'off':n.online?'good':'bad'}"></i><span><b>${e(n.name||n.id)}</b><small>${e((n.inboundIds||[]).length)} ${L('inbounds','اینباند')}${n.last_latency_ms?' · '+e(n.last_latency_ms)+' ms':''}</small></span><em>${n.enabled?(n.online?L('Online','آنلاین'):L('Offline','آفلاین')):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No remote nodes registered yet.','هنوز نودی ثبت نشده است.')}</div>`}</div></article>`;
 }
 
@@ -121,8 +121,8 @@ function backupCard(){
  const b=state.ov2?.backup||{};
  return `<article class="ov4-card ov4-backup-card"><header class="ov4-card-head"><div><span>${L('BACKUP & RECOVERY','بکاپ و بازیابی')}</span><small>${L('Rollback-safe operations','عملیات امن با قابلیت بازگشت')}</small></div><button class="ov4-link" data-act="ov4backup">${L('Open','بازکردن')} →</button></header>
  <div class="ov4-backup-main"><div><span>${L('Database snapshot','اسنپ‌شات دیتابیس')}</span><b>${b.database_bytes===undefined?'—':bytes(b.database_bytes)}</b></div><div><span>${L('Managed clients','کاربران')}</span><b>${b.managed_clients===undefined?'—':fa(b.managed_clients)}</b></div></div>
- <div class="ov4-safe"><i></i><span>${b.restore_isolated===false?L('Restore isolation unavailable','ایزوله‌سازی Restore در دسترس نیست'):L('Isolated restore enforced','Restore ایزوله اجباری است')}</span></div>
- <div class="ov4-card-actions"><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('Verify / Restore','Verify / Restore')}</button></div></article>`;
+ <div class="ov4-safe"><i></i><span>${b.restore_isolated===false?L('Restore isolation unavailable','ایزوله‌سازی بازیابی در دسترس نیست'):L('Isolated restore enforced','بازیابی ایزوله اجباری است')}</span></div>
+ <div class="ov4-card-actions"><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('بررسی / بازیابی','بررسی / بازیابی')}</button></div></article>`;
 }
 
 function repsCard(){
@@ -135,23 +135,23 @@ function repsCard(){
 function healthCard(){
  const core=state.ov2?.core||state.sync?.runtime||{},nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),offline=enabled.filter(n=>!n.online),errors=nodes.filter(n=>n.last_error),bans=state.ov2?.ip?.bans?.length||0,up=state.updateCenter||{},rows=[];
  const add=(kind,title,detail)=>rows.push({kind,title,detail});
- if(core.last_error)add('bad',L('Runtime error','خطای Runtime'),core.last_error);
+ if(core.last_error)add('bad',L('Runtime error','خطای محیط اجرا'),core.last_error);
  if(core.dirty)add('warn',L('Config pending apply','کانفیگ در انتظار اعمال'),L('Saved state differs from running Xray.','وضعیت ذخیره‌شده با Xray در حال اجرا متفاوت است.'));
  if(offline.length)add('bad',L('Nodes offline','نود آفلاین'),offline.map(n=>n.name||n.id).join(', '));
- if(errors.length)add('warn',L('Node sync errors','خطای Sync نود'),errors.map(n=>n.name||n.id).join(', '));
+ if(errors.length)add('warn',L('Node sync errors','خطای همگام‌سازی نود'),errors.map(n=>n.name||n.id).join(', '));
  if(bans)add('warn',L('IP Guard bans','بن‌های IP Guard'),fa(bans));
  if(up.error)add('bad',L('Update broker error','خطای Update Broker'),up.error);
- if(!rows.length)add('good',L('All monitored systems nominal','همه سیستم‌های مانیتورشده سالم هستند'),L('No active runtime, node or update alert.','هشدار فعالی برای Runtime، Node یا Update وجود ندارد.'));
+ if(!rows.length)add('good',L('All monitored systems nominal','همه سیستم‌های مانیتورشده سالم هستند'),L('No active runtime, node or update alert.','هشدار فعالی برای محیط اجرا، نود یا آپدیت وجود ندارد.'));
  return `<article class="ov4-card ov4-health-card"><header class="ov4-card-head"><div><span>${L('HEALTH & ALERTS','سلامت و هشدارها')}</span><small>${L('Operational issues first','اولویت با مشکلات عملیاتی')}</small></div><button class="ov4-link" data-act="ov4doctor">Doctor →</button></header><div class="ov4-alert-list">${rows.slice(0,5).map(r=>`<div class="${r.kind}"><i></i><span><b>${e(r.title)}</b><small>${e(r.detail)}</small></span></div>`).join('')}</div></article>`;
 }
 function activityCard(){
  const rows=(state.ov2?.audit||[]).slice(0,7);
- return `<article class="ov4-card ov4-activity-card"><header class="ov4-card-head"><div><span>${L('RECENT ACTIVITY','فعالیت‌های اخیر')}</span><small>${L('Audit-backed events','رویدادهای مبتنی بر Audit')}</small></div><button class="ov4-link" data-act="ov4history">${L('View all','همه')} →</button></header><div class="ov4-activity-list">${rows.length?rows.map(r=>`<div><time>${date(r.at)}</time><span>${e(r.actor)}</span><b>${e(r.action)}</b><em>${e(r.target)}</em></div>`).join(''):`<div class="ov4-empty">${L('No recent audit events.','رویداد اخیر وجود ندارد.')}</div>`}</div></article>`;
+ return `<article class="ov4-card ov4-activity-card"><header class="ov4-card-head"><div><span>${L('RECENT ACTIVITY','فعالیت‌های اخیر')}</span><small>${L('Audit-backed events','رویدادهای مبتنی بر گزارش عملیات')}</small></div><button class="ov4-link" data-act="ov4history">${L('View all','همه')} →</button></header><div class="ov4-activity-list">${rows.length?rows.map(r=>`<div><time>${date(r.at)}</time><span>${e(r.actor)}</span><b>${e(r.action)}</b><em>${e(r.target)}</em></div>`).join(''):`<div class="ov4-empty">${L('No recent audit events.','رویداد اخیر وجود ندارد.')}</div>`}</div></article>`;
 }
 
 dashboard=function(){
  if(!state.me)return baseDashboard();
- return heading(L('System Overview','نمای کلی سیستم'),L('Live host, Xray and DARK control-plane telemetry.','تله‌متری زنده میزبان، Xray و Control Plane دارک.'))+notices()+
+ return heading(L('System Overview','نمای کلی سیستم'),L('Live host, Xray and DARK control-plane telemetry.','تله‌متری زندهٔ میزبان، Xray و لایهٔ کنترل DARK.'))+notices()+
  `<div class="ov4">${commandBar()}${resourceRow()}<section class="ov4-main-grid">${trafficChart()}${connectionCard()}</section>${telemetryStrip()}${darkSummary()}<section class="ov4-management-grid">${nodeCard()}<div id="dark-update-center-slot"></div></section><section class="ov4-lower-grid">${backupCard()}${repsCard()}${healthCard()}${activityCard()}</section></div>`;
 };
 
