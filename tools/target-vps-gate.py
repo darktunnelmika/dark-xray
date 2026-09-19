@@ -279,7 +279,9 @@ def main()->None:
             reboot=reboot_evidence(pre,boot,source,cfg_sha)|{'required':True}
         passed=bool(base['passed'] and reboot.get('ok') is True)
 
-    result={'version':VERSION,'phase':a.phase,'target_vps_gate_passed':bool(passed),'started_at':started,'finished_at':time.time(),
+    phase_passed=bool(passed)
+    full_gate_passed=bool(a.phase=='post-reboot' and phase_passed and reboot.get('ok') is True)
+    result={'version':VERSION,'phase':a.phase,'target_vps_phase_passed':phase_passed,'target_vps_gate_passed':full_gate_passed,'started_at':started,'finished_at':time.time(),
             'boot':boot,'reboot':reboot,'config_sha256':cfg_sha,'base':base,
             'changes_made':'private validation reports only; optional node gate may update normal node health metadata',
             'limitations':{'certificate_issuance_performed':False,'certificate_renewal_rehearsed':False,
@@ -288,10 +290,10 @@ def main()->None:
     try:
         atomic_report(report_path,result);result['report_path']=str(report_path)
     except Exception as ex:
-        result['target_vps_gate_passed']=False;result['report_error']=type(ex).__name__+': '+str(ex)
+        result['target_vps_phase_passed']=False;result['target_vps_gate_passed']=False;result['report_error']=type(ex).__name__+': '+str(ex)
     if not a.json_only:
         print('DARK XRAY TARGET VPS GATE',VERSION)
-        print('PASS' if result['target_vps_gate_passed'] else 'FAIL','·',a.phase)
+        print('PASS' if result['target_vps_phase_passed'] else 'FAIL','·',a.phase)
         print(' Production :','PASS' if base['production'].get('production_gate_passed') is True else 'FAIL')
         print(' Source     :','PASS' if base['source'].get('ok') is True else 'FAIL')
         print(' TLS        :','PASS' if base['tls']['passed'] else 'FAIL')
@@ -302,7 +304,7 @@ def main()->None:
             print(' Next       : reboot the VPS, then run the same command with --phase post-reboot')
         print('\nJSON RESULT')
     print(json.dumps(result,ensure_ascii=False,indent=2))
-    raise SystemExit(0 if result['target_vps_gate_passed'] else 1)
+    raise SystemExit(0 if result['target_vps_phase_passed'] else 1)
 
 
 if __name__=='__main__':main()
