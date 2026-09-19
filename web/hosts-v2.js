@@ -26,26 +26,27 @@ function transportDefaults(ib){
 }
 function normalizeEndpoint(raw,ib){
  if(!ib)throw Error(L('Choose an inbound.','یک اینباند انتخاب کن.'));
- const m=inboundMeta(ib),mode=raw.mode||'direct';
+ const m=inboundMeta(ib),mode=raw.mode||'direct',requestedSecurity=mode==='advanced'&&['same','tls','none'].includes(raw.security)?raw.security:'same',effectiveSecurity=requestedSecurity==='same'?m.security:requestedSecurity;
  const address=String(raw.address||'').trim(),port=Number(raw.port);
  if(!address||address.length>253||/[\s\/?#@]/.test(address))throw Error(L('Endpoint address must be a plain IP or domain.','آدرس Endpoint باید IP یا دامنه ساده باشد.'));
  if(!Number.isInteger(port)||port<1||port>65535)throw Error(L('Endpoint port must be 1..65535.','پورت Endpoint باید بین ۱ تا ۶۵۵۳۵ باشد.'));
  let out={inboundId:Number(ib.id),address,port,remark:String(raw.remark||'').trim(),security:'same',sni:'',overrideSniFromAddress:false,keepSniBlank:false,host:'',path:'',alpn:'',fingerprint:'',allowInsecure:false,finalMask:'',mihomoIpVersion:'',excludeFromSubTypes:[],enable:raw.enable!==false};
  if(mode==='tunnel'||mode==='advanced'){
    const sd=String(raw.sniMode||'inherit');
-   if(sd==='manual'){out.sni=String(raw.sni||'').trim();if(!out.sni&&m.security!=='none')throw Error(L('Manual SNI needs a value.','برای SNI دستی باید مقدار وارد شود.'));}
+   if(sd==='manual'){out.sni=String(raw.sni||'').trim();if(!out.sni&&effectiveSecurity!=='none')throw Error(L('Manual SNI needs a value.','برای SNI دستی باید مقدار وارد شود.'));}
    else if(sd==='address')out.overrideSniFromAddress=true;
    else if(sd==='blank')out.keepSniBlank=true;
    if(['ws','httpupgrade','xhttp'].includes(m.network)){out.host=String(raw.host||'').trim();out.path=String(raw.path||'').trim();}
  }
  if(mode==='advanced'){
-   out.security=['same','tls','none'].includes(raw.security)?raw.security:'same';
+   out.security=requestedSecurity;
    out.alpn=String(raw.alpn||'').trim();
    out.fingerprint=String(raw.fingerprint||'').trim();
    out.allowInsecure=!!raw.allowInsecure;
    out.finalMask=String(raw.finalMask||'').trim();
    out.mihomoIpVersion=String(raw.mihomoIpVersion||'');
    out.excludeFromSubTypes=[...new Set(raw.excludeFromSubTypes||[])].filter(x=>['raw','json','clash'].includes(x));
+   if(effectiveSecurity==='none'){out.sni='';out.overrideSniFromAddress=false;out.keepSniBlank=false;}
    if(out.finalMask){let fm;try{fm=JSON.parse(out.finalMask);}catch{throw Error(L('Final Mask must be valid JSON.','Final Mask باید JSON معتبر باشد.'));}if(!fm||Array.isArray(fm)||typeof fm!=='object'||!Object.keys(fm).length)throw Error(L('Final Mask must be a non-empty JSON object.','Final Mask باید یک آبجکت JSON غیرخالی باشد.'));out.finalMask=JSON.stringify(fm);}
  }
  return out;
@@ -92,12 +93,12 @@ function editorHTML(h,ib,mode,excluded){
 function formRaw(form){
  const fd=new FormData(form);return {mode:String(fd.get('mode')||'direct'),address:fd.get('address'),port:fd.get('port'),remark:fd.get('remark'),enable:fd.get('enable')==='true',sniMode:fd.get('sniMode'),sni:fd.get('sni'),host:fd.get('host'),path:fd.get('path'),security:fd.get('security'),alpn:fd.get('alpn'),fingerprint:fd.get('fingerprint'),allowInsecure:fd.get('allowInsecure')==='true',finalMask:fd.get('finalMask'),mihomoIpVersion:fd.get('mihomoIpVersion'),excludeFromSubTypes:fd.getAll('excludeFormat')};}
 function syncEditor(form){
- const ib=inboundFor(form.elements.inboundId?.value),m=inboundMeta(ib),mode=form.querySelector('input[name=mode]:checked')?.value||'direct',tunnel=mode!=='direct',advanced=mode==='advanced';
+ const ib=inboundFor(form.elements.inboundId?.value),m=inboundMeta(ib),mode=form.querySelector('input[name=mode]:checked')?.value||'direct',tunnel=mode!=='direct',advanced=mode==='advanced',selectedSecurity=advanced?(form.elements.security?.value||'same'):'same',effectiveSecurity=selectedSecurity==='same'?m.security:selectedSecurity;
  form.querySelectorAll('.hv3-modes label').forEach(x=>x.classList.toggle('active',!!x.querySelector('input:checked')));
  form.querySelector('[data-hv3-section="tunnel"]')?.classList.toggle('hidden',!tunnel);
  form.querySelector('[data-hv3-section="advanced"]')?.classList.toggle('hidden',!advanced);
- form.querySelectorAll('[data-hv3-sni]').forEach(x=>x.classList.toggle('hidden',!tunnel||m.security==='none'));
- const sm=form.elements.sniMode?.value||'inherit';form.querySelector('[data-hv3-manual-sni]')?.classList.toggle('hidden',!tunnel||m.security==='none'||sm!=='manual');
+ form.querySelectorAll('[data-hv3-sni]').forEach(x=>x.classList.toggle('hidden',!tunnel||effectiveSecurity==='none'));
+ const sm=form.elements.sniMode?.value||'inherit';form.querySelector('[data-hv3-manual-sni]')?.classList.toggle('hidden',!tunnel||effectiveSecurity==='none'||sm!=='manual');
  form.querySelectorAll('[data-hv3-web]').forEach(x=>x.classList.toggle('hidden',!tunnel||!['ws','httpupgrade','xhttp'].includes(m.network)));
  const raw=formRaw(form);let model,err='';
  try{model=normalizeEndpoint(raw,ib);}catch(ex){err=ex.message;model={...raw,inboundId:Number(ib?.id||0),enable:raw.enable};}
