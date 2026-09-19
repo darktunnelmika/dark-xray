@@ -49,7 +49,7 @@ def create_inbound(c):
 def rep_body(inbound_id,**overrides):
     body={
         'name':'Seller One','password':'SellerPass88','enabled':True,
-        'allowed':[inbound_id],'quota_bytes':10_000_000,'max_clients':25,
+        'allowed':[inbound_id],'volume_credit_bytes':10_000_000,'unlimited_credit':25,'max_clients':25,
         'prefix':'s_','max_client_ips':2,'max_client_hwid':1,
     }
     body.update(overrides)
@@ -65,6 +65,8 @@ def test_representative_create_unifies_login_profile_and_fixed_scope(env):
     assert doc['id']=='seller' and doc['login_ready'] is True and doc['enabled'] is True
     assert doc['allowed']==[inbound_id]
     assert doc['prefix']=='s_' and doc['max_client_ips']==2 and doc['max_client_hwid']==1
+    assert doc['volume_credit_bytes']==10_000_000 and doc['volume_credit_remaining_bytes']==10_000_000
+    assert doc['unlimited_credit']==25 and doc['unlimited_credit_remaining']==25
     with store.lock:
         admin=store.db.execute("SELECT role,permissions,disabled FROM api_admins WHERE id='seller'").fetchone()
         profile=store.db.execute("SELECT prefix,max_client_ips,max_client_hwid FROM owner_profiles WHERE id='seller'").fetchone()
