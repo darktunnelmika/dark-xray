@@ -1,5 +1,15 @@
 # تغییرات DARK XRAY
 
+## Unreleased — main بعد از 0.9.0-rc7
+
+- **Traffic Engine V4** برای Outbound / Routing / Balancer / Observatory با UX Guided/Basic-first و preview تصمیم Routing اضافه شد.
+- **DNS Guided V3**، **Public Endpoints V3**، **Clients V5 Delivery Center**، **Nodes V4 Orchestrator**، **Security Center V4** و **Sync Runtime V4** وارد Browser QA واقعی شده‌اند.
+- refreshهای هم‌پوشان UI coalesce می‌شوند و stale async render دیگر صفحهٔ جدیدتر را overwrite نمی‌کند؛ raceهای کشف‌شده به regression Browser تبدیل شدند.
+- Gate دائمی **Fresh Install E2E** اضافه شد: Installer تعاملی واقعی روی Ubuntu 24.04، Xray رسمی، systemd، Update Broker، readiness، `vps-verify` و `production-gate`.
+- همین Gate یک startup race واقعی را پیدا کرد: `dark-xray.service` می‌توانست قبل از آماده‌شدن HTTP listener Active شود و Final Doctor `ConnectionRefusedError` بگیرد. Installer اکنون تا endpoint محلی `/health` به‌صورت fail-closed صبر می‌کند.
+- Snapshot `88e9e5967c3577378f0cca03305b6d127f238176` روی `main` در Run 761 هر **۸ Gate** را پاس کرده است.
+- این تغییرات هنوز به Tag/Release جدید تبدیل نشده‌اند و Production Ready محسوب نمی‌شوند.
+
 ## 0.9.0-rc7 — Web Update Center + root update broker
 
 - Update Center داخل خود پنل اضافه شد و فقط برای Interactive Owner قابل دسترسی است؛ Reseller و API Key نمی‌توانند Check/Start آپدیت انجام دهند.
