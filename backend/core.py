@@ -1209,10 +1209,14 @@ class CoreEngine:
             else:
                 doc={'proxies':proxies,'proxy-groups':[{'name':'DARK AUTO','type':'select','proxies':names}], 'rules':['MATCH,DARK AUTO']}
             body=(self._yaml(doc)+'\n').encode();content_type='application/yaml; charset=utf-8'
-        with self.store.lock:r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
-        c=json.loads(r['body']);headers={'Content-Type':content_type,'profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
+        with self.store.lock:
+            r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
+            remote_table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_client_usage'").fetchone()
+            remote=self.store.db.execute('SELECT COALESCE(SUM(current_up),0) up,COALESCE(SUM(current_down),0) down FROM remote_node_client_usage WHERE client_id=?',(email,)).fetchone() if remote_table else None
+        c=json.loads(r['body']);global_up=int(r['up'])+int(remote['up'] if remote else 0);global_down=int(r['down'])+int(remote['down'] if remote else 0)
+        headers={'Content-Type':content_type,'profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
             'profile-title':self._header_text(settings.get('profile_title','DARK XRAY')),
-            'subscription-userinfo':f"upload={r['up']}; download={r['down']}; total={c.get('totalGB',0)}; expire={max(0,c.get('expiryTime',0)//1000)}"}
+            'subscription-userinfo':f"upload={global_up}; download={global_down}; total={c.get('totalGB',0)}; expire={max(0,c.get('expiryTime',0)//1000)}"}
         support=settings.get('support_url','');profile=settings.get('profile_url','')
         if support:headers['support-url']=support
         if profile:headers['profile-web-page-url']=profile
