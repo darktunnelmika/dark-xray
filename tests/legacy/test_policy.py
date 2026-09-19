@@ -21,7 +21,11 @@ def policy(**extra):
 
 @pytest.fixture
 def store(tmp_path):
-    s=Store(tmp_path/'test.db');s.register_owner(OWNER,'arda',max_clients=2);s.register_owner(OWNER,'dark')
+    s=Store(tmp_path/'test.db')
+    s.register_owner(OWNER,'arda',volume_credit_bytes=1000,unlimited_credit=2,max_clients=2)
+    s.register_owner(OWNER,'dark')
+    with s.transaction() as db:
+        db.execute("INSERT INTO api_admins(id,role,password_hash,permissions,disabled) VALUES('arda','reseller','x','{}',0)")
     yield s;s.close()
 
 @pytest.mark.parametrize('raw,canonical',[('8.8.8.8','8.8.8.8'),('[2001:4860:4860:0:0:0:0:8888]','2001:4860:4860::8888'),('::ffff:8.8.8.8','8.8.8.8')])
@@ -175,16 +179,19 @@ def test_cross_owner_no_read_or_edit(store):
 def test_manual_flags_survive_topup_and_resets(store):
     store.register_client(OWNER,'a','arda',quota_bytes=10);store.edit_client(OWNER,'a',manual=True,expires_at=1)
     store.record_usage('evt','a',10,0);store.register_owner(OWNER,'arda',quota_bytes=10,manual=True)
-    assert set(store.client_reasons('a'))=={'client_manual','expired','client_quota','owner_manual','owner_quota'}
+    assert set(store.client_reasons('a'))=={'client_manual','expired','client_quota','owner_manual'}
     store.register_owner(OWNER,'arda',quota_bytes=100)
-    assert 'owner_manual' in store.client_reasons('a') and 'owner_quota' not in store.client_reasons('a')
+    assert 'owner_manual' in store.client_reasons('a')
     store.reset_client_usage(OWNER,'a');store.reset_owner_period(OWNER,'arda')
     assert set(store.client_reasons('a'))=={'client_manual','expired','owner_manual'}
     assert store.owner_stats(OWNER,'arda')['lifetime_used_bytes']==10
 
-def test_exhausted_owner_cannot_create(store):
-    store.register_owner(OWNER,'arda',quota_bytes=1);store.register_client(RESELLER,'a','arda');store.record_usage('evt','a',1,0)
-    with pytest.raises(PolicyError):store.register_client(RESELLER,'b','arda')
+def test_exhausted_representative_unlimited_credit_cannot_create(store):
+    store.register_owner(OWNER,'arda',volume_credit_bytes=0,unlimited_credit=1)
+    store.register_client(RESELLER,'a','arda')
+    store.record_usage('evt','a',MAX_INT//4,0)
+    assert 'owner_quota' not in store.client_reasons('a')
+    with pytest.raises(PolicyError,match='unlimited credit'):store.register_client(RESELLER,'b','arda')
 
 def test_atomic_client_quota_under_concurrency(store):
     def add(n):
@@ -193,23 +200,31 @@ def test_atomic_client_quota_under_concurrency(store):
     with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(add,range(20)))
     assert sum(results)==2 and store.owner_stats(OWNER,'arda')['client_count']==2
 
-def test_money_sale_refund_and_idempotency(store):
-    assert store.credit(OWNER,'arda',300000,'topup1');assert not store.credit(OWNER,'arda',300000,'topup1')
-    assert store.register_client(RESELLER,'a','arda',price=100000,order_id='sale1')
-    assert not store.register_client(RESELLER,'a','arda',price=100000,order_id='sale1')
-    assert store.owner_stats(OWNER,'arda')['credit']==200000
-    store.delete_client(RESELLER,'a');assert store.owner_stats(OWNER,'arda')['credit']==200000
-    assert store.refund(OWNER,'sale1','refund1');assert not store.refund(OWNER,'sale1','refund1')
-    with pytest.raises(PolicyError):store.refund(OWNER,'sale1','refund2')
-    assert store.owner_stats(OWNER,'arda')['credit']==300000
+def test_resource_credit_adjustment_and_idempotency(store):
+    assert store.adjust_resource_credit(OWNER,'arda',500,1,'resource-topup-0001')
+    assert not store.adjust_resource_credit(OWNER,'arda',500,1,'resource-topup-0001')
+    stats=store.owner_stats(OWNER,'arda')
+    assert stats['volume_credit_bytes']==1500 and stats['unlimited_credit']==3
+    store.register_client(RESELLER,'a','arda',quota_bytes=1200)
+    stats=store.owner_stats(OWNER,'arda')
+    assert stats['volume_credit_remaining_bytes']==300
+    with pytest.raises(PolicyError,match='volume credit'):
+        store.register_client(RESELLER,'b','arda',quota_bytes=400)
+    store.delete_client(RESELLER,'a')
+    assert store.owner_stats(OWNER,'arda')['volume_credit_remaining_bytes']==1500
 
-def test_finance_permissions(store):
-    with pytest.raises(PermissionDenied):store.credit(RESELLER,'arda',1,'credit')
 
-def test_failed_order_rolls_back(store):
-    with pytest.raises(PolicyError):store.register_client(RESELLER,'a','arda',price=100,order_id='sale')
+def test_resource_credit_permissions(store):
+    with pytest.raises(PermissionDenied):
+        store.adjust_resource_credit(RESELLER,'arda',1,0,'reseller-credit-0001')
+
+
+def test_legacy_paid_client_creation_is_rejected(store):
+    with pytest.raises(PolicyError,match='Monetary reseller credit is retired'):
+        store.register_client(RESELLER,'a','arda',price=100,order_id='sale')
     assert store.owner_stats(OWNER,'arda')['client_count']==0
     assert store.db.execute('select count(*) from money_ledger').fetchone()[0]==0
+
 
 def test_overflow_no_partial_mutation(store):
     store.register_client(OWNER,'a','arda');store.record_usage('one','a',MAX_INT,0)
