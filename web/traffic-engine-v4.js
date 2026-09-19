@@ -40,7 +40,7 @@ function summary(d){
  return `<section class="te4-summary">
   ${metric(L('Outbounds','اوتباند'),fa((s.outbounds||[]).length),L('first = default','اولی = پیش‌فرض'))}
   ${metric(L('Routing rules','Rule روتینگ'),fa(r.rule_count||0),r.domain_strategy||'AsIs')}
-  ${metric(L('Balancers','بالانسر'),fa((s.balancers||[]).length),L('گزینشگر = پیشوند','گزینشگر = پیشوند'))}
+  ${metric(L('Balancers','بالانسر'),fa((s.balancers||[]).length),L('selector = prefix','گزینشگر = پیشوند'))}
   ${metric(L('Chained outbounds','خروجی زنجیره‌ای'),fa(chainCount),L('dialerProxy','dialerProxy'))}
   ${metric(L('Default outbound','خروجی پیش‌فرض'),r.default_outbound||'—',L('no-rule fallback','Fallback بدون Rule'))}
   ${metric(L('Runtime config','پیکربندی اجرا'),dirty?L('DIRTY','اعمال‌نشده'):L('CLEAN','همسان'),d.core.running?L('Xray running','Xray روشن'):L('Xray stopped','Xray خاموش'))}
