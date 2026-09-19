@@ -58,3 +58,11 @@ test('Persian mode normalizes common user-facing UI concepts while preserving te
   assert.match(i18n,/\[dir="ltr"\]/);
   assert.match(i18n,/\.mono/);
 });
+
+
+test('technical literals are excluded from language leakage heuristics without disabling prose audit',()=>{
+  assert.match(i18n,/function auditComparable/);
+  assert.match(i18n,/replace\(\/\\\?\[A-Za-z\]/);
+  assert.match(i18n,/replace\(\/\\\/[A-Za-z0-9_/);
+  assert.match(i18n,/persianLeakRe\.test\(auditComparable\(raw\)\)/);
+});
