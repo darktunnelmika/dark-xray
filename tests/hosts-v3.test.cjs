@@ -75,6 +75,32 @@ test('Advanced mode preserves explicit security and format behavior',()=>{
   assert.deepEqual(Array.from(out.excludeFromSubTypes),['clash','json']);
 });
 
+test('Advanced TLS override on a plaintext inbound accepts client-facing manual SNI',()=>{
+  const ctx=context(),M=ctx.DarkHostV3;
+  const plain={id:8,remark:'PLAIN',protocol:'vless',port:8080,streamSettings:{network:'tcp',security:'none'}};
+  const out=M.normalizeEndpoint({
+    mode:'advanced',address:'tls-front.example.test',port:443,remark:'TLS FRONT',enable:true,
+    security:'tls',sniMode:'manual',sni:'customer-sni.example',alpn:'h2',fingerprint:'chrome',allowInsecure:false
+  },plain);
+  const p=M.previewModel(out,plain);
+  assert.equal(out.security,'tls');
+  assert.equal(out.sni,'customer-sni.example');
+  assert.equal(p.security,'tls');
+  assert.equal(p.sni,'customer-sni.example');
+});
+
+test('Advanced plaintext override removes ineffective TLS-only fields',()=>{
+  const ctx=context(),M=ctx.DarkHostV3;
+  const out=M.normalizeEndpoint({
+    mode:'advanced',address:'plain.example.test',port:80,enable:true,security:'none',
+    sniMode:'manual',sni:'unused.example',alpn:'h2',fingerprint:'chrome',allowInsecure:true
+  },inbound);
+  assert.equal(out.sni,'');
+  assert.equal(out.alpn,'');
+  assert.equal(out.fingerprint,'');
+  assert.equal(out.allowInsecure,false);
+});
+
 test('Preview inherits inbound transport defaults when endpoint does not override them',()=>{
   const ctx=context(),M=ctx.DarkHostV3;
   const out=M.normalizeEndpoint({mode:'direct',address:'direct.example.test',port:443,remark:'',enable:true},inbound);
