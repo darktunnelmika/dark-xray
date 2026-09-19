@@ -479,6 +479,7 @@ function auditComparable(raw){
     .replace(/\/[A-Za-z0-9_.-]+/g,' ')
     .replace(/:[A-Za-z][A-Za-z0-9_-]*/g,' ')
     .replace(/\b[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+\b/g,' ')
+    .replace(/\b[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+\b/g,' ')
     .replace(/\b[A-Za-z][A-Za-z0-9_]*-(?=\s|,|\.|$)/g,' ');
 }
 function auditLeaks(root=document.body){
