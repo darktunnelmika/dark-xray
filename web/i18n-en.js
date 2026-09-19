@@ -472,6 +472,15 @@ const persianLeakRe=/\b(Overview|Resellers|Settings|Account|Security|Manage|Dele
 function auditSkip(el){
   return skip(el)||!!el?.closest('.cyber-lang-switch,[data-sv2-segment="language"]');
 }
+function auditComparable(raw){
+  return String(raw||'')
+    .replace(/https?:\/\/\S+/gi,' ')
+    .replace(/\?[A-Za-z][A-Za-z0-9_-]*/g,' ')
+    .replace(/\/[A-Za-z0-9_.-]+/g,' ')
+    .replace(/:[A-Za-z][A-Za-z0-9_-]*/g,' ')
+    .replace(/\b[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+\b/g,' ')
+    .replace(/\b[A-Za-z][A-Za-z0-9_]*-(?=\s|,|\.|$)/g,' ');
+}
 function auditLeaks(root=document.body){
   const leaks=[];
   if(!root)return leaks;
@@ -482,7 +491,7 @@ function auditLeaks(root=document.body){
     const raw=String(node.nodeValue||'').trim();
     if(!raw)continue;
     if(selected==='en'&&faChars.test(raw))leaks.push({kind:'text',text:raw.slice(0,240)});
-    if(selected==='fa'&&persianLeakRe.test(raw))leaks.push({kind:'text',text:raw.slice(0,240)});
+    if(selected==='fa'&&persianLeakRe.test(auditComparable(raw)))leaks.push({kind:'text',text:raw.slice(0,240)});
     if(leaks.length>=50)break;
   }
   const els=root.querySelectorAll?root.querySelectorAll('[placeholder],[title],[aria-label]'):[];
@@ -492,7 +501,7 @@ function auditLeaks(root=document.body){
       const raw=String(el.getAttribute(attr)||'').trim();
       if(!raw)continue;
       if(selected==='en'&&faChars.test(raw))leaks.push({kind:attr,text:raw.slice(0,240)});
-      if(selected==='fa'&&persianLeakRe.test(raw))leaks.push({kind:attr,text:raw.slice(0,240)});
+      if(selected==='fa'&&persianLeakRe.test(auditComparable(raw)))leaks.push({kind:attr,text:raw.slice(0,240)});
       if(leaks.length>=50)break;
     }
     if(leaks.length>=50)break;
