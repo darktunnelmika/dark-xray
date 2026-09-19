@@ -320,14 +320,7 @@ jobs:
           systemctl is-enabled dark-xray-update.service
           systemctl is-active dark-xray-update.service
           sudo darkxray check
-          sudo python3 - "$DARK_INSTALL_REF" <<'PY'
-import json,sys
-from pathlib import Path
-expected=sys.argv[1].lower()
-doc=json.loads(Path('/var/lib/dark-xray/installed-source.json').read_text())
-assert doc.get('commit','').lower()==expected,(doc,expected)
-assert doc.get('version')
-PY
+          sudo python3 -c 'import json,sys; from pathlib import Path; expected=sys.argv[1].lower(); doc=json.loads(Path("/var/lib/dark-xray/installed-source.json").read_text()); assert doc.get("commit","").lower()==expected,(doc,expected); assert doc.get("version")' "$DARK_INSTALL_REF"
           sudo darkxray vps-verify | tee qa/fresh-install-vps-verify.txt
           sudo darkxray production-gate --json-only | tee qa/fresh-install-production-gate.json
       - name: Capture fresh-install diagnostics on failure
