@@ -58,7 +58,18 @@ function button(text,act,ic='plus',extra='',primary=false){return `<button class
 function empty(text){return `<div class="empty-state">${icon('info')}<p>${text}</p></div>`;}
 function notices(){return Object.entries(state.errors).map(([k,v])=>`<div class="notice error"><b>${e(k)}</b> — ${e(v)}<br>اطلاعات این بخش دریافت نشده؛ با دادهٔ نمونه جایگزین نشده است.</div>`).join('');}
 async function load(){if(!state.me)return;const specs=[['clients','/api/clients'],['inbounds','/api/inbounds'],['owners','/api/owners'],['sync','/api/sync']];if(isOwner())specs.push(['resellers','/api/resellers']);if(can('system.read'))specs.push(['system','/api/system']);await Promise.all(specs.map(async([key,path])=>{try{state[key]=await api(path);delete state.errors[key];}catch(ex){state.errors[key]=ex.message;if(key!=='sync')state[key]=key==='system'?null:[];}}));if(state.system?.engine){let n=state.system.engine;let v=Number(n.cpu);if(Number.isFinite(v)){state.history.push(v);state.history=state.history.slice(-60);}}}
-async function refresh(){if(state.busy)return;state.busy=true;try{await load();if(state.me)await renderPage();}finally{state.busy=false;}}
+async function refresh(){
+ if(state.busy){
+  await new Promise(resolve=>{
+   const wait=()=>state.busy?setTimeout(wait,20):resolve();
+   wait();
+  });
+  return refresh();
+ }
+ state.busy=true;
+ try{await load();if(state.me)await renderPage();}
+ finally{state.busy=false;}
+}
 function badge(r){if(r.state!=='applied')return `<span class="tag amber">${e(labelState[r.state]||r.state)}</span>`;if(r.block_reasons?.length)return `<span class="tag red" title="${e(r.block_reasons.map(x=>reasons[x]||x).join('، '))}">محدود شده</span>`;return `<span class="tag ${r.data_plane_state==='running'?'green':'amber'}">${r.observed_enable===false?'غیرفعال':r.data_plane_state==='running'?'نسخهٔ هسته همسان است':'ذخیره‌شده؛ هنوز روی هسته اجرا نشده'}</span>`;}
 function clientTable(rows){if(!rows.length)return empty('کاربر تحت مدیریت DARK در این فهرست نیست. مشتری‌های قدیمی باید صریحاً به مالک تخصیص داده شوند.');return `<div class="table-wrap"><table class="clients-table"><thead><tr><th></th><th>کاربر / مالک</th><th>وضعیت همگام‌سازی</th><th>مصرف / سهمیه</th><th>انقضا</th><th>IP / HWID</th><th>عملیات</th></tr></thead><tbody>${rows.map(r=>{let c=r.client||{};return `<tr><td><input type="checkbox" data-select="${e(r.email)}" ${state.selected.has(r.email)?'checked':''} aria-label="انتخاب ${e(r.email)}"></td><td><b class="client-name">${e(r.email)}</b><br><span class="owner-label">${e(r.owner)}</span></td><td>${badge(r)}${r.error?`<div class="data-error">${e(r.error)}</div>`:''}</td><td><span class="mono">${bytes(r.used_bytes)}</span><br><span class="muted">${c.totalGB?bytes(c.totalGB):'نامحدود'}</span></td><td>${c.expiryTime>0?new Date(c.expiryTime).toLocaleDateString('fa-IR'):c.expiryTime<0?'شروع از اتصال اول':'بدون انقضا'}</td><td><span class="mono">${c.limitIp||'∞'} / ${c.limitHwid||'پیش‌فرض'}</span></td><td><div class="row-actions">${can('clients.edit',r.owner)?button('ویرایش','edit','edit',`data-id="${e(r.email)}"`):''}${can('clients.credentials',r.owner)?button('لینک','links','link',`data-id="${e(r.email)}"`):''}${can('clients.ip',r.owner)?button('IP / دستگاه','ips','shield',`data-id="${e(r.email)}"`):''}${can('clients.edit',r.owner)?button(c.enable===false?'فعال':'قطع','toggle','power',`data-id="${e(r.email)}"`):''}${can('clients.reset',r.owner)?button('ریست','reset','refresh',`data-id="${e(r.email)}"`):''}${can('clients.delete',r.owner)?button('حذف','delete','trash',`data-id="${e(r.email)}"`):''}</div></td></tr>`;}).join('')}</tbody></table></div>`;}
 function filtered(rows){let q=state.search.toLowerCase().trim();return rows.filter(r=>!q||r.email.toLowerCase().includes(q)||r.owner.toLowerCase().includes(q));}

@@ -531,7 +531,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 db.execute("DELETE FROM core_clients WHERE email='browser-delivery'")
                 db.execute("UPDATE managed_clients SET state='missing',op='none',error='CoreEngine client missing; automatic recreation refused',retry_at=0 WHERE email='browser-delivery'")
             page.evaluate("refresh()")
-            page.wait_for_timeout(100)
+            page.wait_for_function("()=>state.sync?.items?.find(x=>x.email==='browser-delivery')?.reason_code==='runtime_missing'",timeout=10000)
             page.locator('[data-act="sy4filter"][data-view="issues"]').click()
             page.wait_for_function("()=>state.sv4?.view==='issues'&&document.querySelector('[data-act=sy4filter][data-view=issues]')?.classList.contains('active')",timeout=10000)
             missing=page.locator('.sy4-item').filter(has_text='browser-delivery')
