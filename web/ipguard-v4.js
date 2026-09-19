@@ -52,18 +52,18 @@ function architecture(d){
  const g=d.guard||{},a=d.architecture||{},nodes=d.nodes;
  const applied=!!g.applied,verified=!!g.source_verified;
  return `<section class="ip4-architecture">
-  <article class="panel ip4-arch-card"><small>01 / OBSERVE</small><h3>${L('Verified source observer','مشاهده‌گر Source IP')}</h3><b class="${verified?'ok':'warn'}">${verified?L('VERIFIED DIRECT','DIRECT تأییدشده'):L('OBSERVE ONLY','فقط مشاهده')}</b><p>${L('DARK reads Xray access events and counts recent distinct source IPs.','DARK رویدادهای Access هسته را می‌خواند و IPهای متمایز اخیر را می‌شمارد.')}</p></article>
-  <article class="panel ip4-arch-card"><small>02 / LOCAL ENFORCE</small><h3>${L('Native nftables Guard','گارد Native nftables')}</h3><b class="${applied?'ok':'warn'}">${applied?L('APPLIED','اعمال‌شده'):e(String(g.state||'OBSERVE').toUpperCase())}</b><p>${L('Root-owned DARK broker can block only approved Xray data ports on this host.','Broker روت DARK فقط پورت‌های دیتای Xray تأییدشده همین سرور را مسدود می‌کند.')}</p></article>
-  <article class="panel ip4-arch-card"><small>03 / GLOBAL POLICY</small><h3>${L('Local + Node aggregation','تجمیع Local + Node')}</h3><b class="ok">${L('CENTRAL POLICY','سیاست مرکزی')}</b><p>${L('Verified observations from assigned nodes are combined and can block the client service globally.','مشاهده‌های تأییدشده نودها تجمیع می‌شوند و می‌توانند سرویس کاربر را سراسری مسدود کنند.')}</p></article>
-  <article class="panel ip4-arch-card"><small>04 / NODE TELEMETRY</small><h3>${L('Security telemetry','تله‌متری امنیت')}</h3><b class="${nodes&&nodes.source_verified===nodes.total&&nodes.total?'ok':'warn'}">${nodes?fa(nodes.source_verified)+' / '+fa(nodes.total):'—'}</b><p>${L('Fresh / source-verified node security reports. Stale telemetry never creates a new block.','گزارش‌های تازه و Source-verified نود؛ تله‌متری قدیمی بلاک جدید ایجاد نمی‌کند.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('01 / OBSERVE','۰۱ / مشاهده')}</small><h3>${L('Verified source observer','مشاهده‌گر IP مبدأ')}</h3><b class="${verified?'ok':'warn'}">${verified?L('VERIFIED DIRECT','مستقیم تأییدشده'):L('OBSERVE ONLY','فقط مشاهده')}</b><p>${L('DARK reads Xray access events and counts recent distinct source IPs.','DARK رویدادهای Access هسته را می‌خواند و IPهای متمایز اخیر را می‌شمارد.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('02 / LOCAL ENFORCE','۰۲ / اعمال محلی')}</small><h3>${L('Native nftables Guard','گارد بومی nftables')}</h3><b class="${applied?'ok':'warn'}">${applied?L('APPLIED','اعمال‌شده'):e(String(g.state||'OBSERVE').toUpperCase())}</b><p>${L('Root-owned DARK broker can block only approved Xray data ports on this host.','کارگزار روت DARK فقط پورت‌های دیتای Xray تأییدشدهٔ همین سرور را مسدود می‌کند.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('03 / GLOBAL POLICY','۰۳ / سیاست سراسری')}</small><h3>${L('Local + Node aggregation','تجمیع محلی + نود')}</h3><b class="ok">${L('CENTRAL POLICY','سیاست مرکزی')}</b><p>${L('Verified observations from assigned nodes are combined and can block the client service globally.','مشاهده‌های تأییدشده نودها تجمیع می‌شوند و می‌توانند سرویس کاربر را سراسری مسدود کنند.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('04 / NODE TELEMETRY','۰۴ / تله‌متری نود')}</small><h3>${L('Security telemetry','تله‌متری امنیت')}</h3><b class="${nodes&&nodes.source_verified===nodes.total&&nodes.total?'ok':'warn'}">${nodes?fa(nodes.source_verified)+' / '+fa(nodes.total):'—'}</b><p>${L('Fresh / source-verified node security reports. Stale telemetry never creates a new block.','گزارش‌های تازه و دارای مبدأ تأییدشدهٔ نود؛ تله‌متری قدیمی مسدودی جدید ایجاد نمی‌کند.')}</p></article>
  </section>`;
 }
 async function securityPage(){
  const d=await api('/api/security-center'),s=d.summary||{},g=d.guard||{};
  state.ip4=d;
- const warning=!g.source_verified?`<div class="notice warning">${L('Direct packet source is not verified on this host. Local automatic nftables bans stay fail-safe/off until root explicitly verifies the source path.','Source واقعی Packet روی این سرور تأیید نشده؛ بن خودکار nftables به‌صورت Fail-safe خاموش می‌ماند تا مسیر Source توسط روت تأیید شود.')}</div>`:'';
+ const warning=!g.source_verified?`<div class="notice warning">${L('Direct packet source is not verified on this host. Local automatic nftables bans stay fail-safe/off until root explicitly verifies the source path.','مبدأ واقعی بسته روی این سرور تأیید نشده؛ بن خودکار nftables در حالت ایمن خاموش می‌ماند تا مسیر مبدأ توسط روت تأیید شود.')}</div>`:'';
  const err=g.error?`<div class="notice error">${e(g.error)}</div>`:'';
- return heading(L('DARK Security Center','مرکز امنیت DARK'),L('Native IP/HWID policy across Local Xray and DARK nodes.','سیاست Native برای IP/HWID بین Xray محلی و نودهای DARK.'),
+ return heading(L('DARK Security Center','مرکز امنیت DARK'),L('Native IP/HWID policy across Local Xray and DARK nodes.','سیاست بومی IP/HWID بین Xray محلی و نودهای DARK.'),
   isOwner()?button(L('Guard settings','تنظیمات Guard'),'ip4settings','settings','',true):'')+
  `<div class="ip4">${warning}${err}
    ${architecture(d)}
@@ -82,7 +82,7 @@ async function securityPage(){
     <article class="panel ip4-stream"><header><div><small>DARK / EVENTS</small><h3>${L('Recent policy events','رویدادهای اخیر سیاست')}</h3></div></header><div>${(d.events||[]).length?(d.events||[]).map(eventRow).join(''):empty(L('No recent IP policy events.','رویداد IP اخیر وجود ندارد.'))}</div></article>
     <article class="panel ip4-stream"><header><div><small>DARK / NFTABLES</small><h3>${L('Active local bans','بن‌های فعال محلی')}</h3></div></header><div>${(d.bans||[]).length?(d.bans||[]).map(banRow).join(''):empty(L('No active DARK nftables ban.','بن فعال DARK nftables وجود ندارد.'))}</div></article>
    </section>
-   <div class="notice">${L('Local nftables bans are host-local. Multi-node policy is enforced centrally by blocking the client across synchronized DARK runtime; DARK never claims a remote firewall ban unless that host applied one itself.','بن nftables فقط روی همان سرور اعمال می‌شود. سیاست Multi-node به‌صورت مرکزی با مسدودکردن کاربر در Runtime همگام DARK اعمال می‌شود؛ DARK هیچ‌وقت بدون اعمال واقعی روی نود ادعای Remote Firewall Ban نمی‌کند.')}</div>
+   <div class="notice">${L('Local nftables bans are host-local. Multi-node policy is enforced centrally by blocking the client across synchronized DARK runtime; DARK never claims a remote firewall ban unless that host applied one itself.','بن nftables فقط روی همان سرور اعمال می‌شود. سیاست چندنودی به‌صورت مرکزی با مسدودکردن کاربر در محیط اجرای همگام DARK اعمال می‌شود؛ DARK بدون اعمال واقعی روی نود هرگز ادعای بن فایروال راه‌دور نمی‌کند.')}</div>
  </div>`;
 }
 ipPage=securityPage;
@@ -110,8 +110,8 @@ runAction=async function(act,el){
  if(act==='ip4settings'){await DarkSettingsV2?.open('ipguard');return;}
  if(act==='ip4inspect'){await inspectClient(el.dataset.id);return;}
  if(act==='ip4unban'){if(confirm(L('Release this IP from the local DARK nftables guard?','این IP از Guard محلی nftables آزاد شود؟'))){await api('/api/ip/unban','POST',{ip:el.dataset.ip});toast(L('Local nftables ban released.','بن محلی nftables آزاد شد.'));await renderPage();}return;}
- if(act==='ip4clearips'){if(confirm(L('Clear Local + Node IP observation history for this client? This is not a firewall unban.','تاریخچه IP محلی و نود این کاربر پاک شود؟ این کار رفع بن فایروال نیست.'))){await api('/api/clients/'+enc(el.dataset.id)+'/ips','DELETE');closeDialog();await renderPage();}return;}
- if(act==='ip4cleardevices'){if(confirm(L('Clear Local + Node registered devices for this client?','دستگاه‌های ثبت‌شده Local + Node این کاربر پاک شوند؟'))){await api('/api/clients/'+enc(el.dataset.id)+'/devices','DELETE');closeDialog();await renderPage();}return;}
+ if(act==='ip4clearips'){if(confirm(L('Clear Local + Node IP observation history for this client? This is not a firewall unban.','تاریخچهٔ IP محلی و نود این کاربر پاک شود؟ این کار رفع بن فایروال نیست.'))){await api('/api/clients/'+enc(el.dataset.id)+'/ips','DELETE');closeDialog();await renderPage();}return;}
+ if(act==='ip4cleardevices'){if(confirm(L('Clear Local + Node registered devices for this client?','دستگاه‌های ثبت‌شدهٔ محلی + نود این کاربر پاک شوند؟'))){await api('/api/clients/'+enc(el.dataset.id)+'/devices','DELETE');closeDialog();await renderPage();}return;}
  return baseRunAction(act,el);
 };
 globalThis.DarkSecurityCenterV4={open:async()=>go('ipguard')};
