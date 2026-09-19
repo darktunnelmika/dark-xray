@@ -100,6 +100,79 @@ def test_subscription_settings_are_used(env):
     assert c.get(r.json()['subscription_url']).status_code==404
 
 
+def test_subscription_userinfo_reports_local_plus_remote_node_traffic(env):
+    store,_,c=env
+    assert c.post('/api/inbounds',json=IB).status_code==200
+    iid=c.get('/api/inbounds').json()[0]['id']
+    r=c.post('/api/clients',json={'owner':'dark','client':{'email':'global-sub','totalGB':10_000},'inboundIds':[iid]})
+    assert r.status_code==202,r.text
+    with store.transaction() as db:
+        db.execute("UPDATE core_clients SET up=100,down=200 WHERE email='global-sub'")
+        db.execute("""INSERT INTO remote_node_client_usage(
+          node_id,client_id,raw_up,raw_down,current_up,current_down,seq,initialized,last_seen)
+          VALUES('n1','global-sub',300,400,300,400,1,1,1)""")
+        db.execute("""INSERT INTO remote_node_client_usage(
+          node_id,client_id,raw_up,raw_down,current_up,current_down,seq,initialized,last_seen)
+          VALUES('n2','global-sub',50,60,50,60,1,1,1)""")
+    out=c.get(r.json()['subscription_url']+'?format=raw')
+    assert out.status_code==200,out.text
+    info=out.headers['subscription-userinfo']
+    assert 'upload=450' in info
+    assert 'download=660' in info
+    assert 'total=10000' in info
+
+
+def test_disabled_subscription_has_no_device_registration_side_effect(env):
+    store,_,c=env
+    assert c.post('/api/inbounds',json=IB).status_code==200
+    iid=c.get('/api/inbounds').json()[0]['id']
+    r=c.post('/api/clients',json={'owner':'dark','client':{'email':'hwid-disabled','limitHwid':1},'inboundIds':[iid]})
+    assert r.status_code==202,r.text
+    sub=c.get('/api/settings/subscription').json()['value'];sub['enabled']=False
+    assert c.put('/api/settings/subscription',json={'value':sub}).status_code==200
+    out=c.get(r.json()['subscription_url'],headers={'x-hwid':'device-should-not-register'})
+    assert out.status_code==404
+    with store.lock:
+        assert store.db.execute("SELECT COUNT(*) FROM core_devices WHERE email='hwid-disabled'").fetchone()[0]==0
+
+
+def test_subscription_policy_status_describes_real_format_and_hwid_behavior(env):
+    store,_,c=env
+    assert c.post('/api/inbounds',json=IB).status_code==200
+    iid=c.get('/api/inbounds').json()[0]['id']
+    limited=c.post('/api/clients',json={'owner':'dark','client':{'email':'hwid-one','limitHwid':1},'inboundIds':[iid]})
+    assert limited.status_code==202,limited.text
+    assert c.get(limited.json()['subscription_url'],headers={'x-hwid':'browser-device-1','x-device-os':'ios'}).status_code==200
+    status=c.get('/api/subscription/status')
+    assert status.status_code==200,status.text
+    doc=status.json()
+    assert doc['base_url'].endswith('/sub/<token>')
+    assert doc['traffic_scope']=='local_plus_remote_nodes'
+    assert doc['supported_formats']==['base64','raw','clash','json']
+    assert doc['auto_detect_rules']==[{'contains':'clash','format':'clash'},{'contains':'mihomo','format':'clash'}]
+    assert doc['device_policy']['clients_with_hwid_limit']==1
+    assert doc['device_policy']['registered_devices']==1
+    assert doc['device_policy']['clients_at_device_limit']==1
+    assert doc['device_policy']['required_header']=='x-hwid'
+    assert 'TURKEY FAST' in doc['remark_preview']
+
+
+def test_subscription_auto_detect_only_changes_known_clash_mihomo_user_agents(env):
+    _,_,c=env
+    assert c.post('/api/inbounds',json=IB).status_code==200
+    iid=c.get('/api/inbounds').json()[0]['id']
+    r=c.post('/api/clients',json={'owner':'dark','client':{'email':'ua-sub'},'inboundIds':[iid]})
+    assert r.status_code==202,r.text
+    sub=c.get('/api/settings/subscription').json()['value'];sub.update(default_format='raw',auto_detect=True)
+    assert c.put('/api/settings/subscription',json={'value':sub}).status_code==200
+    raw=c.get(r.json()['subscription_url'],headers={'user-agent':'v2rayNG/1.9'})
+    clash=c.get(r.json()['subscription_url'],headers={'user-agent':'Mihomo/1.19'})
+    assert raw.status_code==200 and raw.content.startswith(b'vless://')
+    assert clash.status_code==200 and clash.headers['content-type'].startswith('application/yaml')
+    explicit=c.get(r.json()['subscription_url']+'?format=json',headers={'user-agent':'Mihomo/1.19'})
+    assert explicit.status_code==200 and explicit.headers['content-type'].startswith('application/json')
+
+
 def test_login_cookie_uses_panel_session_policy(env):
     _,_,c=env
     panel=c.get('/api/settings/panel').json()['value'];panel['session_max_age_minutes']=90
