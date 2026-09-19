@@ -41,7 +41,7 @@ const icon=n=>`<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="current
 const gb=1024**3, enc=encodeURIComponent, fa=n=>Number(n||0).toLocaleString((localStorage.getItem('dark_lang')||'en')==='fa'?'fa-IR':'en-US');
 const date=t=>{if(!t)return '—';const lang=(localStorage.getItem('dark_lang')||'en')==='fa'?'fa-IR':'en-US',cal=state?.me?.ui?.datepicker==='jalalian'?'-u-ca-persian':'',zone=state?.me?.ui?.timezone||'UTC';try{return new Date(t*1000).toLocaleString(lang+cal,{timeZone:zone});}catch{return new Date(t*1000).toLocaleString(lang);}};
 function bytes(v){if(v===undefined||v===null)return '—';v=Number(v);if(!Number.isFinite(v))return '—';let u=0;while(v>=1024&&u<4){v/=1024;u++;}return `${v.toFixed(u?1:0)} ${['B','KiB','MiB','GiB','TiB'][u]}`;}
-const state={me:null,page:'dashboard',clients:[],owners:[],resellers:[],inbounds:[],sync:null,system:null,errors:{},expanded:new Set(),selected:new Set(),search:'',busy:false,history:[]};
+const state={me:null,page:'dashboard',clients:[],owners:[],resellers:[],inbounds:[],sync:null,system:null,errors:{},expanded:new Set(),selected:new Set(),search:'',busy:false,history:[],renderSeq:0};
 const can=(key,owner=state.me?.id)=>state.me?.role==='owner'||state.me?.permissions?.[key]==='all'||(state.me?.permissions?.[key]==='own'&&owner===state.me?.id);
 const isOwner=()=>state.me?.role==='owner';
 const labelState={applied:'ذخیره‌شده در DARK',pending:'در صف',error:'خطای اجرا',conflict:'تعارض',uncertain:'نتیجه نامشخص',deleted:'حذف‌شده',reset_inflight:'در حال ریست',missing:'در دیتابیس اجرا یافت نشد'};
@@ -104,7 +104,30 @@ async function enginePage(){
  return heading(title,notes[state.page],button('ویرایش','sectionedit','edit',`data-section="${key}"`,'true'))+
  `<div class="notice">این داده‌ها متعلق به خود DARK هستند. ذخیره در دیتابیس با اعمال موفق روی Xray متفاوت است؛ وضعیت هسته را بررسی کن.</div><article class="panel">${jsonBox(data.value)}</article>`;
 }
-async function renderPage(){let html;try{if(enginePages[state.page])html=await enginePage();else switch(state.page){case'inbounds':html=inboundPage();break;case'clients':html=clientsPage();break;case'resellers':html=resellerPage();break;case'ipguard':html=await ipPage();break;case'finance':html=await financePage();break;case'audit':html=await auditPage();break;case'sync':html=syncPage();break;case'account':html=await accountPage();break;default:html=dashboard();}}catch(ex){html=heading('دریافت اطلاعات ناموفق','این صفحه بدون پاسخ معتبر، دادهٔ ساختگی نشان نمی‌دهد.')+`<div class="notice error">${e(ex.message)}</div>`;}if($('#content')){const support=state.me?.ui?.support_url||'';$('#content').innerHTML=html+`<footer><span>DARK API · DARK DATABASE · Xray-core${support?` · <a href="${e(support)}" target="_blank" rel="noopener noreferrer">Support</a>`:''}</span><span class="mono">${e(state.me?.version||'DARK')} </span></footer>`;}}
+async function renderPage(){
+ const requestedPage=state.page,seq=++state.renderSeq;
+ let html;
+ try{
+  if(enginePages[requestedPage])html=await enginePage();
+  else switch(requestedPage){
+   case'inbounds':html=inboundPage();break;
+   case'clients':html=clientsPage();break;
+   case'resellers':html=resellerPage();break;
+   case'ipguard':html=await ipPage();break;
+   case'finance':html=await financePage();break;
+   case'audit':html=await auditPage();break;
+   case'sync':html=syncPage();break;
+   case'account':html=await accountPage();break;
+   default:html=dashboard();
+  }
+ }catch(ex){
+  html=heading('دریافت اطلاعات ناموفق','این صفحه بدون پاسخ معتبر، دادهٔ ساختگی نشان نمی‌دهد.')+`<div class="notice error">${e(ex.message)}</div>`;
+ }
+ if(seq!==state.renderSeq||requestedPage!==state.page)return;
+ const content=$('#content');if(!content)return;
+ const support=state.me?.ui?.support_url||'';
+ content.innerHTML=html+`<footer><span>DARK API · DARK DATABASE · Xray-core${support?` · <a href="${e(support)}" target="_blank" rel="noopener noreferrer">Support</a>`:''}</span><span class="mono">${e(state.me?.version||'DARK')} </span></footer>`;
+}
 async function go(page){state.page=page;state.search='';state.selected.clear();shell();await renderPage();}
 function closeDialog(){const o=$('#overlay');o.classList.remove('show');o.style.display='none';o.innerHTML='';}
 function dialog(title,body,onSubmit=null,label='ذخیره'){const o=$('#overlay');o.innerHTML=`<div class="dialog" role="dialog" aria-modal="true" aria-label="${e(title)}"><form id="dialog-form"><header class="dialog-head"><h2>${e(title)}</h2><button type="button" class="icon-btn" data-act="close">${icon('close')}</button></header><div class="dialog-body">${body}<div class="form-error" id="form-error"></div></div><footer class="dialog-foot"><button type="button" class="btn" data-act="close">بستن</button>${onSubmit?`<button class="btn btn-primary" type="submit" id="submit-dialog">${e(label)}</button>`:''}</footer></form></div>`;o.style.display='flex';o.classList.add('show');if(onSubmit)$('#dialog-form').addEventListener('submit',async ev=>{ev.preventDefault();const b=$('#submit-dialog');b.disabled=true;$('#form-error').textContent='';try{await onSubmit(new FormData(ev.target),ev.target);}catch(ex){if($('#form-error'))$('#form-error').textContent=ex.message;else toast(ex.message,true);}finally{if(b.isConnected)b.disabled=false;}});setTimeout(()=>o.querySelector('input,select,button')?.focus(),20);}
