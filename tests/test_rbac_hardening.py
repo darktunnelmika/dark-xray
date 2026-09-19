@@ -78,9 +78,9 @@ def test_reseller_can_still_receive_explicit_cross_owner_client_scope(env):
 def test_robot_keys_reject_obsolete_money_permissions_manage_keys_and_own_global_scope(env):
     _,_,_,auth=env
     _,p=auth.login('dark','OwnerPass88','','127.0.0.1',3600,'test')
-    with pytest.raises(PolicyError,match='Invalid permission'):
+    with pytest.raises(PolicyError,match='Invalid key permissions'):
         auth.new_key(p,'bad-credit',{'finance.credit':'all'},30)
-    with pytest.raises(PolicyError,match='Invalid permission'):
+    with pytest.raises(PolicyError,match='Invalid key permissions'):
         auth.new_key(p,'bad-refund',{'finance.refund':'all'},30)
     with pytest.raises(PolicyError,match='cannot manage key lifecycle'):
         auth.new_key(p,'bad-key-admin',{'api.manage':'all'},30)
