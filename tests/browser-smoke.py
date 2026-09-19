@@ -310,9 +310,9 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             routing=page.evaluate("()=>api('/api/settings/routing').then(x=>x.value)")
             assert any(r.get('ruleTag')=='BROWSER-DIRECT' and r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
 
+            page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-DIRECT')",timeout=10000)
             page.locator('#te4-preview-form [name="domain"]').fill('api.browser.example')
             page.locator('#te4-preview-form [name="port"]').fill('443')
-            page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-DIRECT')",timeout=10000)
             preview_errors=page.locator('.toast.error').count()
             preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
             page.locator('#te4-preview-form [data-act="te4preview"]').click()
@@ -360,8 +360,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#dialog-form [name="targetBalancer"]').select_option('browser-bal')
             page.locator('#submit-dialog').click()
             page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
-            page.locator('#te4-preview-form [name="domain"]').fill('www.balance.example')
             page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-BAL')&&state.te4.preview===null",timeout=10000)
+            page.locator('#te4-preview-form [name="domain"]').fill('www.balance.example')
             preview_errors=page.locator('.toast.error').count()
             preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
             page.locator('#te4-preview-form [data-act="te4preview"]').click()
