@@ -164,6 +164,12 @@ class NodeRegistry:
             CREATE TABLE IF NOT EXISTS remote_node_security_state(
               node_id TEXT PRIMARY KEY,source_verified INTEGER NOT NULL DEFAULT 0,
               last_sync REAL NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '');
+            CREATE TABLE IF NOT EXISTS remote_node_desired_state(
+              node_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0,
+              desired_hash TEXT NOT NULL DEFAULT '',desired_json TEXT NOT NULL DEFAULT '{}',
+              updated_at REAL NOT NULL DEFAULT 0,applied_revision INTEGER NOT NULL DEFAULT 0,
+              applied_hash TEXT NOT NULL DEFAULT '',applied_at REAL NOT NULL DEFAULT 0,
+              last_error TEXT NOT NULL DEFAULT '');
             ''')
             node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
             for name,ddl in (
@@ -233,6 +239,11 @@ class NodeRegistry:
             if r['failover_ready']:r['failover_reason']='ready'
             elif not assigned:r['failover_reason']='no_assignments'
             else:r['failover_reason']=next((x['failover_reason'] for x in assigned if x['failover_reason']!='ready'),'not_deployed')
+            with self.store.lock:
+                ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
+            desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
+            desired['pending']=bool(desired['revision'] and (desired['revision']!=desired['applied_revision'] or desired['desired_hash']!=desired['applied_hash']))
+            r['desired_state']=desired
         return rows
 
     def get(self,node_id:str,*,secret:bool=False)->dict:
@@ -294,6 +305,54 @@ class NodeRegistry:
                 db.executemany('DELETE FROM remote_node_inbounds WHERE node_id=? AND local_inbound_id=?',[(node_id,x) for x in removed])
         return self.get(node_id)
 
+    @staticmethod
+    def _desired_payload(value:dict)->tuple[str,str]:
+        if not isinstance(value,dict):raise PolicyError('Node desired state must be an object')
+        raw=json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+        if len(raw)>8*1024*1024:raise PolicyError('Node desired state is too large')
+        return raw,hashlib.sha256(raw.encode()).hexdigest()
+
+    def set_desired_state(self,node_id:str,value:dict)->dict:
+        self.get(node_id)
+        raw,digest=self._desired_payload(value);now=time.time()
+        with self.store.transaction() as db:
+            old=db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
+            revision=int(old['revision']) if old and old['desired_hash']==digest else int(old['revision'] if old else 0)+1
+            applied_revision=int(old['applied_revision']) if old else 0
+            applied_hash=str(old['applied_hash']) if old else ''
+            applied_at=float(old['applied_at']) if old else 0.
+            db.execute('''INSERT INTO remote_node_desired_state(node_id,revision,desired_hash,desired_json,updated_at,applied_revision,applied_hash,applied_at,last_error)
+                          VALUES(?,?,?,?,?,?,?,?,?)
+                          ON CONFLICT(node_id) DO UPDATE SET revision=excluded.revision,desired_hash=excluded.desired_hash,
+                            desired_json=excluded.desired_json,updated_at=excluded.updated_at,last_error='' ''',
+                       (node_id,revision,digest,raw,now,applied_revision,applied_hash,applied_at,''))
+        return {'node_id':node_id,'revision':revision,'hash':digest,'changed':not old or old['desired_hash']!=digest,
+                'pending':revision!=applied_revision or digest!=applied_hash,'updated_at':now}
+
+    def desired_state(self,node_id:str,*,include_payload:bool=True)->dict:
+        self.get(node_id)
+        with self.store.lock:r=self.store.db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
+        if not r:return {'node_id':node_id,'revision':0,'hash':'','payload':{} if include_payload else None,'pending':False}
+        out={'node_id':node_id,'revision':int(r['revision']),'hash':r['desired_hash'],'updated_at':float(r['updated_at']),
+             'applied_revision':int(r['applied_revision']),'applied_hash':r['applied_hash'],'applied_at':float(r['applied_at']),
+             'last_error':r['last_error'],'pending':int(r['revision'])!=int(r['applied_revision']) or r['desired_hash']!=r['applied_hash']}
+        if include_payload:out['payload']=json.loads(r['desired_json'])
+        return out
+
+    def mark_desired_state(self,node_id:str,revision:int,digest:str,*,error:str='')->dict:
+        if type(revision)is not int or revision<0 or not isinstance(digest,str) or len(digest)>128:raise PolicyError('Invalid node apply acknowledgement')
+        self.get(node_id);now=time.time()
+        with self.store.transaction() as db:
+            row=db.execute('SELECT revision,desired_hash FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
+            if not row:raise PolicyError('Node desired state is missing')
+            if error:
+                db.execute('UPDATE remote_node_desired_state SET last_error=? WHERE node_id=?',(str(error)[:500],node_id))
+            else:
+                if revision!=int(row['revision']) or digest!=row['desired_hash']:raise PolicyError('Node acknowledged a stale desired state')
+                db.execute('''UPDATE remote_node_desired_state SET applied_revision=?,applied_hash=?,applied_at=?,last_error='' WHERE node_id=?''',
+                           (revision,digest,now,node_id))
+        return self.desired_state(node_id,include_payload=False)
+
     def set_enabled(self,node_id:str,enabled:bool)->dict:
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
         with self.store.transaction() as db:
@@ -308,6 +367,7 @@ class NodeRegistry:
             db.execute('DELETE FROM remote_node_ips WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_security_state WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_desired_state WHERE node_id=?',(node_id,))
             cur=db.execute('DELETE FROM remote_nodes WHERE id=?',(node_id,))
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
