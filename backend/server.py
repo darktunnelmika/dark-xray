@@ -301,6 +301,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def update_client()->UpdateBrokerClient:
         return UpdateBrokerClient(timeout=12)
 
+    def hub_source_commit()->str:
+        path=Path(store.path).parent/'installed-source.json'
+        try:
+            value=json.loads(path.read_text(encoding='utf-8'))
+            commit=str(value.get('commit') or '').lower()
+        except (OSError,ValueError,TypeError,AttributeError):commit=''
+        if not re.fullmatch(r'[0-9a-f]{40}',commit):raise HTTPException(409,'Hub exact installed source commit is unavailable')
+        return commit
+
     @app.get('/api/update/status')
     def update_status(p:Principal=Depends(owner)):
         try:return update_client().status()
@@ -1146,6 +1155,21 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
+
+    @app.get('/api/nodes/{node_id}/update')
+    def remote_node_update_status(node_id:str,p:Principal=Depends(owner)):
+        result=nodes.remote_update_status(node_id);result['hub_commit']=hub_source_commit();return result
+
+    @app.post('/api/nodes/{node_id}/update/check')
+    def remote_node_update_check(node_id:str,p:Principal=Depends(owner)):
+        commit=hub_source_commit();result=nodes.remote_update_check(node_id,commit)
+        result['hub_commit']=commit;manager.audit(p.actor,p.actor.id,'node.update_check',node_id,commit);return result
+
+    @app.post('/api/nodes/{node_id}/update/start',status_code=202)
+    def remote_node_update_start(node_id:str,p:Principal=Depends(owner)):
+        if config.test_engine:raise HTTPException(409,'Node update is disabled in test-engine mode')
+        commit=hub_source_commit();result=nodes.remote_update_start(node_id,commit)
+        result['hub_commit']=commit;manager.audit(p.actor,p.actor.id,'node.update_start',node_id,commit);return result
     @app.get('/api/nodes/{node_id}/desired')
     def remote_node_desired(node_id:str,p:Principal=Depends(owner)):
         return ensure_node_desired_state(node_id)
