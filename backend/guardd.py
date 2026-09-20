@@ -39,19 +39,23 @@ class BrokerConfig:
     max_ban_seconds: int = 3600
     exempt_ips: tuple[str, ...] = ()
     nft_binary: str = '/usr/sbin/nft'
+    allow_runtime_port_updates: bool = False
 
     @classmethod
     def from_dict(cls, value):
         if not isinstance(value, dict):
             raise PolicyError('Guard config must be an object')
         allowed_keys = {'allowed_uid', 'allowed_ports', 'protected_ports', 'socket_path',
-                        'direct_source_verified', 'max_ban_seconds', 'exempt_ips', 'nft_binary'}
+                        'direct_source_verified', 'max_ban_seconds', 'exempt_ips', 'nft_binary',
+                        'allow_runtime_port_updates'}
         if set(value) - allowed_keys:
             raise PolicyError('Unknown guard configuration field')
         uid = integer(value.get('allowed_uid'), 1, 2**31-1)
         ports = normalize_ports(value.get('allowed_ports', []))
         protected = normalize_ports(value.get('protected_ports', [22, 2087, 10085]))
-        if not ports or 22 not in protected or set(ports) & set(protected):
+        runtime_updates=value.get('allow_runtime_port_updates',False)
+        if type(runtime_updates)is not bool:raise PolicyError('allow_runtime_port_updates must be boolean')
+        if (not ports and not runtime_updates) or 22 not in protected or set(ports) & set(protected):
             raise PolicyError('Empty data ports or protected-port overlap; include actual SSH, panel and core API ports')
         verified = value.get('direct_source_verified', False)
         if type(verified) is not bool:
@@ -70,7 +74,7 @@ class BrokerConfig:
         except ValueError as exc:
             raise PolicyError('Invalid exempt CIDR') from exc
         return cls(uid, ports, protected, sock, verified,
-                   integer(value.get('max_ban_seconds', 3600), 10, 86400), exempt, nft)
+                   integer(value.get('max_ban_seconds', 3600), 10, 86400), exempt, nft, runtime_updates)
 
     @classmethod
     def load(cls, path: Path):
@@ -89,6 +93,7 @@ class NftFirewall:
         self.config, self.runner = config, runner
         self.lock = threading.RLock()
         self.leases: dict[tuple[str, int], float] = {}
+        self.runtime_ports = tuple(config.allowed_ports)
         self.ready = False
         self.boot_id = uuid.uuid4().hex
 
@@ -148,8 +153,9 @@ class NftFirewall:
         now = time.time()
         self.leases = {k: v for k, v in self.leases.items() if v > now}
         return {'ok': True, 'ready': True, 'backend': 'nftables', 'boot_id': self.boot_id,
-                'allowed_ports': list(self.config.allowed_ports),
+                'allowed_ports': list(self.runtime_ports),
                 'protected_ports': list(self.config.protected_ports),
+                'runtime_port_updates': self.config.allow_runtime_port_updates,
                 'direct_source_verified': self.config.direct_source_verified,
                 'max_ban_seconds': self.config.max_ban_seconds,
                 'active_address_port_leases': len(self.leases), 'packet_block_verified': False}
@@ -160,7 +166,7 @@ class NftFirewall:
         if not isinstance(message, dict):
             raise PolicyError('Message must be an object')
         op = message.get('operation')
-        fields = {'status': {'operation'}, 'clear': {'operation'},
+        fields = {'status': {'operation'}, 'clear': {'operation'}, 'set_ports': {'operation','ports'},
                   'unban': {'operation', 'ip'}, 'ban': {'operation', 'ip', 'ports', 'seconds'}}
         if op not in fields or set(message) != fields[op]:
             raise PolicyError('Unknown operation or fields')
@@ -173,11 +179,26 @@ class NftFirewall:
                 self._run('-f', '-', script=f'flush set inet {TABLE} sources4\nflush set inet {TABLE} sources6\n')
                 self.leases.clear()
                 return {'ok': True, 'cleared': True}
+            if op == 'set_ports':
+                if not self.config.allow_runtime_port_updates:
+                    raise PolicyError('Root has not approved runtime data-port updates')
+                ports=normalize_ports(message.get('ports',[]))
+                if len(ports)>1024 or set(ports)&set(self.config.protected_ports):
+                    raise PolicyError('Runtime data ports overlap protected management ports')
+                removed=set(self.runtime_ports)-set(ports)
+                for (ip,port),_expires in list(self.leases.items()):
+                    if port not in removed:continue
+                    setname='sources6' if ':' in ip else 'sources4'
+                    got=self._run('get','element','inet',TABLE,setname,'{',ip,'.',str(port),'}',check=False)
+                    if got.returncode==0:self._run('-f','-',script=f'delete element inet {TABLE} {setname} {{ {ip} . {port} }}\n')
+                    self.leases.pop((ip,port),None)
+                self.runtime_ports=tuple(ports)
+                return {'ok':True,'allowed_ports':list(self.runtime_ports),'protected_ports':list(self.config.protected_ports)}
             ip = self._ip(message.get('ip'))
             setname = 'sources6' if ':' in ip else 'sources4'
             if op == 'unban':
                 released = 0
-                for port in self.config.allowed_ports:
+                for port in self.runtime_ports:
                     # Expired elements need no deletion. A failed read is surfaced
                     # by the table liveness check before any completion claim.
                     got = self._run('get', 'element', 'inet', TABLE, setname,
@@ -191,7 +212,7 @@ class NftFirewall:
             if not self.config.direct_source_verified:
                 raise PolicyError('Root has not approved direct packet-source enforcement')
             ports = normalize_ports(message['ports'])
-            if not ports or not set(ports) <= set(self.config.allowed_ports) or set(ports) & set(self.config.protected_ports):
+            if not ports or not set(ports) <= set(self.runtime_ports) or set(ports) & set(self.config.protected_ports):
                 raise PolicyError('Unapproved or management port')
             seconds = integer(message['seconds'], 10, self.config.max_ban_seconds)
             now = time.time()
