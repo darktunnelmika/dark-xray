@@ -32,6 +32,7 @@ python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
 python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/preupdate-node-hardening.xml
 python -m pytest tests/test_node_guard_recovery.py -q --junitxml=qa/junit/node-guard-recovery.xml
+python -m pytest tests/test_hub_node_control_store.py -q --junitxml=qa/junit/hub-node-control-store.xml
 python -m pytest tests/test_node_control_lifecycle.py -q --junitxml=qa/junit/node-control-lifecycle.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
