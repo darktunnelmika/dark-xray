@@ -826,6 +826,16 @@ class NodeRegistry:
         if self.thread:self.thread.join(timeout=6.0)
         self.thread=None
 
+    def rotate_token(self,node_id:str,new_token:str)->dict:
+        if not isinstance(new_token,str) or not new_token.startswith('dkn_') or not 40<=len(new_token)<=256:
+            raise PolicyError('Invalid replacement DARK node token')
+        doc,ms=self._request(node_id,'/node/api/v1/token/rotate','POST',{'token':new_token},12.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('rotated') is not True:
+            raise PolicyError('Node did not confirm token rotation')
+        enc=self.cipher.encrypt(new_token.encode()).decode()
+        with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET token_enc=?,updated_at=? WHERE id=?',(enc,time.time(),node_id))
+        return {'rotated':True,'latency_ms':ms}
+
     def remote_core(self,node_id:str,action:str)->dict:
         if action not in {'validate','restart','start','stop'}:raise PolicyError('Unsupported remote core action')
         doc,ms=self._request(node_id,'/node/api/core/'+action,'POST',{})
