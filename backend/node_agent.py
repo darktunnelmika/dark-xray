@@ -120,7 +120,14 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:b
         with store.lock:
             assigned=store.db.execute('SELECT COUNT(*) FROM node_runtime_inbounds WHERE scope=?',(token.scope,)).fetchone()[0]
             clients=store.db.execute('SELECT COUNT(*) FROM node_runtime_clients WHERE scope=?',(token.scope,)).fetchone()[0]
-        return {'service':'DARK XRAY NODE','agent_only':True,'version':VERSION,
+        source={}
+        source_path=engine.runtime.parent/'installed-source.json'
+        try:
+            if source_path.is_file() and not source_path.is_symlink() and source_path.stat().st_size<65536:
+                raw=json.loads(source_path.read_text(encoding='utf-8'))
+                if isinstance(raw,dict):source={k:raw.get(k) for k in ('commit','version','ref','role')}
+        except (OSError,ValueError):source={}
+        return {'service':'DARK XRAY NODE','agent_only':True,'version':VERSION,'installed_source':source,
                 'core':{'state':core['state'],'version':core['version'],'dirty':core['dirty'],'last_error':core['last_error']},
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
@@ -160,12 +167,16 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:b
     def traffic_reset(body:dict,_scope:str=Depends(auth)):
         source=str(body.get('sourceEmail') or '');reset_id=str(body.get('resetId') or '')
         if not source or not 8<=len(reset_id)<=128:raise HTTPException(400,'Invalid traffic reset request')
+        try:cached=runtime.reset_result(reset_id,source)
+        except PolicyError as ex:raise HTTPException(409,str(ex))
+        if cached:return cached
         mirror=runtime.mirror_for_source(source)
         if not mirror:raise HTTPException(404,'Mirrored client is not present')
         result=engine.reset(mirror)
         if not result:raise HTTPException(404,'Mirrored traffic state is missing')
         up,down=CoreEngine.counters(result)
-        return {'sourceEmail':source,'up':up,'down':down,'capturedAt':time.time(),'cached':False}
+        try:return runtime.remember_reset(reset_id,source,up,down)
+        except PolicyError as ex:raise HTTPException(409,str(ex))
 
     @app.get('/node/api/mirrors/security')
     def security_state(_scope:str=Depends(auth)):
@@ -231,7 +242,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config',type=Path,default=Path('/etc/dark-xray-node/config.json'))
     p.add_argument('--data',type=Path,default=Path('/var/lib/dark-xray-node'))
-    p.add_argument('--token-file',type=Path,default=Path('/etc/dark-xray-node/token'))
+    p.add_argument('--token-file',type=Path,default=Path('/var/lib/dark-xray-node/token'))
     p.add_argument('--host',default=None);p.add_argument('--port',type=int,default=None)
     a=p.parse_args()
     a.data.mkdir(parents=True,exist_ok=True,mode=0o700)
