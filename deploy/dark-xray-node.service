@@ -10,7 +10,7 @@ Group=darkxray
 WorkingDirectory=/opt/dark-xray-node
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONNOUSERSITE=1
-ExecStart=/opt/dark-xray-node/.venv/bin/python /opt/dark-xray-node/backend/node_agent.py --config /etc/dark-xray-node/config.json --data /var/lib/dark-xray-node --token-file /var/lib/dark-xray-node/token
+ExecStart=/opt/dark-xray-node/.venv/bin/python /opt/dark-xray-node/backend/node_agent.py --config /etc/dark-xray-node/config.json --data /var/lib/dark-xray-node --token-file /var/lib/dark-xray-node/token --node-id-file /var/lib/dark-xray-node/node-id
 Restart=on-failure
 RestartSec=4
 TimeoutStopSec=60
