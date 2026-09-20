@@ -807,6 +807,12 @@ class NodeRegistry:
                             legacy_bundles=sync_provider(node_id) if sync_provider is not None else None
                             self.sync_desired_state(node_id,desired_provider(node_id),legacy_bundles=legacy_bundles)
                             post=self.sync_traffic(node_id)
+                            if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
+                            if security_callback is not None:
+                                try:
+                                    security=self.sync_security(node_id);security_callback(node_id,security)
+                                except (PolicyError,OSError,ValueError):
+                                    pass
                         elif sync_provider is not None:
                             self.sync_mirrors(node_id,sync_provider(node_id))
                             post=self.sync_traffic(node_id)
@@ -882,9 +888,40 @@ class NodeRegistry:
             error='Node returned an invalid desired-state acknowledgement'
             self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
             self._request_failed(node_id,error);raise PolicyError(error)
+        items=doc.get('items',[])
+        if not isinstance(items,list):
+            error='Node desired-state acknowledgement is missing assignment status'
+            self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
+            self._request_failed(node_id,error);raise PolicyError(error)
+        now=time.time()
+        by_source={int(x.get('sourceInboundId')):x for x in items
+                   if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
+        desired_sources={int(x.get('sourceInboundId')) for x in state['payload'].get('assignments',[])
+                         if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
+        with self.store.transaction() as db:
+            assigned=[int(r[0]) for r in db.execute(
+                'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
+            for source in assigned:
+                item=by_source.get(source)
+                if source not in desired_sources:
+                    db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=0,last_sync=?,last_error=?,updated_at=?
+                                  WHERE node_id=? AND local_inbound_id=?''',
+                               (now,'not present in desired state',now,node_id,source))
+                    continue
+                if not item:
+                    db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=0,last_sync=?,last_error=?,updated_at=?
+                                  WHERE node_id=? AND local_inbound_id=?''',
+                               (now,'node did not acknowledge assignment',now,node_id,source))
+                    continue
+                remote_id=item.get('remoteInboundId');error=str(item.get('error') or '')[:300]
+                if type(remote_id) is not int or remote_id<0:
+                    remote_id=0;error=error or 'invalid remote inbound id'
+                db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?
+                              WHERE node_id=? AND local_inbound_id=?''',
+                           (remote_id,now,error,now,node_id,source))
         status=self.mark_desired_state(node_id,state['revision'],state['hash'])
         return {'latency_ms':ms,'legacy':False,'desired_state_applied':True,'desired_state':status,
-                'items':doc.get('items',[]),'core':doc.get('core',{}),'agent':doc}
+                'items':items,'core':doc.get('core',{}),'agent':doc,'synced_at':now}
 
     def sync_mirrors(self,node_id:str,bundles:list[dict])->dict:
         if not isinstance(bundles,list) or len(bundles)>256:raise PolicyError('Invalid node mirror bundle')
