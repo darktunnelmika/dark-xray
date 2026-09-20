@@ -82,7 +82,7 @@ printf 'Origin : https://%s:%s\n' "$DOMAIN" "$NODE_PORT"
 printf '\nPAIR CODE (paste once into DARK XRAY Hub → Nodes → Add Node):\n'
 python3 - <<'PY'
 import json
-print(json.load(open('/etc/dark-xray-node/pair.json'))['pairCode'])
+print(json.load(open('/var/lib/dark-xray-node/pair.json'))['pairCode'])
 PY
 if [[ "$VERIFY_SOURCE" == 1 ]]; then
   printf 'IP Guard: direct-source packet enforcement approved; Hub controls only Xray data ports.\n'
