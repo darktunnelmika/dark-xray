@@ -426,7 +426,7 @@ class NodeRegistry:
         if not .2<=timeout<=30:raise PolicyError('Invalid node timeout')
         _origin,host,port,addresses=resolve_origin(node['origin'])
         data=None if body is None else json.dumps(body,separators=(',',':')).encode()
-        if data is not None and len(data)>2*1024*1024:raise PolicyError('Node request exceeds 2 MiB limit')
+        if data is not None and len(data)>8*1024*1024:raise PolicyError('Node request exceeds 8 MiB limit')
         headers={'Accept':'application/json','Authorization':'Bearer '+node['token']}
         if data is not None:headers['Content-Type']='application/json'
         context=ssl.create_default_context();last_error=None;start=time.monotonic();deadline=start+timeout
