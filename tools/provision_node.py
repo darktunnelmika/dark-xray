@@ -100,6 +100,8 @@ def main():
     os.chmod(token_path,0o600);os.chown(token_path,account.pw_uid,account.pw_gid)
     name=safe_name(a.name or os.uname().nodename)
     node_id=safe_name(a.node_id or ('node-'+name+'-'+secrets.token_hex(3)))
+    node_id_path=DATA/'node-id';node_id_path.write_text(node_id+'\n',encoding='utf-8')
+    os.chmod(node_id_path,0o600);os.chown(node_id_path,account.pw_uid,account.pw_gid)
     data_address=(a.data_address or domain).strip()
     protected=sorted(set([22,10085,a.port,*a.ssh_port]))
     cfg={'public_origin':f'https://{domain}'+(f':{a.port}' if a.port!=443 else ''),
