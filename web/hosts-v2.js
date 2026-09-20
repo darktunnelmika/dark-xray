@@ -28,7 +28,7 @@ function normalizeEndpoint(raw,ib){
  if(!ib)throw Error(L('Choose an inbound.','یک اینباند انتخاب کن.'));
  const m=inboundMeta(ib),mode=raw.mode||'direct',requestedSecurity=mode==='advanced'&&['same','tls','none'].includes(raw.security)?raw.security:'same',effectiveSecurity=requestedSecurity==='same'?m.security:requestedSecurity;
  const address=String(raw.address||'').trim(),port=Number(raw.port),runtime=String(raw.runtime||'local');
- if(runtime!=='local'&&!/^node:[A-Za-z0-9_.@+\\-]{1,128}$/.test(runtime))throw Error(L('Choose a valid runtime.','یک Runtime معتبر انتخاب کن.'));
+ if(runtime!=='local'&&!/^node:[A-Za-z0-9_.@+-]{1,128}$/.test(runtime))throw Error(L('Choose a valid runtime.','یک Runtime معتبر انتخاب کن.'));
  if(!address||address.length>253||/[\s\/?#@]/.test(address))throw Error(L('Endpoint address must be a plain IP or domain.','آدرس نقطه اتصال باید یک IP یا دامنهٔ ساده باشد.'));
  if(!Number.isInteger(port)||port<1||port>65535)throw Error(L('Endpoint port must be 1..65535.','پورت نقطه اتصال باید بین ۱ تا ۶۵۵۳۵ باشد.'));
  let out={inboundId:Number(ib.id),runtime,address,port,remark:String(raw.remark||'').trim(),security:'same',sni:'',overrideSniFromAddress:false,keepSniBlank:false,host:'',path:'',alpn:'',fingerprint:'',allowInsecure:false,finalMask:'',mihomoIpVersion:'',excludeFromSubTypes:[],enable:raw.enable!==false};
