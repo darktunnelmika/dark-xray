@@ -829,6 +829,30 @@ class NodeRegistry:
             return [dict(r) for r in self.store.db.execute(
                 'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
 
+    def sync_desired_state(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None)->dict:
+        if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
+            raise PolicyError('Invalid Hub desired-state envelope')
+        body={'revision':state['revision'],'hash':state['hash'],'payload':state['payload']}
+        try:
+            doc,ms=self._request(node_id,'/node/api/v1/state/apply','POST',body,30.0)
+        except PolicyError as ex:
+            if legacy_bundles is not None and str(ex).startswith('Node HTTP 404'):
+                legacy=self.sync_mirrors(node_id,legacy_bundles)
+                # Legacy full-panel nodes cannot truthfully acknowledge sections
+                # that only the lightweight Node Agent can own.
+                self.mark_desired_state(node_id,state['revision'],state['hash'],error='legacy node: inbound/client mirror only; upgrade to agent-only runtime')
+                return {**legacy,'legacy':True,'desired_revision':state['revision'],'desired_hash':state['hash'],
+                        'desired_state_applied':False}
+            self.mark_desired_state(node_id,state['revision'],state['hash'],error=str(ex))
+            raise
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('appliedRevision')!=state['revision'] or doc.get('appliedHash')!=state['hash']:
+            error='Node returned an invalid desired-state acknowledgement'
+            self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
+            self._request_failed(node_id,error);raise PolicyError(error)
+        status=self.mark_desired_state(node_id,state['revision'],state['hash'])
+        return {'latency_ms':ms,'legacy':False,'desired_state_applied':True,'desired_state':status,
+                'items':doc.get('items',[]),'core':doc.get('core',{}),'agent':doc}
+
     def sync_mirrors(self,node_id:str,bundles:list[dict])->dict:
         if not isinstance(bundles,list) or len(bundles)>256:raise PolicyError('Invalid node mirror bundle')
         doc,ms=self._request(node_id,'/node/api/mirrors/sync','POST',{'assignments':bundles},30.0)
