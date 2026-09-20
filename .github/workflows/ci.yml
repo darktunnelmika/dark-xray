@@ -363,7 +363,7 @@ jobs:
       - name: Provision real lightweight Node Agent
         run: |
           mkdir -p qa
-          sudo python3 tools/provision_node.py \
+          if ! sudo python3 tools/provision_node.py \
             --domain node.example.test \
             --port 9443 \
             --data-address node.example.test \
@@ -372,7 +372,21 @@ jobs:
             --ssh-port 22 \
             --core-version v26.3.27 \
             --cert /tmp/dark-node-cert.pem \
-            --key /tmp/dark-node-key.pem | tee qa/fresh-node-agent-install.json
+            --key /tmp/dark-node-key.pem > /tmp/fresh-node-agent-install.log 2>&1; then
+              cat /tmp/fresh-node-agent-install.log
+              exit 1
+          fi
+          sudo python3 - <<'PY' > qa/fresh-node-agent-install.json
+          import json
+          from pathlib import Path
+          pair=json.loads(Path('/var/lib/dark-xray-node/pair.json').read_text())
+          source=json.loads(Path('/var/lib/dark-xray-node/installed-source.json').read_text())
+          print(json.dumps({
+              'installed':True,'agent_only':True,'node_id':pair['nodeId'],
+              'origin':pair['origin'],'pair_code_present':pair['pairCode'].startswith('DXN1.'),
+              'source':{k:source.get(k) for k in ('commit','version','ref','role')}
+          },indent=2))
+          PY
       - name: Verify agent-only filesystem and services
         run: |
           systemctl is-enabled dark-xray-node.service
@@ -390,8 +404,18 @@ jobs:
           test -f /var/lib/dark-xray-node/node-id
           test "$(stat -c '%a' /var/lib/dark-xray-node/token)" = "600"
           test "$(stat -c '%a' /var/lib/dark-xray-node/node-id)" = "600"
-          sudo python3 -c 'import json; d=json.load(open("/etc/dark-xray-node/pair.json")); assert d["pairCode"].startswith("DXN1."); assert d["nodeId"]=="ci-node-001"'
-          sudo python3 -c 'import json,subprocess; from pathlib import Path; d=json.loads(Path("/var/lib/dark-xray-node/installed-source.json").read_text()); assert d["role"]=="node-agent"; assert d["commit"]==subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()'
+          test ! -e /etc/dark-xray-node/pair.json
+          test -f /var/lib/dark-xray-node/pair.json
+          test "$(stat -c '%a' /var/lib/dark-xray-node/pair.json)" = "600"
+          sudo python3 -c 'import json; d=json.load(open("/var/lib/dark-xray-node/pair.json")); assert d["pairCode"].startswith("DXN1."); assert d["nodeId"]=="ci-node-001"'
+          EXPECTED="$(git rev-parse HEAD)"
+          sudo python3 - "$EXPECTED" <<'PY'
+          import json,sys
+          from pathlib import Path
+          d=json.loads(Path('/var/lib/dark-xray-node/installed-source.json').read_text())
+          assert d['role']=='node-agent',d
+          assert d['commit']==sys.argv[1],(d,sys.argv[1])
+          PY
       - name: Verify authenticated Node HTTPS health
         run: |
           TOKEN="$(sudo cat /var/lib/dark-xray-node/token)"
