@@ -720,6 +720,8 @@ class CoreEngine:
         result=[]
         for r in self.inbounds():
             if not r['enable']:continue
+            meta=r.get('panelMeta',{}) if isinstance(r.get('panelMeta'),dict) else {}
+            if meta.get('deployLocal',True) is False:continue
             proto=r['protocol'];settings=copy.deepcopy(r['settings']);users=[]
             for c,ids in cs:
                 if r['id'] not in ids or not c.get('enable',True):continue
