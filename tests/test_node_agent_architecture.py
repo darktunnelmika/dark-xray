@@ -168,10 +168,12 @@ def test_node_runtime_scope_is_stable_across_token_rotation(tmp_path):
     from node_agent import AgentToken, node_identity
     token_path=tmp_path/'token';token_path.write_text('dkn_'+('A'*60)+'\n');os.chmod(token_path,0o600)
     node_id_path=tmp_path/'node-id';node_id_path.write_text('node-stable-01\n');os.chmod(node_id_path,0o600)
+    pair_path=tmp_path/'pair.json';pair_path.write_text('{"pairCode":"DXN1.test"}');os.chmod(pair_path,0o600)
     token=AgentToken(token_path);identity=node_identity(node_id_path)
     token.rotate('dkn_'+('B'*60))
     assert node_identity(node_id_path)==identity=='node-stable-01'
     assert token_path.read_text().strip()=='dkn_'+('B'*60)
+    assert not pair_path.exists() and (tmp_path/'pair-consumed').is_file()
 
 
 def test_hub_desired_state_encrypts_managed_file_payload_at_rest(tmp_path,monkeypatch):
