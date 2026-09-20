@@ -775,8 +775,41 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             bundles.append({'sourceInboundId':source,'inbound':inbound,'clients':clients})
         return bundles
 
+    def node_managed_files(bundles:list[dict])->list[dict]:
+        files={};path_ids={}
+        for bundle in bundles:
+            inbound=bundle.get('inbound',{}) if isinstance(bundle,dict) else {}
+            st=inbound.get('streamSettings',{}) if isinstance(inbound,dict) else {}
+            tls=st.get('tlsSettings',{}) if isinstance(st,dict) else {}
+            certs=tls.get('certificates',[]) if isinstance(tls,dict) else []
+            if not isinstance(certs,list):continue
+            for cert in certs:
+                if not isinstance(cert,dict):continue
+                for key,kind in (('certificateFile','certificate'),('keyFile','private-key')):
+                    raw=cert.get(key)
+                    if not isinstance(raw,str) or not raw.strip():continue
+                    original=raw.strip();path=Path(original)
+                    if not path.is_absolute():raise PolicyError('Inbound TLS paths must be absolute before Node deployment')
+                    try:resolved=path.resolve(strict=True)
+                    except OSError as ex:raise PolicyError('Inbound TLS file is missing for Node deployment: '+original) from ex
+                    if not resolved.is_file() or resolved.stat().st_size>1024*1024:
+                        raise PolicyError('Inbound TLS file is unsafe or too large for Node deployment')
+                    content=resolved.read_bytes();digest=hashlib.sha256(content).hexdigest()
+                    identity=kind+'\0'+original+'\0'+digest
+                    file_id=path_ids.get(identity)
+                    if not file_id:
+                        file_id=hashlib.sha256(identity.encode()).hexdigest()
+                        path_ids[identity]=file_id
+                        files[file_id]={'id':file_id,'kind':kind,'sha256':digest,
+                                        'data':base64.b64encode(content).decode('ascii')}
+                    cert[key]='managed://'+file_id
+        total=sum(len(x['data']) for x in files.values())
+        if total>6*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 6 MiB')
+        return [files[k] for k in sorted(files)]
+
     def build_node_desired_payload(node_id:str)->dict:
         bundles=build_node_bundles(node_id)
+        managed_files=node_managed_files(bundles)
         assigned={int(x['sourceInboundId']) for x in bundles}
         with store.lock:
             policy_rows={str(r['id']):dict(r) for r in store.db.execute(
@@ -795,7 +828,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                              'globalDeviceBlocked':bool(row.get('global_device_block'))})
         sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
         return {'schema':1,'nodeId':node_id,'desiredRunning':True,'sections':sections,
-                'assignments':bundles,'security':{'clients':policies}}
+                'assignments':bundles,'security':{'clients':policies},'files':managed_files}
 
     def ensure_node_desired_state(node_id:str)->dict:
         nodes.set_desired_state(node_id,build_node_desired_payload(node_id))
