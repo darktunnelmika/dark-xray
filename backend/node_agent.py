@@ -104,13 +104,16 @@ class AgentRequestBoundary:
         'strict-transport-security': 'max-age=31536000',
     }
 
-    def __init__(self, app, token: AgentToken, authority: str):
+    def __init__(self, app, token: AgentToken, authority: str, node_id: str = '', installation_id: str = ''):
         self.app, self.token, self.authority = app, token, authority.lower()
+        self.node_id, self.installation_id = node_id, installation_id
 
     async def __call__(self, scope, receive, send):
         if scope['type'] != 'http':
             await self.app(scope, receive, send)
             return
+
+        authenticated = False
 
         async def secured_send(message):
             if message['type'] == 'http.response.start':
@@ -119,6 +122,11 @@ class AgentRequestBoundary:
                            if key.lower() not in owned]
                 headers.extend((key.encode(), value.encode())
                                for key, value in self.RESPONSE_HEADERS.items())
+                if authenticated and self.installation_id:
+                    headers = [(k,v) for k,v in headers if k.lower() not in
+                               {b'x-dark-node-id',b'x-dark-installation-id'}]
+                    headers.extend([(b'x-dark-node-id',self.node_id.encode()),
+                                    (b'x-dark-installation-id',self.installation_id.encode())])
                 message = {**message, 'headers': headers}
             await send(message)
 
@@ -138,6 +146,17 @@ class AgentRequestBoundary:
         except HTTPException as exc:
             await reject(exc.status_code, exc.detail)
             return
+
+        authenticated = True
+        # A delayed mutation for another installation must be rejected BEFORE
+        # reading its body or touching Xray. Old Hubs without these optional
+        # headers remain compatible; newly pinned Hubs always supply both.
+        for name,expected in (('x-dark-expected-node-id',self.node_id),
+                              ('x-dark-expected-installation-id',self.installation_id)):
+            values=request.headers.getlist(name)
+            if values and (len(values)!=1 or not expected or values[0]!=expected):
+                await reject(409, 'Node installation identity mismatch')
+                return
 
         # Keep duplicate headers visible instead of silently selecting one.
         lengths = request.headers.getlist('content-length')
@@ -245,7 +264,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     app=FastAPI(title='DARK XRAY NODE',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.engine=engine;app.state.store=store;app.state.runtime=runtime;app.state.loop=loop
 
-    app.add_middleware(AgentRequestBoundary,token=token,authority=public.netloc)
+    app.add_middleware(AgentRequestBoundary,token=token,authority=public.netloc,node_id=node_id,installation_id=runtime.installation_id)
 
     def auth(request:Request)->str:
         token.require(request)
@@ -271,7 +290,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'capabilities':{'ordered_control':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'ordered_control':1,'installation_identity':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')

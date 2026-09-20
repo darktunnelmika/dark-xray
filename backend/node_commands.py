@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 from dark_policy import PolicyError
+from node_installations import installation_operation
 
 
 class NodeCommands:
@@ -35,7 +36,7 @@ class NodeCommands:
     def record(self,node_id:str,action:str)->dict:
         if not isinstance(action,str) or action not in {'start','stop','restart'}:raise PolicyError('Unsupported durable Node action')
         self.registry.get(node_id)
-        with self.store.transaction() as db:
+        with self.registry._node_transaction(node_id) as db:
             if not db.execute('SELECT 1 FROM remote_nodes WHERE id=?',(node_id,)).fetchone():
                 raise PolicyError('Node no longer exists')
             old=db.execute('SELECT * FROM remote_node_control WHERE node_id=?',(node_id,)).fetchone()
@@ -58,7 +59,7 @@ class NodeCommands:
 
     def defer(self,node_id:str,command:dict,error:str,reason:str)->dict:
         """Attach diagnostics only to the still-current pending identity."""
-        with self.store.transaction() as db:
+        with self.registry._node_transaction(node_id) as db:
             cur=db.execute('''UPDATE remote_node_control SET last_error=?
                               WHERE node_id=? AND revision=? AND command_id=? AND applied_revision<>revision''',
                            (str(error)[:500],node_id,command['revision'],command['command_id']))
@@ -76,6 +77,7 @@ class NodeCommands:
         # Agent without receipts stays stopped until explicit recovery/Start.
         return False
 
+    @installation_operation
     def deliver(self,node_id:str,*,expected_command_id:str|None=None)->dict:
         command=self.status(node_id)
         if expected_command_id is not None and command['command_id']!=expected_command_id:
@@ -85,11 +87,12 @@ class NodeCommands:
             return {'queued':False,'executed':False,'delivery_state':'idle','control':command,'result':None}
         if not command['pending']:
             return {'queued':False,'executed':False,'delivery_state':'acknowledged','control':command,'result':None,'already_applied':True}
-        body={'nodeId':node_id,'revision':command['revision'],'commandId':command['command_id'],'action':command['action']}
+        agent_id=self.registry.installations.current(node_id)['agent_id']
+        body={'nodeId':agent_id,'revision':command['revision'],'commandId':command['command_id'],'action':command['action']}
         try:
             doc,ms=self.registry._request(node_id,'/node/api/v1/control','POST',body,12.0)
             expected='stopped' if command['action']=='stop' else 'running'
-            if (not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('node_id')!=node_id
+            if (not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('node_id')!=agent_id
                 or type(doc.get('revision')) is not int or doc['revision']!=command['revision']
                 or doc.get('commandId')!=command['command_id'] or doc.get('action')!=command['action']
                 or doc.get('applied') is not True or not isinstance(doc.get('engine'),dict)
@@ -97,7 +100,7 @@ class NodeCommands:
                 raise PolicyError('Node did not acknowledge the exact run command and resulting state')
         except (PolicyError,OSError,ValueError) as exc:
             return self.defer(node_id,command,str(exc),'pending')
-        with self.store.transaction() as db:
+        with self.registry._node_transaction(node_id) as db:
             cur=db.execute('''UPDATE remote_node_control SET applied_revision=?,applied_at=?,last_error=''
                               WHERE node_id=? AND revision=? AND command_id=?''',
                            (command['revision'],time.time(),node_id,command['revision'],command['command_id']))

@@ -21,6 +21,7 @@ from typing import Any
 
 from dark_policy import PolicyError, NAME_RE, Store, normalize_ip
 from node_commands import NodeCommands
+from node_installations import NodeInstallations, StaleInstallation, installation_operation
 
 
 def token_digest(value:str)->str:
@@ -193,6 +194,11 @@ class NodeRegistry:
                 store.db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',(address,row['id']))
 
         self.commands=NodeCommands(self)
+        self.installations=NodeInstallations(self)
+
+    def _node_transaction(self,node_id:str):
+        return self.installations.transaction(node_id)
+
 
     def _node_operation(self,node_id:str):
         # Serialize config/control/probe effects per Node, never under SQLite.
@@ -260,6 +266,7 @@ class NodeRegistry:
             desired['pending']=bool(desired['revision'] and (desired['revision']!=desired['applied_revision'] or desired['desired_hash']!=desired['applied_hash']))
             r['desired_state']=desired
             r['control']=self.commands.status(r['id'])
+            r['installation']=self.installations.public_status(r['id'])
             assigned=[self._assignment_state(r,x,now=now) for x in assigned]
             r['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
             r['assignments']=assigned
@@ -292,6 +299,7 @@ class NodeRegistry:
                 'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
         out['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
         out['assignments']=assigned
+        out['installation']=self.installations.public_status(node_id)
         return out
 
     def put(self,node_id:str,name:str,origin:str,token:str,enabled:bool=True,inbound_ids:list[int]|None=None,
@@ -325,7 +333,8 @@ class NodeRegistry:
               last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
               (node_id,name,origin,enc,int(enabled),now,now,data_address,priority,int(failover_enabled),
                int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
-            if old and old['origin']!=origin:
+            binding=self.installations.ensure(db,node_id)
+            if old and old['origin']!=origin and not binding['installation_id']:
                 db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=0 WHERE node_id=?',(node_id,))
             old_ids={int(r[0]) for r in db.execute('SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
             for inbound_id in inbound_ids:
@@ -393,7 +402,9 @@ class NodeRegistry:
     def set_desired_state(self,node_id:str,value:dict)->dict:
         self.get(node_id)
         now=time.time()
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
+            if isinstance(value,dict) and 'nodeId' in value:
+                value={**value,'nodeId':self.installations.current(node_id)['agent_id']}
             if isinstance(value,dict) and self.commands.status(node_id)['persisted']:
                 value={**value,'desiredRunning':self.commands.config_running(node_id)}
             _raw,digest=self._desired_payload(value)
@@ -438,7 +449,7 @@ class NodeRegistry:
     def mark_desired_state(self,node_id:str,revision:int,digest:str,*,error:str='')->dict:
         if type(revision)is not int or revision<0 or not isinstance(digest,str) or len(digest)>128:raise PolicyError('Invalid node apply acknowledgement')
         self.get(node_id);now=time.time()
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
             row=db.execute('SELECT revision,desired_hash FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
             if not row:raise PolicyError('Node desired state is missing')
             if revision!=int(row['revision']) or digest!=row['desired_hash']:raise PolicyError('Node acknowledged a stale desired state')
@@ -459,6 +470,11 @@ class NodeRegistry:
 
     def delete(self,node_id:str)->dict:
         with self.store.transaction() as db:
+            history=db.execute('SELECT 1 FROM remote_node_installations WHERE node_id=? AND retired_at>0',(node_id,)).fetchone()
+            usage=db.execute('SELECT 1 FROM remote_node_client_usage WHERE node_id=? AND (current_up>0 OR current_down>0 OR seq>0)',(node_id,)).fetchone()
+            if history or usage:
+                raise PolicyError('Node has retained installation/usage history; disable it instead of deleting it')
+            db.execute('DELETE FROM remote_node_installations WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_inbounds WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_client_usage WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_ips WHERE node_id=?',(node_id,))
@@ -472,7 +488,7 @@ class NodeRegistry:
 
     def _request_ok(self,node_id:str,latency_ms:int):
         now=time.time()
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
             old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
             recovered=bool(old and old['last_error'])
             db.execute('''UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=?,
@@ -482,7 +498,7 @@ class NodeRegistry:
 
     def _request_failed(self,node_id:str,error:str):
         now=time.time()
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
             old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
             first=bool(old and not old['last_error'])
             db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
@@ -498,8 +514,12 @@ class NodeRegistry:
         except Exception:pass
         return PolicyError(f'Node HTTP {status}'+(': '+detail if detail else ''))
 
+    @installation_operation
     def _request(self,node_id:str,path:str,method:str='GET',body:dict|None=None,timeout:float=8.0)->tuple[dict,int]:
-        node=self.get(node_id,secret=True)
+        node=self.installations.current(node_id)
+        with self.store.lock:self.installations.assert_current(self.store.db,node)
+        try:token=self.cipher.decrypt(node['token_enc'].encode()).decode()
+        except Exception as ex:raise PolicyError('Node credential cannot be decrypted') from ex
         if not node['enabled']:raise PolicyError('Node is disabled')
         if not isinstance(path,str) or not path.startswith('/node/api/') or any(ch in path for ch in '\r\n?#'):
             raise PolicyError('Invalid node API path')
@@ -507,7 +527,10 @@ class NodeRegistry:
         _origin,host,port,addresses=resolve_origin(node['origin'])
         data=None if body is None else json.dumps(body,separators=(',',':')).encode()
         if data is not None and len(data)>8*1024*1024:raise PolicyError('Node request exceeds 8 MiB limit')
-        headers={'Accept':'application/json','Authorization':'Bearer '+node['token']}
+        headers={'Accept':'application/json','Authorization':'Bearer '+token}
+        if node['installation_id']:
+            headers['X-Dark-Expected-Node-Id']=node['agent_id']
+            headers['X-Dark-Expected-Installation-Id']=node['installation_id']
         if data is not None:headers['Content-Type']='application/json'
         context=ssl.create_default_context();last_error=None;start=time.monotonic();deadline=start+timeout
         for address in addresses:
@@ -518,6 +541,9 @@ class NodeRegistry:
                 conn.request(method,path,body=data,headers=headers)
                 res=conn.getresponse();raw=res.read(1024*1024+1)
                 if len(raw)>1024*1024:raise PolicyError('Node response exceeds 1 MiB limit')
+                if node['installation_id'] and (res.getheader('X-Dark-Node-Id')!=node['agent_id'] or
+                        res.getheader('X-Dark-Installation-Id')!=node['installation_id']):
+                    raise PolicyError('Node response installation identity mismatch')
                 if res.status<200 or res.status>=300:raise self._response_error(res.status,raw)
                 try:doc=json.loads(raw.decode())
                 except Exception as ex:raise PolicyError('Node returned invalid JSON') from ex
@@ -534,6 +560,7 @@ class NodeRegistry:
         err=PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'Timeout'))
         self._request_failed(node_id,str(err));raise err from last_error
 
+    @installation_operation
     def probe(self,node_id:str,*,timeout:float=8.0)->dict:
         with self._node_operation(node_id):
             return self._probe_locked(node_id,timeout=timeout)
@@ -544,7 +571,8 @@ class NodeRegistry:
         if not isinstance(health,dict) or health.get('service')!='DARK XRAY NODE':
             self._request_failed(node_id,'Remote endpoint is not a DARK node agent')
             raise PolicyError('Remote endpoint is not a DARK node agent')
-        with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
+        self.installations.observe(node_id,health)
+        with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
         return {'node':self.get(node_id),'latency_ms':ms,'health':health}
 
 
@@ -578,7 +606,7 @@ class NodeRegistry:
         if not isinstance(items,list) or len(items)>100000:raise PolicyError('Invalid node traffic snapshot')
         allowed=self._allowed_traffic_clients(node_id);now=time.time() if captured_at is None else float(captured_at)
         seen=set();charged_up=charged_down=0;baselined=0;resets=0;ignored=0;changed=[]
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
             for item in items:
                 if not isinstance(item,dict) or set(item)-{'sourceEmail','up','down'}:raise PolicyError('Invalid node traffic item')
                 email=item.get('sourceEmail');up=item.get('up');down=item.get('down')
@@ -621,6 +649,7 @@ class NodeRegistry:
         return {'clients':len(seen),'ignored_clients':ignored,'baselined':baselined,'charged_up':charged_up,'charged_down':charged_down,
                 'charged_bytes':charged_up+charged_down,'counter_resets':resets,'captured_at':now,'changed_clients':changed}
 
+    @installation_operation
     def sync_traffic(self,node_id:str)->dict:
         doc,ms=self._request(node_id,'/node/api/mirrors/traffic',timeout=12.0)
         if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
@@ -654,6 +683,7 @@ class NodeRegistry:
         if not 0<=value<1e15:raise PolicyError('Invalid node security timestamp')
         return value
 
+    @installation_operation
     def sync_security(self,node_id:str)->dict:
         try:
             doc,ms=self._request(node_id,'/node/api/mirrors/security',timeout=12.0)
@@ -689,7 +719,7 @@ class NodeRegistry:
                     os_name=str(row.get('deviceOs',''))[:80];model=str(row.get('model',''))[:120]
                     devices.append((node_id,email,digest,os_name,model,first,last))
             now=time.time()
-            with self.store.transaction() as db:
+            with self._node_transaction(node_id) as db:
                 db.execute('DELETE FROM remote_node_ips WHERE node_id=?',(node_id,))
                 db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
                 if ips:db.executemany('INSERT INTO remote_node_ips(node_id,client_id,ip,first_seen,last_seen,verified) VALUES(?,?,?,?,?,?)',ips)
@@ -700,7 +730,7 @@ class NodeRegistry:
             return {'latency_ms':ms,'clients':len(seen),'ips':len(ips),'devices':len(devices),
                     'ignored_clients':ignored,'source_verified':bool(doc['sourceVerified']),'synced_at':now}
         except PolicyError as ex:
-            with self.store.transaction() as db:
+            with self._node_transaction(node_id) as db:
                 db.execute('''INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES(?,0,0,?)
                               ON CONFLICT(node_id) DO UPDATE SET source_verified=0,last_error=excluded.last_error''',
                            (node_id,str(ex)[:300]))
@@ -826,15 +856,20 @@ class NodeRegistry:
     def clear_remote_security(self,client_id:str,kind:str)->dict:
         if kind not in {'ips','devices','all'}:raise PolicyError('Invalid node security clear kind')
         node_ids=self._assigned_node_ids(client_id);items=[]
+        stamps=[]
         for node_id in node_ids:
-            doc,ms=self._request(node_id,'/node/api/mirrors/security/clear','POST',
-                                 {'sourceEmail':client_id,'kind':kind},12.0)
-            if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id:
-                raise PolicyError('Invalid node security clear response')
-            items.append({'node_id':node_id,'latency_ms':ms,'result':doc})
+            with self.installations.operation(node_id):
+                doc,ms=self._request(node_id,'/node/api/mirrors/security/clear','POST',
+                                     {'sourceEmail':client_id,'kind':kind},12.0)
+                if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id:
+                    raise PolicyError('Invalid node security clear response')
+                stamps.append(self.installations.current(node_id))
+                items.append({'node_id':node_id,'latency_ms':ms,'result':doc})
         with self.store.transaction() as db:
-            if kind in {'ips','all'}:db.execute('DELETE FROM remote_node_ips WHERE client_id=?',(client_id,))
-            if kind in {'devices','all'}:db.execute('DELETE FROM remote_node_devices WHERE client_id=?',(client_id,))
+            for stamp in stamps:self.installations.assert_current(db,stamp)
+            for stamp in stamps:
+                if kind in {'ips','all'}:db.execute('DELETE FROM remote_node_ips WHERE client_id=? AND node_id=?',(client_id,stamp['node_id']))
+                if kind in {'devices','all'}:db.execute('DELETE FROM remote_node_devices WHERE client_id=? AND node_id=?',(client_id,stamp['node_id']))
         return {'nodes':len(items),'items':items,'kind':kind}
 
     def reset_client_traffic(self,client_id:str,reset_id:str)->dict:
@@ -850,17 +885,18 @@ class NodeRegistry:
                 tuple(inbound_ids))]
         results=[]
         for node_id in node_ids:
-            doc,ms=self._request(node_id,'/node/api/mirrors/traffic/reset','POST',
-                                  {'sourceEmail':client_id,'resetId':reset_id},12.0)
-            if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id or type(doc.get('up')) is not int or type(doc.get('down')) is not int:
-                raise PolicyError('Invalid node traffic reset response')
-            snap=self.apply_traffic_snapshot(node_id,[{'sourceEmail':client_id,'up':doc['up'],'down':doc['down']}],
-                                             captured_at=time.time())
-            with self.store.transaction() as db:
-                db.execute('''UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,current_up=0,current_down=0,
-                              initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',(time.time(),node_id,client_id))
-                self._recompute_client_usage(db,client_id)
-            results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
+            with self.installations.operation(node_id):
+                doc,ms=self._request(node_id,'/node/api/mirrors/traffic/reset','POST',
+                                      {'sourceEmail':client_id,'resetId':reset_id},12.0)
+                if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id or type(doc.get('up')) is not int or type(doc.get('down')) is not int:
+                    raise PolicyError('Invalid node traffic reset response')
+                snap=self.apply_traffic_snapshot(node_id,[{'sourceEmail':client_id,'up':doc['up'],'down':doc['down']}],
+                                                 captured_at=time.time())
+                with self._node_transaction(node_id) as db:
+                    db.execute('''UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,current_up=0,current_down=0,
+                                  initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',(time.time(),node_id,client_id))
+                    self._recompute_client_usage(db,client_id)
+                results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
         return {'nodes':len(results),'items':results,'reset':True}
 
     def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None):
@@ -928,6 +964,7 @@ class NodeRegistry:
         if self.thread:self.thread.join(timeout=6.0)
         self.thread=None
 
+    @installation_operation
     def remote_logs(self,node_id:str,kind:str='process',limit:int=300)->dict:
         if kind not in {'process','error','access'}:raise PolicyError('Unknown Node log kind')
         if type(limit)is not int or not 1<=limit<=1000:raise PolicyError('Invalid Node log limit')
@@ -936,12 +973,14 @@ class NodeRegistry:
             raise PolicyError('Invalid Node log response')
         return {'latency_ms':ms,'kind':kind,'lines':[str(x)[:2000] for x in doc['lines'][-limit:]]}
 
+    @installation_operation
     def remote_update_status(self,node_id:str)->dict:
         doc,ms=self._request(node_id,'/node/api/v1/update/status',timeout=12.0)
         if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
             raise PolicyError('Invalid Node update status response')
         return {'latency_ms':ms,'update':doc['update']}
 
+    @installation_operation
     def remote_update_check(self,node_id:str,commit:str)->dict:
         if not isinstance(commit,str) or not re.fullmatch(r'[0-9a-f]{40}',commit):raise PolicyError('Exact Hub commit required')
         doc,ms=self._request(node_id,'/node/api/v1/update/check','POST',{'commit':commit},30.0)
@@ -949,6 +988,7 @@ class NodeRegistry:
             raise PolicyError('Invalid Node update check response')
         return {'latency_ms':ms,'update':doc['update']}
 
+    @installation_operation
     def remote_update_start(self,node_id:str,commit:str)->dict:
         if not isinstance(commit,str) or not re.fullmatch(r'[0-9a-f]{40}',commit):raise PolicyError('Exact Hub commit required')
         doc,ms=self._request(node_id,'/node/api/v1/update/start','POST',{'commit':commit},30.0)
@@ -956,6 +996,7 @@ class NodeRegistry:
             raise PolicyError('Invalid Node update start response')
         return {'latency_ms':ms,'update':doc['update']}
 
+    @installation_operation
     def rotate_token(self,node_id:str,new_token:str)->dict:
         if not isinstance(new_token,str) or not new_token.startswith('dkn_') or not 40<=len(new_token)<=256:
             raise PolicyError('Invalid replacement DARK node token')
@@ -963,10 +1004,22 @@ class NodeRegistry:
         if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('rotated') is not True:
             raise PolicyError('Node did not confirm token rotation')
         enc=self.cipher.encrypt(new_token.encode()).decode()
-        with self.store.transaction() as db:db.execute('UPDATE remote_nodes SET token_enc=?,updated_at=? WHERE id=?',(enc,time.time(),node_id))
+        with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET token_enc=?,updated_at=? WHERE id=?',(enc,time.time(),node_id))
         return {'rotated':True,'latency_ms':ms}
 
     def remote_core(self,node_id:str,action:str)->dict:
+        self.get(node_id)  # Unknown IDs are errors, not superseded operations.
+        try:
+            with self.installations.operation(node_id):
+                return self._remote_core_operation(node_id,action)
+        except StaleInstallation:
+            # Preserve the public pending/executed contract even when a Node
+            # is deleted/replaced mid-flight. Never return the obsolete result.
+            control=self.commands.status(node_id)
+            return {'queued':bool(control['pending']),'executed':False,'delivery_state':'superseded',
+                    'control':control,'result':None}
+
+    def _remote_core_operation(self,node_id:str,action:str)->dict:
         if not isinstance(action,str) or action not in {'validate','restart','start','stop'}:
             raise PolicyError('Unsupported remote core action')
         if action=='validate':
@@ -978,6 +1031,7 @@ class NodeRegistry:
         self.commands.record(node_id,action)
         return self.deliver_pending_control(node_id)
 
+    @installation_operation
     def deliver_pending_control(self,node_id:str)->dict:
         with self._node_operation(node_id):
             command=self.commands.status(node_id)
@@ -987,7 +1041,7 @@ class NodeRegistry:
                 if not node['enabled']:
                     return self.commands.defer(node_id,command,'Node is disabled; enable it to deliver the pending command','disabled')
                 result=self.probe(node_id,timeout=5.0);health=result['health']
-                if health.get('agent_only') is True and health.get('node_id')!=node_id:
+                if health.get('agent_only') is True and health.get('node_id')!=self.installations.current(node_id)['agent_id']:
                     return self.commands.defer(node_id,command,'Agent identity mismatch; verify Node enrolment','identity_mismatch')
                 capabilities=health.get('capabilities')
                 version=capabilities.get('ordered_control') if isinstance(capabilities,dict) else None
@@ -1001,12 +1055,14 @@ class NodeRegistry:
                 return self.commands.defer(node_id,command,str(exc),'pending')
             return self.commands.deliver(node_id,expected_command_id=command['command_id'])
 
+    @installation_operation
     def remote_inbounds(self,node_id:str)->dict:
         doc,ms=self._request(node_id,'/node/api/inbounds')
         if not isinstance(doc,list):
             self._request_failed(node_id,'Invalid node inbound response');raise PolicyError('Invalid node inbound response')
         return {'latency_ms':ms,'items':doc}
 
+    @installation_operation
     def deploy_inbound(self,node_id:str,payload:dict)->dict:
         if not isinstance(payload,dict):raise PolicyError('Inbound payload must be an object')
         doc,ms=self._request(node_id,'/node/api/inbounds','POST',payload,12.0)
@@ -1020,6 +1076,7 @@ class NodeRegistry:
             return [dict(r) for r in self.store.db.execute(
                 'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
 
+    @installation_operation
     def sync_desired_state(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None)->dict:
         if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
             raise PolicyError('Invalid Hub desired-state envelope')
@@ -1072,7 +1129,7 @@ class NodeRegistry:
             self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
             self._request_failed(node_id,error);raise PolicyError(error)
         now=time.time()
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
             current=db.execute('SELECT revision,desired_hash FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
             if not current or int(current['revision'])!=state['revision'] or current['desired_hash']!=state['hash']:
                 raise PolicyError('Node acknowledged a stale desired state')
@@ -1098,6 +1155,7 @@ class NodeRegistry:
         return {'latency_ms':ms,'legacy':False,'desired_state_applied':True,'desired_state':status,
                 'items':items,'core':doc.get('core',{}),'agent':doc,'synced_at':now}
 
+    @installation_operation
     def sync_mirrors(self,node_id:str,bundles:list[dict])->dict:
         if self.commands.status(node_id)['pending']:
             raise PolicyError('Ordered Node control is pending; legacy mirror synchronization is deferred')
@@ -1107,7 +1165,7 @@ class NodeRegistry:
             self._request_failed(node_id,'Invalid node mirror sync response');raise PolicyError('Invalid node mirror sync response')
         now=time.time()
         by_source={int(x.get('sourceInboundId')):x for x in doc['items'] if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
-        with self.store.transaction() as db:
+        with self._node_transaction(node_id) as db:
             for bundle in bundles:
                 source=int(bundle['sourceInboundId']);item=by_source.get(source,{})
                 db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?

@@ -14,6 +14,7 @@ import os
 import re
 import tempfile
 import time
+import uuid
 
 from core import CoreEngine,CoreError
 from dark_policy import Store,PolicyError
@@ -28,6 +29,8 @@ class NodeRuntime:
         if not self.scope or len(self.scope)>128:raise PolicyError('Invalid node runtime scope')
         with store.lock:
             store.db.executescript('''
+            CREATE TABLE IF NOT EXISTS node_runtime_identity(
+              scope TEXT PRIMARY KEY,installation_id TEXT NOT NULL UNIQUE,created_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS node_runtime_state(
               scope TEXT PRIMARY KEY,applied_revision INTEGER NOT NULL DEFAULT 0,
               applied_hash TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL DEFAULT 0,
@@ -55,6 +58,16 @@ class NodeRuntime:
               manual_stop INTEGER NOT NULL CHECK(manual_stop IN (0,1)),
               updated_at REAL NOT NULL);
             ''')
+        # The identity belongs to this durable Agent state, not its address,
+        # token or Python process. Fresh state gets a fresh identity; cloning an
+        # entire state directory deliberately clones it (not hardware attestation).
+        with store.transaction() as db:
+            db.execute('INSERT OR IGNORE INTO node_runtime_identity VALUES(?,?,?)',
+                       (self.scope,uuid.uuid4().hex,time.time()))
+            self.installation_id=db.execute(
+                'SELECT installation_id FROM node_runtime_identity WHERE scope=?',(self.scope,)).fetchone()[0]
+        if not isinstance(self.installation_id,str) or not re.fullmatch(r'[0-9a-f]{32}',self.installation_id):
+            raise PolicyError('Invalid persisted Node installation identity')
         self.engine.wants_running=self.control_status()['effective_running']
 
     def control_status(self)->dict:
