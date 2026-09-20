@@ -82,3 +82,11 @@ test('English normalization applies multi-word exact mappings inside compound la
   assert.ok(i18n.includes("'آدرس‌های عمومی':'Public Endpoints'"));
   assert.ok(i18n.includes("'نمای کلی':'Overview'"));
 });
+
+
+test('English normalization applies single-word exact mappings inside compound labels',()=>{
+  assert.match(i18n,/const exactWords=/);
+  assert.match(i18n,/for\(const \[a,b\] of exactWords\)core=replaceFaWord\(core,a,b\)/);
+  assert.ok(i18n.includes("'کاربران':'Clients'"));
+  assert.ok(i18n.includes("'نمایندگان':'Resellers'"));
+});
