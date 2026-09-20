@@ -188,3 +188,10 @@ def test_hub_desired_state_encrypts_managed_file_payload_at_rest(tmp_path,monkey
     opened=reg.desired_state('n1')['payload']
     assert opened['files'][0]['data']==secret and 'data_enc' not in opened['files'][0]
     store.close()
+
+
+def test_node_provisioner_accepts_normal_source_ref_and_rejects_only_newlines():
+    root=Path(__file__).resolve().parents[1]
+    provision=(root/'tools/provision_node.py').read_text()
+    assert "or '\\r' in a.source_ref or '\\n' in a.source_ref" in provision
+    assert "for c in a.source_ref for c in" not in provision
