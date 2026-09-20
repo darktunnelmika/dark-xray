@@ -454,7 +454,9 @@ function translateRaw(raw){
 }
 
 function skip(el){
-  return !el||el.closest('script,style,pre,code,.json-box,.json-preview,.terminal,.client-name,.owner-label,.mono,[dir="ltr"],[data-no-i18n]');
+  if(!el)return true;
+  if(el.closest('script,style,pre,code,.json-box,.json-preview,.terminal,.client-name,.owner-label,.mono,[data-no-i18n]'))return true;
+  return el.matches('[dir="ltr"]');
 }
 function process(root){
   if(!root)return;
