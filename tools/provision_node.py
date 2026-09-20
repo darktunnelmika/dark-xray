@@ -142,7 +142,7 @@ case "${1:-status}" in
   status) systemctl status dark-xray-node.service --no-pager -l ;;
   logs) journalctl -u dark-xray-node.service -n "${2:-150}" --no-pager ;;
   restart) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; systemctl restart dark-xray-node.service ;;
-  pair-info) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; cat /etc/dark-xray-node/pair.json ;;
+  pair-info) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; if [[ -f /var/lib/dark-xray-node/pair-consumed ]]; then echo "DARK Node Pair Code has already been consumed."; else cat /var/lib/dark-xray-node/pair.json; fi ;;
   config) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; cat /etc/dark-xray-node/config.json ;;
   *) echo "darknode {status|logs [N]|restart|pair-info|config}" ;;
 esac
@@ -158,8 +158,8 @@ esac
           'dataAddress':data_address,'priority':100,'failoverEnabled':True}
     pair_code='DXN1.'+b64url(json.dumps(pair,separators=(',',':')).encode())
     pair_doc={**pair,'pairCode':pair_code,'sensitive':True,'displayedOnce':True}
-    pair_path=CONF/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
-    os.chmod(pair_path,0o600);os.chown(pair_path,0,0)
+    pair_path=DATA/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
+    os.chmod(pair_path,0o600);os.chown(pair_path,account.pw_uid,account.pw_gid)
 
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node-update.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',
