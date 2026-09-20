@@ -832,6 +832,14 @@ class NodeRegistry:
         if self.thread:self.thread.join(timeout=6.0)
         self.thread=None
 
+    def remote_logs(self,node_id:str,kind:str='process',limit:int=300)->dict:
+        if kind not in {'process','error','access'}:raise PolicyError('Unknown Node log kind')
+        if type(limit)is not int or not 1<=limit<=1000:raise PolicyError('Invalid Node log limit')
+        doc,ms=self._request(node_id,'/node/api/logs/'+kind,timeout=12.0)
+        if not isinstance(doc,dict) or doc.get('kind')!=kind or not isinstance(doc.get('lines'),list):
+            raise PolicyError('Invalid Node log response')
+        return {'latency_ms':ms,'kind':kind,'lines':[str(x)[:2000] for x in doc['lines'][-limit:]]}
+
     def remote_update_status(self,node_id:str)->dict:
         doc,ms=self._request(node_id,'/node/api/v1/update/status',timeout=12.0)
         if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
