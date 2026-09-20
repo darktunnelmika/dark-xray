@@ -35,6 +35,8 @@ def main():
     p.add_argument('--node-id',default='')
     p.add_argument('--ssh-port',type=int,action='append',default=[])
     p.add_argument('--core-version',default='v26.3.27')
+    p.add_argument('--source-commit',default='')
+    p.add_argument('--source-ref',default='node-install')
     p.add_argument('--cert',type=Path,required=True);p.add_argument('--key',type=Path,required=True)
     p.add_argument('--core-archive',type=Path);p.add_argument('--core-sha256')
     p.add_argument('--verified-direct-sources',action='store_true')
@@ -48,6 +50,10 @@ def main():
         raise SystemExit('A valid DNS hostname is required for Node TLS')
     if not 1024<=a.port<=65535 or a.port in {22,10085,*a.ssh_port}:raise SystemExit('Invalid/conflicting Node Agent port')
     if not re.fullmatch(r'v\d+\.\d+\.\d+',a.core_version):raise SystemExit('Invalid Xray version')
+    if a.source_commit and not re.fullmatch(r'[0-9a-f]{40}',str(a.source_commit).lower()):
+        raise SystemExit('source-commit must be an immutable 40-character lowercase/uppercase SHA')
+    if not isinstance(a.source_ref,str) or not a.source_ref or len(a.source_ref)>128 or any(c in a.source_ref for c in '\\r\\n'):
+        raise SystemExit('Invalid source-ref')
     if bool(a.core_archive)!=bool(a.core_sha256):raise SystemExit('Offline core requires archive + sha256')
     if any(x.exists() for x in (APP,CONF,DATA,SERVICE,GUARD_SERVICE,UPDATE_SERVICE,WRAPPER)):
         raise SystemExit('Existing DARK Node/Panel artifacts found; clean or migrate explicitly before provisioning')
@@ -148,9 +154,12 @@ case "${1:-status}" in
 esac
 """,encoding='utf-8');os.chmod(WRAPPER,0o755)
 
-    source_cp=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True,check=False)
-    source={'commit':source_cp.stdout.strip() if source_cp.returncode==0 else '',
-            'version':(APP/'VERSION').read_text().strip(),'ref':'node-install','installed_at':time.time(),'role':'node-agent'}
+    source_commit=str(a.source_commit or '').lower()
+    if not source_commit:
+        source_cp=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True,check=False)
+        source_commit=source_cp.stdout.strip().lower() if source_cp.returncode==0 else ''
+    source={'commit':source_commit,'version':(APP/'VERSION').read_text().strip(),
+            'ref':a.source_ref,'installed_at':time.time(),'role':'node-agent'}
     source_path=DATA/'installed-source.json';source_path.write_text(json.dumps(source,indent=2)+'\n')
     os.chmod(source_path,0o640);os.chown(source_path,0,account.pw_gid)
 
