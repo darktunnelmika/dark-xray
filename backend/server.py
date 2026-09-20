@@ -1658,7 +1658,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         from backup import create_backup
         with tempfile.TemporaryDirectory(prefix='dark-web-backup.') as td:
             path=Path(td)/'dark-xray-full.darkbackup'
-            manifest=create_backup(Path(store.path).parent,Path(config._path if hasattr(config,'_path') else '/etc/dark-xray/config.json'),path,body.passphrase)
+            manifest=create_backup(Path(store.path).parent,Path(config._path),path,body.passphrase)
             raw=path.read_bytes()
         manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
         stamp=time.strftime('%Y%m%d-%H%M%S')
