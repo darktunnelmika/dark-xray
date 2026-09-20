@@ -90,3 +90,11 @@ test('English normalization applies single-word exact mappings inside compound l
   assert.ok(i18n.includes("'کاربران':'Clients'"));
   assert.ok(i18n.includes("'نمایندگان':'Resellers'"));
 });
+
+
+test('full sentence translations run before partial phrase and word replacements',()=>{
+  const phrasePos=i18n.indexOf('for(const [a,b] of phrases)core=core.split(a).join(b)');
+  const exactPhrasePos=i18n.indexOf('for(const [a,b] of exactPhrases)core=core.split(a).join(b)');
+  assert.ok(phrasePos>0 && exactPhrasePos>phrasePos);
+  assert.ok(i18n.includes("['با تغییر رمز، تمام نشست‌های این حساب باطل می‌شوند.','Changing the password revokes all sessions for this account.']"));
+});
