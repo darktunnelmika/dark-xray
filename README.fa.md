@@ -9,12 +9,23 @@ DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API�
 
 ## نصب آنلاین
 
+### نصب پنل اصلی / Hub
+
 روی Ubuntu/Debian دارای systemd:
 
 ```bash
 curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-online.sh -o /tmp/dark-xray-install.sh
 sudo bash /tmp/dark-xray-install.sh
 ```
+
+### نصب Node سبک روی VPS جدا
+
+```bash
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-node.sh -o /tmp/dark-xray-node.sh
+sudo bash /tmp/dark-xray-node.sh
+```
+
+Node سبک پنل وب دوم نصب نمی‌کند؛ فقط Node Agent، Xray-core، Guard، Updater و TLS runtime نصب می‌شوند. در پایان یک `DXN1...` Pair Code می‌گیری که فقط در **Hub → Nodes → Add Node** Paste می‌شود. Hub بعد از Probe موفق bootstrap token را خودکار Rotate می‌کند و Pair Code مصرف می‌شود.
 
 Installer سه وضعیت را تشخیص می‌دهد:
 
@@ -150,31 +161,25 @@ Ledger مالی/مصرفی پایه برای حساب‌وکتاب داخلی پ
 
 Subscription از مسیر مستقل DARK تولید می‌شود و فرمت‌های فعلی شامل Raw/Base64/DARK JSON و Clash/Mihomo هستند. Path Subscription با Panel Path تداخل‌سنجی می‌شود تا route پنل یا subscription روی هم نیفتند.
 
-## Nodes V3
+## Nodes V5 · Lightweight Agent
 
-Node control برای Origin عمومی HTTPS طراحی شده است:
+Hub منبع حقیقت (Source of Truth) است و Nodeها disposable runtime هستند:
 
-- URL بدون credential/path/query ناخواسته؛
-- DNS فقط به IPهای globally routable؛
-- TCP connection به IP validate‌شده pin می‌شود؛
-- TLS همچنان hostname اصلی را verify می‌کند؛
-- HTTP redirect دنبال نمی‌شود؛
-- proxy environment برای Node request استفاده نمی‌شود؛
-- response/request limit و deadline وجود دارد؛
-- health monitor نودهای فعال را دوره‌ای probe می‌کند؛
-- Traffic Clientهای Mirrorشده با baseline مستقل هر Node وارد Ledger مرکزی می‌شود؛
-- retry/reconnect یک snapshot تکراری را دوباره حساب نمی‌کند و counter reset نود به‌صورت delta جدید مدیریت می‌شود؛
-- مصرف فعلی Client از Local + همه Nodeها جمع می‌شود و در quota مرکزی اثر دارد؛
-- Reset مصرف با reset ID پایدار روی Nodeها هماهنگ است و پاسخ reset روی Agent cache می‌شود تا retry باعث reset دوباره یا double-count نشود؛
-- Offline/Recovery count و آخرین Traffic Sync در UI Node نمایش داده می‌شوند؛
-- برای هر Node یک `Data Address` مستقل از Control Origin، `Priority` و Failover On/Off قابل تعریف است؛
-- Subscription فقط Nodeهای enabled، deploy‌شده، fresh و بدون خطا را به‌عنوان endpoint فیل‌اور اضافه می‌کند؛
-- Clash/Mihomo یک گروه واقعی `DARK FAILOVER` از نوع `fallback` می‌گیرد؛ Raw/Base64/DARK JSON چند endpoint سالم را دریافت می‌کنند؛
-- Nodeهای Mirrorشده source IPهای تأییدشده را observe می‌کنند و HWID فقط به‌صورت SHA-256 به Central Sync می‌شود؛ هیچ HWID خامی بین Nodeها منتقل نمی‌شود؛
-- Central IPهای Local + Nodeها را deduplicate می‌کند و در صورت کامل و fresh بودن telemetry، limit سراسری را اعمال می‌کند؛ telemetry ناقص بلاک جدید نمی‌سازد و بلاک موجود را هم کورکورانه آزاد نمی‌کند؛
-- Global Guard با disable کردن Credential در Central و Mirrorها enforce می‌شود؛ nftables همچنان محلیِ هر Host است و «firewall سراسری» ادعا نمی‌شود.
+- روی Node هیچ Web UI، Owner، Finance، Reseller یا دیتابیس مدیریتی کامل نصب نمی‌شود؛
+- اتصال Node فقط با Origin عمومی HTTPS و DNS/IP عمومی معتبر انجام می‌شود؛
+- Pair Code نوع `DXN1` bootstrap-only است و بعد از Pair موفق credential Agent خودکار Rotate می‌شود؛
+- Desired State هر Node دارای Revision و SHA-256 است؛ تغییر هنگام Offline در Hub به‌صورت Pending می‌ماند و بعد از Recovery اعمال می‌شود؛
+- داخل **Inbound** مقصد اجرای `Main Server` و هر Node قابل انتخاب است و Clientها از Inbound خودکار پیروی می‌کنند؛
+- داخل **Public Endpoints / Hosts** Runtime می‌تواند `local` یا `node:<id>` باشد؛ Endpoint نود فقط وقتی وارد Subscription می‌شود که Node آنلاین و همان Inbound واقعاً Deploy شده باشد؛
+- Outbound، Routing، DNS، Policy، Observatory و IP Guard از Hub داخل Desired State Node می‌روند؛
+- TLS certificate/key موردنیاز Inbound از Hub با hash منتقل، روی Node در فایل خصوصی materialize و مسیر Xray بازنویسی می‌شود؛ محتوای این فایل‌ها داخل SQLite Hub با `secret.key` رمز‌شده نگهداری می‌شود؛
+- Traffic هر Node با baseline/delta idempotent وارد Ledger مرکزی می‌شود و Reset ID روی Agent cache می‌شود تا retry دوباره Reset نکند؛
+- IP/HWID policy از Hub می‌آید؛ nftables enforcement روی همان Node و فقط برای source IP تأییدشده و پورت‌های Xray انجام می‌شود؛ SSH/Agent/API همیشه Protected هستند؛
+- Health، Sync، Security، Xray Validate/Restart، Logs و **Update to Hub Version** از Main Panel انجام می‌شوند؛
+- Update Node فقط SHA دقیق نسخه نصب‌شده Hub را می‌پذیرد و rollback-safe است؛
+- Backup مدیریتی فقط در Hub انجام می‌شود. Full Encrypted Backup شامل Node Registry، tokenهای رمز‌شده، Desired State، TLS پنل و TLS اینباندهاست؛ پس از خرابی کامل Node کافی است Agent سبک دوباره نصب/Pair شود و Hub state را بازسازی کند.
 
-این کنترل‌ها SSRF risk را کم می‌کنند ولی جای network ACL بیرونی را نمی‌گیرند.
+Legacy full-panel Node API فعلاً فقط برای migration/backward compatibility باقی مانده و مسیر اصلی محصول Agent-only است.
 
 ## IP Guard
 

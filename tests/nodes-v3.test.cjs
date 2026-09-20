@@ -4,64 +4,37 @@ const fs=require('node:fs');
 const path=require('node:path');
 
 const src=fs.readFileSync(path.join(__dirname,'..','web','nodes-v2.js'),'utf8');
+const inbound=fs.readFileSync(path.join(__dirname,'..','web','inbounds-v3.js'),'utf8');
 
-test('Node add/edit exposes per-node inbound assignment picker',()=>{
-  assert.match(src,/name="inboundIds"/);
-  assert.match(src,/getAll\('inboundIds'\)/);
-  assert.match(src,/Select at least one inbound for this node/);
-  assert.match(src,/Only selected inbounds and their attached clients are mirrored/);
+test('Nodes V5 uses lightweight Pair Code as the primary add workflow',()=>{
+  assert.ok(src.includes('pairNodeDialog'));
+  assert.ok(src.includes('DXN1....'));
+  assert.ok(src.includes('/api/nodes/pair'));
+  assert.ok(src.toLowerCase().includes('no second web panel is installed'));
+  assert.ok(src.includes("if(act==='nv2new'){await pairNodeDialog()"));
 });
 
-test('Node workflow replaces manual clone with assignment sync',()=>{
-  assert.match(src,/'nv2sync'/);
-  assert.match(src,/\/api\/nodes\/'.*\/sync/);
-  assert.doesNotMatch(src,/nv2cloneinbound/);
-  assert.doesNotMatch(src,/Clone local inbound to node/);
+test('Node Fleet surfaces online state and Hub desired-state drift',()=>{
+  for(const token of ['desired_state','Pending changes','desiredLabel','Deployment'])assert.ok(src.includes(token),token);
+  assert.ok(src.includes('Sync Now')||src.includes("L('Sync'"));
 });
 
-test('Node cards expose assigned inbound names and sync state',()=>{
-  assert.match(src,/function assignedNames\(n\)/);
-  assert.match(src,/ASSIGNMENT STATE/);
-  assert.match(src,/n\.assignments/);
-  assert.match(src,/n\.assignments/);
-  assert.match(src,/last_error/);
+test('Node Manage keeps daily operations in the Hub',()=>{
+  for(const token of ['Health Check','Remote Inbounds','Sync Security','Validate Xray','Restart Xray','Logs','Update to Hub Version','Delete Node'])
+    assert.ok(src.includes(token),token);
+  for(const route of ['/update/check','/update/start','/logs/'])assert.ok(src.includes(route),route);
 });
 
-
-test('Node cards expose Central traffic and recovery state',()=>{
-  assert.match(src,/Central traffic/);
-  assert.match(src,/Traffic sync/);
-  assert.match(src,/Recoveries/);
-  assert.match(src,/charged_bytes/);
-  assert.doesNotMatch(src,/Remote traffic accounting is still node-local/);
+test('Inbound editor is the primary deployment target selector',()=>{
+  for(const token of ['Deployment Targets','name="deployLocal"','name="deployNode"','/deployments','Clients follow this inbound automatically'])
+    assert.ok(inbound.includes(token),token);
 });
 
-
-test('Node editor exposes failover address priority and security sync',()=>{
-  assert.match(src,/,\'dataAddress\',/);
-  assert.match(src,/,\'priority\',/);
-  assert.match(src,/name="failoverEnabled"/);
-  assert.match(src,/nv2security/);
-  assert.match(src,/Security synchronized/);
-  assert.match(src,/failover_reason/);
-  assert.match(src,/source_verified/);
+test('Detailed orchestration remains available but is no longer the main surface',()=>{
+  for(const token of ['nv5-advanced','Deployment & failover details','Subscription Orchestrator','subscription_included','subscription_reason'])
+    assert.ok(src.includes(token),token);
 });
 
-
-test('Nodes V4 exposes subscription orchestrator and explicit inclusion reasons',()=>{
-  assert.match(src,/Subscription Orchestrator/);
-  assert.match(src,/\/api\/nodes\/orchestration/);
-  assert.match(src,/IN SUBSCRIPTION/);
-  assert.match(src,/NOT DEPLOYED/);
-  assert.match(src,/NODE OFFLINE/);
-  assert.match(src,/FAILOVER OFF/);
-  assert.match(src,/SYNC ERROR/);
-  assert.match(src,/subscription_included/);
-  assert.match(src,/subscription_reason/);
-});
-
-test('Node failover help explains source inbound port isolation from Public Endpoint',()=>{
-  assert.match(src,/failover port is the source inbound port/i);
-  assert.match(src,/not the primary Public Endpoint tunnel\/CDN port/i);
-  assert.match(src,/data_port/);
+test('Node editor can still manage inbound assignments for recovery/admin use',()=>{
+  for(const token of ['Inbound deployments','name="inboundIds"',"getAll('inboundIds')"])assert.ok(src.includes(token),token);
 });

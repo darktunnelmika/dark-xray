@@ -1,8 +1,10 @@
 """Encrypted, consistent standalone backups. No restore into nonempty targets.
 
 The bundle contains the SQLite database, MFA encryption key, panel configuration
-and optional panel TLS pair. Xray binary, external inbound certificates, systemd
-units and the root guard allowlist are NOT silently claimed to be backed up.
+and optional panel TLS pair. TLS certificate/key files referenced by managed
+inbounds are copied into the encrypted archive and their database paths are
+rewritten on restore. Xray binary, systemd units and the root guard allowlist
+remain rebuildable host artifacts.
 """
 from __future__ import annotations
 import hashlib
@@ -18,7 +20,7 @@ from dark_policy import PolicyError
 
 MAGIC = b'DARK-XRAY-BACKUP-1\x00'
 LIMIT = 256 * 1024 * 1024
-ALLOWED = {'manifest.json', 'data/dark.sqlite3', 'data/secret.key', 'config.json', 'tls/cert.pem', 'tls/key.pem'}
+ALLOWED_BASE = {'manifest.json', 'data/dark.sqlite3', 'data/secret.key', 'config.json', 'tls/cert.pem', 'tls/key.pem'}
 ROOT = Path(__file__).resolve().parents[1]
 
 def project_version() -> str:
@@ -36,6 +38,74 @@ def private_write(path: Path, raw: bytes):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'wb') as f:
         f.write(raw); f.flush(); os.fsync(f.fileno())
+
+def safe_member(name: str) -> bool:
+    if name in ALLOWED_BASE:return True
+    parts=name.split('/')
+    return (len(parts)==3 and parts[0]=='inbound-tls' and len(parts[1])==64
+            and all(c in '0123456789abcdef' for c in parts[1])
+            and parts[2] in {'certificate.pem','private-key.pem'})
+
+def inbound_tls_files(snapshot: Path) -> tuple[dict[str,bytes],dict[str,str]]:
+    """Collect only TLS files actually referenced by the consistent DB snapshot."""
+    extra={};mapping={}
+    try:db=sqlite3.connect(snapshot.resolve().as_uri()+'?mode=ro',uri=True,timeout=10)
+    except sqlite3.Error as ex:raise PolicyError('Cannot inspect inbound TLS references') from ex
+    try:
+        exists=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_inbounds'").fetchone()
+        rows=db.execute('SELECT body FROM core_inbounds').fetchall() if exists else []
+        refs=[]
+        for (raw,) in rows:
+            try:doc=json.loads(raw)
+            except Exception as ex:raise PolicyError('Inbound record is invalid while building backup') from ex
+            st=doc.get('streamSettings',{}) if isinstance(doc,dict) else {}
+            tls=st.get('tlsSettings',{}) if isinstance(st,dict) else {}
+            certs=tls.get('certificates',[]) if isinstance(tls,dict) else []
+            if not isinstance(certs,list):continue
+            for cert in certs:
+                if not isinstance(cert,dict):continue
+                for key,leaf in (('certificateFile','certificate.pem'),('keyFile','private-key.pem')):
+                    value=cert.get(key)
+                    if isinstance(value,str) and value.strip():refs.append((value.strip(),leaf))
+        for original,leaf in refs:
+            field='certificateFile' if leaf=='certificate.pem' else 'keyFile'
+            map_key=field+'\n'+original
+            if map_key in mapping:continue
+            path=Path(original)
+            try:resolved=path.resolve(strict=True)
+            except OSError as ex:raise PolicyError('Referenced inbound TLS file is missing: '+original) from ex
+            if not resolved.is_file() or resolved.stat().st_size>1024*1024:
+                raise PolicyError('Referenced inbound TLS file is unsafe or too large: '+original)
+            digest=hashlib.sha256((field+'\0'+original).encode()).hexdigest()
+            member='inbound-tls/'+digest+'/'+leaf
+            extra[member]=resolved.read_bytes();mapping[map_key]=member
+        return extra,mapping
+    finally:db.close()
+
+def rewrite_inbound_tls_paths(dbpath: Path, mapping: dict[str,str], destination: Path):
+    if not mapping:return
+    db=sqlite3.connect(dbpath)
+    try:
+        exists=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_inbounds'").fetchone()
+        if not exists:return
+        for rowid,raw in db.execute('SELECT id,body FROM core_inbounds').fetchall():
+            doc=json.loads(raw);changed=False
+            st=doc.get('streamSettings',{}) if isinstance(doc,dict) else {}
+            tls=st.get('tlsSettings',{}) if isinstance(st,dict) else {}
+            certs=tls.get('certificates',[]) if isinstance(tls,dict) else []
+            if not isinstance(certs,list):continue
+            for cert in certs:
+                if not isinstance(cert,dict):continue
+                for key in ('certificateFile','keyFile'):
+                    original=cert.get(key)
+                    map_key=key+'\n'+str(original)
+                    if original and map_key in mapping:
+                        cert[key]=str(destination/mapping[map_key]);changed=True
+            if changed:db.execute('UPDATE core_inbounds SET body=? WHERE id=?',(json.dumps(doc),rowid))
+        db.commit()
+    except (sqlite3.Error,ValueError,TypeError) as ex:
+        db.rollback();raise PolicyError('Cannot rewrite restored inbound TLS paths') from ex
+    finally:db.close()
 
 def create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
     data,config,output=Path(data),Path(config),Path(output)
@@ -69,17 +139,20 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
             dest.close(); source.close()
         if snapshot.stat().st_size > LIMIT:
             raise PolicyError('Database exceeds this backup utility limit of 256 MiB')
+        external_files,external_map=inbound_tls_files(snapshot)
         files['data/dark.sqlite3'] = snapshot.read_bytes()
+        files.update(external_files)
     for key, name in [('tls_certificate','tls/cert.pem'),('tls_private_key','tls/key.pem')]:
         if cfg.get(key):
             path = Path(cfg[key])
             if not path.is_file() or path.stat().st_size > 1024*1024:
                 raise PolicyError('Configured panel TLS file missing or too large')
             files[name] = path.read_bytes()
-    manifest = {'schema': 1, 'project': 'DARK XRAY', 'version': project_version(),
+    manifest = {'schema': 2, 'project': 'DARK XRAY', 'version': project_version(),
                 'files': {name: hashlib.sha256(raw).hexdigest() for name,raw in files.items()},
-                'excluded': ['Xray binary and geo assets','external inbound certificates',
-                             'root firewall allowlist','systemd service definitions'],
+                'external_files': external_map,
+                'excluded': ['Xray binary and geo assets','root firewall allowlist','systemd service definitions',
+                             'Node Agent host TLS (reissued when a disposable node is reinstalled)'],
                 'restore_into_empty_destination_only': True}
     files['manifest.json'] = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
     stream = io.BytesIO()
@@ -113,7 +186,7 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
     try:
         with zipfile.ZipFile(io.BytesIO(plain)) as z:
             names = z.namelist()
-            if len(names) != len(set(names)) or not set(names) <= ALLOWED:
+            if len(names) != len(set(names)) or not all(safe_member(n) for n in names):
                 raise PolicyError('Unsafe or duplicate backup members')
             if sum(i.file_size for i in z.infolist()) > LIMIT:
                 raise PolicyError('Decompressed backup exceeds 256 MiB')
@@ -122,12 +195,16 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
         raise PolicyError('Invalid backup contents') from exc
     try:
         manifest = json.loads(files['manifest.json'])
-        if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') != 1:
+        if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') not in (1,2):
             raise PolicyError('Unknown backup schema')
         manifest_files=manifest.get('files')
         excluded=manifest.get('excluded')
+        external_map=manifest.get('external_files',{}) if manifest.get('schema')==2 else {}
         if not isinstance(manifest_files,dict) or not isinstance(excluded,list) or not all(isinstance(x,str) for x in excluded):
             raise PolicyError('Invalid backup manifest')
+        if not isinstance(external_map,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not safe_member(v) for k,v in external_map.items()):
+            raise PolicyError('Invalid inbound TLS backup mapping')
+        if any(v not in manifest_files for v in external_map.values()):raise PolicyError('Inbound TLS mapping references a missing member')
         if set(manifest_files) != set(files)-{'manifest.json'}:
             raise PolicyError('Incomplete backup manifest')
         for name, expected in manifest_files.items():
@@ -157,6 +234,7 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
             db.commit()
         except sqlite3.Error as ex:raise PolicyError('Restored database validation failed') from ex
         finally:db.close()
+        rewrite_inbound_tls_paths(staging/'data/dark.sqlite3',external_map,dest)
         for key,name in [('tls_certificate','tls/cert.pem'),('tls_private_key','tls/key.pem')]:
             if name in files:cfg[key]=str(dest/name)
         cfg['core_autostart'] = False

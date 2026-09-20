@@ -49,6 +49,9 @@ class BrokerClient:
     def clear(self) -> dict:
         return self.request({'operation': 'clear'})
 
+    def set_ports(self, ports: list[int]) -> dict:
+        return self.request({'operation':'set_ports','ports':list(ports)})
+
 class BrokerExecutor:
     """Guard-compatible executor; commands are still not packet-flow proof."""
     confirmation = 'nftables_broker_accepted'

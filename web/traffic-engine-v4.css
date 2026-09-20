@@ -34,3 +34,22 @@
 @media(max-width:1150px){.te4-summary{grid-template-columns:repeat(3,1fr)}.te4-preview-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:850px){.te4-out-grid,.te4-bal-grid{grid-template-columns:1fr}.te4-graph-list>div{grid-template-columns:1fr}.te4-bal-row{grid-template-columns:1fr}.te4-ob-kv{grid-template-columns:1fr}}
 @media(max-width:650px){.te4-summary,.te4-preview-grid,.te4-preview-advanced>div{grid-template-columns:1fr}.te4-preview-advanced .wide{grid-column:auto}.te4-tabs button{flex:1;justify-content:center}}
+
+
+/* Routing V5 — rules-first operator workflow */
+.te5-routing-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;border:1px solid rgba(45,205,195,.10);background:#03090c;border-radius:8px;padding:7px}
+.te5-routing-bar>div{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(255,255,255,.045);background:#020709;border-radius:6px;padding:8px 9px;min-width:0}
+.te5-routing-bar span{font-size:8px;color:#57757b}.te5-routing-bar b{font:10px var(--mono);color:#b6d9d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.te5-routing .te4-rule-list{gap:0;border:1px solid rgba(255,255,255,.055);border-radius:8px;overflow:hidden;background:#020709}
+.te5-routing .te4-rule{border:0!important;border-bottom:1px solid rgba(255,255,255,.055)!important;border-radius:0!important;box-shadow:none!important;background:#030a0d!important;display:grid;grid-template-columns:minmax(170px,.85fr) minmax(220px,1.65fr) auto;align-items:center;gap:10px;padding:9px 10px}
+.te5-routing .te4-rule:last-child{border-bottom:0!important}.te5-routing .te4-rule>header{min-width:0}.te5-routing .te4-rule>header h3{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.te5-routing .te4-rule>header .te4-order{display:none}.te5-routing .te4-rule .te4-conditions{min-width:0}.te5-routing .te4-rule footer{border:0;padding:0;justify-content:flex-end;white-space:nowrap}
+.te5-routing .te4-rule footer .btn{min-width:30px}.te5-routing .te4-bal-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.te5-advanced-tools{padding:0;overflow:hidden}.te5-advanced-tools>summary{cursor:pointer;padding:12px 13px;color:#6e8f92;font-size:9px;background:#03090c}
+.te5-advanced-tools[open]>summary{color:#a9e3d6;border-bottom:1px solid rgba(255,255,255,.05)}
+.te5-advanced-tools>div{display:grid;gap:10px;padding:10px}.te5-advanced-tools .te4-preview,.te5-advanced-tools .te4-observatory{margin:0}
+.xv3-rule-advanced{border:1px solid rgba(255,255,255,.055);border-radius:9px;background:#040b0e;padding:0 11px}
+.xv3-rule-advanced>summary{cursor:pointer;padding:11px 0;color:#708c91;font-size:9px}.xv3-rule-advanced[open]>summary{color:#9be1cf;border-bottom:1px solid rgba(255,255,255,.05)}
+.xv3-rule-advanced>.xv3-section{border:0!important;border-radius:0!important;background:transparent!important;padding-inline:0!important}
+@media(max-width:1000px){.te5-routing .te4-rule{grid-template-columns:1fr}.te5-routing .te4-rule footer{justify-content:flex-start}.te5-routing .te4-bal-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:650px){.te5-routing-bar,.te5-routing .te4-bal-grid{grid-template-columns:1fr}}

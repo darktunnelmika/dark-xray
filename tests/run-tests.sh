@@ -29,6 +29,7 @@ python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
+python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
 python -m pytest tests/test_menu_owner_selection.py -q --junitxml=qa/junit/menu-owner-selection.xml
@@ -59,6 +60,8 @@ node --test tests/finance-v2.test.cjs
 node --test tests/ui-stability.test.cjs
 node --test tests/update-center.test.cjs
 node --test tests/nodes-v3.test.cjs
+node --test tests/hosts-v3.test.cjs
+node --test tests/traffic-engine-v4.test.cjs
 node --test tests/representatives-v2.test.cjs
 node --test tests/cyber-classic.test.cjs
 node --test tests/overview-v4.test.cjs

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import copy
 import hashlib
 import hmac
 import io
@@ -164,6 +165,10 @@ class TrafficRoutePreview(Model):
     process:str=Field(default='',max_length=1024)
     vless_route:StrictInt=Field(default=0,ge=0,le=65535)
     attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
+class FullBackupBody(Model):
+    passphrase:str=Field(min_length=12,max_length=512)
+class NodePair(Model):
+    code:str=Field(min_length=16,max_length=4096)
 class NodeCreate(Model):
     id:str=Field(min_length=1,max_length=128)
     name:str=Field(min_length=1,max_length=128)
@@ -184,6 +189,9 @@ class NodePatch(Model):
     priority:StrictInt=Field(default=100,ge=1,le=1000)
     failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
+class InboundDeployments(Model):
+    local:bool=True
+    nodeIds:list[str]=Field(default_factory=list,max_length=256)
 class NodeMirrorSync(Model):
     assignments:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
 class NodeMirrorTrafficReset(Model):
@@ -210,6 +218,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if background:
             manager.start();nodes.start(interval=max(5.0,min(60.0,float(config.poll_seconds))),
                                       sync_provider=lambda node_id:build_node_bundles(node_id),
+                                      desired_provider=lambda node_id:ensure_node_desired_state(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True),
                                       security_callback=apply_global_security)
         yield
@@ -291,6 +300,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     def update_client()->UpdateBrokerClient:
         return UpdateBrokerClient(timeout=12)
+
+    def hub_source_commit()->str:
+        path=Path(store.path).parent/'installed-source.json'
+        try:
+            value=json.loads(path.read_text(encoding='utf-8'))
+            commit=str(value.get('commit') or '').lower()
+        except (OSError,ValueError,TypeError,AttributeError):commit=''
+        if not re.fullmatch(r'[0-9a-f]{40}',commit):raise HTTPException(409,'Hub exact installed source commit is unavailable')
+        return commit
 
     @app.get('/api/update/status')
     def update_status(p:Principal=Depends(owner)):
@@ -624,14 +642,32 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         netloc=userinfo+host+((':'+str(port)) if port else '')
         return urlunsplit((p.scheme,netloc,p.path,p.query,quote(remark)))
 
+    def runtime_ready_map(email:str)->dict[str,set[int]]:
+        detail=engine.client_detail(email);ids={int(x) for x in detail.get('inboundIds',[])}
+        ready={'local':set()}
+        for inbound_id in ids:
+            inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+            if meta.get('deployLocal',True) is not False:ready['local'].add(inbound_id)
+        for node in nodes.list():
+            if not node.get('enabled') or not node.get('online') or node.get('last_error'):continue
+            key='node:'+str(node['id'])
+            for assignment in node.get('assignments',[]):
+                inbound_id=int(assignment.get('local_inbound_id') or 0)
+                if inbound_id in ids and assignment.get('deployed') and not assignment.get('last_error'):
+                    ready.setdefault(key,set()).add(inbound_id)
+        return ready
+
     def failover_links(email:str)->list[dict]:
         targets=nodes.failover_targets(email)
         if not targets:return []
-        base=engine.links(email,'raw');out=[]
+        detail=engine.client_detail(email);base=engine.links(email,'raw',runtime_ready={'local':set(map(int,detail.get('inboundIds',[])))});out=[]
         for item in base['links']:
             inbound_id=int(item.get('inboundId') or 0)
             for target in targets:
                 if inbound_id not in target['inbound_ids']:continue
+                explicit=any(int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True) and h.get('runtime')=='node:'+str(target['node_id'])
+                             for h in engine.section('hosts'))
+                if explicit:continue
                 remark=str(item['remark'])+' · '+str(target['name'])+' ['+str(target['node_id'])+']'
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
@@ -645,7 +681,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/clients/{email}/links')
     def links(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'credentials')
-        result=engine.links(email);result['failover']=failover_links(email)
+        result=engine.links(email,runtime_ready=runtime_ready_map(email));result['failover']=failover_links(email)
         detail=manager.detail(p.actor,email)
         return {'engine':result,'subscription_url':detail['subscription_url']}
     @app.get('/api/clients/{email}/security-global')
@@ -726,6 +762,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         for assignment in assignments:
             source=int(assignment['local_inbound_id']);ib=engine.inbound(source)
             inbound={k:json.loads(json.dumps(v)) for k,v in ib.items() if k not in {'id','applied'}}
+            # Deployment scope belongs to the Hub. A selected remote Node must
+            # run the logical inbound even when Local deployment is disabled.
+            if isinstance(inbound.get('panelMeta'),dict):
+                inbound['panelMeta'].pop('deployLocal',None);inbound['panelMeta'].pop('deploymentTargets',None)
+                if not inbound['panelMeta']:inbound.pop('panelMeta',None)
             clients=[]
             for client in all_clients:
                 if source not in client.get('inboundIds',[]):continue
@@ -733,6 +774,65 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 clients.append({'sourceEmail':client['email'],'client':raw})
             bundles.append({'sourceInboundId':source,'inbound':inbound,'clients':clients})
         return bundles
+
+    def node_managed_files(bundles:list[dict])->list[dict]:
+        files={};path_ids={}
+        for bundle in bundles:
+            inbound=bundle.get('inbound',{}) if isinstance(bundle,dict) else {}
+            st=inbound.get('streamSettings',{}) if isinstance(inbound,dict) else {}
+            tls=st.get('tlsSettings',{}) if isinstance(st,dict) else {}
+            certs=tls.get('certificates',[]) if isinstance(tls,dict) else []
+            if not isinstance(certs,list):continue
+            for cert in certs:
+                if not isinstance(cert,dict):continue
+                for key,kind in (('certificateFile','certificate'),('keyFile','private-key')):
+                    raw=cert.get(key)
+                    if not isinstance(raw,str) or not raw.strip():continue
+                    original=raw.strip();path=Path(original)
+                    if not path.is_absolute():raise PolicyError('Inbound TLS paths must be absolute before Node deployment')
+                    try:resolved=path.resolve(strict=True)
+                    except OSError as ex:raise PolicyError('Inbound TLS file is missing for Node deployment: '+original) from ex
+                    if not resolved.is_file() or resolved.stat().st_size>1024*1024:
+                        raise PolicyError('Inbound TLS file is unsafe or too large for Node deployment')
+                    content=resolved.read_bytes();digest=hashlib.sha256(content).hexdigest()
+                    identity=kind+'\0'+original+'\0'+digest
+                    file_id=path_ids.get(identity)
+                    if not file_id:
+                        file_id=hashlib.sha256(identity.encode()).hexdigest()
+                        path_ids[identity]=file_id
+                        files[file_id]={'id':file_id,'kind':kind,'sha256':digest,
+                                        'data':base64.b64encode(content).decode('ascii')}
+                    cert[key]='managed://'+file_id
+        total=sum(len(x['data']) for x in files.values())
+        if total>4*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 4 MiB')
+        return [files[k] for k in sorted(files)]
+
+    def build_node_desired_payload(node_id:str)->dict:
+        bundles=build_node_bundles(node_id)
+        managed_files=node_managed_files(bundles)
+        assigned={int(x['sourceInboundId']) for x in bundles}
+        with store.lock:
+            policy_rows={str(r['id']):dict(r) for r in store.db.execute(
+                'SELECT id,limit_ip,global_ip_block,global_device_block FROM clients')}
+        policies=[]
+        seen=set()
+        for client in engine.clients():
+            ids={int(x) for x in client.get('inboundIds',[])}
+            if not ids.intersection(assigned):continue
+            email=str(client.get('email',''))
+            if not email or email in seen:continue
+            seen.add(email);row=policy_rows.get(email,{})
+            policies.append({'sourceEmail':email,'limitIp':int(row.get('limit_ip') or 0),
+                             'limitHwid':int(client.get('limitHwid') or 0),
+                             'globalIpBlocked':bool(row.get('global_ip_block')),
+                             'globalDeviceBlocked':bool(row.get('global_device_block'))})
+        sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
+        return {'schema':1,'nodeId':node_id,'desiredRunning':True,'sections':sections,
+                'assignments':bundles,'security':{'clients':policies},'files':managed_files}
+
+    def ensure_node_desired_state(node_id:str)->dict:
+        nodes.set_desired_state(node_id,build_node_desired_payload(node_id))
+        return nodes.desired_state(node_id)
 
     def sync_node_assignments(node_id:str)->dict:
         pre=nodes.sync_traffic(node_id)
@@ -743,7 +843,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         except PolicyError:
             pass
         bundles=build_node_bundles(node_id)
-        result=nodes.sync_mirrors(node_id,bundles)
+        state=ensure_node_desired_state(node_id)
+        result=nodes.sync_desired_state(node_id,state,legacy_bundles=bundles)
         post=nodes.sync_traffic(node_id)
         if post.get('charged_bytes'):manager.tick(suppress=True)
         security_post=None
@@ -1018,6 +1119,53 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/nodes')
     def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
+
+    @app.post('/api/nodes/pair')
+    def remote_node_pair(body:NodePair,p:Principal=Depends(owner)):
+        writable();code=body.code.strip()
+        if not code.startswith('DXN1.'):raise HTTPException(400,'Unsupported DARK Node pair code')
+        encoded=code[5:]
+        if not encoded or len(encoded)>3800:raise HTTPException(400,'Invalid DARK Node pair code')
+        try:
+            raw=base64.urlsafe_b64decode(encoded+'='*((4-len(encoded)%4)%4))
+            doc=json.loads(raw.decode('utf-8'))
+        except Exception as ex:raise HTTPException(400,'Malformed DARK Node pair code') from ex
+        required={'schema','nodeId','name','origin','token','dataAddress','priority','failoverEnabled'}
+        if not isinstance(doc,dict) or set(doc)!=required or doc.get('schema')!=1:
+            raise HTTPException(400,'Invalid DARK Node pair payload')
+        node_id=doc.get('nodeId');name=doc.get('name');origin=doc.get('origin');token=doc.get('token')
+        data_address=doc.get('dataAddress');priority=doc.get('priority');failover=doc.get('failoverEnabled')
+        if not isinstance(node_id,str) or not NAME_RE.fullmatch(node_id) or not isinstance(name,str) or not 1<=len(name)<=128:
+            raise HTTPException(400,'Invalid paired node identity')
+        if not isinstance(origin,str) or not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:
+            raise HTTPException(400,'Invalid paired node credential')
+        if not isinstance(data_address,str) or type(priority)is not int or not 1<=priority<=1000 or type(failover)is not bool:
+            raise HTTPException(400,'Invalid paired node settings')
+        with store.lock:
+            if store.db.execute('SELECT 1 FROM remote_nodes WHERE id=? OR origin=?',(node_id,origin)).fetchone():
+                raise HTTPException(409,'Node ID or Origin is already registered')
+        rotated=False
+        try:
+            nodes.put(node_id,name,origin,token,True,[],data_address,priority,failover)
+            probe=nodes.probe(node_id,timeout=8.0)
+            ensure_node_desired_state(node_id)
+            # The installer Pair Code is bootstrap-only. Rotate its credential
+            # after the authenticated probe so a copied DXN1 code cannot be
+            # reused as the long-lived Hub -> Node bearer credential.
+            active_token='dkn_'+secrets.token_urlsafe(48)
+            nodes.rotate_token(node_id,active_token);rotated=True
+        except Exception:
+            # Before credential rotation the bootstrap registration is safe to
+            # remove. After rotation, retain the registered Node rather than
+            # orphaning an Agent whose original Pair Code has been invalidated.
+            if not rotated:
+                try:nodes.delete(node_id)
+                except Exception:pass
+            raise
+        manager.audit(p.actor,p.actor.id,'node.pair',node_id,'agent-only pair code; bootstrap credential rotated')
+        return {'paired':True,'pair_code_consumed':True,'node':nodes.get(node_id),
+                'health':probe.get('health',{}),'latency_ms':probe.get('latency_ms',0)}
+
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
         writable()
@@ -1030,22 +1178,51 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.patch('/api/nodes/{node_id}')
     def remote_node_edit(node_id:str,body:NodePatch,p:Principal=Depends(owner)):
         writable();token=body.token
-        if not token:
+        if token:
+            nodes.rotate_token(node_id,token)
+        else:
             if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
             token=nodes.get(node_id,secret=True)['token']
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
+        for target in {node_id}:ensure_node_desired_state(target)
         apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
     @app.delete('/api/nodes/{node_id}')
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
-        writable();result=nodes.delete(node_id);apply_global_security()
+        writable()
+        refs=[h for h in engine.section('hosts') if h.get('runtime')=='node:'+node_id]
+        if refs:raise HTTPException(409,'Move or delete Public Endpoints that use this Node before deleting it')
+        result=nodes.delete(node_id);apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
+
+    @app.get('/api/nodes/{node_id}/logs/{kind}')
+    def remote_node_logs(node_id:str,kind:Literal['process','error','access'],limit:int=300,p:Principal=Depends(owner)):
+        return nodes.remote_logs(node_id,kind,max(1,min(1000,limit)))
+
+    @app.get('/api/nodes/{node_id}/update')
+    def remote_node_update_status(node_id:str,p:Principal=Depends(owner)):
+        result=nodes.remote_update_status(node_id);result['hub_commit']=hub_source_commit();return result
+
+    @app.post('/api/nodes/{node_id}/update/check')
+    def remote_node_update_check(node_id:str,p:Principal=Depends(owner)):
+        commit=hub_source_commit();result=nodes.remote_update_check(node_id,commit)
+        result['hub_commit']=commit;manager.audit(p.actor,p.actor.id,'node.update_check',node_id,commit);return result
+
+    @app.post('/api/nodes/{node_id}/update/start',status_code=202)
+    def remote_node_update_start(node_id:str,p:Principal=Depends(owner)):
+        if config.test_engine:raise HTTPException(409,'Node update is disabled in test-engine mode')
+        commit=hub_source_commit();result=nodes.remote_update_start(node_id,commit)
+        result['hub_commit']=commit;manager.audit(p.actor,p.actor.id,'node.update_start',node_id,commit);return result
+    @app.get('/api/nodes/{node_id}/desired')
+    def remote_node_desired(node_id:str,p:Principal=Depends(owner)):
+        return ensure_node_desired_state(node_id)
+
     @app.post('/api/nodes/{node_id}/sync')
     def remote_node_sync(node_id:str,p:Principal=Depends(owner)):
         writable();result=sync_node_assignments(node_id)
@@ -1074,6 +1251,36 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/nodes/{node_id}/core/{action}')
     def remote_node_core(node_id:str,action:str,p:Principal=Depends(owner)):
         writable();result=nodes.remote_core(node_id,action);manager.audit(p.actor,p.actor.id,'node.core.'+action,node_id);return result
+
+    @app.get('/api/inbounds/{inbound_id}/deployments')
+    def inbound_deployments(inbound_id:int,p:Principal=Depends(owner)):
+        inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+        selected=set(nodes.inbound_assignments(inbound_id));fleet=nodes.list()
+        return {'inboundId':inbound_id,'local':meta.get('deployLocal',True) is not False,
+                'nodeIds':sorted(selected),
+                'targets':[{'id':n['id'],'name':n['name'],'online':bool(n.get('online')),'enabled':bool(n.get('enabled')),
+                            'selected':n['id'] in selected,'pending':bool(n.get('desired_state',{}).get('pending'))}
+                           for n in fleet]}
+
+    @app.put('/api/inbounds/{inbound_id}/deployments')
+    def inbound_deployments_put(inbound_id:int,body:InboundDeployments,p:Principal=Depends(owner)):
+        writable();inbound=engine.inbound(inbound_id);fleet=nodes.list();known={str(n['id']) for n in fleet}
+        requested=list(dict.fromkeys(str(x) for x in body.nodeIds))
+        if any(not NAME_RE.fullmatch(x) for x in requested) or not set(requested)<=known:
+            raise HTTPException(400,'Unknown node deployment target')
+        meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+        inbound=copy.deepcopy(inbound);inbound.pop('id',None);inbound.pop('applied',None)
+        meta=copy.deepcopy(meta);meta['deployLocal']=bool(body.local);meta['deploymentTargets']=['local']*int(bool(body.local))+requested
+        inbound['panelMeta']=meta;engine.save_inbound(inbound,inbound_id)
+        before=set(nodes.inbound_assignments(inbound_id));after=set(requested)
+        for node_id in sorted(before|after):
+            nodes.set_inbound_assignment(node_id,inbound_id,node_id in after)
+            # Persist the new Hub desired revision immediately even when a node
+            # is offline. The monitor will apply it when connectivity returns.
+            ensure_node_desired_state(node_id)
+        manager.audit(p.actor,p.actor.id,'inbound.deployments',str(inbound_id),
+                      'local='+str(bool(body.local))+'; nodes='+','.join(sorted(after)))
+        return inbound_deployments(inbound_id,p)
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
@@ -1517,8 +1724,26 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             audits=store.db.execute('SELECT COUNT(*) FROM live_audit').fetchone()[0]
             groups=store.db.execute('SELECT COUNT(*) FROM client_groups').fetchone()[0] if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_groups'").fetchone() else 0
         return {'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
-                'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup','full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
-                'restore_isolated':True}
+                'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup',
+                'full_backup_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup/full',
+                'full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
+                'central_node_state_included':True,'restore_isolated':True}
+
+    @app.post('/api/backup/full')
+    def backup_full(body:FullBackupBody,p:Principal=Depends(owner)):
+        from backup import create_backup
+        config_path=Path(str(getattr(config,'_path','')))
+        if not str(getattr(config,'_path','')) or config_path.is_symlink() or not config_path.is_file():
+            raise HTTPException(409,'Full Web backup requires a file-backed DARK configuration')
+        with tempfile.TemporaryDirectory(prefix='dark-web-backup.') as td:
+            path=Path(td)/'dark-xray-full.darkbackup'
+            manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase)
+            raw=path.read_bytes()
+        manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
+        stamp=time.strftime('%Y%m%d-%H%M%S')
+        return Response(raw,media_type='application/octet-stream',
+                        headers={'Content-Disposition':f'attachment; filename="DARK-XRAY-full-{stamp}.darkbackup"',
+                                 'X-DARK-Backup-Schema':str(manifest.get('schema',0))})
 
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
@@ -1550,7 +1775,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if sub.get('auto_detect',True) and any(x in ua for x in ('clash','mihomo')):fmt='clash'
             else:fmt=sub.get('default_format','base64')
         extra=failover_links(row['email'])
-        body,headers=engine.subscription(row['email'],fmt,extra_links=extra)
+        body,headers=engine.subscription(row['email'],fmt,extra_links=extra,runtime_ready=runtime_ready_map(row['email']))
         if extra:headers['x-dark-failover-nodes']=str(len({x['failoverNode'] for x in extra}))
         return Response(body,headers=headers)
 

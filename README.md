@@ -40,13 +40,15 @@ DARK UI → DARK API / Owner + Representative Scope → DARK Database → Xray-c
 - **Settings V2** با General/Security/Network/Domain-TLS/Subscription/IP Guard/Appearance/System و مرز stage/apply برای تنظیمات privileged.
 - **Finance / Ledger V2** با event-id idempotency، مصرف دوره جاری و lifetime، Credit تعاملی Owner و Audit قابل ردیابی.
 - **Xray Control V2** برای DNS، Outbound، Routing، Balancer و Observatory.
-- **Nodes V3** با HTTPS اجباری، Agent Token، DNS pinning، TLS hostname verification، انتخاب Inbound هنگام Add/Edit، Mirror فقط Inboundهای انتخاب‌شده و Credential همان‌ها، Traffic Sync مرکزی با baseline/ledger idempotent، Global IP/Device state، Failover priority/data-address، recovery بعد از قطع/وصل و Reset هماهنگ چندنودی.
+- **Nodes V5 / Lightweight Agent** با نصب مستقل و بدون Web Panel دوم، Pair Code یک‌بارمصرف، Desired State نسخه‌دار، Deployment Target داخل Inbound، Runtime داخل Public Endpoint، Traffic/Security/IP-HWID مرکزی، Guard محلی، Xray/Logs/Update از Hub و recovery خودکار Node آفلاین.
 - **Dashboard Control Center** برای Owner؛ Update Center با Latest Verified / Stable / RC / Exact Ref، CI gate روی Commit دقیق، Preflight، Changelog، Progress، Log و Rollback خودکار مستقیماً روی صفحه اول قرار دارد.
 - **Root Update Broker** مستقل از Web process؛ پنل non-root می‌ماند و Broker فقط status/check/start محدود را از Unix socket احرازشده می‌پذیرد.
-- **Backup / Restore / Doctor** نیز روی صفحه اول Owner متمرکز شده‌اند؛ DB Snapshot از Web قابل دریافت است و Full Backup/Verify/Restore رمزدار از workflow ایمن CLI اجرا می‌شود.
+- **Backup / Restore / Doctor** روی Hub متمرکز است؛ Full Encrypted Backup از خود پنل شامل SQLite، `secret.key`، TLS پنل، TLS اینباندها و Node/Desired State قابل دریافت است. Nodeها بکاپ مدیریتی مستقل ندارند و از Hub بازسازی می‌شوند.
 - **Cyber UI** با English/LTR پیش‌فرض، فارسی/RTL، responsive layout و refresh/focus stability.
 
 ## نصب آنلاین
+
+### سرور اصلی / Hub
 
 روی Ubuntu/Debian دارای systemd:
 
@@ -55,13 +57,24 @@ curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/ma
 sudo bash /tmp/dark-xray-install.sh
 ```
 
-Installer حالت‌های `Clean`، `Partial/Failed` و `Installed` را تشخیص می‌دهد و برای نصب/Repair/Update مسیر جدا دارد. Xray رسمی به نسخه pin‌شده دریافت می‌شود و ابزار دریافت، SHA-256 رسمی Release را بررسی می‌کند.
-
-بعد از نصب:
+Installer پنل اصلی حالت‌های `Clean`، `Partial/Failed` و `Installed` را تشخیص می‌دهد و برای نصب/Repair/Update مسیر جدا دارد. بعد از نصب:
 
 ```bash
 darkxray
 ```
+
+### سرور Node سبک
+
+روی VPS جداگانه‌ای که پنل اصلی روی آن نصب نیست:
+
+```bash
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-node.sh -o /tmp/dark-xray-node.sh
+sudo bash /tmp/dark-xray-node.sh
+```
+
+Node فقط **DARK Node Agent + Xray-core + Guard + Updater + TLS runtime** را نصب می‌کند؛ Web UI، Owner، Finance و Reseller روی Node نصب نمی‌شوند. Installer یک `DXN1...` Pair Code می‌دهد؛ آن را در **Main Panel → Nodes → Add Node** وارد کن. پس از Pair موفق، credential bootstrap خودکار Rotate می‌شود و Pair Code مصرف‌شده دیگر credential دائمی Node نیست.
+
+Xray رسمی در هر دو مسیر به نسخه pin‌شده دریافت می‌شود و SHA-256 رسمی Release بررسی می‌شود.
 
 ## گیت‌های سلامت روی سرور
 

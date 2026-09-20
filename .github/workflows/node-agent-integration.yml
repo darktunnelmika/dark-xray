@@ -1,0 +1,109 @@
+name: Node Agent recovery integration
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'deploy/**'
+      - 'requirements*.txt'
+      - '.github/workflows/node-agent-integration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: node-agent-integration-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Focused API and recovery tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest tests/test_node_hub_recovery.py -q --junitxml=qa/node-agent-integration.xml
+      - name: Capture reproducible source identity
+        if: always()
+        run: |
+          mkdir -p qa
+          git rev-parse HEAD > qa/node-agent-source-commit.txt
+      - name: Upload isolated recovery evidence and public source
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-node-agent-recovery-source
+          path: |
+            qa/node-agent-integration.xml
+            qa/node-agent-source-commit.txt
+            backend/
+            tools/
+            tests/
+            deploy/
+            requirements*.txt
+            VERSION
+            LICENSE
+            THIRD-PARTY-NOTICES.md
+          if-no-files-found: error
+          retention-days: 7
+
+  installed-update:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install disposable Node prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -q git python3-venv ca-certificates nftables openssl >/dev/null
+      - name: Trust the isolated TLS fixture on this disposable runner only
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/dark-node-key.pem -out /tmp/dark-node-cert.pem -days 1 \
+            -subj '/CN=node.example.test' \
+            -addext 'subjectAltName=DNS:node.example.test' >/dev/null 2>&1
+          sudo install -m 0644 /tmp/dark-node-cert.pem /usr/local/share/ca-certificates/dark-node-ci.crt
+          sudo update-ca-certificates >/dev/null
+      - name: Provision the disposable update-test Node
+        run: |
+          mkdir -p qa
+          sudo python3 tools/provision_node.py \
+            --domain node.example.test --port 9443 --data-address node.example.test \
+            --name CI-UPDATE --node-id ci-update-001 --ssh-port 22 \
+            --core-version v26.3.27 --source-commit "$(git rev-parse HEAD)" \
+            --source-ref ci-node-update --cert /tmp/dark-node-cert.pem --key /tmp/dark-node-key.pem \
+            > /tmp/node-update-provision.log 2>&1
+      - name: Real VLESS before update after update and after injected rollback
+        run: |
+          sudo env GITHUB_ACTIONS=true /opt/dark-xray-node/.venv/bin/python \
+            tests/node-update-systemd-smoke.py --expected-commit "$(git rev-parse HEAD)" \
+            --report "$GITHUB_WORKSPACE/qa/node-update-systemd.json"
+      - name: Capture Node services on failure
+        if: failure()
+        run: |
+          mkdir -p qa
+          systemctl status dark-xray-node.service dark-xray-node-guard.service dark-xray-node-update.service --no-pager -l > qa/node-update-systemd-services.txt 2>&1 || true
+          sudo journalctl -u dark-xray-node.service -u dark-xray-node-guard.service -u dark-xray-node-update.service --no-pager -n 200 > qa/node-update-systemd-journal.txt 2>&1 || true
+      - name: Upload real Node update and rollback evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-node-update-systemd
+          path: |
+            qa/node-update-systemd.json
+            qa/node-update-systemd-services.txt
+            qa/node-update-systemd-journal.txt
+          if-no-files-found: error
+          retention-days: 14

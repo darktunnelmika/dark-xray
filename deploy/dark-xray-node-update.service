@@ -1,0 +1,33 @@
+[Unit]
+Description=DARK XRAY Node root-owned update broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=darkxray
+WorkingDirectory=/opt/dark-xray-node
+ExecStart=/opt/dark-xray-node/.venv/bin/python /opt/dark-xray-node/backend/node_updated.py
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=dark-xray-node-update
+RuntimeDirectoryMode=0750
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONNOUSERSITE=1
+Environment=HOME=/tmp
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/opt/dark-xray-node /var/lib/dark-xray-node /etc/systemd/system
+
+[Install]
+WantedBy=multi-user.target

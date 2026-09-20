@@ -33,28 +33,37 @@ Current major workspaces include:
 - **Settings V2** with staged privileged runtime changes and rollback-aware apply flows.
 - **Finance / Ledger V2** with idempotent event IDs, current-period and lifetime usage, interactive-owner credit and audit traceability.
 - **Xray Control V2** for DNS, outbounds, routing, balancers and observatory.
-- **Nodes V3** with HTTPS-only origins, Agent Tokens, DNS pinning, TLS hostname verification, per-node inbound assignment, selected credential mirroring, Central traffic aggregation, global verified-IP/device-hash state, per-node failover data addresses/priorities, reconnect recovery, and coordinated multi-node traffic resets.
+- **Nodes V5 / Lightweight Agent** with a separate agent-only install, one-time Pair Code, versioned Desired State, Inbound deployment targets, runtime-aware Public Endpoints, central traffic/security/IP-HWID policy, local Guard enforcement, and Hub-controlled Xray/logs/exact-version updates.
 - **Dashboard Control Center** for interactive owners: the Update Center with Latest Verified / Stable / RC / Exact Ref, exact-commit CI gating, preflight, changelog, live progress, logs and automatic rollback now lives directly on the first page.
 - **Root-owned Update Broker** separate from the non-root web process; only narrow status/check/start operations cross the authenticated Unix socket.
-- **Backup / Restore / Doctor** are centralized on the owner dashboard; DB snapshots are downloadable from Web while encrypted full backup / verify / restore keep the hardened CLI workflow.
+- **Backup / Restore / Doctor** are Hub-owned. A Full Encrypted Backup can be created from Web and includes SQLite, `secret.key`, panel TLS, managed Inbound TLS, Node registry and Desired State. Nodes require no independent management backup.
 - **Cyber UI** with English/LTR default, Persian/RTL switching, responsive layout and refresh/focus stability.
 
 ## Online installation
 
-On an Ubuntu/Debian systemd host:
+### Main Panel / Hub
 
 ```bash
 curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-online.sh -o /tmp/dark-xray-install.sh
 sudo bash /tmp/dark-xray-install.sh
 ```
 
-The installer distinguishes `Clean`, `Partial/Failed` and `Installed` states. The official Xray core is fetched through the pinned core helper, which requires release SHA-256 metadata and refuses insecure fallback downloads.
-
 After installation:
 
 ```bash
 darkxray
 ```
+
+### Lightweight Node Agent on a separate VPS
+
+```bash
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/install-node.sh -o /tmp/dark-xray-node.sh
+sudo bash /tmp/dark-xray-node.sh
+```
+
+The Node installer installs only the DARK Node Agent, Xray-core, Guard, updater and TLS runtime—no second Web UI, owner, finance or reseller runtime. It prints a bootstrap-only `DXN1...` Pair Code for **Main Panel → Nodes → Add Node**. The Hub rotates the Agent credential after a successful authenticated pair, consuming the bootstrap credential.
+
+Both paths fetch the pinned official Xray release with verified release SHA-256 metadata.
 
 ## Installed-server gates
 
