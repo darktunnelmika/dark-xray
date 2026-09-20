@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from core import Config,CoreEngine,CoreError
 from dark_policy import Store,PolicyError
 from node_runtime import NodeRuntime
+from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
@@ -113,6 +114,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:b
         return response
 
     auth=token.require
+    updater=UpdateBrokerClient('/run/dark-xray-node-update/control.sock',timeout=12)
 
     @app.get('/node/api/health')
     def health(_scope:str=Depends(auth)):
@@ -209,6 +211,23 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:b
             if kind in {'devices','all'}:
                 cur=db.execute('DELETE FROM core_devices WHERE email=?',(mirror,));cleared_devices=max(0,cur.rowcount)
         return {'sourceEmail':source,'kind':kind,'ips':cleared_ips,'devices':cleared_devices}
+
+    @app.get('/node/api/v1/update/status')
+    def update_status(_scope:str=Depends(auth)):
+        try:return {'service':'DARK XRAY NODE','update':updater.status()}
+        except UpdateBrokerError as ex:raise HTTPException(503,str(ex))
+
+    @app.post('/node/api/v1/update/check')
+    def update_check(body:dict,_scope:str=Depends(auth)):
+        commit=str(body.get('commit') or '').lower() if isinstance(body,dict) else ''
+        try:return {'service':'DARK XRAY NODE','update':updater.check('exact',commit)}
+        except UpdateBrokerError as ex:raise HTTPException(422,str(ex))
+
+    @app.post('/node/api/v1/update/start')
+    def update_start(body:dict,_scope:str=Depends(auth)):
+        commit=str(body.get('commit') or '').lower() if isinstance(body,dict) else ''
+        try:return {'service':'DARK XRAY NODE','update':updater.start(commit)}
+        except UpdateBrokerError as ex:raise HTTPException(422,str(ex))
 
     @app.post('/node/api/v1/token/rotate')
     def rotate_token(body:dict,_scope:str=Depends(auth)):
