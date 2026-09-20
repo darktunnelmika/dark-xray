@@ -100,7 +100,7 @@ class NodeRuntime:
             if not raw or len(raw)>1024*1024 or hashlib.sha256(raw).hexdigest()!=digest:
                 raise PolicyError('Managed Node TLS hash/size validation failed')
             total+=len(raw);ids.add(file_id)
-        if total>6*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 6 MiB')
+        if total>4*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 4 MiB')
         if type(payload.get('desiredRunning',True)) is not bool:raise PolicyError('Invalid desiredRunning')
         return revision,digest,payload
 
