@@ -50,6 +50,10 @@ jobs:
             tools/
             tests/
             deploy/
+            web/
+            install*.sh
+            setup.sh
+            darkxray
             requirements*.txt
             VERSION
             LICENSE
