@@ -58,3 +58,11 @@ test('Overview V4 palette is inherited from Cyber Classic instead of hard-coded 
   assert.match(src,/class="ov4-up-stop"/);
   assert.match(src,/class="ov4-down-stop"/);
 });
+
+
+test('Overview V4 formats current, average and peak percentages consistently',()=>{
+  assert.match(src,/function fmtPercent/);
+  assert.match(src,/resourceCard\('cpu','CPU',fmtPercent\(n\.cpu\)/);
+  assert.match(src,/fmtPercent\(avg\(history\)\)/);
+  assert.match(src,/fmtPercent\(peak\(history\)\)/);
+});
