@@ -135,7 +135,8 @@ class NodeRuntime:
         for file_id,raw in files.items():
             path=root/(file_id+'.pem')
             if path.exists():
-                if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=hashlib.sha256(raw).hexdigest():
+                mode=path.stat().st_mode
+                if path.is_symlink() or not path.is_file() or mode&0o077 or hashlib.sha256(path.read_bytes()).hexdigest()!=hashlib.sha256(raw).hexdigest():
                     raise PolicyError('Existing managed Node TLS file is unsafe')
             else:
                 fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
