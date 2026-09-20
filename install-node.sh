@@ -51,19 +51,10 @@ LIVE="/etc/letsencrypt/live/$CERT_NAME"
 [[ -f "$LIVE/fullchain.pem" && -f "$LIVE/privkey.pem" ]] || fail "Certbot did not produce the expected certificate"
 
 PROVISION_ARGS=(--domain "$DOMAIN" --port "$NODE_PORT" --data-address "$DATA_ADDRESS" --name "$NAME"
-  --ssh-port "$SSH_PORT" --core-version "$CORE_VERSION" --cert "$LIVE/fullchain.pem" --key "$LIVE/privkey.pem")
+  --ssh-port "$SSH_PORT" --core-version "$CORE_VERSION" --cert "$LIVE/fullchain.pem" --key "$LIVE/privkey.pem"
+  --source-commit "$SHA" --source-ref "$REF")
 [[ "$VERIFY_SOURCE" == 1 ]] && PROVISION_ARGS+=(--verified-direct-sources)
 python3 "$TMP/src/tools/provision_node.py" "${PROVISION_ARGS[@]}"
-
-# Persist the exact fetched source identity rather than the temporary checkout label.
-python3 - "$SHA" "$REF" <<'PY'
-import json,os,pwd,sys,time
-from pathlib import Path
-p=Path('/var/lib/dark-xray-node/installed-source.json')
-value=json.loads(p.read_text());value.update(commit=sys.argv[1],ref=sys.argv[2],installed_at=time.time(),role='node-agent')
-tmp=p.with_name('.installed-source.tmp');tmp.write_text(json.dumps(value,indent=2)+'\n')
-os.chmod(tmp,0o640);os.chown(tmp,0,pwd.getpwnam('darkxray').pw_gid);os.replace(tmp,p)
-PY
 
 HOOK="/etc/letsencrypt/renewal-hooks/deploy/dark-xray-node-$DOMAIN"
 cat >"$HOOK" <<EOF
