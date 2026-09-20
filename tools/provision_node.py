@@ -8,6 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node')
 SERVICE=Path('/etc/systemd/system/dark-xray-node.service')
 GUARD_SERVICE=Path('/etc/systemd/system/dark-xray-node-guard.service')
+UPDATE_SERVICE=Path('/etc/systemd/system/dark-xray-node-update.service')
 WRAPPER=Path('/usr/local/bin/darknode')
 
 def run(args,**kw):return subprocess.run([str(x) for x in args],check=True,**kw)
@@ -48,7 +49,7 @@ def main():
     if not 1024<=a.port<=65535 or a.port in {22,10085,*a.ssh_port}:raise SystemExit('Invalid/conflicting Node Agent port')
     if not re.fullmatch(r'v\d+\.\d+\.\d+',a.core_version):raise SystemExit('Invalid Xray version')
     if bool(a.core_archive)!=bool(a.core_sha256):raise SystemExit('Offline core requires archive + sha256')
-    if any(x.exists() for x in (APP,CONF,DATA,SERVICE,GUARD_SERVICE,WRAPPER)):
+    if any(x.exists() for x in (APP,CONF,DATA,SERVICE,GUARD_SERVICE,UPDATE_SERVICE,WRAPPER)):
         raise SystemExit('Existing DARK Node/Panel artifacts found; clean or migrate explicitly before provisioning')
     if Path('/opt/dark-xray').exists() or Path('/etc/dark-xray').exists():
         raise SystemExit('A full DARK XRAY panel exists on this host; agent-only install is intentionally separate')
@@ -63,11 +64,12 @@ def main():
     if account.pw_uid==0:raise SystemExit('Service account must not be root')
 
     APP.mkdir(parents=True,mode=0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
-    needed_backend=['node_agent.py','node_runtime.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py']
+    needed_backend=['node_agent.py','node_runtime.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','node_updated.py','update_bridge.py']
     for name in needed_backend:shutil.copy2(ROOT/'backend'/name,APP/'backend'/name)
-    for name in ['fetch-core.py','import-core.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
+    for name in ['fetch-core.py','import-core.py','update_node.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
     shutil.copy2(ROOT/'deploy'/'dark-xray-node.service',APP/'deploy'/'dark-xray-node.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-guard.service',APP/'deploy'/'dark-xray-node-guard.service')
+    shutil.copy2(ROOT/'deploy'/'dark-xray-node-update.service',APP/'deploy'/'dark-xray-node-update.service')
     for name in ['requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md']:
         shutil.copy2(ROOT/name,APP/name)
     run([sys.executable,'-m','venv',APP/'.venv'])
@@ -130,7 +132,8 @@ def main():
 
     shutil.copy2(APP/'deploy'/'dark-xray-node.service',SERVICE)
     shutil.copy2(APP/'deploy'/'dark-xray-node-guard.service',GUARD_SERVICE)
-    os.chmod(SERVICE,0o644);os.chmod(GUARD_SERVICE,0o644)
+    shutil.copy2(APP/'deploy'/'dark-xray-node-update.service',UPDATE_SERVICE)
+    os.chmod(SERVICE,0o644);os.chmod(GUARD_SERVICE,0o644);os.chmod(UPDATE_SERVICE,0o644)
     WRAPPER.write_text("""#!/usr/bin/env bash
 set -Eeuo pipefail
 case "${1:-status}" in
@@ -156,7 +159,7 @@ esac
     pair_path=CONF/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
     os.chmod(pair_path,0o600);os.chown(pair_path,0,0)
 
-    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
+    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node-update.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',
                       'origin':cfg['public_origin'],'nodeId':node_id,'pairCode':pair_code,'directSourceVerified':bool(a.verified_direct_sources)},indent=2))
 if __name__=='__main__':main()
