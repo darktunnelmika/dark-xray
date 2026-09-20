@@ -185,20 +185,23 @@ function observatoryCard(d){
  <div class="notice">${L('Traffic Engine does not invent live latency/health. leastPing final selection remains a runtime Xray decision unless a verified live API is available.','موتور ترافیک برای تأخیر/سلامت عدد ساختگی نمی‌سازد. انتخاب نهایی leastPing تا وقتی API زنده و تأییدشده‌ای نداشته باشیم، تصمیم زمان اجرای Xray است.')}</div>
  <footer>${button(L('Edit Observatory','ویرایش Observatory'),'te4obsedit','edit','',true)}</footer></article>`;
 }
+function routingSimpleBar(d){
+ const r=d.routing||{},def=d.status?.routing?.default_outbound||d.status?.routing?.defaultOutbound||d.status?.routing?.default_outbound||'—';
+ return `<section class="te5-routing-bar"><div><span>${L('Domain strategy','استراتژی دامنه')}</span><b>${esc(r.domainStrategy||r.domain_strategy||'AsIs')}</b></div><div><span>${L('Default outbound','اوتباند پیش‌فرض')}</span><b>${esc(def)}</b></div><div><span>${L('Rules','قوانین')}</span><b>${fa((r.rules||[]).length)}</b></div></section>`;
+}
 function routingPage(d){
  state.te4.data=d;
  const rules=d.routing.rules||[],bals=d.status.balancers||[];
- return heading(L('Traffic Engine · Routing','موتور ترافیک · مسیریابی'),L('Model the complete traffic decision: match conditions → outbound/balancer → optional dial chain.','تصمیم کامل ترافیک را ببین: شرایط تطبیق ← اوتباند/بالانسر ← زنجیرهٔ اختیاری.'),
+ return heading(L('Routing','مسیریابی'),L('Rules run from top to bottom. Add a rule, choose what it matches, then choose its outbound or balancer.','قوانین از بالا به پایین اجرا می‌شوند؛ شرط را انتخاب کن و مقصد اوتباند یا بالانسر را مشخص کن.'),
   `${button(L('Routing settings','تنظیمات Routing'),'te4routesettings','settings')}${button(L('Add rule','افزودن قانون'),'te4rulenew','plus','',true)}`)+
-  `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
-   ${previewForm(d)}
-   <section class="te4-section"><header><div><small>DARK / RULE ORDER</small><h2>${L('Routing rules','قوانین مسیریابی')}</h2><p>${L('First matching rule wins. Empty conditions mean catch-all.','اولین قانونی که تطبیق پیدا کند اجرا می‌شود؛ شرط خالی یعنی شامل همه.')}</p></div><span>${fa(rules.length)}</span></header>
+  `<div class="te4 te5-routing">${trafficTabs()}${routingSimpleBar(d)}${warnings(d)}
+   <section class="te4-section"><header><div><small>${L('RULES · TOP TO BOTTOM','قوانین · از بالا به پایین')}</small><h2>${L('Routing rules','قوانین مسیریابی')}</h2><p>${L('First matching rule wins. Drag by order buttons; empty match means all traffic.','اولین قانون منطبق اجرا می‌شود؛ شرط خالی یعنی همهٔ ترافیک.')}</p></div><span>${fa(rules.length)}</span></header>
     <div class="te4-rule-list">${rules.length?rules.map(ruleCard).join(''):empty(L('No routing rules. Xray will use the first outbound.','قانون مسیریابی وجود ندارد؛ Xray از اولین اوتباند استفاده می‌کند.'))}</div>
    </section>
-   <section class="te4-section"><header><div><small>DARK / BALANCERS</small><h2>${L('Balancer pools','مجموعه‌های بالانسر')}</h2><p>${L('Selectors use Xray prefix matching, not exact-tag membership.','گزینشگرها در Xray با پیشوند تطبیق داده می‌شوند، نه با عضویت دقیق تگ.')}</p></div><div>${button(L('New balancer','بالانسر جدید'),'te4balnew','plus','',true)}</div></header>
+   <section class="te4-section"><header><div><small>${L('BALANCERS','بالانسرها')}</small><h2>${L('Balancer pools','مجموعه‌های بالانسر')}</h2><p>${L('Selectors use Xray prefix matching, not exact-tag membership.','گزینشگرها در Xray با پیشوند تطبیق داده می‌شوند، نه با عضویت دقیق تگ.')}</p></div><div>${button(L('New balancer','بالانسر جدید'),'te4balnew','plus','',true)}</div></header>
     <div class="te4-bal-grid">${bals.length?bals.map(balancerCard).join(''):empty(L('No balancer configured.','بالانسری تنظیم نشده است.'))}</div>
    </section>
-   ${observatoryCard(d)}
+   <details class="panel te5-advanced-tools"><summary>${L('Advanced Tools · Route Preview & Observatory','ابزار پیشرفته · پیش‌نمایش مسیر و Observatory')}</summary><div>${previewForm(d)}${observatoryCard(d)}</div></details>
   </div>`;
 }
 enginePage=async function(){
