@@ -94,8 +94,8 @@ def main():
     os.chmod(cert,0o640);os.chmod(key,0o640);os.chown(cert,0,account.pw_gid);os.chown(key,0,account.pw_gid)
 
     token='dkn_'+secrets.token_urlsafe(48)
-    token_path=CONF/'token';token_path.write_text(token+'\n',encoding='utf-8')
-    os.chmod(token_path,0o640);os.chown(token_path,0,account.pw_gid)
+    token_path=DATA/'token';token_path.write_text(token+'\n',encoding='utf-8')
+    os.chmod(token_path,0o600);os.chown(token_path,account.pw_uid,account.pw_gid)
     name=safe_name(a.name or os.uname().nodename)
     node_id=safe_name(a.node_id or ('node-'+name+'-'+secrets.token_hex(3)))
     data_address=(a.data_address or domain).strip()
