@@ -450,8 +450,8 @@ function translateRaw(raw){
   if(selected==='en'){
     if(!faChars.test(core))return out;
     if(exact.has(core))return lead+exact.get(core)+tail;
-    for(const [a,b] of exactPhrases)core=core.split(a).join(b);
     for(const [a,b] of phrases)core=core.split(a).join(b);
+    for(const [a,b] of exactPhrases)core=core.split(a).join(b);
     if(faChars.test(core))for(const [a,b] of exactWords)core=replaceFaWord(core,a,b);
     if(faChars.test(core))for(const [a,b] of words)core=replaceFaWord(core,a,b);
     return lead+core+tail;
