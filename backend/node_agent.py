@@ -67,8 +67,10 @@ class AgentToken:
             fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
             with os.fdopen(fd,'w',encoding='utf-8') as out:
                 out.write(str(time.time())+'\n');out.flush();os.fsync(out.fileno())
-        except OSError as ex:
-            raise PolicyError('Node token rotated but Pair Code cleanup failed') from ex
+        except OSError:
+            # Credential rotation already succeeded. Bootstrap cleanup is
+            # best-effort and must never strand Hub/Agent authentication.
+            pass
 
 
 
