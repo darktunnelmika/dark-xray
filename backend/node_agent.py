@@ -65,7 +65,7 @@ def node_identity(path:Path)->str:
     path=Path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size>512:raise PolicyError('Node identity file is missing or unsafe')
     value=path.read_text(encoding='utf-8').strip()
-    if not re.fullmatch(r'[A-Za-z0-9_.@+\\-]{1,128}',value):raise PolicyError('Invalid stable Node identity')
+    if not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,128}',value):raise PolicyError('Invalid stable Node identity')
     return value
 
 class EngineLoop:
