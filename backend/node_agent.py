@@ -14,11 +14,13 @@ import hmac
 import json
 import os
 import re
+import stat
 import threading
 import time
 
 from fastapi import Depends,FastAPI,HTTPException,Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
 
 from core import Config,CoreEngine,CoreError
 from dark_policy import Store,PolicyError
@@ -83,6 +85,55 @@ def node_identity(path:Path)->str:
     if not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,128}',value):raise PolicyError('Invalid stable Node identity')
     return value
 
+
+class AgentRequestBoundary:
+    """Authenticate before JSON parsing; cap bytes even without Content-Length."""
+    MAX_BODY=8*1024*1024
+
+    def __init__(self,app,token:AgentToken,authority:str):
+        self.app,self.token,self.authority=app,token,authority.lower()
+
+    async def __call__(self,scope,receive,send):
+        if scope['type']!='http':
+            await self.app(scope,receive,send);return
+        request=Request(scope)
+        async def secure_send(message):
+            if message['type']=='http.response.start':
+                headers=MutableHeaders(scope=message)
+                headers['Cache-Control']='no-store'
+                headers['X-Content-Type-Options']='nosniff'
+                headers['Referrer-Policy']='no-referrer'
+                headers['X-Frame-Options']='DENY'
+                headers['Content-Security-Policy']="default-src 'none'; frame-ancestors 'none'"
+                headers['Strict-Transport-Security']='max-age=31536000'
+            await send(message)
+        async def reject(status,detail):
+            await JSONResponse({'detail':detail},status)(scope,receive,secure_send)
+        if request.headers.get('host','').lower()!=self.authority:
+            await reject(400,'Unexpected Host');return
+        if not scope.get('path','/').startswith('/node/api/'):
+            await reject(404,'Not Found');return
+        try:self.token.require(request)
+        except HTTPException as ex:
+            await reject(ex.status_code,ex.detail);return
+        lengths=request.headers.getlist('content-length')
+        if len(lengths)>1:
+            await reject(400,'Ambiguous Content-Length');return
+        if lengths:
+            declared=lengths[0]
+            if not re.fullmatch(r'[0-9]+',declared) or len(declared)>10 or int(declared)>self.MAX_BODY:
+                await reject(413,'Request too large');return
+        received=0
+        async def bounded_receive():
+            nonlocal received
+            message=await receive()
+            if message['type']=='http.request':
+                received+=len(message.get('body',b''))
+                if received>self.MAX_BODY:
+                    raise HTTPException(413,'Request too large')
+            return message
+        await self.app(scope,bounded_receive,secure_send)
+
 class EngineLoop:
     def __init__(self,engine:CoreEngine,interval:float):
         self.engine=engine;self.interval=max(1.0,min(60.0,float(interval)));self.stop=threading.Event();self.thread=None
@@ -118,24 +169,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     app=FastAPI(title='DARK XRAY NODE',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.engine=engine;app.state.store=store;app.state.runtime=runtime
 
-    @app.middleware('http')
-    async def security(request:Request,call_next):
-        if request.headers.get('host','').lower()!=public.netloc.lower():
-            return JSONResponse({'detail':'Unexpected Host'},400)
-        if not request.scope.get('path','/').startswith('/node/api/'):
-            return JSONResponse({'detail':'Not Found'},404)
-        if request.method not in ('GET','HEAD','OPTIONS'):
-            declared=request.headers.get('content-length')
-            if declared and (not declared.isdigit() or int(declared)>8*1024*1024):
-                return JSONResponse({'detail':'Request too large'},413)
-        response=await call_next(request)
-        response.headers['Cache-Control']='no-store'
-        response.headers['X-Content-Type-Options']='nosniff'
-        response.headers['Referrer-Policy']='no-referrer'
-        response.headers['X-Frame-Options']='DENY'
-        response.headers['Content-Security-Policy']="default-src 'none'; frame-ancestors 'none'"
-        response.headers['Strict-Transport-Security']='max-age=31536000'
-        return response
+    app.add_middleware(AgentRequestBoundary,token=token,authority=public.netloc)
 
     def auth(request:Request)->str:
         token.require(request)
@@ -277,12 +311,18 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         path=engine.runtime/(kind+'.log')
         if path.is_symlink():raise HTTPException(409,'Unsafe log path')
         try:
-            if not path.is_file():return {'kind':kind,'lines':[]}
-            with path.open('rb') as stream:
-                stream.seek(0,2);end=stream.tell();stream.seek(max(0,end-512*1024))
-                text=stream.read().decode('utf-8',errors='replace')
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        except FileNotFoundError:return {'kind':kind,'lines':[]}
         except OSError as ex:raise HTTPException(503,type(ex).__name__)
-        return {'kind':kind,'lines':[x[-2000:] for x in text.splitlines()[-limit:]]}
+        try:
+            with os.fdopen(fd,'rb') as log:
+                info=os.fstat(log.fileno())
+                if not stat.S_ISREG(info.st_mode):raise HTTPException(409,'Unsafe log file')
+                start=max(0,info.st_size-512*1024)
+                log.seek(start)
+                text=log.read(512*1024).decode('utf-8','replace')
+        except OSError as ex:raise HTTPException(503,type(ex).__name__)
+        return {'kind':kind,'lines':[x[-2000:] for x in text.splitlines()[-limit:]],'truncated':start>0}
 
     return app
 
