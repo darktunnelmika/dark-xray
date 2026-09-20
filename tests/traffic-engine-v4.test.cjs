@@ -64,3 +64,19 @@ test('Traffic Engine V4 calls exported Guided editors directly',()=>{
   assert.match(traffic,/guided\.openOutbound/);
   assert.match(traffic,/guided\.openRule/);
 });
+
+
+test('Routing V5 is rules-first and keeps diagnostics under Advanced Tools',()=>{
+  assert.match(traffic,/routingSimpleBar/);
+  assert.match(traffic,/RULES · TOP TO BOTTOM/);
+  assert.match(traffic,/te5-advanced-tools/);
+  assert.match(traffic,/Advanced Tools · Route Preview & Observatory/);
+  assert.match(css,/Routing V5 — rules-first operator workflow/);
+  assert.match(css,/\.te5-routing \.te4-rule/);
+});
+
+test('Guided rule editor groups source identity and process matches under Advanced',()=>{
+  assert.match(guided,/xv3-rule-advanced/);
+  assert.match(guided,/Advanced match conditions/);
+  assert.match(guided,/editor\.insertBefore\(sections\[3\],sections\[0\]\)/);
+});
