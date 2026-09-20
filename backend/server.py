@@ -165,6 +165,8 @@ class TrafficRoutePreview(Model):
     process:str=Field(default='',max_length=1024)
     vless_route:StrictInt=Field(default=0,ge=0,le=65535)
     attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
+class FullBackupBody(Model):
+    passphrase:str=Field(min_length=12,max_length=512)
 class NodePair(Model):
     code:str=Field(min_length=16,max_length=4096)
 class NodeCreate(Model):
@@ -1646,8 +1648,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             audits=store.db.execute('SELECT COUNT(*) FROM live_audit').fetchone()[0]
             groups=store.db.execute('SELECT COUNT(*) FROM client_groups').fetchone()[0] if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_groups'").fetchone() else 0
         return {'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
-                'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup','full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
-                'restore_isolated':True}
+                'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup',
+                'full_backup_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup/full',
+                'full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
+                'central_node_state_included':True,'restore_isolated':True}
+
+    @app.post('/api/backup/full')
+    def backup_full(body:FullBackupBody,p:Principal=Depends(owner)):
+        from backup import create_backup
+        with tempfile.TemporaryDirectory(prefix='dark-web-backup.') as td:
+            path=Path(td)/'dark-xray-full.darkbackup'
+            manifest=create_backup(Path(store.path).parent,Path(config._path if hasattr(config,'_path') else '/etc/dark-xray/config.json'),path,body.passphrase)
+            raw=path.read_bytes()
+        manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
+        stamp=time.strftime('%Y%m%d-%H%M%S')
+        return Response(raw,media_type='application/octet-stream',
+                        headers={'Content-Disposition':f'attachment; filename="DARK-XRAY-full-{stamp}.darkbackup"',
+                                 'X-DARK-Backup-Schema':str(manifest.get('schema',0))})
 
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
