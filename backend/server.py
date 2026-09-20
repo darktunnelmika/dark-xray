@@ -804,7 +804,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                         'data':base64.b64encode(content).decode('ascii')}
                     cert[key]='managed://'+file_id
         total=sum(len(x['data']) for x in files.values())
-        if total>6*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 6 MiB')
+        if total>4*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 4 MiB')
         return [files[k] for k in sorted(files)]
 
     def build_node_desired_payload(node_id:str)->dict:
