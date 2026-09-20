@@ -45,6 +45,20 @@ class AgentToken:
         if not hmac.compare_digest(value,self.token):raise HTTPException(401,'Invalid DARK node token')
         return self.scope
 
+    def rotate(self,value:str):
+        if not isinstance(value,str) or not value.startswith('dkn_') or not 40<=len(value)<=256:
+            raise PolicyError('Invalid replacement node token')
+        temp=self.path.with_name('.token.rotate.'+str(os.getpid()))
+        fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        try:
+            with os.fdopen(fd,'w',encoding='utf-8') as out:
+                out.write(value+'\n');out.flush();os.fsync(out.fileno())
+            os.replace(temp,self.path)
+        finally:
+            try:temp.unlink(missing_ok=True)
+            except OSError:pass
+        self.token=value
+
 
 class EngineLoop:
     def __init__(self,engine:CoreEngine,interval:float):
@@ -184,6 +198,13 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:b
             if kind in {'devices','all'}:
                 cur=db.execute('DELETE FROM core_devices WHERE email=?',(mirror,));cleared_devices=max(0,cur.rowcount)
         return {'sourceEmail':source,'kind':kind,'ips':cleared_ips,'devices':cleared_devices}
+
+    @app.post('/node/api/v1/token/rotate')
+    def rotate_token(body:dict,_scope:str=Depends(auth)):
+        value=body.get('token') if isinstance(body,dict) else None
+        try:token.rotate(value)
+        except PolicyError as ex:raise HTTPException(422,str(ex))
+        return {'service':'DARK XRAY NODE','rotated':True}
 
     @app.post('/node/api/core/{action}')
     def core_action(action:str,_scope:str=Depends(auth)):
