@@ -490,6 +490,10 @@ class CoreEngine:
                     raise CoreError('Host address must be a plain IP/domain')
                 if type(host.get('port',0))is not int or not 1<=host['port']<=65535: raise CoreError('Invalid host port')
                 if 'enable' in host and type(host['enable'])is not bool:raise CoreError('Host enable must be boolean')
+                runtime=host.get('runtime','local') or 'local'
+                if not isinstance(runtime,str) or (runtime!='local' and not re.fullmatch(r'node:[A-Za-z0-9_.@+\\-]{1,128}',runtime)):
+                    raise CoreError('Host runtime must be local or node:<id>')
+                host['runtime']=runtime
                 for key in ('remark','sni','host','path','alpn','fingerprint','security','finalMask','mihomoIpVersion'):
                     if key in host and (not isinstance(host[key],str) or len(host[key])>8192):raise CoreError('Invalid host '+key)
                 security=host.get('security','same') or 'same'
@@ -1084,7 +1088,7 @@ class CoreEngine:
             if db.execute('SELECT COUNT(*) FROM core_devices WHERE email=?',(email,)).fetchone()[0]>=limit:raise CoreError('Subscription device limit reached',status=403)
             db.execute('INSERT INTO core_devices(email,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?)',(email,fingerprint,os_name[:80],model[:120],now,now))
 
-    def links(self,email:str,fmt:str='raw')->dict:
+    def links(self,email:str,fmt:str='raw',runtime_ready:dict[str,set[int]]|None=None)->dict:
         if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported link format',status=400)
         host_format='raw' if fmt=='base64' else fmt
         d=self.client_detail(email);c=d['client'];links=[];warnings=[]
@@ -1092,8 +1096,13 @@ class CoreEngine:
             ib=self.inbound(i)
             if not ib['enable']:continue
             configured=[h for h in self.section('hosts') if h['inboundId']==i]
-            hs=[h for h in configured if h.get('enable',True) and host_format not in h.get('excludeFromSubTypes',[])] if configured else [{}]
+            if configured:
+                hs=[h for h in configured if h.get('enable',True) and host_format not in h.get('excludeFromSubTypes',[])
+                    and (runtime_ready is None or i in runtime_ready.get(h.get('runtime','local') or 'local',set()))]
+            else:
+                hs=[{}] if runtime_ready is None or i in runtime_ready.get('local',set()) else []
             for host in hs:
+                runtime=host.get('runtime','local') or 'local'
                 address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
                 proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
                 label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
@@ -1156,7 +1165,7 @@ class CoreEngine:
                 else:warnings.append('No subscription generator for '+proto);continue
                 meta={}
                 if host.get('mihomoIpVersion'):meta['mihomoIpVersion']=host['mihomoIpVersion']
-                links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta})
+                links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta,'runtime':runtime})
         return {'links':links,'warnings':warnings,'formats':['raw','base64','json','clash']}
 
     @staticmethod
@@ -1232,9 +1241,9 @@ class CoreEngine:
         try:value.encode('ascii');return value
         except UnicodeEncodeError:return 'base64:'+base64.b64encode(value.encode('utf-8')).decode('ascii')
 
-    def subscription(self,email:str,fmt:str,extra_links:list[dict]|None=None)->tuple[bytes,dict]:
+    def subscription(self,email:str,fmt:str,extra_links:list[dict]|None=None,runtime_ready:dict[str,set[int]]|None=None)->tuple[bytes,dict]:
         if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported subscription format',status=400)
-        settings=self.section('subscription');result=self.links(email,'raw' if fmt=='base64' else fmt)
+        settings=self.section('subscription');result=self.links(email,'raw' if fmt=='base64' else fmt,runtime_ready=runtime_ready)
         if result['warnings']:raise CoreError('Subscription would be incomplete: '+'; '.join(result['warnings']),status=422)
         if extra_links:
             if not isinstance(extra_links,list) or len(extra_links)>2048:raise CoreError('Invalid failover link set',status=500)
