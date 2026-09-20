@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import re
 import socket
 import ssl
 import threading
@@ -190,21 +191,38 @@ class NodeRegistry:
                 store.db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',(address,row['id']))
 
     @staticmethod
+    def _runtime_block_reason(node:dict)->str:
+        desired=node.get('desired_state') or {}
+        if desired.get('last_error'):return 'desired_state_error'
+        if desired.get('pending'):return 'desired_state_pending'
+        health=node.get('health') or {}
+        if not isinstance(health,dict):return 'invalid_health'
+        core=health.get('core') or {}
+        if not isinstance(core,dict):return 'invalid_health'
+        if core.get('state') and core['state']!='running':return 'core_stopped'
+        if core.get('dirty') is True:return 'runtime_dirty'
+        if core.get('last_error'):return 'core_error'
+        if health.get('agent_only') is True and core.get('state')!='running':return 'core_unverified'
+        # Older full-panel nodes do not report revisions. Keep their legacy
+        # assignment contract, but never ignore an explicit unhealthy report.
+        return ''
+
+    @staticmethod
     def _assignment_state(node:dict,assignment:dict,*,now:float|None=None)->dict:
         now=time.time() if now is None else float(now)
         remote_id=int(assignment.get('remote_inbound_id') or 0)
         sync_error=str(assignment.get('last_error') or '')
-        deployed=bool(remote_id and not sync_error)
+        runtime_block=NodeRegistry._runtime_block_reason(node)
+        deployed=bool(remote_id and not sync_error and not runtime_block)
         online=bool(node.get('enabled') and node.get('last_seen') and now-float(node.get('last_seen') or 0)<180 and not node.get('last_error'))
-        if sync_error:
-            deployment_state='sync_error'
-        elif remote_id:
-            deployment_state='deployed'
-        else:
-            deployment_state='pending'
+        if sync_error:deployment_state='sync_error'
+        elif runtime_block:deployment_state=runtime_block
+        elif remote_id:deployment_state='deployed'
+        else:deployment_state='pending'
         if not node.get('enabled'):reason='node_disabled'
         elif sync_error:reason='sync_error'
         elif not remote_id:reason='not_deployed'
+        elif runtime_block:reason=runtime_block
         elif not node.get('failover_enabled'):reason='failover_disabled'
         elif not node.get('data_address'):reason='data_address_missing'
         elif not online:reason='node_offline'
@@ -223,6 +241,11 @@ class NodeRegistry:
                 assigned=[dict(x) for x in self.store.db.execute(
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
             r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180 and not r['last_error'])
+            with self.store.lock:
+                ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
+            desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
+            desired['pending']=bool(desired['revision'] and (desired['revision']!=desired['applied_revision'] or desired['desired_hash']!=desired['applied_hash']))
+            r['desired_state']=desired
             assigned=[self._assignment_state(r,x,now=now) for x in assigned]
             r['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
             r['assignments']=assigned
@@ -239,11 +262,6 @@ class NodeRegistry:
             if r['failover_ready']:r['failover_reason']='ready'
             elif not assigned:r['failover_reason']='no_assignments'
             else:r['failover_reason']=next((x['failover_reason'] for x in assigned if x['failover_reason']!='ready'),'not_deployed')
-            with self.store.lock:
-                ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
-            desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
-            desired['pending']=bool(desired['revision'] and (desired['revision']!=desired['applied_revision'] or desired['desired_hash']!=desired['applied_hash']))
-            r['desired_state']=desired
         return rows
 
     def get(self,node_id:str,*,secret:bool=False)->dict:
@@ -293,7 +311,7 @@ class NodeRegistry:
               last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
               (node_id,name,origin,enc,int(enabled),now,now,data_address,priority,int(failover_enabled),
                int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
-            if reset_probe:
+            if old and old['origin']!=origin:
                 db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=0 WHERE node_id=?',(node_id,))
             old_ids={int(r[0]) for r in db.execute('SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
             for inbound_id in inbound_ids:
@@ -326,9 +344,11 @@ class NodeRegistry:
     @staticmethod
     def _desired_payload(value:dict)->tuple[str,str]:
         if not isinstance(value,dict):raise PolicyError('Node desired state must be an object')
-        raw=json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False)
-        if len(raw)>8*1024*1024:raise PolicyError('Node desired state is too large')
-        return raw,hashlib.sha256(raw.encode()).hexdigest()
+        try:raw=json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)
+        except (TypeError,ValueError) as ex:raise PolicyError('Node desired state must be finite JSON') from ex
+        encoded=raw.encode()
+        if len(encoded)>8*1024*1024:raise PolicyError('Node desired state is too large')
+        return raw,hashlib.sha256(encoded).hexdigest()
 
     def _seal_desired_payload(self,value:dict)->str:
         sealed=json.loads(json.dumps(value,ensure_ascii=False))
@@ -358,10 +378,15 @@ class NodeRegistry:
 
     def set_desired_state(self,node_id:str,value:dict)->dict:
         self.get(node_id)
-        _raw,digest=self._desired_payload(value);sealed_raw=self._seal_desired_payload(value);now=time.time()
+        _raw,digest=self._desired_payload(value);now=time.time()
         with self.store.transaction() as db:
             old=db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
-            revision=int(old['revision']) if old and old['desired_hash']==digest else int(old['revision'] if old else 0)+1
+            if old and old['desired_hash']==digest:
+                return {'node_id':node_id,'revision':int(old['revision']),'hash':digest,'changed':False,
+                        'pending':bool(old['last_error'] or old['revision']!=old['applied_revision'] or digest!=old['applied_hash']),
+                        'updated_at':float(old['updated_at'])}
+            sealed_raw=self._seal_desired_payload(value)
+            revision=int(old['revision'] if old else 0)+1
             applied_revision=int(old['applied_revision']) if old else 0
             applied_hash=str(old['applied_hash']) if old else ''
             applied_at=float(old['applied_at']) if old else 0.
@@ -389,6 +414,7 @@ class NodeRegistry:
         with self.store.transaction() as db:
             row=db.execute('SELECT revision,desired_hash FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
             if not row:raise PolicyError('Node desired state is missing')
+            if revision!=int(row['revision']) or digest!=row['desired_hash']:raise PolicyError('Node acknowledged a stale desired state')
             if error:
                 db.execute('UPDATE remote_node_desired_state SET last_error=? WHERE node_id=?',(str(error)[:500],node_id))
             else:
@@ -658,12 +684,21 @@ class NodeRegistry:
             row=self.store.db.execute("SELECT body FROM core_sections WHERE name='ipguard'").fetchone()
             try:window=max(10,int(json.loads(row[0]).get('window_seconds',120))) if row else 120
             except Exception:window=120
+            remote_only=set()
+            for inbound in self.store.db.execute('SELECT id,body FROM core_inbounds'):
+                try:
+                    body=json.loads(inbound['body']);meta=body.get('panelMeta',{})
+                    if isinstance(meta,dict) and meta.get('deployLocal') is False:remote_only.add(int(inbound['id']))
+                except (ValueError,TypeError,AttributeError):
+                    pass  # Unknown scope still requires Local verification.
             metas=[dict(r) for r in self.store.db.execute('''SELECT c.id,c.limit_ip,m.desired,m.inbounds,
                        c.global_ip_block,c.global_device_block FROM clients c
                        JOIN managed_clients m ON m.email=c.id WHERE m.state!='deleted' ORDER BY c.id''')]
         changed=[];items=[]
         for meta in metas:
             client_id=str(meta['id']);assigned=self._assigned_node_ids(client_id)
+            try:local_required=any(int(i) not in remote_only for i in json.loads(meta['inbounds']))
+            except (ValueError,TypeError):local_required=True
             states={}
             if assigned:
                 marks=','.join('?' for _ in assigned)
@@ -674,7 +709,7 @@ class NodeRegistry:
                       and not states[n]['last_error'] for n in assigned)
             verified=fresh and all(bool(states[n]['source_verified']) for n in assigned)
             ip_values=set()
-            if local_source_verified:
+            if local_source_verified and local_required:
                 with self.store.lock:
                     ip_values.update(str(r[0]) for r in self.store.db.execute(
                         'SELECT DISTINCT ip FROM observations WHERE client_id=? AND last_seen>?',(client_id,now-window)))
@@ -684,7 +719,7 @@ class NodeRegistry:
                     ip_values.update(str(r[0]) for r in self.store.db.execute(
                         'SELECT DISTINCT ip FROM remote_node_ips WHERE client_id=? AND verified=1 AND last_seen>? '
                         'AND node_id IN ('+marks+')',(client_id,now-window,*assigned)))
-            ip_complete=bool(assigned) and local_source_verified and verified
+            ip_complete=bool(assigned) and (not local_required or local_source_verified) and verified
             limit_ip=int(meta['limit_ip'] or 0)
             if not limit_ip or not assigned:
                 ip_block=False
@@ -719,7 +754,7 @@ class NodeRegistry:
                                    (int(ip_block),int(device_block),client_id))
                     changed.append(client_id)
             items.append({'client_id':client_id,'nodes':assigned,'ip_count':len(ip_values),'limit_ip':limit_ip,
-                          'ip_enforceable':ip_complete,'ip_blocked':ip_block,'device_count':len(device_values),
+                          'ip_enforceable':ip_complete,'local_observation_required':local_required,'ip_blocked':ip_block,'device_count':len(device_values),
                           'limit_hwid':limit_hwid,'device_complete':device_complete,'device_blocked':device_block})
         return {'clients':len(items),'changed':changed,'items':items,'window_seconds':window}
 
@@ -744,27 +779,17 @@ class NodeRegistry:
                 'local_devices':local_devices,'remote_devices':remote_devices}
 
     def failover_targets(self,client_id:str)->list[dict]:
-        inbound_ids=self._client_inbounds(client_id)
+        inbound_ids=set(self._client_inbounds(client_id))
         if not inbound_ids:return []
-        marks=','.join('?' for _ in inbound_ids);now=time.time()
-        with self.store.lock:
-            rows=[dict(r) for r in self.store.db.execute(
-                '''SELECT n.id,n.name,n.data_address,n.priority,n.failover_enabled,n.enabled,n.last_seen,
-                          n.last_latency_ms,n.last_error,n.recovery_count,r.local_inbound_id,r.remote_inbound_id,
-                          r.last_error AS assignment_error
-                   FROM remote_node_inbounds r JOIN remote_nodes n ON n.id=r.node_id
-                   WHERE r.local_inbound_id IN ('''+marks+''') ORDER BY n.priority,n.name,n.id''',tuple(inbound_ids))]
-        grouped={}
-        for row in rows:
-            if not row['enabled'] or not row['failover_enabled'] or not row['data_address'] or not row['remote_inbound_id']:
-                continue
-            if row['assignment_error']:continue
-            if not row['last_seen'] or now-float(row['last_seen'])>=180 or row['last_error']:continue
-            target=grouped.setdefault(row['id'],{'node_id':row['id'],'name':row['name'],'address':row['data_address'],
-                'priority':int(row['priority']),'latency_ms':int(row['last_latency_ms'] or 0),
-                'recovery_count':int(row['recovery_count'] or 0),'inbound_ids':[]})
-            target['inbound_ids'].append(int(row['local_inbound_id']))
-        return sorted(grouped.values(),key=lambda x:(x['priority'],x['latency_ms'] or 10**9,x['name'],x['node_id']))
+        targets=[]
+        for node in self.list():
+            ids=[int(a['local_inbound_id']) for a in node['assignments']
+                 if int(a['local_inbound_id']) in inbound_ids and a['failover_ready']]
+            if not ids:continue
+            targets.append({'node_id':node['id'],'name':node['name'],'address':node['data_address'],
+                'priority':int(node['priority']),'latency_ms':int(node['last_latency_ms'] or 0),
+                'recovery_count':int(node['recovery_count'] or 0),'inbound_ids':ids})
+        return sorted(targets,key=lambda x:(x['priority'],x['latency_ms'] or 10**9,x['name'],x['node_id']))
 
     def clear_remote_security(self,client_id:str,kind:str)->dict:
         if kind not in {'ips','devices','all'}:raise PolicyError('Invalid node security clear kind')
@@ -835,7 +860,10 @@ class NodeRegistry:
                                 pass
                         if desired_provider is not None:
                             legacy_bundles=sync_provider(node_id) if sync_provider is not None else None
-                            desired_state=desired_state or desired_provider(node_id)
+                            # Traffic/security callbacks may just have disabled a client.
+                            # Persist before probing for offline visibility, but rebuild here
+                            # so this cycle never sends the pre-quota/pre-block payload.
+                            desired_state=desired_provider(node_id)
                             self.sync_desired_state(node_id,desired_state,legacy_bundles=legacy_bundles)
                             post=self.sync_traffic(node_id)
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
@@ -906,6 +934,14 @@ class NodeRegistry:
         doc,ms=self._request(node_id,'/node/api/core/'+action,'POST',{})
         if not isinstance(doc,dict) or 'engine' not in doc:
             self._request_failed(node_id,'Invalid remote core response');raise PolicyError('Invalid remote core response')
+        if action!='validate' and isinstance(doc.get('engine'),dict):
+            with self.store.transaction() as db:
+                row=db.execute('SELECT last_health FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+                try:health=json.loads(row['last_health'])
+                except (ValueError,TypeError):health={}
+                if not isinstance(health,dict):health={}
+                health['core']=doc['engine']
+                db.execute('UPDATE remote_nodes SET last_health=? WHERE id=?',(json.dumps(health),node_id))
         return {'latency_ms':ms,'result':doc}
 
     def remote_inbounds(self,node_id:str)->dict:
@@ -947,38 +983,45 @@ class NodeRegistry:
             error='Node returned an invalid desired-state acknowledgement'
             self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
             self._request_failed(node_id,error);raise PolicyError(error)
-        items=doc.get('items',[])
-        if not isinstance(items,list):
-            error='Node desired-state acknowledgement is missing assignment status'
+        items=doc.get('items')
+        desired_sources={x['sourceInboundId'] for x in state['payload'].get('assignments',[])
+                         if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
+        by_source={}
+        valid=isinstance(items,list)
+        for item in items if valid else []:
+            if (not isinstance(item,dict) or type(item.get('sourceInboundId')) is not int
+                    or item['sourceInboundId'] not in desired_sources or item['sourceInboundId'] in by_source
+                    or type(item.get('remoteInboundId')) is not int or item['remoteInboundId']<1 or item.get('error')):
+                valid=False;break
+            by_source[item['sourceInboundId']]=item
+        if not valid or set(by_source)!=desired_sources:
+            error='Node returned incomplete or invalid assignment acknowledgements'
             self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
             self._request_failed(node_id,error);raise PolicyError(error)
         now=time.time()
-        by_source={int(x.get('sourceInboundId')):x for x in items
-                   if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
-        desired_sources={int(x.get('sourceInboundId')) for x in state['payload'].get('assignments',[])
-                         if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
         with self.store.transaction() as db:
-            assigned=[int(r[0]) for r in db.execute(
-                'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
+            current=db.execute('SELECT revision,desired_hash FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
+            if not current or int(current['revision'])!=state['revision'] or current['desired_hash']!=state['hash']:
+                raise PolicyError('Node acknowledged a stale desired state')
+            assigned={int(r[0]) for r in db.execute(
+                'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
+            if not desired_sources<=assigned:raise PolicyError('Node assignments changed while applying desired state')
             for source in assigned:
                 item=by_source.get(source)
-                if source not in desired_sources:
-                    db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=0,last_sync=?,last_error=?,updated_at=?
-                                  WHERE node_id=? AND local_inbound_id=?''',
-                               (now,'not present in desired state',now,node_id,source))
-                    continue
-                if not item:
-                    db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=0,last_sync=?,last_error=?,updated_at=?
-                                  WHERE node_id=? AND local_inbound_id=?''',
-                               (now,'node did not acknowledge assignment',now,node_id,source))
-                    continue
-                remote_id=item.get('remoteInboundId');error=str(item.get('error') or '')[:300]
-                if type(remote_id) is not int or remote_id<0:
-                    remote_id=0;error=error or 'invalid remote inbound id'
-                db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?
-                              WHERE node_id=? AND local_inbound_id=?''',
-                           (remote_id,now,error,now,node_id,source))
-        status=self.mark_desired_state(node_id,state['revision'],state['hash'])
+                db.execute("""UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?
+                              WHERE node_id=? AND local_inbound_id=?""",
+                           (item['remoteInboundId'] if item else 0,now,
+                            '' if item else 'not present in desired state',now,node_id,source))
+            # The assignment list and revision acknowledgement commit together.
+            db.execute("""UPDATE remote_node_desired_state SET applied_revision=?,applied_hash=?,applied_at=?,last_error=''
+                          WHERE node_id=?""",(state['revision'],state['hash'],now,node_id))
+            row=db.execute('SELECT last_health FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            try:health=json.loads(row['last_health'])
+            except (ValueError,TypeError):health={}
+            if not isinstance(health,dict):health={}
+            if isinstance(doc.get('core'),dict):health['core']=doc['core']
+            db.execute('UPDATE remote_nodes SET last_health=? WHERE id=?',(json.dumps(health),node_id))
+        status=self.desired_state(node_id,include_payload=False)
         return {'latency_ms':ms,'legacy':False,'desired_state_applied':True,'desired_state':status,
                 'items':items,'core':doc.get('core',{}),'agent':doc,'synced_at':now}
 
