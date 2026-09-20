@@ -324,7 +324,7 @@ class NodeRegistry:
             db.execute('''INSERT INTO remote_node_desired_state(node_id,revision,desired_hash,desired_json,updated_at,applied_revision,applied_hash,applied_at,last_error)
                           VALUES(?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(node_id) DO UPDATE SET revision=excluded.revision,desired_hash=excluded.desired_hash,
-                            desired_json=excluded.desired_json,updated_at=excluded.updated_at,last_error='' ''',
+                            desired_json=excluded.desired_json,updated_at=excluded.updated_at,last_error=excluded.last_error''',
                        (node_id,revision,digest,raw,now,applied_revision,applied_hash,applied_at,''))
         return {'node_id':node_id,'revision':revision,'hash':digest,'changed':not old or old['desired_hash']!=digest,
                 'pending':revision!=applied_revision or digest!=applied_hash,'updated_at':now}
