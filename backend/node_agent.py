@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlsplit
 import argparse
+import asyncio
 import contextlib
 import hmac
 import json
@@ -20,7 +21,6 @@ import time
 
 from fastapi import Depends,FastAPI,HTTPException,Request
 from fastapi.responses import JSONResponse
-from starlette.datastructures import MutableHeaders
 
 from core import Config,CoreEngine,CoreError
 from dark_policy import Store,PolicyError
@@ -87,64 +87,135 @@ def node_identity(path:Path)->str:
 
 
 class AgentRequestBoundary:
-    """Authenticate before JSON parsing; cap bytes even without Content-Length."""
-    MAX_BODY=8*1024*1024
+    """Authenticate before parsing; bound actual bytes, not only Content-Length.
 
-    def __init__(self,app,token:AgentToken,authority:str):
-        self.app,self.token,self.authority=app,token,authority.lower()
+    This is pure ASGI middleware: the entire body is bounded before the router
+    sees any bytes. Chunked requests, disconnects and read timeouts therefore
+    cannot bypass the limit or result in a partially processed command.
+    """
+    MAX_BODY = 8 * 1024 * 1024
+    READ_TIMEOUT = 30.0
+    RESPONSE_HEADERS = {
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'no-referrer',
+        'x-frame-options': 'DENY',
+        'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+        'strict-transport-security': 'max-age=31536000',
+    }
 
-    async def __call__(self,scope,receive,send):
-        if scope['type']!='http':
-            await self.app(scope,receive,send);return
-        request=Request(scope)
-        async def secure_send(message):
-            if message['type']=='http.response.start':
-                headers=MutableHeaders(scope=message)
-                headers['Cache-Control']='no-store'
-                headers['X-Content-Type-Options']='nosniff'
-                headers['Referrer-Policy']='no-referrer'
-                headers['X-Frame-Options']='DENY'
-                headers['Content-Security-Policy']="default-src 'none'; frame-ancestors 'none'"
-                headers['Strict-Transport-Security']='max-age=31536000'
+    def __init__(self, app, token: AgentToken, authority: str):
+        self.app, self.token, self.authority = app, token, authority.lower()
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            await self.app(scope, receive, send)
+            return
+
+        async def secured_send(message):
+            if message['type'] == 'http.response.start':
+                owned = {key.encode() for key in self.RESPONSE_HEADERS}
+                headers = [(key, value) for key, value in message.get('headers', [])
+                           if key.lower() not in owned]
+                headers.extend((key.encode(), value.encode())
+                               for key, value in self.RESPONSE_HEADERS.items())
+                message = {**message, 'headers': headers}
             await send(message)
-        async def reject(status,detail):
-            await JSONResponse({'detail':detail},status)(scope,receive,secure_send)
-        if request.headers.get('host','').lower()!=self.authority:
-            await reject(400,'Unexpected Host');return
-        if not scope.get('path','/').startswith('/node/api/'):
-            await reject(404,'Not Found');return
-        try:self.token.require(request)
-        except HTTPException as ex:
-            await reject(ex.status_code,ex.detail);return
-        lengths=request.headers.getlist('content-length')
-        if len(lengths)>1:
-            await reject(400,'Ambiguous Content-Length');return
+
+        async def reject(status, detail):
+            response = JSONResponse({'detail': detail}, status_code=status)
+            await response(scope, receive, secured_send)
+
+        request = Request(scope)
+        if request.headers.get('host', '').lower() != self.authority:
+            await reject(400, 'Unexpected Host')
+            return
+        if not scope.get('path', '/').startswith('/node/api/'):
+            await reject(404, 'Not Found')
+            return
+        try:
+            self.token.require(request)
+        except HTTPException as exc:
+            await reject(exc.status_code, exc.detail)
+            return
+
+        # Keep duplicate headers visible instead of silently selecting one.
+        lengths = request.headers.getlist('content-length')
+        declared = None
         if lengths:
-            declared=lengths[0]
-            if not re.fullmatch(r'[0-9]+',declared) or len(declared)>10 or int(declared)>self.MAX_BODY:
-                await reject(413,'Request too large');return
-        received=0
-        async def bounded_receive():
-            nonlocal received
-            message=await receive()
-            if message['type']=='http.request':
-                received+=len(message.get('body',b''))
-                if received>self.MAX_BODY:
-                    raise HTTPException(413,'Request too large')
-            return message
-        await self.app(scope,bounded_receive,secure_send)
+            if len(lengths) != 1 or not re.fullmatch(r'[0-9]{1,12}', lengths[0]):
+                await reject(400, 'Invalid Content-Length')
+                return
+            declared = int(lengths[0])
+            if declared > self.MAX_BODY:
+                await reject(413, 'Request too large')
+                return
+        if request.headers.get('content-encoding', 'identity').lower() != 'identity':
+            await reject(415, 'Compressed request bodies are not supported')
+            return
+
+        body = bytearray()
+        try:
+            # A total deadline prevents an endless trickle of small chunks.
+            async with asyncio.timeout(self.READ_TIMEOUT):
+                while True:
+                    message = await receive()
+                    if message['type'] == 'http.disconnect':
+                        return
+                    if message['type'] != 'http.request':
+                        await reject(400, 'Invalid request body')
+                        return
+                    chunk = message.get('body', b'')
+                    if len(body) + len(chunk) > self.MAX_BODY:
+                        await reject(413, 'Request too large')
+                        return
+                    body.extend(chunk)
+                    if not message.get('more_body', False):
+                        break
+        except TimeoutError:
+            await reject(408, 'Request body timed out')
+            return
+        if declared is not None and len(body) != declared:
+            await reject(400, 'Content-Length does not match request body')
+            return
+
+        buffered = bytes(body)
+        del body
+        delivered = False
+
+        async def replay():
+            nonlocal delivered, buffered
+            if not delivered:
+                delivered = True
+                chunk, buffered = buffered, b''
+                return {'type': 'http.request', 'body': chunk, 'more_body': False}
+            return await receive()
+
+        await self.app(scope, replay, secured_send)
 
 class EngineLoop:
-    def __init__(self,engine:CoreEngine,interval:float):
+    def __init__(self,engine:CoreEngine,interval:float,runtime:NodeRuntime|None=None):
+        self.runtime=runtime;self.last_error='';self.last_success=0.0
         self.engine=engine;self.interval=max(1.0,min(60.0,float(interval)));self.stop=threading.Event();self.thread=None
     def start(self):
         if self.thread and self.thread.is_alive():return
         self.stop.clear()
         def run():
             while not self.stop.wait(self.interval):
-                try:self.engine.flush()
-                except Exception:pass
+                self.tick()
         self.thread=threading.Thread(target=run,name='dark-node-engine',daemon=True);self.thread.start()
+    def tick(self):
+        try:
+            # The root broker's dynamic allowlist is volatile. Restore only
+            # locally persisted, validated Xray data ports after its restart.
+            try:
+                if self.runtime is not None:self.runtime.reconcile_guard()
+            finally:
+                # Guard outages must not also stop cumulative traffic collection.
+                self.engine.flush()
+            self.last_error='';self.last_success=time.time()
+        except Exception as exc:
+            self.last_error=type(exc).__name__+': '+str(exc)[:400]
     def close(self):
         self.stop.set()
         if self.thread:self.thread.join(timeout=6)
@@ -154,20 +225,22 @@ class EngineLoop:
 def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,background:bool=True)->FastAPI:
     if not isinstance(node_id,str) or not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,128}',node_id):
         raise PolicyError('Invalid stable Node identity')
-    runtime=NodeRuntime(store,engine,node_id);loop=EngineLoop(engine,engine.config.poll_seconds)
+    runtime=NodeRuntime(store,engine,node_id);loop=EngineLoop(engine,engine.config.poll_seconds,runtime)
     public=urlsplit(engine.config.public_origin)
     @contextlib.asynccontextmanager
     async def lifespan(app):
         if background:
-            if engine.config.core_autostart:
-                try:engine.command('start')
-                except Exception:pass
+            try:
+                runtime.reconcile_guard()
+                if engine.config.core_autostart:engine.command('start')
+            except Exception as exc:
+                loop.last_error=type(exc).__name__+': '+str(exc)[:400]
             loop.start()
         yield
         loop.close();engine.close()
 
     app=FastAPI(title='DARK XRAY NODE',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
-    app.state.engine=engine;app.state.store=store;app.state.runtime=runtime
+    app.state.engine=engine;app.state.store=store;app.state.runtime=runtime;app.state.loop=loop
 
     app.add_middleware(AgentRequestBoundary,token=token,authority=public.netloc)
 
@@ -195,7 +268,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'desired_state':state,'direct_source_verified':bool(engine.config.direct_source_verified)}
+                'desired_state':state,'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')
     def state(_scope:str=Depends(auth)):

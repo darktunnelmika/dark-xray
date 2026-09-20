@@ -259,10 +259,27 @@ class NodeRuntime:
         if mode=='enforce' and not status.get('direct_source_verified'):
             raise PolicyError('Node Guard has not verified direct packet sources')
         if status.get('runtime_port_updates'):
-            client.set_ports(ports)
+            if set(ports)!=set(old):client.set_ports(ports)
         elif set(ports)-set(old):
             if mode=='enforce':raise PolicyError('Node Guard root approval is missing for desired Xray ports')
         return client,old
+
+    def reconcile_guard(self)->None:
+        """Recover volatile broker ports from applied local state, even offline.
+
+        No new revision, inbound edit or Xray restart is needed. The root
+        broker continues to validate protected ports and direct-source approval.
+        An unpaired/never-applied Node must not change the broker allowlist.
+        """
+        with self.engine.lock:
+            if self.status()['appliedRevision']<1:return
+            with self.store.lock:
+                rows=self.store.db.execute(
+                    'SELECT c.body FROM core_inbounds c JOIN node_runtime_inbounds n '
+                    'ON c.id=n.local_inbound_id WHERE n.scope=?',(self.scope,)).fetchall()
+            local={'sections':{'ipguard':self.engine.section('ipguard')},
+                   'assignments':[{'inbound':json.loads(row['body'])} for row in rows]}
+            self._sync_guard_ports(local)
 
     def apply(self,envelope:dict)->dict:
         # Validation, revision comparison, snapshot and commit share one lock.
@@ -278,6 +295,7 @@ class NodeRuntime:
         if revision==current['appliedRevision']:
             if digest!=current['appliedHash']:raise PolicyError('Revision already belongs to a different desired state')
             if not current['lastError']:
+                self.reconcile_guard()
                 return {'changed':False,'appliedRevision':revision,'appliedHash':digest,
                         'items':self.assignment_status(),'core':self.engine.runtime_state()}
         model=self._validated_model(payload);now=time.time()
