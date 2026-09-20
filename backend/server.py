@@ -186,6 +186,9 @@ class NodePatch(Model):
     priority:StrictInt=Field(default=100,ge=1,le=1000)
     failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
+class InboundDeployments(Model):
+    local:bool=True
+    nodeIds:list[str]=Field(default_factory=list,max_length=256)
 class NodeMirrorSync(Model):
     assignments:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
 class NodeMirrorTrafficReset(Model):
@@ -1143,6 +1146,36 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/nodes/{node_id}/core/{action}')
     def remote_node_core(node_id:str,action:str,p:Principal=Depends(owner)):
         writable();result=nodes.remote_core(node_id,action);manager.audit(p.actor,p.actor.id,'node.core.'+action,node_id);return result
+
+    @app.get('/api/inbounds/{inbound_id}/deployments')
+    def inbound_deployments(inbound_id:int,p:Principal=Depends(owner)):
+        inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+        selected=set(nodes.inbound_assignments(inbound_id));fleet=nodes.list()
+        return {'inboundId':inbound_id,'local':meta.get('deployLocal',True) is not False,
+                'nodeIds':sorted(selected),
+                'targets':[{'id':n['id'],'name':n['name'],'online':bool(n.get('online')),'enabled':bool(n.get('enabled')),
+                            'selected':n['id'] in selected,'pending':bool(n.get('desired_state',{}).get('pending'))}
+                           for n in fleet]}
+
+    @app.put('/api/inbounds/{inbound_id}/deployments')
+    def inbound_deployments_put(inbound_id:int,body:InboundDeployments,p:Principal=Depends(owner)):
+        writable();inbound=engine.inbound(inbound_id);fleet=nodes.list();known={str(n['id']) for n in fleet}
+        requested=list(dict.fromkeys(str(x) for x in body.nodeIds))
+        if any(not NAME_RE.fullmatch(x) for x in requested) or not set(requested)<=known:
+            raise HTTPException(400,'Unknown node deployment target')
+        meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+        inbound=copy.deepcopy(inbound);inbound.pop('id',None);inbound.pop('applied',None)
+        meta=copy.deepcopy(meta);meta['deployLocal']=bool(body.local);meta['deploymentTargets']=['local']*int(bool(body.local))+requested
+        inbound['panelMeta']=meta;engine.save_inbound(inbound,inbound_id)
+        before=set(nodes.inbound_assignments(inbound_id));after=set(requested)
+        for node_id in sorted(before|after):
+            nodes.set_inbound_assignment(node_id,inbound_id,node_id in after)
+            # Persist the new Hub desired revision immediately even when a node
+            # is offline. The monitor will apply it when connectivity returns.
+            ensure_node_desired_state(node_id)
+        manager.audit(p.actor,p.actor.id,'inbound.deployments',str(inbound_id),
+                      'local='+str(bool(body.local))+'; nodes='+','.join(sorted(after)))
+        return inbound_deployments(inbound_id,p)
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
