@@ -42,7 +42,63 @@ class NodeRuntime:
               scope TEXT NOT NULL,reset_id TEXT NOT NULL,source_email TEXT NOT NULL,
               up_bytes INTEGER NOT NULL,down_bytes INTEGER NOT NULL,at REAL NOT NULL,
               PRIMARY KEY(scope,reset_id));
+            CREATE TABLE IF NOT EXISTS node_runtime_control(
+              scope TEXT PRIMARY KEY,
+              desired_running INTEGER NOT NULL CHECK(desired_running IN (0,1)),
+              manual_stop INTEGER NOT NULL CHECK(manual_stop IN (0,1)),
+              updated_at REAL NOT NULL);
             ''')
+        self.engine.wants_running=self.control_status()['effective_running']
+
+    def control_status(self)->dict:
+        with self.store.lock:
+            row=self.store.db.execute(
+                'SELECT desired_running,manual_stop,updated_at FROM node_runtime_control WHERE scope=?',
+                (self.scope,)).fetchone()
+        desired=bool(row['desired_running']) if row else bool(self.engine.config.core_autostart)
+        paused=bool(row['manual_stop']) if row else False
+        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused,
+                'persisted':row is not None,'updated_at':float(row['updated_at']) if row else 0.0}
+
+    def _write_control(self,db,desired:bool,paused:bool)->None:
+        db.execute('''INSERT INTO node_runtime_control(scope,desired_running,manual_stop,updated_at)
+                      VALUES(?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
+                      desired_running=excluded.desired_running,manual_stop=excluded.manual_stop,
+                      updated_at=excluded.updated_at''',
+                   (self.scope,int(desired),int(paused),time.time()))
+
+    def command(self,action:str)->dict:
+        # An authenticated Stop is a durable pause, not a temporary process kill.
+        # Ordinary Hub configuration revisions cannot silently undo that pause.
+        with self.engine.lock:
+            if action=='validate':return self.engine.command(action)
+            if action not in {'start','restart','stop'}:raise PolicyError('Unsupported Node core action')
+            self.engine._write()
+            previous=self.control_status()
+            if action=='stop':
+                with self.store.transaction() as db:
+                    self._write_control(db,previous['desired_running'],True)
+                # Even a failed final traffic snapshot must not cause an
+                # automatic restart. Maintenance retries the safe stop later.
+                self.engine.wants_running=False
+                return self.engine.command('stop')
+            with self.store.transaction() as db:self._write_control(db,True,False)
+            try:return self.engine.command(action)
+            except Exception:
+                with self.store.transaction() as db:
+                    self._write_control(db,previous['desired_running'],previous['manual_stop'])
+                self.engine.wants_running=previous['effective_running']
+                raise
+
+    def reconcile_control(self)->bool:
+        # Restore the last accepted control intent from local SQLite, with no
+        # Hub connectivity needed. Never start a child here: flush/start owns it.
+        with self.engine.lock:
+            self.engine.wants_running=False
+            wanted=self.control_status()['effective_running']
+            self.engine.wants_running=wanted
+            if not wanted and self.engine.running:self.engine.command('stop')
+            return wanted
 
     def mirror_email(self,source_email:str)->str:
         if not isinstance(source_email,str) or not source_email or len(source_email)>128:
@@ -225,7 +281,7 @@ class NodeRuntime:
 
     def _snapshot(self)->dict:
         names=('core_inbounds','core_clients','core_sections','clients','owners','observations','bans','core_devices',
-               'node_runtime_inbounds','node_runtime_clients','node_runtime_state','node_runtime_traffic_resets')
+               'node_runtime_inbounds','node_runtime_clients','node_runtime_state','node_runtime_traffic_resets','node_runtime_control')
         out={}
         with self.store.lock:
             for name in names:
@@ -295,10 +351,14 @@ class NodeRuntime:
         if revision==current['appliedRevision']:
             if digest!=current['appliedHash']:raise PolicyError('Revision already belongs to a different desired state')
             if not current['lastError']:
+                self.reconcile_control()
                 self.reconcile_guard()
                 return {'changed':False,'appliedRevision':revision,'appliedHash':digest,
                         'items':self.assignment_status(),'core':self.engine.runtime_state()}
         model=self._validated_model(payload);now=time.time()
+        control=self.control_status()
+        desired_running=payload.get('desiredRunning',True)
+        effective_running=desired_running and not control['manual_stop']
         was_running=self.engine.running;wanted_running=self.engine.wants_running
         guard=None;old_guard_ports=None;snap=None
         try:
@@ -352,11 +412,12 @@ class NodeRuntime:
                 for mirror in stale:
                     db.execute('DELETE FROM observations WHERE client_id=?',(mirror,))
                     db.execute('DELETE FROM core_devices WHERE email=?',(mirror,))
-            if payload.get('desiredRunning',True):
+            if effective_running:
                 core=self.engine.command('start')
             else:
                 self.engine.validate();core=self.engine.runtime_state()
             with self.store.transaction() as db:
+                self._write_control(db,desired_running,control['manual_stop'])
                 db.execute('''INSERT INTO node_runtime_state(scope,applied_revision,applied_hash,updated_at,last_error)
                               VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
                               applied_revision=excluded.applied_revision,applied_hash=excluded.applied_hash,
@@ -397,8 +458,8 @@ class NodeRuntime:
                 if not detail:continue
                 for inbound_id in json.loads(detail['inbounds']):
                     if int(inbound_id) in counts:counts[int(inbound_id)]+=1
-        return [{'sourceInboundId':int(r['source_inbound_id']),'remoteInboundId':int(r['local_inbound_id']),
-                 'clients':counts.get(int(r['source_inbound_id']),0)} for r in rows]
+        return [{'sourceInboundId':int(row['source_inbound_id']),'remoteInboundId':int(row['local_inbound_id']),
+                 'clients':counts.get(int(row['source_inbound_id']),0)} for row in rows]
 
     def reset_result(self,reset_id:str,source_email:str)->dict|None:
         if not isinstance(reset_id,str) or not 8<=len(reset_id)<=128 or not isinstance(source_email,str) or not source_email:

@@ -209,7 +209,9 @@ class EngineLoop:
             # The root broker's dynamic allowlist is volatile. Restore only
             # locally persisted, validated Xray data ports after its restart.
             try:
-                if self.runtime is not None:self.runtime.reconcile_guard()
+                if self.runtime is not None:
+                    self.runtime.reconcile_control()
+                    self.runtime.reconcile_guard()
             finally:
                 # Guard outages must not also stop cumulative traffic collection.
                 self.engine.flush()
@@ -231,8 +233,9 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     async def lifespan(app):
         if background:
             try:
+                wanted=runtime.reconcile_control()
                 runtime.reconcile_guard()
-                if engine.config.core_autostart:engine.command('start')
+                if wanted:engine.command('start')
             except Exception as exc:
                 loop.last_error=type(exc).__name__+': '+str(exc)[:400]
             loop.start()
@@ -268,11 +271,11 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'desired_state':state,'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
+                'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')
     def state(_scope:str=Depends(auth)):
-        return {'service':'DARK XRAY NODE',**runtime.status(),'core':engine.runtime_state()}
+        return {'service':'DARK XRAY NODE',**runtime.status(),'core':engine.runtime_state(),'run_control':runtime.control_status()}
 
     @app.post('/node/api/v1/state/apply')
     def apply_state(body:dict,_scope:str=Depends(auth)):
@@ -374,7 +377,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     @app.post('/node/api/core/{action}')
     def core_action(action:str,_scope:str=Depends(auth)):
         if action not in {'validate','restart','start','stop'}:raise HTTPException(404,'Unknown node core action')
-        try:return {'engine':engine.command(action),'node_agent':True}
+        try:return {'engine':runtime.command(action),'node_agent':True,'run_control':runtime.control_status()}
         except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
 
     @app.get('/node/api/logs/{kind}')
