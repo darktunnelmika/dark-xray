@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import copy
 import hashlib
 import hmac
 import io
@@ -732,6 +733,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         for assignment in assignments:
             source=int(assignment['local_inbound_id']);ib=engine.inbound(source)
             inbound={k:json.loads(json.dumps(v)) for k,v in ib.items() if k not in {'id','applied'}}
+            # Deployment scope belongs to the Hub. A selected remote Node must
+            # run the logical inbound even when Local deployment is disabled.
+            if isinstance(inbound.get('panelMeta'),dict):
+                inbound['panelMeta'].pop('deployLocal',None);inbound['panelMeta'].pop('deploymentTargets',None)
+                if not inbound['panelMeta']:inbound.pop('panelMeta',None)
             clients=[]
             for client in all_clients:
                 if source not in client.get('inboundIds',[]):continue
