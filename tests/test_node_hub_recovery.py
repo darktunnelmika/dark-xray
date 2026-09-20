@@ -52,7 +52,7 @@ def agent(root:Path,credential=TOKEN):
     root.mkdir(parents=True,exist_ok=True)
     fake=root/'fake-xray'
     shutil.copy2(ROOT/'tests/fixtures/fake_xray.py',fake);fake.chmod(0o755)
-    cfg=Config(public_origin=ORIGIN,public_address='node.example.test',
+    cfg=Config(public_origin=ORIGIN,public_address='node.example.test',secure_cookie=True,
                xray_binary=str(fake),xray_assets=str(root),xray_api_port=free_port(),
                core_autostart=False,test_engine=True)
     store=Store(root/'node.sqlite3');engine=CoreEngine(cfg,store,root/'runtime')
@@ -241,3 +241,95 @@ def test_encrypted_hub_backup_rebuilds_fresh_agent_from_restored_desired_state(t
             with node_store.lock:
                 assert node_store.db.execute('SELECT COUNT(*) FROM api_admins').fetchone()[0]==0
     finally:restored_store.close()
+
+
+def load_updater():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('node_update_transaction',ROOT/'tools/update_node.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+def update_fixture(tmp_path,monkeypatch):
+    import sqlite3
+    from types import SimpleNamespace
+    updater=load_updater();app=tmp_path/'app';data=tmp_path/'data';src=tmp_path/'source'
+    for root in (app,data,src):root.mkdir()
+    monkeypatch.setattr(updater,'APP',app);monkeypatch.setattr(updater,'DATA',data)
+    for name in updater.SOURCE_FILES:
+        for root,prefix in ((app,'old-'),(src,'new-')):
+            path=root/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(prefix+name)
+    (app/'VERSION').write_text('0.9.0-rc7');(src/'VERSION').write_text('0.9.0-rc8')
+    for root,label in ((app/'.venv','old-interpreter'),(tmp_path/'candidate-venv','new-interpreter')):
+        (root/'bin').mkdir(parents=True)
+        executable=root/'bin/python';executable.write_text(label);executable.chmod(0o755)
+    with sqlite3.connect(data/'node.sqlite3') as db:
+        db.execute('CREATE TABLE retained(value TEXT)');db.execute("INSERT INTO retained VALUES('before-update')")
+    source={'commit':'a'*40,'version':'0.9.0-rc7','ref':'old','role':'node-agent'}
+    (data/'installed-source.json').write_text(json.dumps(source));(data/'installed-source.json').chmod(0o640)
+    transaction=tmp_path/'rollback';transaction.mkdir(mode=0o700)
+    calls=[]
+    def run(args,**kwargs):
+        calls.append(tuple(map(str,args)));return SimpleNamespace(returncode=0,stdout='',stderr='')
+    monkeypatch.setattr(updater,'run',run)
+    monkeypatch.setattr(updater,'install_units',lambda:None)
+    return updater,app,data,src,tmp_path/'candidate-venv',transaction,calls
+
+
+def test_node_updater_run_supports_real_captured_subprocess(tmp_path):
+    import sys
+    updater=load_updater()
+    result=updater.run([sys.executable,'-c','import sys;print("out");print("err",file=sys.stderr)'])
+    assert result.returncode==0 and result.stdout.strip()=='out' and result.stderr.strip()=='err'
+    output=tmp_path/'log'
+    with output.open('w') as stream:
+        updater.run([sys.executable,'-c','print("streamed")'],stdout=stream)
+    assert output.read_text().strip()=='streamed'
+
+
+def test_node_update_failure_before_venv_switch_never_deletes_old_environment(tmp_path,monkeypatch):
+    updater,app,data,src,venv,transaction,calls=update_fixture(tmp_path,monkeypatch)
+    def broken_copy(_src):raise OSError('injected copy failure before venv rename')
+    monkeypatch.setattr(updater,'copy_source',broken_copy)
+    monkeypatch.setattr(updater,'health_probe',lambda **kwargs:{'service':'DARK XRAY NODE'})
+    with pytest.raises(RuntimeError,match='database restored'):
+        updater.activate_candidate(src,venv,'b'*40,'0.9.0-rc8','b'*40,transaction)
+    executable=app/'.venv/bin/python'
+    assert executable.read_text()=='old-interpreter' and executable.stat().st_mode&0o111
+    assert updater.current_source()['commit']=='a'*40
+
+
+def test_node_update_failed_health_restores_source_database_and_venv(tmp_path,monkeypatch):
+    import sqlite3
+    updater,app,data,src,venv,transaction,calls=update_fixture(tmp_path,monkeypatch)
+    def health(**kwargs):
+        if kwargs.get('expected_version')=='0.9.0-rc8':
+            with sqlite3.connect(data/'node.sqlite3') as db:
+                db.execute("UPDATE retained SET value='new-generation'")
+                db.execute('CREATE TABLE injected_new_schema(value TEXT)')
+            raise RuntimeError('injected post-start health failure')
+        return {'service':'DARK XRAY NODE'}
+    monkeypatch.setattr(updater,'health_probe',health)
+    with pytest.raises(RuntimeError,match='database restored'):
+        updater.activate_candidate(src,venv,'b'*40,'0.9.0-rc8','b'*40,transaction)
+    assert (app/'VERSION').read_text()=='0.9.0-rc7'
+    assert (app/'.venv/bin/python').read_text()=='old-interpreter'
+    with sqlite3.connect(data/'node.sqlite3') as db:
+        assert db.execute('SELECT value FROM retained').fetchone()[0]=='before-update'
+        assert not db.execute("SELECT name FROM sqlite_master WHERE name='injected_new_schema'").fetchone()
+        assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
+    assert updater.current_source()['commit']=='a'*40
+
+
+def test_node_update_success_preserves_source_reader_permissions(tmp_path,monkeypatch):
+    updater,app,data,src,venv,transaction,calls=update_fixture(tmp_path,monkeypatch)
+    metadata=data/'installed-source.json';before=metadata.stat()
+    monkeypatch.setattr(updater,'health_probe',lambda **kwargs:{'service':'DARK XRAY NODE'})
+    result=updater.activate_candidate(src,venv,'b'*40,'0.9.0-rc8','b'*40,transaction)
+    assert result['updated'] and updater.current_source()['commit']=='b'*40
+    after=metadata.stat()
+    assert (after.st_uid,after.st_gid)==(before.st_uid,before.st_gid)
+    assert after.st_mode&0o777==0o640
+    assert (app/'.venv/bin/python').read_text()=='new-interpreter'
+    assert (app/'.venv/bin/python').stat().st_mode&0o111
