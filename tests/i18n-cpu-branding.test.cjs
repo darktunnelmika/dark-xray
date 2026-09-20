@@ -66,3 +66,35 @@ test('technical literals are excluded from language leakage heuristics without d
   assert.ok(i18n.includes(".replace(/\\/[A-Za-z0-9_.-]+"));
   assert.ok(i18n.includes('persianLeakRe.test(auditComparable(raw))'));
 });
+
+
+test('LTR document direction does not disable English normalization and English is the browser default',()=>{
+  assert.match(i18n,/return el\.matches\('\[dir="ltr"\]'\)/);
+  assert.doesNotMatch(i18n,/closest\([^\n]*\[dir="ltr"\]/);
+  assert.match(live,/if\(!localStorage\.getItem\('dark_lang'\)\)localStorage\.setItem\('dark_lang','en'\)/);
+  assert.doesNotMatch(live,/localStorage\.setItem\('dark_lang',state\.me\.ui\?\.language/);
+});
+
+
+test('English normalization applies multi-word exact mappings inside compound labels',()=>{
+  assert.match(i18n,/const exactPhrases=/);
+  assert.match(i18n,/for\(const \[a,b\] of exactPhrases\)core=core\.split\(a\)\.join\(b\)/);
+  assert.ok(i18n.includes("'آدرس‌های عمومی':'Public Endpoints'"));
+  assert.ok(i18n.includes("'نمای کلی':'Overview'"));
+});
+
+
+test('English normalization applies single-word exact mappings inside compound labels',()=>{
+  assert.match(i18n,/const exactWords=/);
+  assert.match(i18n,/for\(const \[a,b\] of exactWords\)core=replaceFaWord\(core,a,b\)/);
+  assert.ok(i18n.includes("'کاربران':'Clients'"));
+  assert.ok(i18n.includes("'نمایندگان':'Resellers'"));
+});
+
+
+test('full sentence translations run before partial phrase and word replacements',()=>{
+  const phrasePos=i18n.indexOf('for(const [a,b] of phrases)core=core.split(a).join(b)');
+  const exactPhrasePos=i18n.indexOf('for(const [a,b] of exactPhrases)core=core.split(a).join(b)');
+  assert.ok(phrasePos>0 && exactPhrasePos>phrasePos);
+  assert.ok(i18n.includes("['با تغییر رمز، تمام نشست‌های این حساب باطل می‌شوند.','Changing the password revokes all sessions for this account.']"));
+});

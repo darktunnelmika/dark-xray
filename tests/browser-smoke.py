@@ -141,6 +141,11 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('desktop language switch stays inside the sidebar instead of covering dashboard content')
             page.screenshot(path=str(OUT/'browser-dashboard.png'),full_page=True)
 
+            assert page.evaluate("localStorage.getItem('dark_lang')")=='en'
+            assert page.evaluate("document.documentElement.lang")=='en'
+            assert page.evaluate("document.documentElement.dir")=='ltr'
+            mark('English is the default browser language and LTR normalization is active')
+
             # Every owner workspace must render without leaving a busy/blank content surface.
             pages=['dashboard','inbounds','clients','resellers','ipguard','finance','sync',
                    'hosts','outbounds','routing','nodes','xray','settings','account']
