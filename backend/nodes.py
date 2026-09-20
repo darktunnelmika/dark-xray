@@ -832,6 +832,26 @@ class NodeRegistry:
         if self.thread:self.thread.join(timeout=6.0)
         self.thread=None
 
+    def remote_update_status(self,node_id:str)->dict:
+        doc,ms=self._request(node_id,'/node/api/v1/update/status',timeout=12.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
+            raise PolicyError('Invalid Node update status response')
+        return {'latency_ms':ms,'update':doc['update']}
+
+    def remote_update_check(self,node_id:str,commit:str)->dict:
+        if not isinstance(commit,str) or not re.fullmatch(r'[0-9a-f]{40}',commit):raise PolicyError('Exact Hub commit required')
+        doc,ms=self._request(node_id,'/node/api/v1/update/check','POST',{'commit':commit},30.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
+            raise PolicyError('Invalid Node update check response')
+        return {'latency_ms':ms,'update':doc['update']}
+
+    def remote_update_start(self,node_id:str,commit:str)->dict:
+        if not isinstance(commit,str) or not re.fullmatch(r'[0-9a-f]{40}',commit):raise PolicyError('Exact Hub commit required')
+        doc,ms=self._request(node_id,'/node/api/v1/update/start','POST',{'commit':commit},30.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
+            raise PolicyError('Invalid Node update start response')
+        return {'latency_ms':ms,'update':doc['update']}
+
     def rotate_token(self,node_id:str,new_token:str)->dict:
         if not isinstance(new_token,str) or not new_token.startswith('dkn_') or not 40<=len(new_token)<=256:
             raise PolicyError('Invalid replacement DARK node token')
