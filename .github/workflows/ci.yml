@@ -53,7 +53,7 @@ jobs:
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/provision.py
           python -m py_compile \
             tools/menu.py tools/update.py tools/provision.py tools/provision_node.py tools/update_node.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/smoke-real.py \
-            tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py tests/test_node_agent_architecture.py \
+            tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py tests/test_node_agent_architecture.py tests/test_node_hub_recovery.py tests/verify-node-install.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py backend/node_agent.py backend/node_runtime.py backend/node_updated.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
           grep -q "report={'version':VERSION" tools/smoke-real.py
@@ -134,6 +134,18 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: bash tests/run-tests.sh
+      - name: Hub backup and Agent API recovery integration
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest tests/test_node_hub_recovery.py -q --junitxml=qa/junit/node-hub-recovery.xml
+      - name: Upload recovery integration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-node-hub-recovery-${{ matrix.python }}
+          path: qa/junit/node-hub-recovery.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   browser:
     runs-on: ubuntu-24.04
@@ -165,7 +177,7 @@ jobs:
           retention-days: 14
 
   real-core:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -198,7 +210,7 @@ jobs:
           retention-days: 14
 
   kernel-firewall:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -224,7 +236,7 @@ jobs:
           retention-days: 14
 
   systemd-recovery:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -246,7 +258,7 @@ jobs:
           retention-days: 14
 
   load-scale:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -315,6 +327,7 @@ jobs:
         env:
           DARK_INSTALL_REF: "${{ github.event.pull_request.head.sha || github.sha }}"
         run: |
+          set -euo pipefail
           systemctl is-enabled dark-xray.service
           systemctl is-active dark-xray.service
           systemctl is-enabled dark-xray-update.service
@@ -391,51 +404,12 @@ jobs:
           PY
       - name: Verify agent-only filesystem and services
         run: |
-          systemctl is-enabled dark-xray-node.service
-          systemctl is-active dark-xray-node.service
-          systemctl is-enabled dark-xray-node-guard.service
-          systemctl is-active dark-xray-node-guard.service
-          systemctl is-enabled dark-xray-node-update.service
-          systemctl is-active dark-xray-node-update.service
-          test ! -e /opt/dark-xray-node/web
-          test ! -e /opt/dark-xray-node/backend/server.py
-          test ! -e /opt/dark-xray-node/backend/auth.py
-          test ! -e /opt/dark-xray
-          test ! -e /etc/dark-xray
-          test -f /var/lib/dark-xray-node/token
-          test -f /var/lib/dark-xray-node/node-id
-          test "$(stat -c '%a' /var/lib/dark-xray-node/token)" = "600"
-          test "$(stat -c '%a' /var/lib/dark-xray-node/node-id)" = "600"
-          test ! -e /etc/dark-xray-node/pair.json
-          test -f /var/lib/dark-xray-node/pair.json
-          test "$(stat -c '%a' /var/lib/dark-xray-node/pair.json)" = "600"
-          sudo python3 -c 'import json; d=json.load(open("/var/lib/dark-xray-node/pair.json")); assert d["pairCode"].startswith("DXN1."); assert d["nodeId"]=="ci-node-001"'
-          EXPECTED="$(git rev-parse HEAD)"
-          sudo python3 - "$EXPECTED" <<'PY'
-          import json,sys
-          from pathlib import Path
-          d=json.loads(Path('/var/lib/dark-xray-node/installed-source.json').read_text())
-          assert d['role']=='node-agent',d
-          assert d['commit']==sys.argv[1],(d,sys.argv[1])
-          PY
+          set -euo pipefail
+          sudo python3 tests/verify-node-install.py --phase filesystem --expected-commit "$(git rev-parse HEAD)" | tee qa/fresh-node-agent-filesystem.json
       - name: Verify authenticated Node HTTPS health
         run: |
-          TOKEN="$(sudo cat /var/lib/dark-xray-node/token)"
-          echo "::add-mask::$TOKEN"
-          curl --fail --silent --show-error --insecure \
-            --resolve node.example.test:9443:127.0.0.1 \
-            -H "Authorization: Bearer $TOKEN" \
-            https://node.example.test:9443/node/api/health > qa/fresh-node-agent-health.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          d=json.loads(Path('qa/fresh-node-agent-health.json').read_text())
-          assert d['service']=='DARK XRAY NODE',d
-          assert d['agent_only'] is True,d
-          assert d['node_id']=='ci-node-001',d
-          assert d['installed_source']['role']=='node-agent',d
-          assert d['core']['state'] in {'running','clean','dirty'},d
-          PY
+          set -euo pipefail
+          sudo python3 tests/verify-node-install.py --phase health --expected-commit "$(git rev-parse HEAD)" --ca /tmp/dark-node-cert.pem | tee qa/fresh-node-agent-health.json
       - name: Capture Node diagnostics on failure
         if: failure()
         run: |
@@ -448,9 +422,9 @@ jobs:
           name: dark-xray-fresh-node-agent-qa
           path: |
             qa/fresh-node-agent-install.json
+            qa/fresh-node-agent-filesystem.json
             qa/fresh-node-agent-health.json
             qa/fresh-node-agent-systemd.txt
             qa/fresh-node-agent-journal.txt
           if-no-files-found: warn
           retention-days: 14
-
