@@ -271,11 +271,13 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
+                'capabilities':{'ordered_control':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')
     def state(_scope:str=Depends(auth)):
-        return {'service':'DARK XRAY NODE',**runtime.status(),'core':engine.runtime_state(),'run_control':runtime.control_status()}
+        return {'service':'DARK XRAY NODE',**runtime.status(),'core':engine.runtime_state(),
+                'run_control':runtime.control_status(),'control_receipt':runtime.command_status()}
 
     @app.post('/node/api/v1/state/apply')
     def apply_state(body:dict,_scope:str=Depends(auth)):
@@ -373,6 +375,12 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         try:token.rotate(value)
         except PolicyError as ex:raise HTTPException(422,str(ex))
         return {'service':'DARK XRAY NODE','rotated':True}
+
+    @app.post('/node/api/v1/control')
+    def ordered_control(body:dict,_scope:str=Depends(auth)):
+        try:return runtime.ordered_command(body)
+        except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
+        except PolicyError as ex:raise HTTPException(422,str(ex))
 
     @app.post('/node/api/core/{action}')
     def core_action(action:str,_scope:str=Depends(auth)):
