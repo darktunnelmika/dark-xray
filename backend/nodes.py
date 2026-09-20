@@ -330,9 +330,35 @@ class NodeRegistry:
         if len(raw)>8*1024*1024:raise PolicyError('Node desired state is too large')
         return raw,hashlib.sha256(raw.encode()).hexdigest()
 
+    def _seal_desired_payload(self,value:dict)->str:
+        sealed=json.loads(json.dumps(value,ensure_ascii=False))
+        files=sealed.get('files',[])
+        if isinstance(files,list):
+            for item in files:
+                if not isinstance(item,dict) or 'data' not in item:continue
+                raw=item.pop('data')
+                if not isinstance(raw,str):raise PolicyError('Invalid managed Node file payload')
+                item['data_enc']=self.cipher.encrypt(raw.encode()).decode()
+        return json.dumps(sealed,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+
+    def _open_desired_payload(self,raw:str)->dict:
+        try:value=json.loads(raw)
+        except Exception as ex:raise PolicyError('Persisted Node desired state is invalid') from ex
+        if not isinstance(value,dict):raise PolicyError('Persisted Node desired state is invalid')
+        files=value.get('files',[])
+        if isinstance(files,list):
+            for item in files:
+                if not isinstance(item,dict):continue
+                if 'data_enc' in item:
+                    enc=item.pop('data_enc')
+                    if not isinstance(enc,str):raise PolicyError('Persisted Node file secret is invalid')
+                    try:item['data']=self.cipher.decrypt(enc.encode()).decode()
+                    except Exception as ex:raise PolicyError('Persisted Node file secret cannot be decrypted') from ex
+        return value
+
     def set_desired_state(self,node_id:str,value:dict)->dict:
         self.get(node_id)
-        raw,digest=self._desired_payload(value);now=time.time()
+        _raw,digest=self._desired_payload(value);sealed_raw=self._seal_desired_payload(value);now=time.time()
         with self.store.transaction() as db:
             old=db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
             revision=int(old['revision']) if old and old['desired_hash']==digest else int(old['revision'] if old else 0)+1
@@ -343,7 +369,7 @@ class NodeRegistry:
                           VALUES(?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(node_id) DO UPDATE SET revision=excluded.revision,desired_hash=excluded.desired_hash,
                             desired_json=excluded.desired_json,updated_at=excluded.updated_at,last_error=excluded.last_error''',
-                       (node_id,revision,digest,raw,now,applied_revision,applied_hash,applied_at,''))
+                       (node_id,revision,digest,sealed_raw,now,applied_revision,applied_hash,applied_at,''))
         return {'node_id':node_id,'revision':revision,'hash':digest,'changed':not old or old['desired_hash']!=digest,
                 'pending':revision!=applied_revision or digest!=applied_hash,'updated_at':now}
 
@@ -354,7 +380,7 @@ class NodeRegistry:
         out={'node_id':node_id,'revision':int(r['revision']),'hash':r['desired_hash'],'updated_at':float(r['updated_at']),
              'applied_revision':int(r['applied_revision']),'applied_hash':r['applied_hash'],'applied_at':float(r['applied_at']),
              'last_error':r['last_error'],'pending':int(r['revision'])!=int(r['applied_revision']) or r['desired_hash']!=r['applied_hash']}
-        if include_payload:out['payload']=json.loads(r['desired_json'])
+        if include_payload:out['payload']=self._open_desired_payload(r['desired_json'])
         return out
 
     def mark_desired_state(self,node_id:str,revision:int,digest:str,*,error:str='')->dict:
