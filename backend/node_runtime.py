@@ -16,6 +16,7 @@ import time
 
 from core import CoreEngine, CoreError
 from dark_policy import Store, PolicyError
+from guard_bridge import BrokerClient
 
 
 STATE_SECTIONS=('outbounds','routing','dns','policy','observatory','ipguard')
@@ -176,6 +177,24 @@ class NodeRuntime:
                     marks=','.join('?' for _ in cols)
                     db.executemany('INSERT INTO '+name+'('+','.join(cols)+') VALUES('+marks+')',rows)
 
+    def _sync_guard_ports(self,payload:dict)->tuple[BrokerClient|None,list[int]|None]:
+        mode=str(payload.get('sections',{}).get('ipguard',{}).get('mode','observe'))
+        ports=sorted({int(a.get('inbound',{}).get('port') or 0) for a in payload.get('assignments',[])
+                      if isinstance(a,dict) and isinstance(a.get('inbound'),dict) and int(a['inbound'].get('port') or 0)>0})
+        client=BrokerClient(self.engine.config.guard_socket)
+        try:status=client.status()
+        except PolicyError:
+            if mode=='enforce':raise
+            return None,None
+        old=[int(x) for x in status.get('allowed_ports',[])]
+        if status.get('runtime_port_updates'):
+            client.set_ports(ports)
+        elif set(ports)-set(old):
+            if mode=='enforce':raise PolicyError('Node Guard root approval is missing for desired Xray ports')
+        if mode=='enforce' and not status.get('direct_source_verified'):
+            raise PolicyError('Node Guard has not verified direct packet sources')
+        return client,old
+
     def apply(self,envelope:dict)->dict:
         revision,digest,payload=self._validate_envelope(envelope)
         current=self.status()
@@ -185,7 +204,9 @@ class NodeRuntime:
         if revision<current['appliedRevision']:
             raise PolicyError('Refusing stale desired-state revision')
         model=self._validated_model(payload);snap=self._snapshot();now=time.time()
+        guard=None;old_guard_ports=None
         try:
+            guard,old_guard_ports=self._sync_guard_ports(payload)
             policies=model['policies'];assignments=model['assignments']
             with self.store.lock:
                 old_mirrors={str(r[0]) for r in self.store.db.execute(
@@ -239,6 +260,9 @@ class NodeRuntime:
                     'validatedHash':model['validated']['hash']}
         except Exception as ex:
             self._restore_snapshot(snap)
+            if guard is not None and old_guard_ports is not None:
+                try:guard.set_ports(old_guard_ports)
+                except Exception:pass
             try:self.engine.command('restart' if self.engine.config.core_autostart else 'stop')
             except Exception:pass
             with self.store.transaction() as db:
