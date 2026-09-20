@@ -148,12 +148,17 @@ def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkey
   if path=='/node/api/mirrors/traffic':return {'items':[],'capturedAt':time.time()},11
   if path=='/node/api/mirrors/security':return {'sourceVerified':False,'items':[],'capturedAt':time.time()},12
   captured.update(node_id=node_id,path=path,method=method,body=body,timeout=timeout)
-  return {'items':[{'sourceInboundId':a,'remoteInboundId':9,'clients':1}],'core':{'state':'running'}},17
+  if path=='/node/api/v1/state/apply':
+   return {'service':'DARK XRAY NODE','appliedRevision':body['revision'],'appliedHash':body['hash'],
+           'items':[{'sourceInboundId':a,'remoteInboundId':9,'clients':1}],'core':{'state':'running'}},17
+  raise AssertionError(path)
  monkeypatch.setattr(app.state.nodes,'_request',fake_request)
  out=c.post('/api/nodes/tr1/sync')
  assert out.status_code==200,out.text
- assert captured['path']=='/node/api/mirrors/sync'
- assignments=captured['body']['assignments']
+ assert captured['path']=='/node/api/v1/state/apply'
+ desired=captured['body']
+ assert desired['revision']>=1 and len(desired['hash'])==64
+ assignments=desired['payload']['assignments']
  assert [x['sourceInboundId'] for x in assignments]==[a]
  assert assignments[0]['inbound']['tag']=='node-a'
  assert [x['sourceEmail'] for x in assignments[0]['clients']]==['alice']
