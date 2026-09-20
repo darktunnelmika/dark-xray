@@ -163,6 +163,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             visit(page,'inbounds')
             page.locator('[data-v3-action="new"]').click()
             form=page.locator('#iv3-editor');form.wait_for(state='visible',timeout=10000)
+            assert form.locator('input[name="deployLocal"]').count()==1 and form.locator('input[name="deployLocal"]').is_checked()
+            assert form.locator('input[name="deployNode"]').count()==0
             assert_language_surface(page,'inbounds editor / English')
             form.locator('[name=remark]').fill('DARK Browser QA / VLESS')
             form.locator('[name=port]').fill('19443')
@@ -205,6 +207,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('[data-act="hv2new"]').click()
             page.locator('.hv3-editor').wait_for(state='visible',timeout=10000)
             page.locator('#dialog-form [name="inboundId"]').select_option(str(inbound_id))
+            assert page.locator('#dialog-form [name="runtime"] option[value="local"]').count()==1
+            page.locator('#dialog-form [name="runtime"]').select_option('local')
             page.locator('#dialog-form [name="address"]').fill('public-browser.example.test')
             page.locator('#dialog-form [name="port"]').fill('20443')
             page.locator('#dialog-form [name="remark"]').fill('BROWSER PUBLIC ENDPOINT')
@@ -216,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             endpoint=next((x for x in hosts if x.get('remark')=='BROWSER PUBLIC ENDPOINT'),None)
             assert endpoint and endpoint['inboundId']==inbound_id
             assert endpoint['address']=='public-browser.example.test' and endpoint['port']==20443
-            assert endpoint['security']=='same' and endpoint['host']=='' and endpoint['path']==''
+            assert endpoint['security']=='same' and endpoint['host']=='' and endpoint['path']=='' and endpoint['runtime']=='local'
             mark('Public Endpoints V3 distinguishes Xray listener from customer-facing address and previews delivery impact')
             page.screenshot(path=str(OUT/'browser-public-endpoints-v3.png'),full_page=True)
 
@@ -309,7 +313,9 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('DNS Guided V3 exposes safe structured controls instead of raw JSON')
 
             visit(page,'routing')
-            page.locator('.te4-preview').wait_for(state='visible',timeout=10000)
+            page.locator('.te5-routing-bar').wait_for(state='visible',timeout=10000)
+            assert page.locator('.te5-advanced-tools').count()==1
+            assert page.locator('.te4-preview').is_hidden()
             open_guided(page,page.locator('[data-act="te4rulenew"]'),'Traffic Engine V4 routing rule editor')
             assert page.locator('#dialog-form [name="targetType"]').count()==1
             assert page.locator('#dialog-form [name="ruleSourceIP"]').count()==1
@@ -325,6 +331,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert any(r.get('ruleTag')=='BROWSER-DIRECT' and r.get('outboundTag')=='browser-proxy' and 'domain:browser.example' in r.get('domain',[]) for r in routing.get('rules',[])),routing
 
             page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-DIRECT')",timeout=10000)
+            page.locator('.te5-advanced-tools').evaluate("x=>x.open=true")
+            page.locator('.te4-preview').wait_for(state='visible',timeout=10000)
             page.locator('#te4-preview-form [name="domain"]').fill('api.browser.example')
             page.locator('#te4-preview-form [name="port"]').fill('443')
             preview_errors=page.locator('.toast.error').count()
@@ -375,6 +383,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#submit-dialog').click()
             page.locator('.xv3-editor').wait_for(state='detached',timeout=10000)
             page.wait_for_function("()=>state.te4?.data?.routing?.rules?.some(r=>r.ruleTag==='BROWSER-BAL')&&state.te4.preview===null",timeout=10000)
+            page.locator('.te5-advanced-tools').evaluate("x=>x.open=true")
+            page.locator('.te4-preview').wait_for(state='visible',timeout=10000)
             page.locator('#te4-preview-form [name="domain"]').fill('www.balance.example')
             preview_errors=page.locator('.toast.error').count()
             preview_seq=page.evaluate("()=>state.te4?.preview_seq||0")
@@ -387,6 +397,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             bal_preview=page.locator('#te4-preview-result').inner_text()
             assert 'browser-proxy' in bal_preview and 'browser-proxy-backup' in bal_preview,bal_preview
 
+            page.locator('.te5-advanced-tools').evaluate("x=>x.open=true")
             open_guided(page,page.locator('[data-act="te4obsedit"]'),'Traffic Engine V4 Observatory editor')
             assert page.locator('#dialog-form input[name="obsSelector"][value="browser-proxy"]').is_checked()
             page.locator('#dialog-form [name="obsInterval"]').fill('45s')
@@ -412,6 +423,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                     VALUES(?,?,?,?,?,'')""",('browser-node',inbound_id,77,now,now))
 
             visit(page,'nodes')
+            page.locator('.nv5-fleet-head').wait_for(state='visible',timeout=10000)
+            page.locator('.nv5-advanced > summary').click()
             page.locator('.nv4-orchestrator').wait_for(state='visible',timeout=10000)
             orch=page.locator('.nv4-inbound').filter(has_text='DARK Browser QA / VLESS')
             assert orch.count()==1
@@ -424,12 +437,19 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-nodes-v4-orchestrator.png'),full_page=True)
 
             page.locator('[data-act="nv2new"]').click()
-            page.locator('#dialog-form .nv2-picker').wait_for(state='visible',timeout=10000)
-            assert page.locator('#dialog-form [name="inboundIds"]').count()>=1
-            assert page.locator('#dialog-form').get_by_text('Clone local inbound to node').count()==0
-            assert 'source inbound port' in page.locator('#dialog-form').inner_text().lower()
-            mark('Nodes V4 Add Node explains assignment and failover port semantics')
+            page.locator('#dialog-form [name="code"]').wait_for(state='visible',timeout=10000)
+            assert page.locator('#dialog-form [name="code"]').get_attribute('placeholder').startswith('DXN1.')
+            assert 'no second web panel' in page.locator('#dialog-form').inner_text().lower()
+            mark('Nodes V5 Add Node uses one-paste lightweight Agent Pair Code')
             page.locator('[data-act="close"]').first.click()
+
+            visit(page,'inbounds')
+            page.locator('[data-v3-action="edit"][data-id="'+str(inbound_id)+'"]').click()
+            page.locator('#iv3-editor').wait_for(state='visible',timeout=10000)
+            node_target=page.locator('#iv3-editor input[name="deployNode"][value="browser-node"]')
+            assert node_target.count()==1 and node_target.is_checked()
+            mark('Inbound editor exposes paired Nodes as first-class deployment targets')
+            page.evaluate("closeDialog()")
 
             visit(page,'finance')
             finance_text=page.locator('#content').inner_text()
