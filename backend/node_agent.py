@@ -58,6 +58,17 @@ class AgentToken:
             try:temp.unlink(missing_ok=True)
             except OSError:pass
         self.token=value
+        # A successful authenticated rotation is the terminal step of DXN1
+        # bootstrap pairing. Remove the reusable bootstrap material locally.
+        pair=self.path.parent/'pair.json'
+        try:
+            if pair.is_file() and not pair.is_symlink():pair.unlink()
+            marker=self.path.parent/'pair-consumed'
+            fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+            with os.fdopen(fd,'w',encoding='utf-8') as out:
+                out.write(str(time.time())+'\n');out.flush();os.fsync(out.fileno())
+        except OSError as ex:
+            raise PolicyError('Node token rotated but Pair Code cleanup failed') from ex
 
 
 
