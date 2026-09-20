@@ -631,14 +631,32 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         netloc=userinfo+host+((':'+str(port)) if port else '')
         return urlunsplit((p.scheme,netloc,p.path,p.query,quote(remark)))
 
+    def runtime_ready_map(email:str)->dict[str,set[int]]:
+        detail=engine.client_detail(email);ids={int(x) for x in detail.get('inboundIds',[])}
+        ready={'local':set()}
+        for inbound_id in ids:
+            inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+            if meta.get('deployLocal',True) is not False:ready['local'].add(inbound_id)
+        for node in nodes.list():
+            if not node.get('enabled') or not node.get('online') or node.get('last_error'):continue
+            key='node:'+str(node['id'])
+            for assignment in node.get('assignments',[]):
+                inbound_id=int(assignment.get('local_inbound_id') or 0)
+                if inbound_id in ids and assignment.get('deployed') and not assignment.get('last_error'):
+                    ready.setdefault(key,set()).add(inbound_id)
+        return ready
+
     def failover_links(email:str)->list[dict]:
         targets=nodes.failover_targets(email)
         if not targets:return []
-        base=engine.links(email,'raw');out=[]
+        detail=engine.client_detail(email);base=engine.links(email,'raw',runtime_ready={'local':set(map(int,detail.get('inboundIds',[])))});out=[]
         for item in base['links']:
             inbound_id=int(item.get('inboundId') or 0)
             for target in targets:
                 if inbound_id not in target['inbound_ids']:continue
+                explicit=any(int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True) and h.get('runtime')=='node:'+str(target['node_id'])
+                             for h in engine.section('hosts'))
+                if explicit:continue
                 remark=str(item['remark'])+' · '+str(target['name'])+' ['+str(target['node_id'])+']'
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
@@ -652,7 +670,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/clients/{email}/links')
     def links(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'credentials')
-        result=engine.links(email);result['failover']=failover_links(email)
+        result=engine.links(email,runtime_ready=runtime_ready_map(email));result['failover']=failover_links(email)
         detail=manager.detail(p.actor,email)
         return {'engine':result,'subscription_url':detail['subscription_url']}
     @app.get('/api/clients/{email}/security-global')
@@ -1658,7 +1676,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if sub.get('auto_detect',True) and any(x in ua for x in ('clash','mihomo')):fmt='clash'
             else:fmt=sub.get('default_format','base64')
         extra=failover_links(row['email'])
-        body,headers=engine.subscription(row['email'],fmt,extra_links=extra)
+        body,headers=engine.subscription(row['email'],fmt,extra_links=extra,runtime_ready=runtime_ready_map(row['email']))
         if extra:headers['x-dark-failover-nodes']=str(len({x['failoverNode'] for x in extra}))
         return Response(body,headers=headers)
 
