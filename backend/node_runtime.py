@@ -187,7 +187,9 @@ class NodeRuntime:
         model=self._validated_model(payload);snap=self._snapshot();now=time.time()
         try:
             policies=model['policies'];assignments=model['assignments']
-            desired_sources={x for a in assignments for x,_,_ in a['clients']}
+            with self.store.lock:
+                old_mirrors={str(r[0]) for r in self.store.db.execute(
+                    'SELECT mirror_email FROM node_runtime_clients WHERE scope=?',(self.scope,))}
             # The agent is an owned runtime: the Hub model replaces all Xray
             # config tables, while observations/traffic history remain local.
             with self.store.transaction() as db:
@@ -222,8 +224,7 @@ class NodeRuntime:
                                 int(bool(policy.get('globalIpBlocked'))),int(bool(policy.get('globalDeviceBlocked')))))
                 # Remove stale observations/devices belonging to mirror identities
                 # no longer controlled by the Hub.
-                stale=[r[0] for r in db.execute('SELECT mirror_email FROM node_runtime_clients WHERE scope=?',(self.scope,))
-                       if r[0] not in {v['mirror'] for v in merged.values()}]
+                stale=old_mirrors-{v['mirror'] for v in merged.values()}
                 for mirror in stale:
                     db.execute('DELETE FROM observations WHERE client_id=?',(mirror,))
                     db.execute('DELETE FROM core_devices WHERE email=?',(mirror,))
