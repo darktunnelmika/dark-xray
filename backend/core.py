@@ -112,7 +112,9 @@ class Config:
         info=path.stat()
         if info.st_mode&0o027 or info.st_uid not in (0,os.geteuid()):
             raise ValueError('Use private config 0600, or root-owned 0640 for the service group')
-        return cls(**json.loads(path.read_text()))  # unknown legacy upstream fields fail closed
+        value=cls(**json.loads(path.read_text()))  # unknown legacy upstream fields fail closed
+        value._path=str(path.resolve())
+        return value
 
 def serialized(fn):
     @wraps(fn)
