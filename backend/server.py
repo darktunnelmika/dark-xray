@@ -1144,15 +1144,27 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:
             if store.db.execute('SELECT 1 FROM remote_nodes WHERE id=? OR origin=?',(node_id,origin)).fetchone():
                 raise HTTPException(409,'Node ID or Origin is already registered')
+        rotated=False
         try:
             nodes.put(node_id,name,origin,token,True,[],data_address,priority,failover)
             probe=nodes.probe(node_id,timeout=8.0)
+            ensure_node_desired_state(node_id)
+            # The installer Pair Code is bootstrap-only. Rotate its credential
+            # after the authenticated probe so a copied DXN1 code cannot be
+            # reused as the long-lived Hub -> Node bearer credential.
+            active_token='dkn_'+secrets.token_urlsafe(48)
+            nodes.rotate_token(node_id,active_token);rotated=True
         except Exception:
-            try:nodes.delete(node_id)
-            except Exception:pass
+            # Before credential rotation the bootstrap registration is safe to
+            # remove. After rotation, retain the registered Node rather than
+            # orphaning an Agent whose original Pair Code has been invalidated.
+            if not rotated:
+                try:nodes.delete(node_id)
+                except Exception:pass
             raise
-        manager.audit(p.actor,p.actor.id,'node.pair',node_id,'agent-only pair code')
-        return {'paired':True,'node':nodes.get(node_id),'health':probe.get('health',{}),'latency_ms':probe.get('latency_ms',0)}
+        manager.audit(p.actor,p.actor.id,'node.pair',node_id,'agent-only pair code; bootstrap credential rotated')
+        return {'paired':True,'pair_code_consumed':True,'node':nodes.get(node_id),
+                'health':probe.get('health',{}),'latency_ms':probe.get('latency_ms',0)}
 
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
