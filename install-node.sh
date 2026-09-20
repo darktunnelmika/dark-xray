@@ -50,7 +50,10 @@ certbot certonly --standalone --non-interactive --agree-tos --preferred-challeng
 LIVE="/etc/letsencrypt/live/$CERT_NAME"
 [[ -f "$LIVE/fullchain.pem" && -f "$LIVE/privkey.pem" ]] || fail "Certbot did not produce the expected certificate"
 
-python3 "$TMP/src/tools/provision_node.py"   --domain "$DOMAIN" --port "$NODE_PORT" --data-address "$DATA_ADDRESS" --name "$NAME"   --ssh-port "$SSH_PORT" --core-version "$CORE_VERSION"   --cert "$LIVE/fullchain.pem" --key "$LIVE/privkey.pem" $([[ "$VERIFY_SOURCE" == 1 ]] && printf %s --verified-direct-sources)
+PROVISION_ARGS=(--domain "$DOMAIN" --port "$NODE_PORT" --data-address "$DATA_ADDRESS" --name "$NAME"
+  --ssh-port "$SSH_PORT" --core-version "$CORE_VERSION" --cert "$LIVE/fullchain.pem" --key "$LIVE/privkey.pem")
+[[ "$VERIFY_SOURCE" == 1 ]] && PROVISION_ARGS+=(--verified-direct-sources)
+python3 "$TMP/src/tools/provision_node.py" "${PROVISION_ARGS[@]}"
 
 # Persist the exact fetched source identity rather than the temporary checkout label.
 python3 - "$SHA" "$REF" <<'PY'
@@ -75,7 +78,7 @@ systemctl enable --now certbot.timer >/dev/null 2>&1 || true
 
 printf '\nNode Agent installed.\n'
 printf 'Service: dark-xray-node.service\n'
-printf 'Origin : https://%s%s\n' "$DOMAIN" "$([[ "$NODE_PORT" == 443 ]] || printf ':%s' "$NODE_PORT")"
+printf 'Origin : https://%s:%s\n' "$DOMAIN" "$NODE_PORT"
 printf '\nPAIR CODE (paste once into DARK XRAY Hub → Nodes → Add Node):\n'
 python3 - <<'PY'
 import json
