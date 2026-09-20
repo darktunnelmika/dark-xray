@@ -1,7 +1,7 @@
 [Unit]
 Description=DARK XRAY lightweight Node Agent
-After=network-online.target
-Wants=network-online.target
+After=network-online.target dark-xray-node-guard.service
+Wants=network-online.target dark-xray-node-guard.service
 
 [Service]
 Type=simple
