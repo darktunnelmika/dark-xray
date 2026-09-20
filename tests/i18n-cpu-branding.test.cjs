@@ -74,3 +74,11 @@ test('LTR document direction does not disable English normalization and English 
   assert.match(live,/if\(!localStorage\.getItem\('dark_lang'\)\)localStorage\.setItem\('dark_lang','en'\)/);
   assert.doesNotMatch(live,/localStorage\.setItem\('dark_lang',state\.me\.ui\?\.language/);
 });
+
+
+test('English normalization applies multi-word exact mappings inside compound labels',()=>{
+  assert.match(i18n,/const exactPhrases=/);
+  assert.match(i18n,/for\(const \[a,b\] of exactPhrases\)core=core\.split\(a\)\.join\(b\)/);
+  assert.ok(i18n.includes("'آدرس‌های عمومی':'Public Endpoints'"));
+  assert.ok(i18n.includes("'نمای کلی':'Overview'"));
+});
