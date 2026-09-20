@@ -493,7 +493,7 @@ class CoreEngine:
                 if type(host.get('port',0))is not int or not 1<=host['port']<=65535: raise CoreError('Invalid host port')
                 if 'enable' in host and type(host['enable'])is not bool:raise CoreError('Host enable must be boolean')
                 runtime=host.get('runtime','local') or 'local'
-                if not isinstance(runtime,str) or (runtime!='local' and not re.fullmatch(r'node:[A-Za-z0-9_.@+\\-]{1,128}',runtime)):
+                if not isinstance(runtime,str) or (runtime!='local' and not re.fullmatch(r'node:[A-Za-z0-9_.@+-]{1,128}',runtime)):
                     raise CoreError('Host runtime must be local or node:<id>')
                 host['runtime']=runtime
                 for key in ('remark','sni','host','path','alpn','fingerprint','security','finalMask','mihomoIpVersion'):
