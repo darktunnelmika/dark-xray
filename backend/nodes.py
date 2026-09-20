@@ -762,10 +762,11 @@ class NodeRegistry:
             results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
         return {'nodes':len(results),'items':results,'reset':True}
 
-    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,traffic_callback=None,security_callback=None):
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None):
         if self.thread and self.thread.is_alive():return
         if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
         if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
+        if desired_provider is not None and not callable(desired_provider):raise ValueError('desired_provider must be callable')
         if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
         if security_callback is not None and not callable(security_callback):raise ValueError('security_callback must be callable')
         self.stop.clear()
@@ -784,7 +785,11 @@ class NodeRegistry:
                                 security=self.sync_security(node_id);security_callback(node_id,security)
                             except (PolicyError,OSError,ValueError):
                                 pass
-                        if sync_provider is not None:
+                        if desired_provider is not None:
+                            legacy_bundles=sync_provider(node_id) if sync_provider is not None else None
+                            self.sync_desired_state(node_id,desired_provider(node_id),legacy_bundles=legacy_bundles)
+                            post=self.sync_traffic(node_id)
+                        elif sync_provider is not None:
                             self.sync_mirrors(node_id,sync_provider(node_id))
                             post=self.sync_traffic(node_id)
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
