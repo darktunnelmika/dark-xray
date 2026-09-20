@@ -2,8 +2,8 @@
 
 Latest intent wins. Superseded, undelivered actions are not replayed as a FIFO.
 Never keep a SQLite transaction open while calling a remote Node.
-This component is not yet wired to the live Hub API/monitor; that integration
-is a separate checkpoint and must include ordered Agent acknowledgement.
+The registry dispatches this register through the authenticated ordered Agent
+API. Historical receipt state must never be confused with current liveness.
 """
 from __future__ import annotations
 import json
@@ -56,12 +56,35 @@ class NodeCommands:
             # The desired-state getter/compiler reconciles it before delivery.
         return self.status(node_id)
 
-    def deliver(self,node_id:str)->dict:
+    def defer(self,node_id:str,command:dict,error:str,reason:str)->dict:
+        """Attach diagnostics only to the still-current pending identity."""
+        with self.store.transaction() as db:
+            cur=db.execute('''UPDATE remote_node_control SET last_error=?
+                              WHERE node_id=? AND revision=? AND command_id=? AND applied_revision<>revision''',
+                           (str(error)[:500],node_id,command['revision'],command['command_id']))
+        current=self.status(node_id)
+        return {'queued':bool(current['pending']),'executed':False,'control':current,'result':None,
+                'delivery_state':reason if cur.rowcount else 'superseded'}
+
+    def config_running(self,node_id:str,default:bool=True)->bool:
+        control=self.status(node_id)
+        if not control['persisted']:return default
+        # Once ordered control is used, config has a stopped fallback. Only a
+        # durable Agent command receipt may grant running intent. Keep this bit
+        # stable after acknowledgement: toggling it would create an unnecessary
+        # config revision/restart after a successfully staged Start. A rebuilt
+        # Agent without receipts stays stopped until explicit recovery/Start.
+        return False
+
+    def deliver(self,node_id:str,*,expected_command_id:str|None=None)->dict:
         command=self.status(node_id)
+        if expected_command_id is not None and command['command_id']!=expected_command_id:
+            return {'queued':bool(command['pending']),'executed':False,'delivery_state':'superseded',
+                    'control':command,'result':None}
         if not command['persisted']:
-            return {'queued':False,'control':command,'result':None}
+            return {'queued':False,'executed':False,'delivery_state':'idle','control':command,'result':None}
         if not command['pending']:
-            return {'queued':False,'control':command,'result':None,'already_applied':True}
+            return {'queued':False,'executed':False,'delivery_state':'acknowledged','control':command,'result':None,'already_applied':True}
         body={'nodeId':node_id,'revision':command['revision'],'commandId':command['command_id'],'action':command['action']}
         try:
             doc,ms=self.registry._request(node_id,'/node/api/v1/control','POST',body,12.0)
@@ -73,12 +96,7 @@ class NodeCommands:
                 or doc['engine'].get('state')!=expected):
                 raise PolicyError('Node did not acknowledge the exact run command and resulting state')
         except (PolicyError,OSError,ValueError) as exc:
-            with self.store.transaction() as db:
-                db.execute('''UPDATE remote_node_control SET last_error=?
-                              WHERE node_id=? AND revision=? AND command_id=? AND applied_revision<>revision''',
-                           (str(exc)[:500],node_id,command['revision'],command['command_id']))
-            current=self.status(node_id)
-            return {'queued':bool(current['pending']),'control':current,'result':None,'delivery_error':str(exc)[:500]}
+            return self.defer(node_id,command,str(exc),'pending')
         with self.store.transaction() as db:
             cur=db.execute('''UPDATE remote_node_control SET applied_revision=?,applied_at=?,last_error=''
                               WHERE node_id=? AND revision=? AND command_id=?''',
@@ -94,4 +112,6 @@ class NodeCommands:
                     health['core']=doc['engine'];health['run_control']=doc.get('run_control',{})
                     db.execute('UPDATE remote_nodes SET last_health=? WHERE id=?',(json.dumps(health),node_id))
         current=self.status(node_id)
-        return {'queued':bool(current['pending']),'control':current,'latency_ms':ms,'result':doc}
+        accepted=bool(cur.rowcount and current['command_id']==command['command_id'] and not current['pending'])
+        return {'queued':bool(current['pending']),'executed':accepted,'control':current,'latency_ms':ms,
+                'delivery_state':'executed' if accepted else 'superseded','result':doc if accepted else None}

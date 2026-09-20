@@ -35,6 +35,7 @@ python -m pytest tests/test_node_guard_recovery.py -q --junitxml=qa/junit/node-g
 python -m pytest tests/test_hub_node_control_store.py -q --junitxml=qa/junit/hub-node-control-store.xml
 python -m pytest tests/test_node_control_lifecycle.py -q --junitxml=qa/junit/node-control-lifecycle.xml
 python -m pytest tests/test_node_ordered_control.py -q --junitxml=qa/junit/node-ordered-control.xml
+python -m pytest tests/test_hub_node_control_live.py -q --junitxml=qa/junit/hub-node-control-live.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
 python -m pytest tests/test_menu_owner_selection.py -q --junitxml=qa/junit/menu-owner-selection.xml
@@ -73,3 +74,4 @@ node --test tests/overview-v4.test.cjs
 node --test tests/i18n-cpu-branding.test.cjs
 node --test tests/xray-guided-v3.test.cjs
 node --test tests/settings-operations.test.cjs
+node --test tests/node-control-live.test.cjs

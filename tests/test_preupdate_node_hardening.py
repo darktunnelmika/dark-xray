@@ -203,8 +203,16 @@ def test_remote_stop_removes_endpoint_readiness_immediately(registry,monkeypatch
     healthy(registry)
     monkeypatch.setattr(registry,'_client_inbounds',lambda client:[1])
     assert registry.failover_targets('alice')
-    monkeypatch.setattr(registry,'_request',lambda *a,**k:({'engine':{'state':'stopped'},'node_agent':True},1))
-    registry.remote_core('n1','stop')
+    def request(node,path,method='GET',body=None,timeout=8.0):
+        if path=='/node/api/health':
+            return {'service':'DARK XRAY NODE','agent_only':True,'node_id':node,
+                    'capabilities':{'ordered_control':1},'core':{'state':'running'}},1
+        assert path=='/node/api/v1/control'
+        return {'service':'DARK XRAY NODE','node_id':node,'revision':body['revision'],
+                'commandId':body['commandId'],'action':'stop','applied':True,
+                'engine':{'state':'stopped'}},1
+    monkeypatch.setattr(registry,'_request',request)
+    assert registry.remote_core('n1','stop')['executed'] is True
     assert registry.list()[0]['online'] is True
     assert registry.failover_targets('alice')==[]
 

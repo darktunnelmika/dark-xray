@@ -20,6 +20,7 @@ import urllib.parse
 from typing import Any
 
 from dark_policy import PolicyError, NAME_RE, Store, normalize_ip
+from node_commands import NodeCommands
 
 
 def token_digest(value:str)->str:
@@ -111,6 +112,7 @@ class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
         self.stop=threading.Event();self.thread:threading.Thread|None=None
+        self._operation_locks={};self._operation_locks_guard=threading.Lock()
         with store.lock:
             store.db.executescript('''
             CREATE TABLE IF NOT EXISTS remote_nodes(
@@ -190,8 +192,19 @@ class NodeRegistry:
                 except PolicyError:continue
                 store.db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',(address,row['id']))
 
+        self.commands=NodeCommands(self)
+
+    def _node_operation(self,node_id:str):
+        # Serialize config/control/probe effects per Node, never under SQLite.
+        # Recording newer intent deliberately does NOT wait for this lock.
+        with self._operation_locks_guard:
+            return self._operation_locks.setdefault(node_id,threading.RLock())
+
     @staticmethod
     def _runtime_block_reason(node:dict)->str:
+        control=node.get('control') or {}
+        if control.get('pending'):return 'control_pending'
+        if control.get('persisted') and not control.get('desired_running'):return 'control_stopped'
         desired=node.get('desired_state') or {}
         if desired.get('last_error'):return 'desired_state_error'
         if desired.get('pending'):return 'desired_state_pending'
@@ -246,6 +259,7 @@ class NodeRegistry:
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
             desired['pending']=bool(desired['revision'] and (desired['revision']!=desired['applied_revision'] or desired['desired_hash']!=desired['applied_hash']))
             r['desired_state']=desired
+            r['control']=self.commands.status(r['id'])
             assigned=[self._assignment_state(r,x,now=now) for x in assigned]
             r['inboundIds']=[int(x['local_inbound_id']) for x in assigned]
             r['assignments']=assigned
@@ -378,8 +392,11 @@ class NodeRegistry:
 
     def set_desired_state(self,node_id:str,value:dict)->dict:
         self.get(node_id)
-        _raw,digest=self._desired_payload(value);now=time.time()
+        now=time.time()
         with self.store.transaction() as db:
+            if isinstance(value,dict) and self.commands.status(node_id)['persisted']:
+                value={**value,'desiredRunning':self.commands.config_running(node_id)}
+            _raw,digest=self._desired_payload(value)
             old=db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
             if old and old['desired_hash']==digest:
                 return {'node_id':node_id,'revision':int(old['revision']),'hash':digest,'changed':False,
@@ -399,13 +416,23 @@ class NodeRegistry:
                 'pending':revision!=applied_revision or digest!=applied_hash,'updated_at':now}
 
     def desired_state(self,node_id:str,*,include_payload:bool=True)->dict:
+        with self.store.lock:
+            return self._desired_state_locked(node_id,include_payload=include_payload)
+
+    def _desired_state_locked(self,node_id:str,*,include_payload:bool=True)->dict:
         self.get(node_id)
         with self.store.lock:r=self.store.db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
         if not r:return {'node_id':node_id,'revision':0,'hash':'','payload':{} if include_payload else None,'pending':False}
         out={'node_id':node_id,'revision':int(r['revision']),'hash':r['desired_hash'],'updated_at':float(r['updated_at']),
              'applied_revision':int(r['applied_revision']),'applied_hash':r['applied_hash'],'applied_at':float(r['applied_at']),
              'last_error':r['last_error'],'pending':int(r['revision'])!=int(r['applied_revision']) or r['desired_hash']!=r['applied_hash']}
-        if include_payload:out['payload']=self._open_desired_payload(r['desired_json'])
+        if include_payload:
+            value=self._open_desired_payload(r['desired_json'])
+            control=self.commands.status(node_id)
+            if control['persisted'] and value.get('desiredRunning',True)!=self.commands.config_running(node_id):
+                self.set_desired_state(node_id,value)
+                return self._desired_state_locked(node_id,include_payload=True)
+            out['payload']=value
         return out
 
     def mark_desired_state(self,node_id:str,revision:int,digest:str,*,error:str='')->dict:
@@ -438,6 +465,7 @@ class NodeRegistry:
             db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_security_state WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_desired_state WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_control WHERE node_id=?',(node_id,))
             cur=db.execute('DELETE FROM remote_nodes WHERE id=?',(node_id,))
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
@@ -507,6 +535,10 @@ class NodeRegistry:
         self._request_failed(node_id,str(err));raise err from last_error
 
     def probe(self,node_id:str,*,timeout:float=8.0)->dict:
+        with self._node_operation(node_id):
+            return self._probe_locked(node_id,timeout=timeout)
+
+    def _probe_locked(self,node_id:str,*,timeout:float=8.0)->dict:
         now=time.time()
         health,ms=self._request(node_id,'/node/api/health',timeout=timeout)
         if not isinstance(health,dict) or health.get('service')!='DARK XRAY NODE':
@@ -845,6 +877,10 @@ class NodeRegistry:
                 with self.store.lock:ids=[r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY id')]
                 for node_id in ids:
                     if self.stop.is_set():return
+                    command=self.commands.status(node_id)
+                    if command['pending'] and command['action']=='stop':
+                        try:self.deliver_pending_control(node_id)
+                        except (PolicyError,OSError,ValueError):pass
                     desired_state=None
                     if desired_provider is not None:
                         try:desired_state=desired_provider(node_id)
@@ -881,6 +917,7 @@ class NodeRegistry:
                                     security=self.sync_security(node_id);security_callback(node_id,security)
                                 except (PolicyError,OSError,ValueError):
                                     pass
+                        self.deliver_pending_control(node_id)
                     except (PolicyError,OSError,ValueError):
                         pass
                 if self.stop.wait(interval):return
@@ -930,19 +967,39 @@ class NodeRegistry:
         return {'rotated':True,'latency_ms':ms}
 
     def remote_core(self,node_id:str,action:str)->dict:
-        if action not in {'validate','restart','start','stop'}:raise PolicyError('Unsupported remote core action')
-        doc,ms=self._request(node_id,'/node/api/core/'+action,'POST',{})
-        if not isinstance(doc,dict) or 'engine' not in doc:
-            self._request_failed(node_id,'Invalid remote core response');raise PolicyError('Invalid remote core response')
-        if action!='validate' and isinstance(doc.get('engine'),dict):
-            with self.store.transaction() as db:
-                row=db.execute('SELECT last_health FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-                try:health=json.loads(row['last_health'])
-                except (ValueError,TypeError):health={}
-                if not isinstance(health,dict):health={}
-                health['core']=doc['engine']
-                db.execute('UPDATE remote_nodes SET last_health=? WHERE id=?',(json.dumps(health),node_id))
-        return {'latency_ms':ms,'result':doc}
+        if not isinstance(action,str) or action not in {'validate','restart','start','stop'}:
+            raise PolicyError('Unsupported remote core action')
+        if action=='validate':
+            doc,ms=self._request(node_id,'/node/api/core/validate','POST',{})
+            if not isinstance(doc,dict) or not isinstance(doc.get('engine'),dict):
+                self._request_failed(node_id,'Invalid remote core response')
+                raise PolicyError('Invalid remote core response')
+            return {'latency_ms':ms,'result':doc,'queued':False,'validated':True}
+        self.commands.record(node_id,action)
+        return self.deliver_pending_control(node_id)
+
+    def deliver_pending_control(self,node_id:str)->dict:
+        with self._node_operation(node_id):
+            command=self.commands.status(node_id)
+            if not command['pending']:return self.commands.deliver(node_id)
+            try:
+                node=self.get(node_id)
+                if not node['enabled']:
+                    return self.commands.defer(node_id,command,'Node is disabled; enable it to deliver the pending command','disabled')
+                result=self.probe(node_id,timeout=5.0);health=result['health']
+                if health.get('agent_only') is True and health.get('node_id')!=node_id:
+                    return self.commands.defer(node_id,command,'Agent identity mismatch; verify Node enrolment','identity_mismatch')
+                capabilities=health.get('capabilities')
+                version=capabilities.get('ordered_control') if isinstance(capabilities,dict) else None
+                if health.get('agent_only') is not True or type(version) is not int or version!=1:
+                    return self.commands.defer(node_id,command,'Agent lacks ordered control v1; update the Node Agent. No legacy command was sent','unsupported_agent')
+                # A resumed core must not run a known-outdated configuration.
+                desired=self.desired_state(node_id,include_payload=False)
+                if command['action']!='stop' and (desired.get('pending') or desired.get('last_error')):
+                    return self.commands.defer(node_id,command,'Waiting for desired configuration acknowledgement before resume','configuration_pending')
+            except (PolicyError,OSError,ValueError) as exc:
+                return self.commands.defer(node_id,command,str(exc),'pending')
+            return self.commands.deliver(node_id,expected_command_id=command['command_id'])
 
     def remote_inbounds(self,node_id:str)->dict:
         doc,ms=self._request(node_id,'/node/api/inbounds')
@@ -964,6 +1021,22 @@ class NodeRegistry:
                 'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
 
     def sync_desired_state(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None)->dict:
+        if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
+            raise PolicyError('Invalid Hub desired-state envelope')
+        with self._node_operation(node_id):
+            control=self.deliver_pending_control(node_id)
+            if control['queued'] and control['delivery_state']!='configuration_pending':
+                return {**control,'desired_state_applied':False,'sync_deferred':True,'items':[]}
+            current=self.desired_state(node_id)
+            if state.get('revision')!=current['revision'] or state.get('hash')!=current['hash']:
+                raise PolicyError('Desired state changed before delivery; retry synchronization')
+            result=self._sync_desired_state_locked(node_id,state,legacy_bundles=legacy_bundles)
+            control=self.deliver_pending_control(node_id)
+            result['control']=control['control'];result['queued']=control['queued']
+            if control.get('executed'):result['core']=control['result']['engine']
+            return result
+
+    def _sync_desired_state_locked(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None)->dict:
         if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
             raise PolicyError('Invalid Hub desired-state envelope')
         body={'revision':state['revision'],'hash':state['hash'],'payload':state['payload']}
@@ -1026,6 +1099,8 @@ class NodeRegistry:
                 'items':items,'core':doc.get('core',{}),'agent':doc,'synced_at':now}
 
     def sync_mirrors(self,node_id:str,bundles:list[dict])->dict:
+        if self.commands.status(node_id)['pending']:
+            raise PolicyError('Ordered Node control is pending; legacy mirror synchronization is deferred')
         if not isinstance(bundles,list) or len(bundles)>256:raise PolicyError('Invalid node mirror bundle')
         doc,ms=self._request(node_id,'/node/api/mirrors/sync','POST',{'assignments':bundles},30.0)
         if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
@@ -1039,4 +1114,3 @@ class NodeRegistry:
                               WHERE node_id=? AND local_inbound_id=?''',
                            (int(item.get('remoteInboundId') or 0),now,str(item.get('error') or '')[:300],now,node_id,source))
         return {'latency_ms':ms,'items':doc['items'],'core':doc.get('core',{}),'synced_at':now}
-

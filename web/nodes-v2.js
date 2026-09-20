@@ -3,6 +3,7 @@
 'use strict';
 if(typeof enginePage!=='function'||typeof runAction!=='function')return;
 const baseEnginePage=enginePage,baseRunAction=runAction;
+const controlBusy=new Set();
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 state.nv2=state.nv2||{nodes:[],orchestration:null,nodeError:'',orchestrationError:''};
 
@@ -15,6 +16,7 @@ async function loadNodes(){
 function healthMetric(label,value){return `<div><small>${e(label)}</small><b>${e(value??'—')}</b></div>`;}
 function assignedNames(n){return (n.inboundIds||[]).map(id=>{let ib=state.inbounds.find(x=>x.id===id);return ib?(ib.remark||ib.tag):'#'+id;});}
 const reasonLabels={
+ control_pending:['COMMAND PENDING','فرمان در انتظار'],control_stopped:['STOP REQUESTED','توقف درخواست شده'],
  ready:['IN SUBSCRIPTION','داخل اشتراک'],not_deployed:['NOT DEPLOYED','مستقر نشده'],sync_error:['SYNC ERROR','خطای همگام‌سازی'],
  node_disabled:['NODE DISABLED','نود غیرفعال'],failover_disabled:['FAILOVER OFF','فیل‌اور خاموش'],
  data_address_missing:['NO DATA ADDRESS','آدرس داده ندارد'],node_offline:['NODE OFFLINE','نود آفلاین'],no_assignments:['NO ASSIGNMENTS','بدون تخصیص']
@@ -25,12 +27,31 @@ function assignmentChip(a){
  const ib=state.inbounds.find(x=>x.id===Number(a.local_inbound_id)),name=ib?(ib.remark||ib.tag):'#'+a.local_inbound_id;
  return `<span class="nv4-assignment ${reasonClass(a.failover_reason)}"><b>${e(name)}</b><small>${e(a.deployment_state||'pending')} · ${e(reasonLabel(a.failover_reason))}</small></span>`;
 }
+function controlBanner(n){
+ const c=n.control||{};if(!c.persisted)return '';
+ const action=String(c.action||'').toUpperCase(),phase=c.pending?L('COMMAND PENDING','فرمان در انتظار'):L('LAST COMMAND ACKNOWLEDGED','آخرین فرمان تأیید شده');
+ const hint=c.pending?L('Saved on the Hub; not confirmed as executed. Disabled nodes wait until enabled.','در Hub ذخیره شده؛ اجرای آن هنوز تأیید نشده است. نود غیرفعال تا فعال‌سازی مجدد منتظر می‌ماند.'):L('This is a command receipt, not a live health check.','این وضعیت، رسید فرمان است؛ نه بررسی زندهٔ سلامت.');
+ return `<div class="notice ${c.pending?'warning':''}" data-node-control="${c.pending?'pending':'acknowledged'}"><b>${e(phase)} · ${e(action)} · r${e(c.revision)}</b><p>${e(hint)}</p>${c.last_error?`<div class="nv2-error">${e(c.last_error)}</div>`:''}</div>`;
+}
+function controlMessage(r,action){
+ if(r.queued||r.control?.pending){
+  if(r.delivery_state==='unsupported_agent')return L('Command saved, not executed: update the Node Agent to support ordered control.','فرمان ذخیره شد، اجرا نشد: برای کنترل نسخه‌دار، Agent نود را آپدیت کن.');
+  if(r.delivery_state==='identity_mismatch')return L('Command saved, not executed: Node identity does not match.','فرمان ذخیره شد، اجرا نشد: شناسهٔ نود مطابقت ندارد.');
+  if(r.delivery_state==='disabled')return L('Command saved; delivery is paused until the Node is enabled.','فرمان ذخیره شد؛ ارسال آن تا فعال‌سازی نود متوقف است.');
+  if(r.delivery_state==='configuration_pending')return L('Command saved; waiting for configuration synchronization before resume.','فرمان ذخیره شد؛ برای شروع، ابتدا باید تنظیمات همگام شود.');
+  return L('Command saved and awaiting Node acknowledgement; the monitor will retry.','فرمان ذخیره شد و در انتظار تأیید نود است؛ مانیتور دوباره تلاش می‌کند.');
+ }
+ if(action==='validate'&&r.validated)return L('Remote configuration validation completed.','اعتبارسنجی تنظیمات راه‌دور انجام شد.');
+ if(r.executed===true)return L('Node acknowledged the requested core action.','نود اجرای فرمان هسته را تأیید کرد.');
+ return L('No execution acknowledgement for this request; refresh Node status.','برای این درخواست تأیید اجرا دریافت نشد؛ وضعیت نود را تازه‌سازی کن.');
+}
 function nodeCard(n){
  const h=n.health||{},core=h.core||{},status=!n.enabled?'disabled':n.online?'online':n.last_error?'error':'offline';
  const desired=n.desired_state||{},assigned=assignedNames(n),pending=!!desired.pending;
  const desiredLabel=desired.last_error?L('ERROR','خطا'):pending?L('PENDING r','در انتظار r')+String(desired.revision||0):desired.revision?L('SYNCED','همگام'):L('NOT DEPLOYED','مستقر نشده');
  return `<article class="panel nv2-node"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(status)}</b></div></div>
  <div class="nv2-metrics">${healthMetric(L('Latency','تأخیر'),n.last_latency_ms?`${n.last_latency_ms} ms`:'—')}${healthMetric('Xray',core.state||'—')}${healthMetric(L('Inbounds','اینباندها'),assigned.length)}${healthMetric(L('Deployment','استقرار'),desiredLabel)}</div>
+ ${controlBanner(n)}
  ${assigned.length?`<div class="nv2-assigned"><span>${L('DEPLOYED / ASSIGNED','تخصیص اینباند')}</span><div>${assigned.map(x=>`<span class="nv4-assignment ${pending?'warn':'ready'}"><b>${e(x)}</b></span>`).join('')}</div></div>`:''}
  ${n.last_error?`<div class="nv2-error">${e(n.last_error)}</div>`:''}${desired.last_error?`<div class="nv2-error">${e(desired.last_error)}</div>`:''}
  <div class="nv2-actions">${n.enabled?button(L('Sync','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`,pending):''}${button(L('Manage','مدیریت'),'nv2edit','settings',`data-id="${e(n.id)}"`,true)}${button(L('Check','بررسی'),'nv2probe','activity',`data-id="${e(n.id)}"`)}</div></article>`;
@@ -62,7 +83,7 @@ function inboundOrchestration(row){
 async function nodesPage(){
  let d=await loadNodes(),errs='';
  if(d.nodeError)errs+=`<div class="notice error">${L('Node registry could not be loaded: ','فهرست نودها دریافت نشد: ')}${e(d.nodeError)}</div>`;
- const online=d.nodes.filter(x=>x.online).length,pending=d.nodes.filter(x=>x.desired_state?.pending).length;
+ const online=d.nodes.filter(x=>x.online).length,pending=d.nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
  return heading(L('Nodes','نودها'),L('Install the lightweight agent once, pair it here, then manage deployments from this Hub.','Agent سبک را یک‌بار نصب و Pair کن؛ بعد همه استقرارها را از همین Hub مدیریت کن.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
  `<div class="nv2">${errs}<section class="nv5-fleet-head"><div>${healthMetric(L('Nodes','نودها'),d.nodes.length)}${healthMetric(L('Online','آنلاین'),online)}${healthMetric(L('Pending changes','تغییر در انتظار'),pending)}</div><p>${L('Nodes do not need a second control panel. Inbounds, clients, traffic and security are owned by this Hub.','نودها پنل دوم لازم ندارند؛ اینباند، کاربر، ترافیک و امنیت از همین Hub مدیریت می‌شود.')}</p></section>
  <section><div class="nv4-section-title"><div><small>DARK NODE FLEET</small><h2>${L('Servers','سرورها')}</h2></div><span>${fa(d.nodes.length)}</span></div><div class="nv2-grid">${d.nodes.length?d.nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'))}</div></section>
@@ -71,7 +92,7 @@ async function nodesPage(){
 enginePage=async function(){if(state.page==='nodes')return nodesPage();return baseEnginePage();};
 function inboundPicker(selected=[]){return `<div class="nv2-picker">${state.inbounds.map(ib=>{let on=selected.includes(ib.id);return `<label class="${on?'active':''}"><input type="checkbox" name="inboundIds" value="${ib.id}" ${on?'checked':''}><span class="nv2-pick-dot"></span><span><b>${e(ib.remark||ib.tag)}</b><small>#${ib.id} · ${e(ib.protocol)} · ${e(ib.network||'tcp')} / ${e(ib.security||'none')} · :${ib.port}</small></span></label>`;}).join('')}</div>`;}
 function manageActions(n){
- return `<div class="span-2 nv5-manage-actions"><div class="nv2-form-title"><b>${L('Remote operations','عملیات راه‌دور')}</b><small>${L('Daily Node operations stay in the Hub; SSH is only for recovery.','عملیات روزمره Node از Hub انجام می‌شود؛ SSH فقط برای بازیابی است.')}</small></div><div>${button(L('Health Check','بررسی سلامت'),'nv2probe','activity',`data-id="${e(n.id)}"`)}${button(L('Sync Now','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`)}${button(L('Remote Inbounds','اینباندهای Node'),'nv2inbounds','server',`data-id="${e(n.id)}"`)}${button(L('Sync Security','همگام‌سازی امنیت'),'nv2security','shield',`data-id="${e(n.id)}"`)}${button(L('Validate Xray','اعتبارسنجی Xray'),'nv2core','check',`data-id="${e(n.id)}" data-core="validate"`)}${button(L('Restart Xray','ری‌استارت Xray'),'nv2core','refresh',`data-id="${e(n.id)}" data-core="restart"`)}${button(L('Logs','لاگ‌ها'),'nv2logs','log',`data-id="${e(n.id)}"`)}${button(L('Update to Hub Version','آپدیت به نسخه Hub'),'nv2update','download',`data-id="${e(n.id)}"`,true)}${button(L('Delete Node','حذف Node'),'nv2delete','trash',`data-id="${e(n.id)}"`)}</div></div>`;
+ return `${controlBanner(n)}<div class="span-2 nv5-manage-actions"><div class="nv2-form-title"><b>${L('Remote operations','عملیات راه‌دور')}</b><small>${L('Daily Node operations stay in the Hub; SSH is only for recovery.','عملیات روزمره Node از Hub انجام می‌شود؛ SSH فقط برای بازیابی است.')}</small></div><div>${button(L('Health Check','بررسی سلامت'),'nv2probe','activity',`data-id="${e(n.id)}"`)}${button(L('Sync Now','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`)}${button(L('Remote Inbounds','اینباندهای Node'),'nv2inbounds','server',`data-id="${e(n.id)}"`)}${button(L('Sync Security','همگام‌سازی امنیت'),'nv2security','shield',`data-id="${e(n.id)}"`)}${button(L('Validate Xray','اعتبارسنجی Xray'),'nv2core','check',`data-id="${e(n.id)}" data-core="validate"`)}${button(L('Start Xray','شروع Xray'),'nv2core','play',`data-id="${e(n.id)}" data-core="start"`)}${button(L('Stop Xray','توقف Xray'),'nv2core','stop',`data-id="${e(n.id)}" data-core="stop"`)}${button(L('Restart Xray','ری‌استارت Xray'),'nv2core','refresh',`data-id="${e(n.id)}" data-core="restart"`)}${button(L('Logs','لاگ‌ها'),'nv2logs','log',`data-id="${e(n.id)}"`)}${button(L('Update to Hub Version','آپدیت به نسخه Hub'),'nv2update','download',`data-id="${e(n.id)}"`,true)}${button(L('Delete Node','حذف Node'),'nv2delete','trash',`data-id="${e(n.id)}"`)}</div></div>`;
 }
 async function nodeDialog(id){
  const n=state.nv2.nodes.find(x=>x.id===id);if(!n)throw Error(L('Node not found.','نود پیدا نشد.'));
@@ -99,9 +120,17 @@ runAction=async function(act,el){
  if(act==='nv2new'){await pairNodeDialog();return;}if(act==='nv2edit'){await nodeDialog(el.dataset.id);return;}
  if(act==='nv2probe'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/probe','POST',{});toast(`${L('Node online','نود آنلاین')} · ${r.latency_ms} ms`);});return;}
  if(act==='nv2inbounds'){await refreshAfterRemote(()=>showNodeInbounds(el.dataset.id));return;}
- if(act==='nv2sync'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/sync','POST',{});toast(`${L('Node synchronized','نود همگام شد')} · ${(r.items||[]).length} ${L('inbounds','اینباند')} · ${bytes(r.traffic?.charged_bytes||0)} ${L('new traffic','ترافیک جدید')}`);});return;}
+ if(act==='nv2sync'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/sync','POST',{});if(r.queued||r.sync_deferred){toast(controlMessage(r));return;}toast(`${L('Node synchronized','نود همگام شد')} · ${(r.items||[]).length} ${L('inbounds','اینباند')} · ${bytes(r.traffic?.charged_bytes||0)} ${L('new traffic','ترافیک جدید')}`);});return;}
  if(act==='nv2security'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/security','POST',{});toast(`${L('Security synchronized','امنیت همگام شد')} · ${r.node.ips} IP · ${r.node.devices} ${L('devices','دستگاه')}`);});return;}
- if(act==='nv2core'){let action=el.dataset.core;if(action==='restart'&&!confirm(L('Restart Xray on the remote node? Active sessions may disconnect.','Xray روی نود راه‌دور ری‌استارت شود؟ اتصال‌ها ممکن است قطع شوند.')))return;await refreshAfterRemote(async()=>{await api('/api/nodes/'+enc(el.dataset.id)+'/core/'+action,'POST',{});toast(L('Remote core action completed.','عملیات هستهٔ راه‌دور انجام شد.'));});return;}
+ if(act==='nv2core'){
+  const action=el.dataset.core,id=el.dataset.id;
+  if(!['validate','start','stop','restart'].includes(action)||controlBusy.has(id))return;
+  if(action!=='validate'&&!confirm(action==='stop'?L('Stop Xray on this Node? Sessions will disconnect; use Start to resume.','Xray این نود متوقف شود؟ اتصال‌ها قطع می‌شوند؛ برای ادامه از شروع استفاده کن.'):action==='restart'?L('Restart Xray on the remote node? Active sessions may disconnect.','Xray روی نود راه‌دور ری‌استارت شود؟ اتصال‌ها ممکن است قطع شوند.'):L('Start Xray on this Node?','Xray روی این نود شروع شود؟')))return;
+  controlBusy.add(id);
+  try{await refreshAfterRemote(async()=>{const r=await api('/api/nodes/'+enc(id)+'/core/'+action,'POST',{});toast(controlMessage(r,action));});}
+  finally{controlBusy.delete(id);}
+  return;
+ }
  if(act==='nv2logs'){await showNodeLogs(el.dataset.id);return;}
  if(act==='nv2logkind'){await showNodeLogs(el.dataset.id,el.dataset.kind);return;}
  if(act==='nv2update'){const id=el.dataset.id;await refreshAfterRemote(async()=>{const checked=await api('/api/nodes/'+enc(id)+'/update/check','POST',{}),u=checked.update||{},candidate=u.candidate||{};if(!candidate.ready)throw Error(L('Node update candidate is not verified by CI.','نسخه آپدیت Node توسط CI تأیید نشده است.'));if(!candidate.update_available){toast(L('Node is already on the Hub version.','Node همین نسخه Hub را دارد.'));return;}if(!confirm(L('Update this Node to the exact Hub commit? The Node Agent and Xray may restart briefly.','این Node به SHA دقیق Hub آپدیت شود؟ Agent و Xray ممکن است کوتاه ری‌استارت شوند.')))return;await api('/api/nodes/'+enc(id)+'/update/start','POST',{});toast(L('Node update started. Health will recover automatically after restart.','آپدیت Node شروع شد؛ بعد از ری‌استارت وضعیت سلامت خودکار برمی‌گردد.'));});return;}
