@@ -28,6 +28,8 @@ const exact=new Map(Object.entries({
  'قطع دستی در موتور محلی':'Disabled in local engine',
  'مرکز کنترل':'CONTROL CENTER',
  'نمای کلی':'Overview',
+ 'آدرس‌های عمومی':'Public Endpoints',
+ 'محیط آزمون خودکار — هستهٔ شبیه‌ساز؛ این اعداد دادهٔ VPS نیستند.':'Automated test environment — simulated core; these values are not VPS telemetry.',
  'اینباندها':'Inbounds',
  'کاربران':'Clients',
  'نمایندگان':'Resellers',
@@ -365,6 +367,9 @@ for(const [faText,enText] of exact){
   if(faChars.test(faText)&&enText&&!reverseExact.has(enText))reverseExact.set(enText,faText);
 }
 for(const [enText,faText] of faExact)reverseExact.set(enText,faText);
+const exactPhrases=[...exact.entries()]
+  .filter(([faText])=>faChars.test(faText)&&/[\s/·:()،؛؟.—-]/.test(faText))
+  .sort((a,b)=>b[0].length-a[0].length);
 const reversePhrases=phrases
   .filter(([faText,enText])=>faChars.test(faText)&&enText)
   .map(([faText,enText])=>[enText,faText])
@@ -442,6 +447,7 @@ function translateRaw(raw){
   if(selected==='en'){
     if(!faChars.test(core))return out;
     if(exact.has(core))return lead+exact.get(core)+tail;
+    for(const [a,b] of exactPhrases)core=core.split(a).join(b);
     for(const [a,b] of phrases)core=core.split(a).join(b);
     if(faChars.test(core))for(const [a,b] of words)core=replaceFaWord(core,a,b);
     return lead+core+tail;
