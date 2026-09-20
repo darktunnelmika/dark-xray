@@ -38,15 +38,18 @@ class AgentToken:
         if not token.startswith('dkn_') or not 40<=len(token)<=256:raise PolicyError('Invalid node token')
         self.token=token
 
-    def require(self,request:Request)->str:
+    def require(self,request:Request)->None:
+        # Authentication proves possession only; it must not derive or change
+        # the stable identity used by runtime tables and traffic counters.
         header=request.headers.get('authorization','')
         if not header.startswith('Bearer '):raise HTTPException(401,'DARK node token required')
         value=header[7:]
-        if not hmac.compare_digest(value,self.token):raise HTTPException(401,'Invalid DARK node token')
-        return self.scope
+        try:valid=hmac.compare_digest(value,self.token)
+        except TypeError:valid=False
+        if not valid:raise HTTPException(401,'Invalid DARK node token')
 
     def rotate(self,value:str):
-        if not isinstance(value,str) or not value.startswith('dkn_') or not 40<=len(value)<=256:
+        if not isinstance(value,str) or not value.startswith('dkn_') or not 40<=len(value)<=256 or not value.isascii():
             raise PolicyError('Invalid replacement node token')
         temp=self.path.with_name('.token.rotate.'+str(os.getpid()))
         fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
@@ -71,7 +74,6 @@ class AgentToken:
             # Credential rotation already succeeded. Bootstrap cleanup is
             # best-effort and must never strand Hub/Agent authentication.
             pass
-
 
 
 def node_identity(path:Path)->str:
@@ -99,6 +101,8 @@ class EngineLoop:
 
 
 def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,background:bool=True)->FastAPI:
+    if not isinstance(node_id,str) or not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,128}',node_id):
+        raise PolicyError('Invalid stable Node identity')
     runtime=NodeRuntime(store,engine,node_id);loop=EngineLoop(engine,engine.config.poll_seconds)
     public=urlsplit(engine.config.public_origin)
     @contextlib.asynccontextmanager
@@ -133,15 +137,18 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         response.headers['Strict-Transport-Security']='max-age=31536000'
         return response
 
-    auth=token.require
+    def auth(request:Request)->str:
+        token.require(request)
+        return node_id
+
     updater=UpdateBrokerClient('/run/dark-xray-node-update/control.sock',timeout=12)
 
     @app.get('/node/api/health')
     def health(_scope:str=Depends(auth)):
         system=engine.system();state=runtime.status();core=engine.runtime_state()
         with store.lock:
-            assigned=store.db.execute('SELECT COUNT(*) FROM node_runtime_inbounds WHERE scope=?',(token.scope,)).fetchone()[0]
-            clients=store.db.execute('SELECT COUNT(*) FROM node_runtime_clients WHERE scope=?',(token.scope,)).fetchone()[0]
+            assigned=store.db.execute('SELECT COUNT(*) FROM node_runtime_inbounds WHERE scope=?',(_scope,)).fetchone()[0]
+            clients=store.db.execute('SELECT COUNT(*) FROM node_runtime_clients WHERE scope=?',(_scope,)).fetchone()[0]
         source={}
         source_path=engine.runtime.parent/'installed-source.json'
         try:
@@ -189,23 +196,24 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     def traffic_reset(body:dict,_scope:str=Depends(auth)):
         source=str(body.get('sourceEmail') or '');reset_id=str(body.get('resetId') or '')
         if not source or not 8<=len(reset_id)<=128:raise HTTPException(400,'Invalid traffic reset request')
-        try:cached=runtime.reset_result(reset_id,source)
-        except PolicyError as ex:raise HTTPException(409,str(ex))
-        if cached:return cached
-        mirror=runtime.mirror_for_source(source)
-        if not mirror:raise HTTPException(404,'Mirrored client is not present')
-        result=engine.reset(mirror)
-        if not result:raise HTTPException(404,'Mirrored traffic state is missing')
-        up,down=CoreEngine.counters(result)
-        try:return runtime.remember_reset(reset_id,source,up,down)
-        except PolicyError as ex:raise HTTPException(409,str(ex))
+        with engine.lock:
+            try:cached=runtime.reset_result(reset_id,source)
+            except PolicyError as ex:raise HTTPException(409,str(ex))
+            if cached:return cached
+            mirror=runtime.mirror_for_source(source)
+            if not mirror:raise HTTPException(404,'Mirrored client is not present')
+            result=engine.reset(mirror)
+            if not result:raise HTTPException(404,'Mirrored traffic state is missing')
+            up,down=CoreEngine.counters(result)
+            try:return runtime.remember_reset(reset_id,source,up,down)
+            except PolicyError as ex:raise HTTPException(409,str(ex))
 
     @app.get('/node/api/mirrors/security')
     def security_state(_scope:str=Depends(auth)):
         engine.read_ip_log();items=[]
         with store.lock:
             mappings=[dict(r) for r in store.db.execute(
-                'SELECT source_email,mirror_email FROM node_runtime_clients WHERE scope=? ORDER BY source_email',(token.scope,))]
+                'SELECT source_email,mirror_email FROM node_runtime_clients WHERE scope=? ORDER BY source_email',(_scope,))]
             for mapping in mappings:
                 ips=[{'ip':r['ip'],'firstSeen':float(r['first_seen']),'lastSeen':float(r['last_seen'])}
                      for r in store.db.execute('SELECT ip,first_seen,last_seen FROM observations WHERE client_id=? ORDER BY last_seen DESC',
@@ -270,7 +278,9 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         if path.is_symlink():raise HTTPException(409,'Unsafe log path')
         try:
             if not path.is_file():return {'kind':kind,'lines':[]}
-            text=path.read_text(encoding='utf-8',errors='replace')[-512*1024:]
+            with path.open('rb') as stream:
+                stream.seek(0,2);end=stream.tell();stream.seek(max(0,end-512*1024))
+                text=stream.read().decode('utf-8',errors='replace')
         except OSError as ex:raise HTTPException(503,type(ex).__name__)
         return {'kind':kind,'lines':[x[-2000:] for x in text.splitlines()[-limit:]]}
 
