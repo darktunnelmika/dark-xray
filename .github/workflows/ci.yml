@@ -371,6 +371,8 @@ jobs:
             --node-id ci-node-001 \
             --ssh-port 22 \
             --core-version v26.3.27 \
+            --source-commit "$(git rev-parse HEAD)" \
+            --source-ref ci-fresh-node \
             --cert /tmp/dark-node-cert.pem \
             --key /tmp/dark-node-key.pem > /tmp/fresh-node-agent-install.log 2>&1; then
               cat /tmp/fresh-node-agent-install.log
