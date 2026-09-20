@@ -210,6 +210,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if background:
             manager.start();nodes.start(interval=max(5.0,min(60.0,float(config.poll_seconds))),
                                       sync_provider=lambda node_id:build_node_bundles(node_id),
+                                      desired_provider=lambda node_id:ensure_node_desired_state(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True),
                                       security_callback=apply_global_security)
         yield
@@ -734,6 +735,32 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             bundles.append({'sourceInboundId':source,'inbound':inbound,'clients':clients})
         return bundles
 
+    def build_node_desired_payload(node_id:str)->dict:
+        bundles=build_node_bundles(node_id)
+        assigned={int(x['sourceInboundId']) for x in bundles}
+        with store.lock:
+            policy_rows={str(r['id']):dict(r) for r in store.db.execute(
+                'SELECT id,limit_ip,global_ip_block,global_device_block FROM clients')}
+        policies=[]
+        seen=set()
+        for client in engine.clients():
+            ids={int(x) for x in client.get('inboundIds',[])}
+            if not ids.intersection(assigned):continue
+            email=str(client.get('email',''))
+            if not email or email in seen:continue
+            seen.add(email);row=policy_rows.get(email,{})
+            policies.append({'sourceEmail':email,'limitIp':int(row.get('limit_ip') or 0),
+                             'limitHwid':int(client.get('limitHwid') or 0),
+                             'globalIpBlocked':bool(row.get('global_ip_block')),
+                             'globalDeviceBlocked':bool(row.get('global_device_block'))})
+        sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
+        return {'schema':1,'nodeId':node_id,'desiredRunning':True,'sections':sections,
+                'assignments':bundles,'security':{'clients':policies}}
+
+    def ensure_node_desired_state(node_id:str)->dict:
+        nodes.set_desired_state(node_id,build_node_desired_payload(node_id))
+        return nodes.desired_state(node_id)
+
     def sync_node_assignments(node_id:str)->dict:
         pre=nodes.sync_traffic(node_id)
         if pre.get('charged_bytes'):manager.tick(suppress=True)
@@ -743,7 +770,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         except PolicyError:
             pass
         bundles=build_node_bundles(node_id)
-        result=nodes.sync_mirrors(node_id,bundles)
+        state=ensure_node_desired_state(node_id)
+        result=nodes.sync_desired_state(node_id,state,legacy_bundles=bundles)
         post=nodes.sync_traffic(node_id)
         if post.get('charged_bytes'):manager.tick(suppress=True)
         security_post=None
@@ -1046,6 +1074,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
+    @app.get('/api/nodes/{node_id}/desired')
+    def remote_node_desired(node_id:str,p:Principal=Depends(owner)):
+        return ensure_node_desired_state(node_id)
+
     @app.post('/api/nodes/{node_id}/sync')
     def remote_node_sync(node_id:str,p:Principal=Depends(owner)):
         writable();result=sync_node_assignments(node_id)
