@@ -1133,7 +1133,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
     @app.delete('/api/nodes/{node_id}')
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
-        writable();result=nodes.delete(node_id);apply_global_security()
+        writable()
+        refs=[h for h in engine.section('hosts') if h.get('runtime')=='node:'+node_id]
+        if refs:raise HTTPException(409,'Move or delete Public Endpoints that use this Node before deleting it')
+        result=nodes.delete(node_id);apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
