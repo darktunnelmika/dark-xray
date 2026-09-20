@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node')
 SERVICE=Path('/etc/systemd/system/dark-xray-node.service')
+GUARD_SERVICE=Path('/etc/systemd/system/dark-xray-node-guard.service')
 WRAPPER=Path('/usr/local/bin/darknode')
 
 def run(args,**kw):return subprocess.run([str(x) for x in args],check=True,**kw)
@@ -35,6 +36,8 @@ def main():
     p.add_argument('--core-version',default='v26.3.27')
     p.add_argument('--cert',type=Path,required=True);p.add_argument('--key',type=Path,required=True)
     p.add_argument('--core-archive',type=Path);p.add_argument('--core-sha256')
+    p.add_argument('--verified-direct-sources',action='store_true')
+    p.add_argument('--exempt',action='append',default=[])
     a=p.parse_args()
     if os.geteuid()!=0 or sys.platform!='linux':raise SystemExit('Linux root is required')
     if sys.version_info<(3,11):raise SystemExit('Python 3.11+ required')
@@ -45,7 +48,7 @@ def main():
     if not 1024<=a.port<=65535 or a.port in {22,10085,*a.ssh_port}:raise SystemExit('Invalid/conflicting Node Agent port')
     if not re.fullmatch(r'v\d+\.\d+\.\d+',a.core_version):raise SystemExit('Invalid Xray version')
     if bool(a.core_archive)!=bool(a.core_sha256):raise SystemExit('Offline core requires archive + sha256')
-    if any(x.exists() for x in (APP,CONF,DATA,SERVICE,WRAPPER)):
+    if any(x.exists() for x in (APP,CONF,DATA,SERVICE,GUARD_SERVICE,WRAPPER)):
         raise SystemExit('Existing DARK Node/Panel artifacts found; clean or migrate explicitly before provisioning')
     if Path('/opt/dark-xray').exists() or Path('/etc/dark-xray').exists():
         raise SystemExit('A full DARK XRAY panel exists on this host; agent-only install is intentionally separate')
@@ -64,6 +67,7 @@ def main():
     for name in needed_backend:shutil.copy2(ROOT/'backend'/name,APP/'backend'/name)
     for name in ['fetch-core.py','import-core.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
     shutil.copy2(ROOT/'deploy'/'dark-xray-node.service',APP/'deploy'/'dark-xray-node.service')
+    shutil.copy2(ROOT/'deploy'/'dark-xray-node-guard.service',APP/'deploy'/'dark-xray-node-guard.service')
     for name in ['requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md']:
         shutil.copy2(ROOT/name,APP/name)
     run([sys.executable,'-m','venv',APP/'.venv'])
@@ -99,12 +103,24 @@ def main():
     cfg={'public_origin':f'https://{domain}'+(f':{a.port}' if a.port!=443 else ''),
          'panel_path':'/','xray_binary':str(core/'xray'),'xray_assets':str(core),'xray_api_port':10085,
          'public_address':data_address,'writes_enabled':True,'secure_cookie':True,'poll_seconds':5,
-         'core_autostart':True,'ip_window_seconds':120,'direct_source_verified':False,
+         'core_autostart':True,'ip_window_seconds':120,'direct_source_verified':bool(a.verified_direct_sources),
          'protected_ports':protected,'test_engine':False,'bind_host':'0.0.0.0','bind_port':a.port,
          'tls_certificate':str(cert),'tls_private_key':str(key),'guard_socket':'/run/dark-xray-guard/control.sock',
          'ip_ban_seconds':1800,'ip_exempt_ips':[]}
     cfg_path=CONF/'config.json';cfg_path.write_text(json.dumps(cfg,indent=2)+'\n',encoding='utf-8')
     os.chmod(cfg_path,0o640);os.chown(cfg_path,0,account.pw_gid)
+    nft=shutil.which('nft')
+    if not nft:raise SystemExit('nftables is required for the Node Guard runtime')
+    guard={'allowed_uid':account.pw_uid,'allowed_ports':[],'protected_ports':protected,
+           'direct_source_verified':bool(a.verified_direct_sources),'max_ban_seconds':86400,
+           'exempt_ips':a.exempt,'nft_binary':nft,'socket_path':'/run/dark-xray-guard/control.sock',
+           'allow_runtime_port_updates':True}
+    # Validate with the same root-broker parser before writing the privileged contract.
+    sys.path.insert(0,str(APP/'backend'))
+    from guardd import BrokerConfig
+    BrokerConfig.from_dict(guard)
+    guard_path=CONF/'guard.json';guard_path.write_text(json.dumps(guard,indent=2)+'\n',encoding='utf-8')
+    os.chmod(guard_path,0o600);os.chown(guard_path,0,0)
 
     for path in APP.rglob('*'):
         if path.is_symlink():continue
@@ -113,7 +129,8 @@ def main():
         if not path.is_symlink():os.chmod(path,0o755)
 
     shutil.copy2(APP/'deploy'/'dark-xray-node.service',SERVICE)
-    os.chmod(SERVICE,0o644)
+    shutil.copy2(APP/'deploy'/'dark-xray-node-guard.service',GUARD_SERVICE)
+    os.chmod(SERVICE,0o644);os.chmod(GUARD_SERVICE,0o644)
     WRAPPER.write_text("""#!/usr/bin/env bash
 set -Eeuo pipefail
 case "${1:-status}" in
@@ -139,7 +156,7 @@ esac
     pair_path=CONF/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
     os.chmod(pair_path,0o600);os.chown(pair_path,0,0)
 
-    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node.service'])
+    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',
-                      'origin':cfg['public_origin'],'nodeId':node_id,'pairCode':pair_code},indent=2))
+                      'origin':cfg['public_origin'],'nodeId':node_id,'pairCode':pair_code,'directSourceVerified':bool(a.verified_direct_sources)},indent=2))
 if __name__=='__main__':main()
