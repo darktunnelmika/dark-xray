@@ -29,6 +29,33 @@ def test_central_node_token_encrypted_and_probe(env,monkeypatch):
  p=c.post('/api/nodes/de1/probe');assert p.status_code==200 and p.json()['latency_ms']==21
  rows=c.get('/api/nodes').json();assert rows[0]['online'] is True and rows[0]['health']['inbounds']==3 and 'token' not in rows[0]
 
+
+def test_pair_code_is_bootstrap_only_and_rotates_remote_credential(env,monkeypatch):
+ store,_,app,c=env
+ bootstrap='dkn_'+('P'*60)
+ doc={'schema':1,'nodeId':'pair-node','name':'Pair Node','origin':'https://node.example.com',
+      'token':bootstrap,'dataAddress':'node.example.com','priority':100,'failoverEnabled':True}
+ import base64,json
+ code='DXN1.'+base64.urlsafe_b64encode(json.dumps(doc,separators=(',',':')).encode()).decode().rstrip('=')
+ calls=[]
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  calls.append((path,body))
+  if path=='/node/api/health':
+   return {'service':'DARK XRAY NODE','agent_only':True,'node_id':'pair-node','core':{'state':'running'}},13
+  if path=='/node/api/v1/token/rotate':
+   assert method=='POST' and body['token'].startswith('dkn_') and body['token']!=bootstrap
+   return {'service':'DARK XRAY NODE','rotated':True},9
+  raise AssertionError(path)
+ monkeypatch.setattr(app.state.nodes,'_request',fake_request)
+ r=c.post('/api/nodes/pair',json={'code':code});assert r.status_code==200,r.text
+ out=r.json();assert out['paired'] is True and out['pair_code_consumed'] is True and 'token' not in json.dumps(out).lower()
+ current=app.state.nodes.get('pair-node',secret=True)['token']
+ assert current!=bootstrap and current.startswith('dkn_')
+ assert [x[0] for x in calls]==['/node/api/health','/node/api/v1/token/rotate']
+ with store.lock:stored=store.db.execute("SELECT token_enc FROM remote_nodes WHERE id='pair-node'").fetchone()[0]
+ assert bootstrap not in stored and current not in stored
+ repeat=c.post('/api/nodes/pair',json={'code':code});assert repeat.status_code==409
+
 def test_node_url_rejects_private_and_invalid_ports_and_normalizes_ipv6(env,monkeypatch):
  _,_,_,c=env
  monkeypatch.setattr(nodes_mod.socket,'getaddrinfo',lambda *a,**k:[(2,1,6,'',('127.0.0.1',443))])
