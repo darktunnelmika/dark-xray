@@ -1720,9 +1720,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/backup/full')
     def backup_full(body:FullBackupBody,p:Principal=Depends(owner)):
         from backup import create_backup
+        config_path=Path(str(getattr(config,'_path','')))
+        if not str(getattr(config,'_path','')) or config_path.is_symlink() or not config_path.is_file():
+            raise HTTPException(409,'Full Web backup requires a file-backed DARK configuration')
         with tempfile.TemporaryDirectory(prefix='dark-web-backup.') as td:
             path=Path(td)/'dark-xray-full.darkbackup'
-            manifest=create_backup(Path(store.path).parent,Path(config._path),path,body.passphrase)
+            manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase)
             raw=path.read_bytes()
         manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
         stamp=time.strftime('%Y%m%d-%H%M%S')
