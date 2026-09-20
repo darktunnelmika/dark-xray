@@ -794,6 +794,10 @@ class NodeRegistry:
                 with self.store.lock:ids=[r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY id')]
                 for node_id in ids:
                     if self.stop.is_set():return
+                    desired_state=None
+                    if desired_provider is not None:
+                        try:desired_state=desired_provider(node_id)
+                        except (PolicyError,OSError,ValueError):desired_state=None
                     try:
                         self.probe(node_id,timeout=5.0)
                         traffic=self.sync_traffic(node_id)
@@ -805,7 +809,8 @@ class NodeRegistry:
                                 pass
                         if desired_provider is not None:
                             legacy_bundles=sync_provider(node_id) if sync_provider is not None else None
-                            self.sync_desired_state(node_id,desired_provider(node_id),legacy_bundles=legacy_bundles)
+                            desired_state=desired_state or desired_provider(node_id)
+                            self.sync_desired_state(node_id,desired_state,legacy_bundles=legacy_bundles)
                             post=self.sync_traffic(node_id)
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
                             if security_callback is not None:
