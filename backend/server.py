@@ -1124,13 +1124,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.patch('/api/nodes/{node_id}')
     def remote_node_edit(node_id:str,body:NodePatch,p:Principal=Depends(owner)):
         writable();token=body.token
-        if not token:
+        if token:
+            nodes.rotate_token(node_id,token)
+        else:
             if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
             token=nodes.get(node_id,secret=True)['token']
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
+        for target in {node_id}:ensure_node_desired_state(target)
         apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
     @app.delete('/api/nodes/{node_id}')
