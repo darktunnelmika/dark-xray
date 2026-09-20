@@ -8,9 +8,11 @@ required on an agent-only node.
 from __future__ import annotations
 
 from pathlib import Path
+import base64
 import copy
 import hashlib
 import json
+import os
 import tempfile
 import time
 
@@ -83,6 +85,22 @@ class NodeRuntime:
         security=payload.get('security')
         if not isinstance(security,dict) or not isinstance(security.get('clients',[]),list):
             raise PolicyError('Invalid desired-state security policy')
+        files=payload.get('files',[])
+        if not isinstance(files,list) or len(files)>512:raise PolicyError('Invalid managed Node file set')
+        total=0;ids=set()
+        for item in files:
+            if not isinstance(item,dict) or set(item)!={'id','kind','sha256','data'}:raise PolicyError('Invalid managed Node file')
+            file_id=item.get('id');kind=item.get('kind');digest=item.get('sha256');data=item.get('data')
+            if not isinstance(file_id,str) or len(file_id)!=64 or any(c not in '0123456789abcdef' for c in file_id) or file_id in ids:
+                raise PolicyError('Invalid or duplicate managed Node file ID')
+            if kind not in {'certificate','private-key'} or not isinstance(digest,str) or len(digest)!=64 or not isinstance(data,str):
+                raise PolicyError('Invalid managed Node TLS metadata')
+            try:raw=base64.b64decode(data,validate=True)
+            except Exception as ex:raise PolicyError('Managed Node TLS content is not valid base64') from ex
+            if not raw or len(raw)>1024*1024 or hashlib.sha256(raw).hexdigest()!=digest:
+                raise PolicyError('Managed Node TLS hash/size validation failed')
+            total+=len(raw);ids.add(file_id)
+        if total>6*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 6 MiB')
         if type(payload.get('desiredRunning',True)) is not bool:raise PolicyError('Invalid desiredRunning')
         return revision,digest,payload
 
@@ -101,12 +119,53 @@ class NodeRuntime:
             result[email]=copy.deepcopy(item)
         return result
 
+    @staticmethod
+    def _managed_file_bytes(payload:dict)->dict[str,bytes]:
+        out={}
+        for item in payload.get('files',[]):
+            raw=base64.b64decode(item['data'],validate=True)
+            if hashlib.sha256(raw).hexdigest()!=item['sha256']:raise PolicyError('Managed Node TLS hash mismatch')
+            out[item['id']]=raw
+        return out
+
+    @staticmethod
+    def _materialize_managed(files:dict[str,bytes],root:Path)->dict[str,str]:
+        root.mkdir(parents=True,exist_ok=True,mode=0o700)
+        mapping={}
+        for file_id,raw in files.items():
+            path=root/(file_id+'.pem')
+            if path.exists():
+                if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=hashlib.sha256(raw).hexdigest():
+                    raise PolicyError('Existing managed Node TLS file is unsafe')
+            else:
+                fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(fd,'wb') as out:out.write(raw);out.flush();os.fsync(out.fileno())
+            mapping['managed://'+file_id]=str(path)
+        return mapping
+
+    @staticmethod
+    def _rewrite_managed_refs(inbound:dict,mapping:dict[str,str])->dict:
+        inbound=copy.deepcopy(inbound);st=inbound.get('streamSettings',{})
+        tls=st.get('tlsSettings',{}) if isinstance(st,dict) else {}
+        certs=tls.get('certificates',[]) if isinstance(tls,dict) else []
+        if isinstance(certs,list):
+            for cert in certs:
+                if not isinstance(cert,dict):continue
+                for key in ('certificateFile','keyFile'):
+                    value=cert.get(key)
+                    if isinstance(value,str) and value.startswith('managed://'):
+                        if value not in mapping:raise PolicyError('Inbound references unknown managed Node TLS file')
+                        cert[key]=mapping[value]
+        return inbound
+
     def _validated_model(self,payload:dict)->dict:
         policies=self._policy_map(payload);assignments=payload['assignments']
         seen=set();normalized=[];all_sources=set()
+        managed=self._managed_file_bytes(payload)
         with tempfile.TemporaryDirectory(prefix='dark-node-validate.') as td:
             root=Path(td);stage_store=Store(root/'stage.sqlite3')
             stage_engine=CoreEngine(self.engine.config,stage_store,root/'runtime')
+            managed_map=self._materialize_managed(managed,root/'managed-tls')
             try:
                 for name in STATE_SECTIONS:
                     stage_engine.save_section(name,copy.deepcopy(payload['sections'][name]))
@@ -120,7 +179,8 @@ class NodeRuntime:
                     inbound=copy.deepcopy(item['inbound'])
                     if not isinstance(inbound,dict):raise PolicyError('Invalid node inbound payload')
                     inbound.pop('id',None);inbound.pop('applied',None)
-                    saved=stage_engine.save_inbound(inbound);local_id=int(saved['id']);source_to_local[source]=local_id
+                    validated_inbound=self._rewrite_managed_refs(inbound,managed_map)
+                    saved=stage_engine.save_inbound(validated_inbound);local_id=int(saved['id']);source_to_local[source]=local_id
                     clients=[]
                     for entry in item['clients']:
                         if not isinstance(entry,dict) or set(entry)!={'sourceEmail','client'}:
@@ -213,6 +273,9 @@ class NodeRuntime:
         snap=self._snapshot()
         try:
             guard,old_guard_ports=self._sync_guard_ports(payload)
+            managed=self._managed_file_bytes(payload)
+            managed_root=self.engine.runtime.parent/'managed-tls'
+            managed_map=self._materialize_managed(managed,managed_root)
             policies=model['policies'];assignments=model['assignments']
             with self.store.lock:
                 old_mirrors={str(r[0]) for r in self.store.db.execute(
@@ -233,6 +296,7 @@ class NodeRuntime:
                 merged={}
                 for item in assignments:
                     source=int(item['sourceInboundId']);body=copy.deepcopy(item['inbound']);body.pop('id',None);body.pop('applied',None)
+                    body=self._rewrite_managed_refs(body,managed_map)
                     db.execute('INSERT INTO core_inbounds(id,body) VALUES(?,?)',(source,json.dumps(body)))
                     db.execute('INSERT INTO node_runtime_inbounds(scope,source_inbound_id,local_inbound_id,source_tag,updated_at) VALUES(?,?,?,?,?)',
                                (self.scope,source,source,str(item.get('sourceTag') or ''),now))
@@ -256,6 +320,10 @@ class NodeRuntime:
                     db.execute('DELETE FROM observations WHERE client_id=?',(mirror,))
                     db.execute('DELETE FROM core_devices WHERE email=?',(mirror,))
             core=self.engine.command('restart' if payload.get('desiredRunning',True) else 'stop')
+            keep={Path(x).name for x in managed_map.values()}
+            if managed_root.is_dir() and not managed_root.is_symlink():
+                for path in managed_root.iterdir():
+                    if path.is_file() and not path.is_symlink() and path.name not in keep:path.unlink(missing_ok=True)
             with self.store.transaction() as db:
                 db.execute('''INSERT INTO node_runtime_state(scope,applied_revision,applied_hash,updated_at,last_error)
                               VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
