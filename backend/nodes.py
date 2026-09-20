@@ -305,6 +305,24 @@ class NodeRegistry:
                 db.executemany('DELETE FROM remote_node_inbounds WHERE node_id=? AND local_inbound_id=?',[(node_id,x) for x in removed])
         return self.get(node_id)
 
+    def set_inbound_assignment(self,node_id:str,inbound_id:int,assigned:bool)->dict:
+        if type(inbound_id)is not int or inbound_id<1 or type(assigned)is not bool:raise PolicyError('Invalid inbound deployment assignment')
+        self.get(node_id);now=time.time()
+        with self.store.transaction() as db:
+            if assigned:
+                db.execute('''INSERT INTO remote_node_inbounds(node_id,local_inbound_id,updated_at)
+                              VALUES(?,?,?) ON CONFLICT(node_id,local_inbound_id) DO UPDATE SET updated_at=excluded.updated_at''',
+                           (node_id,inbound_id,now))
+            else:
+                db.execute('DELETE FROM remote_node_inbounds WHERE node_id=? AND local_inbound_id=?',(node_id,inbound_id))
+        return {'node_id':node_id,'inbound_id':inbound_id,'assigned':assigned,'updated_at':now}
+
+    def inbound_assignments(self,inbound_id:int)->list[str]:
+        if type(inbound_id)is not int or inbound_id<1:raise PolicyError('Invalid inbound ID')
+        with self.store.lock:
+            return [str(r[0]) for r in self.store.db.execute(
+                'SELECT node_id FROM remote_node_inbounds WHERE local_inbound_id=? ORDER BY node_id',(inbound_id,))]
+
     @staticmethod
     def _desired_payload(value:dict)->tuple[str,str]:
         if not isinstance(value,dict):raise PolicyError('Node desired state must be an object')
