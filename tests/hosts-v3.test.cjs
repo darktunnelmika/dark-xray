@@ -125,3 +125,21 @@ test('Guided editor labels the distinction between inbound and public endpoint',
   assert.match(src,/Customer link impact/);
   assert.match(src,/Credential is masked/);
 });
+
+
+test('Public Endpoints default to Main runtime and accept a paired Node runtime',()=>{
+  const ctx=context(),M=ctx.DarkHostV3;
+  const local=M.normalizeEndpoint({mode:'direct',address:'main.example.test',port:443,enable:true},inbound);
+  assert.equal(local.runtime,'local');
+  const node=M.normalizeEndpoint({mode:'direct',runtime:'node:tr-1',address:'tr.example.test',port:443,enable:true},inbound);
+  assert.equal(node.runtime,'node:tr-1');
+  assert.throws(()=>M.normalizeEndpoint({mode:'direct',runtime:'ssh://bad',address:'bad.example.test',port:443,enable:true},inbound),/valid runtime/i);
+});
+
+test('Public Endpoint editor exposes Main Server and Node runtime selector',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','hosts-v2.js'),'utf8');
+  assert.match(src,/name=['"]runtime|,'runtime'/);
+  assert.match(src,/Main Server/);
+  assert.match(src,/node:'\+n\.id/);
+  assert.match(src,/h\.runtime/);
+});
