@@ -172,3 +172,17 @@ def test_node_runtime_scope_is_stable_across_token_rotation(tmp_path):
     token.rotate('dkn_'+('B'*60))
     assert node_identity(node_id_path)==identity=='node-stable-01'
     assert token_path.read_text().strip()=='dkn_'+('B'*60)
+
+
+def test_hub_desired_state_encrypts_managed_file_payload_at_rest(tmp_path,monkeypatch):
+    monkeypatch.setattr(nodes_mod.socket,'getaddrinfo',lambda *a,**k:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',443))])
+    store=Store(tmp_path/'hub.sqlite3');auth=Auth(store,tmp_path/'secret.key');reg=NodeRegistry(store,auth.cipher)
+    reg.put('n1','Node 1','https://node.example','dkn_'+('C'*60),True)
+    secret=base64.b64encode(b'PRIVATE-NODE-TLS-MATERIAL').decode()
+    payload={'schema':1,'files':[{'id':'a'*64,'kind':'private-key','sha256':'b'*64,'data':secret}]}
+    reg.set_desired_state('n1',payload)
+    with store.lock:raw=store.db.execute("SELECT desired_json FROM remote_node_desired_state WHERE node_id='n1'").fetchone()[0]
+    assert secret not in raw and 'data_enc' in raw
+    opened=reg.desired_state('n1')['payload']
+    assert opened['files'][0]['data']==secret and 'data_enc' not in opened['files'][0]
+    store.close()
