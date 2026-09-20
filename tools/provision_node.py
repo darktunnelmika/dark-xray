@@ -52,7 +52,8 @@ def main():
     if not re.fullmatch(r'v\d+\.\d+\.\d+',a.core_version):raise SystemExit('Invalid Xray version')
     if a.source_commit and not re.fullmatch(r'[0-9a-f]{40}',str(a.source_commit).lower()):
         raise SystemExit('source-commit must be an immutable 40-character lowercase/uppercase SHA')
-    if not isinstance(a.source_ref,str) or not a.source_ref or len(a.source_ref)>128 or any(c in a.source_ref for c in '\\r\\n'):
+    if (not isinstance(a.source_ref,str) or not a.source_ref or len(a.source_ref)>128
+            or '\r' in a.source_ref or '\n' in a.source_ref):
         raise SystemExit('Invalid source-ref')
     if bool(a.core_archive)!=bool(a.core_sha256):raise SystemExit('Offline core requires archive + sha256')
     if any(x.exists() for x in (APP,CONF,DATA,SERVICE,GUARD_SERVICE,UPDATE_SERVICE,WRAPPER)):
