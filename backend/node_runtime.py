@@ -39,6 +39,10 @@ class NodeRuntime:
             CREATE TABLE IF NOT EXISTS node_runtime_clients(
               scope TEXT NOT NULL,source_email TEXT NOT NULL,mirror_email TEXT NOT NULL,
               updated_at REAL NOT NULL,PRIMARY KEY(scope,source_email),UNIQUE(scope,mirror_email));
+            CREATE TABLE IF NOT EXISTS node_runtime_traffic_resets(
+              scope TEXT NOT NULL,reset_id TEXT NOT NULL,source_email TEXT NOT NULL,
+              up_bytes INTEGER NOT NULL,down_bytes INTEGER NOT NULL,at REAL NOT NULL,
+              PRIMARY KEY(scope,reset_id));
             ''')
 
     def mirror_email(self,source_email:str)->str:
@@ -157,8 +161,8 @@ class NodeRuntime:
                 stage_engine.close();stage_store.close()
 
     def _snapshot(self)->dict:
-        names=('core_inbounds','core_clients','core_sections','clients','owners',
-               'node_runtime_inbounds','node_runtime_clients','node_runtime_state')
+        names=('core_inbounds','core_clients','core_sections','clients','owners','observations','bans','core_devices',
+               'node_runtime_inbounds','node_runtime_clients','node_runtime_state','node_runtime_traffic_resets')
         out={}
         with self.store.lock:
             for name in names:
@@ -203,8 +207,10 @@ class NodeRuntime:
                     'core':self.engine.runtime_state()}
         if revision<current['appliedRevision']:
             raise PolicyError('Refusing stale desired-state revision')
-        model=self._validated_model(payload);snap=self._snapshot();now=time.time()
+        model=self._validated_model(payload);now=time.time()
         guard=None;old_guard_ports=None
+        self.engine.lock.acquire()
+        snap=self._snapshot()
         try:
             guard,old_guard_ports=self._sync_guard_ports(payload)
             policies=model['policies'];assignments=model['assignments']
@@ -270,6 +276,8 @@ class NodeRuntime:
                               VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET updated_at=excluded.updated_at,last_error=excluded.last_error''',
                            (self.scope,current['appliedRevision'],current['appliedHash'],time.time(),str(ex)[:500]))
             raise
+        finally:
+            self.engine.lock.release()
 
     def assignment_status(self)->list[dict]:
         with self.store.lock:
@@ -282,6 +290,35 @@ class NodeRuntime:
                     if int(inbound_id) in counts:counts[int(inbound_id)]+=1
         return [{'sourceInboundId':int(r['source_inbound_id']),'remoteInboundId':int(r['local_inbound_id']),
                  'clients':counts.get(int(r['source_inbound_id']),0)} for r in rows]
+
+    def reset_result(self,reset_id:str,source_email:str)->dict|None:
+        if not isinstance(reset_id,str) or not 8<=len(reset_id)<=128 or not isinstance(source_email,str) or not source_email:
+            raise PolicyError('Invalid node traffic reset identity')
+        with self.store.lock:r=self.store.db.execute(
+            'SELECT source_email,up_bytes,down_bytes,at FROM node_runtime_traffic_resets WHERE scope=? AND reset_id=?',
+            (self.scope,reset_id)).fetchone()
+        if not r:return None
+        if str(r['source_email'])!=source_email:raise PolicyError('Reset ID belongs to a different client')
+        return {'sourceEmail':source_email,'up':int(r['up_bytes']),'down':int(r['down_bytes']),
+                'capturedAt':float(r['at']),'cached':True}
+
+    def remember_reset(self,reset_id:str,source_email:str,up:int,down:int)->dict:
+        if type(up)is not int or type(down)is not int or up<0 or down<0:raise PolicyError('Invalid reset counters')
+        now=time.time()
+        with self.store.transaction() as db:
+            existing=db.execute('SELECT source_email,up_bytes,down_bytes,at FROM node_runtime_traffic_resets WHERE scope=? AND reset_id=?',
+                                (self.scope,reset_id)).fetchone()
+            if existing:
+                if str(existing['source_email'])!=source_email:raise PolicyError('Reset ID belongs to a different client')
+                return {'sourceEmail':source_email,'up':int(existing['up_bytes']),'down':int(existing['down_bytes']),
+                        'capturedAt':float(existing['at']),'cached':True}
+            db.execute('INSERT INTO node_runtime_traffic_resets(scope,reset_id,source_email,up_bytes,down_bytes,at) VALUES(?,?,?,?,?,?)',
+                       (self.scope,reset_id,source_email,up,down,now))
+            # Bound idempotency history while retaining enough retry horizon.
+            db.execute('''DELETE FROM node_runtime_traffic_resets WHERE scope=? AND reset_id IN (
+                          SELECT reset_id FROM node_runtime_traffic_resets WHERE scope=? ORDER BY at DESC LIMIT -1 OFFSET 5000)''',
+                       (self.scope,self.scope))
+        return {'sourceEmail':source_email,'up':up,'down':down,'capturedAt':now,'cached':False}
 
     def source_for_mirror(self,mirror:str)->str|None:
         with self.store.lock:r=self.store.db.execute(
