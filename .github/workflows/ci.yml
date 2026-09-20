@@ -34,7 +34,7 @@ jobs:
         run: python tools/repo-check.py
       - name: Installer updater and manager smoke
         run: |
-          bash -n install-online.sh setup.sh darkxray tests/systemd-recovery-smoke.sh
+          bash -n install-online.sh install-node.sh setup.sh darkxray tests/systemd-recovery-smoke.sh
           bash install-online.sh --selftest > /tmp/dark-installer-smoke.txt
           grep -q '\[100/100\]' /tmp/dark-installer-smoke.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
@@ -52,9 +52,9 @@ jobs:
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/update.py
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/provision.py
           python -m py_compile \
-            tools/menu.py tools/update.py tools/provision.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/smoke-real.py \
-            tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py \
-            backend/server.py backend/auth.py backend/policy_auth.py backend/core.py \
+            tools/menu.py tools/update.py tools/provision.py tools/provision_node.py tools/update_node.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/smoke-real.py \
+            tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py tests/test_node_agent_architecture.py \
+            backend/server.py backend/auth.py backend/policy_auth.py backend/core.py backend/node_agent.py backend/node_runtime.py backend/node_updated.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
           grep -q "report={'version':VERSION" tools/smoke-real.py
           grep -q 'DARK-XRAY-REAL-E2E-{VERSION}' tools/smoke-real.py
@@ -78,7 +78,7 @@ jobs:
           for js in \
             web/i18n-en.js web/form-models.js web/inbounds-models.js web/inbounds-v3.js \
             web/settings-v2.js web/clients-v2.js web/finance-v2.js web/ui-stability.js web/xray-v2.js web/hosts-v2.js \
-            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/xray-guided-v3.js; do node --check "$js"; done
+            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/xray-guided-v3.js web/traffic-engine-v4.js; do node --check "$js"; done
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q 'body class="skin-cyber-classic"' web/index.html
           grep -q 'assets/cyber-classic.css' web/index.html
@@ -341,3 +341,90 @@ jobs:
             qa/fresh-install-journal.txt
           if-no-files-found: warn
           retention-days: 14
+
+  fresh-node-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Install Node host prerequisites
+        run: sudo apt-get update -qq && sudo apt-get install -y -q python3-venv ca-certificates nftables openssl curl >/dev/null
+      - name: Create isolated Node TLS fixture
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/dark-node-key.pem -out /tmp/dark-node-cert.pem -days 1 \
+            -subj '/CN=node.example.test' \
+            -addext 'subjectAltName=DNS:node.example.test' >/dev/null 2>&1
+      - name: Provision real lightweight Node Agent
+        run: |
+          mkdir -p qa
+          sudo python3 tools/provision_node.py \
+            --domain node.example.test \
+            --port 9443 \
+            --data-address node.example.test \
+            --name CI-NODE \
+            --node-id ci-node-001 \
+            --ssh-port 22 \
+            --core-version v26.3.27 \
+            --cert /tmp/dark-node-cert.pem \
+            --key /tmp/dark-node-key.pem | tee qa/fresh-node-agent-install.json
+      - name: Verify agent-only filesystem and services
+        run: |
+          systemctl is-enabled dark-xray-node.service
+          systemctl is-active dark-xray-node.service
+          systemctl is-enabled dark-xray-node-guard.service
+          systemctl is-active dark-xray-node-guard.service
+          systemctl is-enabled dark-xray-node-update.service
+          systemctl is-active dark-xray-node-update.service
+          test ! -e /opt/dark-xray-node/web
+          test ! -e /opt/dark-xray-node/backend/server.py
+          test ! -e /opt/dark-xray-node/backend/auth.py
+          test ! -e /opt/dark-xray
+          test ! -e /etc/dark-xray
+          test -f /var/lib/dark-xray-node/token
+          test -f /var/lib/dark-xray-node/node-id
+          test "$(stat -c '%a' /var/lib/dark-xray-node/token)" = "600"
+          test "$(stat -c '%a' /var/lib/dark-xray-node/node-id)" = "600"
+          sudo python3 -c 'import json; d=json.load(open("/etc/dark-xray-node/pair.json")); assert d["pairCode"].startswith("DXN1."); assert d["nodeId"]=="ci-node-001"'
+          sudo python3 -c 'import json,subprocess; from pathlib import Path; d=json.loads(Path("/var/lib/dark-xray-node/installed-source.json").read_text()); assert d["role"]=="node-agent"; assert d["commit"]==subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()'
+      - name: Verify authenticated Node HTTPS health
+        run: |
+          TOKEN="$(sudo cat /var/lib/dark-xray-node/token)"
+          echo "::add-mask::$TOKEN"
+          curl --fail --silent --show-error --insecure \
+            --resolve node.example.test:9443:127.0.0.1 \
+            -H "Authorization: Bearer $TOKEN" \
+            https://node.example.test:9443/node/api/health > qa/fresh-node-agent-health.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('qa/fresh-node-agent-health.json').read_text())
+          assert d['service']=='DARK XRAY NODE',d
+          assert d['agent_only'] is True,d
+          assert d['node_id']=='ci-node-001',d
+          assert d['installed_source']['role']=='node-agent',d
+          assert d['core']['state'] in {'running','clean','dirty'},d
+          PY
+      - name: Capture Node diagnostics on failure
+        if: failure()
+        run: |
+          systemctl status dark-xray-node.service dark-xray-node-guard.service dark-xray-node-update.service --no-pager -l > qa/fresh-node-agent-systemd.txt 2>&1 || true
+          journalctl -u dark-xray-node.service -u dark-xray-node-guard.service -u dark-xray-node-update.service --no-pager -n 300 > qa/fresh-node-agent-journal.txt 2>&1 || true
+      - name: Upload Node Agent evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-xray-fresh-node-agent-qa
+          path: |
+            qa/fresh-node-agent-install.json
+            qa/fresh-node-agent-health.json
+            qa/fresh-node-agent-systemd.txt
+            qa/fresh-node-agent-journal.txt
+          if-no-files-found: warn
+          retention-days: 14
+
