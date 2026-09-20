@@ -13,6 +13,7 @@ import contextlib
 import hmac
 import json
 import os
+import re
 import threading
 import time
 
@@ -36,8 +37,6 @@ class AgentToken:
         token=self.path.read_text(encoding='utf-8').strip()
         if not token.startswith('dkn_') or not 40<=len(token)<=256:raise PolicyError('Invalid node token')
         self.token=token
-        import hashlib
-        self.scope=hashlib.sha256(token.encode()).hexdigest()[:24]
 
     def require(self,request:Request)->str:
         header=request.headers.get('authorization','')
@@ -61,6 +60,14 @@ class AgentToken:
         self.token=value
 
 
+
+def node_identity(path:Path)->str:
+    path=Path(path)
+    if path.is_symlink() or not path.is_file() or path.stat().st_size>512:raise PolicyError('Node identity file is missing or unsafe')
+    value=path.read_text(encoding='utf-8').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.@+\\-]{1,128}',value):raise PolicyError('Invalid stable Node identity')
+    return value
+
 class EngineLoop:
     def __init__(self,engine:CoreEngine,interval:float):
         self.engine=engine;self.interval=max(1.0,min(60.0,float(interval)));self.stop=threading.Event();self.thread=None
@@ -78,8 +85,8 @@ class EngineLoop:
         self.thread=None
 
 
-def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:bool=True)->FastAPI:
-    runtime=NodeRuntime(store,engine,token.scope);loop=EngineLoop(engine,engine.config.poll_seconds)
+def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,background:bool=True)->FastAPI:
+    runtime=NodeRuntime(store,engine,node_id);loop=EngineLoop(engine,engine.config.poll_seconds)
     public=urlsplit(engine.config.public_origin)
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -129,7 +136,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,*,background:b
                 raw=json.loads(source_path.read_text(encoding='utf-8'))
                 if isinstance(raw,dict):source={k:raw.get(k) for k in ('commit','version','ref','role')}
         except (OSError,ValueError):source={}
-        return {'service':'DARK XRAY NODE','agent_only':True,'version':VERSION,'installed_source':source,
+        return {'service':'DARK XRAY NODE','agent_only':True,'version':VERSION,'node_id':node_id,'installed_source':source,
                 'core':{'state':core['state'],'version':core['version'],'dirty':core['dirty'],'last_error':core['last_error']},
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
@@ -262,6 +269,7 @@ def main():
     p.add_argument('--config',type=Path,default=Path('/etc/dark-xray-node/config.json'))
     p.add_argument('--data',type=Path,default=Path('/var/lib/dark-xray-node'))
     p.add_argument('--token-file',type=Path,default=Path('/var/lib/dark-xray-node/token'))
+    p.add_argument('--node-id-file',type=Path,default=Path('/var/lib/dark-xray-node/node-id'))
     p.add_argument('--host',default=None);p.add_argument('--port',type=int,default=None)
     a=p.parse_args()
     a.data.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -270,13 +278,13 @@ def main():
     try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:raise SystemExit('Another DARK Node Agent is already using this data directory')
     store=Store(a.data/'node.sqlite3');config=Config.load(a.config)
-    engine=CoreEngine(config,store,a.data/'runtime');token=AgentToken(a.token_file)
+    engine=CoreEngine(config,store,a.data/'runtime');token=AgentToken(a.token_file);node_id=node_identity(a.node_id_file)
     host=a.host or config.bind_host;port=a.port or config.bind_port
     if host in ('127.0.0.1','::1') or not config.tls_certificate or not config.tls_private_key:
         raise SystemExit('Node Agent requires a public HTTPS listener with a real certificate/key')
     try:
         import uvicorn
-        uvicorn.run(make_agent_app(engine,store,token),host=host,port=port,proxy_headers=False,access_log=False,
+        uvicorn.run(make_agent_app(engine,store,token,node_id),host=host,port=port,proxy_headers=False,access_log=False,
                     workers=1,ws='none',ssl_certfile=config.tls_certificate,ssl_keyfile=config.tls_private_key)
     except (PolicyError,CoreError,ValueError) as ex:raise SystemExit(str(ex))
     finally:
