@@ -25,7 +25,13 @@ function linePoints(values,w,h,maxValue=null){
 }
 function spark(values,max=100){return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
 function fmtRate(v){return bytes(number(v))+'/s';}
-function fmtCpu(v){v=number(v);return v<=0?'<0.1':v.toFixed(1);}
+function fmtPercent(v){
+ v=Number(v);
+ if(!Number.isFinite(v))return '—';
+ if(v===0)return '0.0';
+ if(v>0&&v<0.1)return '<0.1';
+ return v.toFixed(1);
+}
 function fmtUptime(sec){sec=Math.max(0,number(sec));let d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+'d ':'')+h+'h '+m+'m';}
 
 function commandBar(){
@@ -46,19 +52,19 @@ function commandBar(){
 function resourceCard(key,label,value,detail,history,extra=''){
  return `<article class="ov4-resource ov4-resource-${key}">
    <header><span>${icon(key==='cpu'?'activity':key==='ram'?'server':key==='swap'?'refresh':'database')}${label}</span></header>
-   <div class="ov4-resource-value">${e(value)}<small>%</small></div>
+   <div class="ov4-resource-value">${e(value)}${value==='—'?'':'<small>%</small>'}</div>
    <div class="ov4-resource-detail">${e(detail)}</div>
-   <div class="ov4-resource-meta"><span>AVG ${e(avg(history).toFixed(1))}%</span><span>PEAK ${e(peak(history).toFixed(1))}%</span></div>
+   <div class="ov4-resource-meta"><span>AVG ${e(fmtPercent(avg(history)))}%</span><span>PEAK ${e(fmtPercent(peak(history)))}%</span></div>
    ${spark(history,100)}${extra}
  </article>`;
 }
 function resourceRow(){
  const n=state.system?.engine||{},h=state.ov4.history,ci=n.cpuInfo||{},freq=number(ci.mhz);
  return `<section class="ov4-resource-grid">
- ${resourceCard('cpu','CPU',fmtCpu(n.cpu),`${ci.physical||'—'} ${L('Cores','هسته')} / ${ci.logical||'—'}T${freq?' · '+(freq/1000).toFixed(2)+' GHz':''}`,h.cpu)}
- ${resourceCard('ram','RAM',pct(n.mem).toFixed(1),`${bytes(n.mem?.current)} / ${bytes(n.mem?.total)}`,h.mem)}
- ${resourceCard('swap','SWAP',pct(n.swap).toFixed(1),`${bytes(n.swap?.current)} / ${bytes(n.swap?.total)}`,h.swap)}
- ${resourceCard('disk',L('STORAGE','فضای دیسک'),pct(n.disk).toFixed(1),`${bytes(n.disk?.current)} / ${bytes(n.disk?.total)} · ${L('free','آزاد')} ${bytes(n.disk?.free)}`,h.disk)}
+ ${resourceCard('cpu','CPU',fmtPercent(n.cpu),`${ci.physical||'—'} ${L('Cores','هسته')} / ${ci.logical||'—'}T${freq?' · '+(freq/1000).toFixed(2)+' GHz':''}`,h.cpu)}
+ ${resourceCard('ram','RAM',fmtPercent(pct(n.mem)),`${bytes(n.mem?.current)} / ${bytes(n.mem?.total)}`,h.mem)}
+ ${resourceCard('swap','SWAP',fmtPercent(pct(n.swap)),`${bytes(n.swap?.current)} / ${bytes(n.swap?.total)}`,h.swap)}
+ ${resourceCard('disk',L('STORAGE','فضای دیسک'),fmtPercent(pct(n.disk)),`${bytes(n.disk?.current)} / ${bytes(n.disk?.total)} · ${L('free','آزاد')} ${bytes(n.disk?.free)}`,h.disk)}
  </section>`;
 }
 
