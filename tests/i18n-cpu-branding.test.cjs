@@ -30,14 +30,18 @@ test('user-facing panel UI does not mention legacy Sanaei or Mirza products',()=
   assert.match(live,/authorized DARK XRAY integrations|اتصال ابزارهای مجاز به DARK XRAY/);
 });
 
-test('CPU telemetry uses a stable sample and dashboard never renders false 0.0 percent',()=>{
+test('CPU telemetry uses a stable sample and formats zero consistently',()=>{
   assert.match(core,/def _host_cpu_percent/);
   assert.match(core,/self\._cpu_sample_at/);
   assert.match(core,/psutil\.cpu_percent\(interval=\.2\)/);
   assert.doesNotMatch(core,/cpu_percent\(interval=\.05\)/);
   assert.doesNotMatch(server,/cpu_percent\(interval=\.05\)/);
-  assert.match(overview,/function fmtCpu/);
-  assert.match(overview,/return v<=0\?'<0\.1':v\.toFixed\(1\)/);
+  assert.match(overview,/function fmtPercent/);
+  assert.match(overview,/if\(v===0\)return '0\.0'/);
+  assert.match(overview,/if\(v>0&&v<0\.1\)return '<0\.1'/);
+  assert.match(overview,/AVG \$\{e\(fmtPercent\(avg\(history\)\)\)\}%/);
+  assert.match(overview,/PEAK \$\{e\(fmtPercent\(peak\(history\)\)\)\}%/);
+  assert.match(live,/Number\(n\.cpu\)===0\?'0\.0'/);
 });
 
 
@@ -97,4 +101,13 @@ test('full sentence translations run before partial phrase and word replacements
   const exactPhrasePos=i18n.indexOf('for(const [a,b] of exactPhrases)core=core.split(a).join(b)');
   assert.ok(phrasePos>0 && exactPhrasePos>phrasePos);
   assert.ok(i18n.includes("['با تغییر رمز، تمام نشست‌های این حساب باطل می‌شوند.','Changing the password revokes all sessions for this account.']"));
+});
+
+
+test('healthy production shell has no redundant live status banner and top breadcrumb is compact',()=>{
+  assert.match(live,/const runtimeBanner=state\.me\.test_engine/);
+  assert.match(live,/!state\.me\.writes_enabled/);
+  assert.match(live,/:'';\$\('#app'\)\.innerHTML/);
+  assert.match(live,/<span class="breadcrumb"><b>\$\{e\(active\)\}<\/b><\/span>/);
+  assert.doesNotMatch(live,/حالت متصل · بدون دادهٔ نمونه/);
 });
