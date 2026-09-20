@@ -68,17 +68,17 @@ def inbound_tls_files(snapshot: Path) -> tuple[dict[str,bytes],dict[str,str]]:
                     value=cert.get(key)
                     if isinstance(value,str) and value.strip():refs.append((value.strip(),leaf))
         for original,leaf in refs:
-            if original in mapping:continue
+            field='certificateFile' if leaf=='certificate.pem' else 'keyFile'
+            map_key=field+'\n'+original
+            if map_key in mapping:continue
             path=Path(original)
             try:resolved=path.resolve(strict=True)
             except OSError as ex:raise PolicyError('Referenced inbound TLS file is missing: '+original) from ex
             if not resolved.is_file() or resolved.stat().st_size>1024*1024:
                 raise PolicyError('Referenced inbound TLS file is unsafe or too large: '+original)
-            digest=hashlib.sha256(original.encode()).hexdigest()
+            digest=hashlib.sha256((field+'\0'+original).encode()).hexdigest()
             member='inbound-tls/'+digest+'/'+leaf
-            # Same path cannot be both cert/key; keep leaf-specific member if needed.
-            if member in extra and mapping.get(original)!=member:raise PolicyError('Ambiguous inbound TLS backup member')
-            extra[member]=resolved.read_bytes();mapping[original]=member
+            extra[member]=resolved.read_bytes();mapping[map_key]=member
         return extra,mapping
     finally:db.close()
 
@@ -98,8 +98,9 @@ def rewrite_inbound_tls_paths(dbpath: Path, mapping: dict[str,str], destination:
                 if not isinstance(cert,dict):continue
                 for key in ('certificateFile','keyFile'):
                     original=cert.get(key)
-                    if original in mapping:
-                        cert[key]=str(destination/mapping[original]);changed=True
+                    map_key=key+'\n'+str(original)
+                    if original and map_key in mapping:
+                        cert[key]=str(destination/mapping[map_key]);changed=True
             if changed:db.execute('UPDATE core_inbounds SET body=? WHERE id=?',(json.dumps(doc),rowid))
         db.commit()
     except (sqlite3.Error,ValueError,TypeError) as ex:
