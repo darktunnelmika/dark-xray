@@ -86,6 +86,9 @@ node --test tests/i18n-cpu-branding.test.cjs
 node --test tests/xray-guided-v3.test.cjs
 node --test tests/settings-operations.test.cjs
 node --test tests/node-control-live.test.cjs
+node --test tests/render-generation.test.cjs
+node --test tests/subscription-policy-v3.test.cjs
+node --test tests/sync-v4.test.cjs
 
 node --test tests/node-pairing-ui.test.cjs
 
