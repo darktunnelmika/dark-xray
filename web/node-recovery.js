@@ -75,7 +75,18 @@ function validReview(doc,id){
   &&doc.configuration_will_be_applied===false&&doc.node_will_remain_disabled===true
   &&doc.usage_will_be_reconstructed===false&&doc.backup_contents_require_operator_review===true;
 }
-function authorized(s){return s.live&&state.me?.role==='owner'&&state.me.id===s.owner;}
+function authorized(s){return s.live&&s.box.isConnected&&s.box.open&&state.me?.role==='owner'&&state.me.id===s.owner;}
+function dismiss(s,restoreFocus=true){
+ if(!s?.live)return;
+ // close is queued by the browser. Retire state synchronously so a buffered
+ // handler/response cannot act on a closed view before that event arrives.
+ const wasActive=active===s;
+ s.live=false;s.doc=null;s.review=null;s.error='';
+ if(wasActive)active=null;
+ if(s.box.open)s.box.close();
+ s.box.remove();
+ if(restoreFocus&&wasActive&&state.me?.role==='owner'&&state.me.id===s.owner&&s.trigger?.isConnected)s.trigger.focus();
+}
 function allowed(s){
  const actions=['refresh'];
  if(!s.doc)return actions;
@@ -89,7 +100,7 @@ function button(s,action,en,fa,confirm=false){
  return `<button type="button" class="btn ${confirm?'btn-primary':''}" data-nrec="${action}" ${confirm?'data-requires-consent disabled':''}>${text(s,en,fa)}</button>`;
 }
 function paint(s){
- if(!s.live)return;
+ if(!authorized(s)){dismiss(s,false);return;}
  const doc=s.doc,review=s.review,actions=allowed(s),phase=doc?.phase||'unavailable';
  const label=phase==='pending'?text(s,'Recovery pending; Stop is not independently confirmed.','بازیابی در انتظار است؛ توقف مستقل تأیید نشده است.'):
   phase==='recovered_stopped'?text(s,'Saved receipt: Stop and sequence repair were confirmed.','رسید ذخیره‌شده: توقف و تعمیر شماره‌ها تأیید شده بود.'):
@@ -122,7 +133,8 @@ async function read(s){
  s.doc=doc;
 }
 async function perform(s,action){
- if(!authorized(s)||s.busy||!allowed(s).includes(action))return;
+ if(!authorized(s)){dismiss(s,false);return;}
+ if(s.busy||!allowed(s).includes(action))return;
  const checked=Object.keys(confirmations).every(key=>s.box.querySelector(`[name="${key}"]`)?.checked===true);
  if(['stop','retry'].includes(action)&&!checked)return;
  const review=s.review,attempt=s.doc?.attempt_id;
@@ -142,23 +154,26 @@ async function perform(s,action){
   if(authorized(s)){s.doc=null;s.review=null;const known=Object.hasOwn(failures,error?.message)?failures[error.message]:null;s.error=(known?text(s,...known)+' ':'')+text(s,'Result not confirmed. Read saved status before another action. The request may have been applied; do not delete recovery data or assume the node stopped.','نتیجه تأیید نشده است. پیش از اقدام بعدی وضعیت ذخیره‌شده را بخوان. ممکن است درخواست اعمال شده باشد؛ اطلاعات بازیابی را حذف نکن و خاموش‌شدن نود را فرض نکن.');}
  }finally{
   s.busy=false;
-  if(!authorized(s)){if(s.live)s.box.close();return;}
+  if(!authorized(s)){dismiss(s,false);return;}
   paint(s);s.box.querySelector('[data-nrec-phase]')?.focus();
  }
 }
 async function open(id,trigger){
+ if(active?.live&&!authorized(active))dismiss(active,false);
  if(!isOwner()||typeof id!=='string'||!id)return;
- if(active?.live)active.box.close();
+ if(active?.live)dismiss(active,false);
  if(typeof closeDialog==='function')closeDialog();
  const box=document.createElement('dialog'),lang=language();
  box.className='nr-dialog nrec-dialog';box.dir=lang==='fa'?'rtl':'ltr';box.setAttribute('aria-labelledby','nrec-title');
  box.innerHTML=`<header><div><small>DARK XRAY</small><h2 id="nrec-title">${text({lang},'Recover node after backup','بازیابی نود بعد از بکاپ')}</h2><small><bdi>${esc(id)}</bdi></small></div><button type="button" class="btn" data-nrec-close>${text({lang},'Close','بستن')}</button></header><div class="nr-body nrec-body"></div><footer><button type="button" class="btn" data-nrec="refresh">${text({lang},'Read saved status','خواندن وضعیت ذخیره‌شده')}</button><small>${text({lang},'No automatic repair or Start','بدون تعمیر یا شروع خودکار')}</small></footer>`;
  document.body.append(box);
- const s={id,lang,owner:state.me.id,url:'/api/nodes/'+enc(id)+'/recovery',box,body:box.querySelector('.nrec-body'),doc:null,review:null,error:'',busy:false,live:true};active=s;
- box.addEventListener('close',()=>{s.live=false;s.doc=null;s.review=null;box.remove();if(active===s)active=null;if(trigger?.isConnected)trigger.focus();});
- box.querySelector('[data-nrec-close]').onclick=()=>box.close();
+ const s={id,lang,trigger,owner:state.me.id,url:'/api/nodes/'+enc(id)+'/recovery',box,body:box.querySelector('.nrec-body'),doc:null,review:null,error:'',busy:false,live:true};active=s;
+ box.addEventListener('close',()=>dismiss(s));
+ box.addEventListener('cancel',ev=>{ev.preventDefault();dismiss(s);});
+ box.querySelector('[data-nrec-close]').onclick=()=>dismiss(s);
  box.addEventListener('click',ev=>{const b=ev.target.closest('[data-nrec]');if(b){ev.preventDefault();void perform(s,b.dataset.nrec);}});
  box.addEventListener('change',()=>{
+  if(!authorized(s)){dismiss(s,false);return;}
   const checked=Object.keys(confirmations).every(key=>box.querySelector(`[name="${key}"]`)?.checked===true);
   box.querySelectorAll('[data-requires-consent]').forEach(b=>b.disabled=s.busy||!allowed(s).includes(b.dataset.nrec)||!checked);
  });

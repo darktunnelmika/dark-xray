@@ -297,6 +297,7 @@ def test_browser_duplicate_click_is_one_mutation_and_role_change_drops_late_view
 def test_browser_manage_entry_and_replacement_entry_coexist(recovery_env):
     env = recovery_env;p = enter(env);assert p.locator('.nv2-actions [data-act=nr-open]').count()==1
     p.keyboard.press('Escape')
+    expect(p.locator('.nrec-dialog')).to_have_count(0)
     if not env['bridge']:
         p.locator('.nv2-actions [data-act=nv2edit]').click()
         expect(p.locator('.nv5-manage-actions [data-act=nrec-open]')).to_be_visible()
@@ -304,10 +305,13 @@ def test_browser_manage_entry_and_replacement_entry_coexist(recovery_env):
         p.locator('.nv5-manage-actions [data-act=nrec-open]').click()
         expect(p.locator('[data-nrec-phase=not_started]')).to_be_visible()
         p.keyboard.press('Escape')
+        expect(p.locator('.nrec-dialog')).to_have_count(0)
     # The entry wrapper must not expose an owner action to a reseller view.
+    reads = len(env['requests'])
     p.evaluate("()=>{state.me={id:'rep',role:'reseller',writes_enabled:true};}")
     p.evaluate("()=>DarkNodeRecovery.open('node-recovery-1')")
-    assert p.locator('.nrec-dialog').count()==0 and not env['errors']
+    expect(p.locator('.nrec-dialog')).to_have_count(0)
+    assert len(env['requests'])==reads and not env['errors']
 
 
 def test_browser_missing_snapshot_explains_rebuild_instead_of_offering_stop(recovery_env):
@@ -318,3 +322,88 @@ def test_browser_missing_snapshot_explains_rebuild_instead_of_offering_stop(reco
     assert 'No saved configuration exists' in p.locator('[role=alert]').inner_text()
     assert p.locator('[data-nrec=stop]').count()==0 and not env['seen']
     assert env['target'].process.pid==pid and not env['errors']
+
+
+@pytest.mark.parametrize('action', ['refresh', 'stop'])
+def test_browser_native_closed_dialog_rejects_same_turn_actions(recovery_env, action):
+    """Native close removes `open` before its queued close event clears the DOM."""
+    env = recovery_env;p = enter(env);act(p, 'review');agree(p)
+    pid = env['target'].process.pid
+    calls = p.evaluate("""action=>{
+      const box=document.querySelector('.nrec-dialog'), prior=api, calls=[];
+      api=(...args)=>{calls.push(args[0]);return prior(...args);};
+      box.close();
+      // Retained/queued handlers must be inert even before the close event.
+      box.querySelector(`[data-nrec=${action}]`).click();
+      return calls;
+    }""", action)
+    assert calls == [], 'A closed recovery dialog issued an API request'
+    expect(p.locator('.nrec-dialog')).to_have_count(0)
+    assert env['target'].running and env['target'].process.pid == pid
+    assert not env['errors']
+
+
+@pytest.mark.parametrize('next_owner', [None,
+    {'id': 'rep', 'role': 'reseller', 'writes_enabled': True},
+    {'id': 'different-owner', 'role': 'owner', 'writes_enabled': True}])
+def test_browser_changed_owner_cannot_keep_or_reuse_prior_recovery_view(recovery_env, next_owner):
+    env = recovery_env;p = enter(env);act(p, 'review');agree(p)
+    pid = env['target'].process.pid
+    result = p.evaluate("""async next=>{
+      const old=document.querySelector('.nrec-dialog'), prior=api, calls=[];
+      api=(...args)=>{calls.push(args[0]);return prior(...args);};state.me=next;
+      // Invalid entry never contacts the server, but must retire the old session.
+      await DarkNodeRecovery.open('');
+      const count=document.querySelectorAll('.nrec-dialog').length;
+      old.querySelector('[data-nrec=stop]')?.click();
+      return {count,calls};
+    }""", next_owner)
+    assert result == {'count': 0, 'calls': []}
+    assert env['target'].running and env['target'].process.pid == pid
+    assert not env['errors']
+
+
+def test_browser_close_button_retires_view_before_delayed_review_resolves(recovery_env):
+    env = recovery_env;p = enter(env);pid = env['target'].process.pid
+    p.evaluate("""()=>{
+      const prior=api;window.recoveryCloseCalls=[];
+      api=async(...args)=>{
+        window.recoveryCloseCalls.push(args[0]);const result=await prior(...args);
+        if(args[0].endsWith('/review')){
+          document.documentElement.dataset.recoveryHeld='yes';
+          await new Promise(resolve=>window.releaseClosedReview=resolve);
+        }
+        return result;
+      };
+    }""")
+    p.locator('[data-nrec=review]').click()
+    expect(p.locator('html')).to_have_attribute('data-recovery-held', 'yes')
+    count = p.evaluate("""()=>{
+      document.querySelector('[data-nrec-close]').click();
+      const count=document.querySelectorAll('.nrec-dialog').length;
+      window.releaseClosedReview();return count;
+    }""")
+    assert count == 0, 'Close left the old live view until a later browser task'
+    expect(p.locator('.nrec-dialog')).to_have_count(0)
+    assert p.evaluate('window.recoveryCloseCalls') == [URL + '/review']
+    assert env['target'].running and env['target'].process.pid == pid
+    assert not env['errors']
+
+
+def test_browser_reopen_does_not_leave_two_live_views_or_restore_old_consent(recovery_env):
+    env = recovery_env;p = enter(env);act(p, 'review');agree(p)
+    result = p.evaluate("""async node=>{
+      const old=document.querySelector('.nrec-dialog');
+      const opening=DarkNodeRecovery.open(node);
+      const during=document.querySelectorAll('.nrec-dialog').length;
+      await opening;
+      // A duplicate/late close event may only retire the old view.
+      old.dispatchEvent(new Event('close'));
+      return {during,after:document.querySelectorAll('.nrec-dialog').length};
+    }""", NODE)
+    assert result == {'during': 1, 'after': 1}
+    expect(p.locator('[data-nrec-phase=not_started]')).to_be_visible()
+    assert p.locator('[data-nrec=stop]').count() == 0
+    act(p, 'review');expect(p.locator('[data-nrec=stop]')).to_be_disabled()
+    assert all(not p.locator(f'[name={key}]').is_checked() for key in CONFIRMATIONS)
+    assert env['target'].running and not env['errors']
