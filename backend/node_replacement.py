@@ -87,6 +87,8 @@ class NodeReplacement(ReplacementResolution):
               ON remote_node_replacements(target_installation_id) WHERE target_installation_id!='';
             ''')
         self._init_resolution()
+        from node_pairing import install_pairing_reservations
+        install_pairing_reservations(self.store)
 
     def begin(self, node_id: str, code: str) -> dict:
         doc = parse_pair_code(code)

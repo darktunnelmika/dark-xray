@@ -28,6 +28,7 @@ python -m pytest tests/test_destructive_recovery.py -q --junitxml=qa/junit/destr
 python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-consistency.xml
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
+python -m pytest tests/test_node_pairing.py tests/test_pair_loss_regression.py -q --junitxml=qa/junit/node-pairing.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
 python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/preupdate-node-hardening.xml
@@ -84,3 +85,5 @@ node --test tests/i18n-cpu-branding.test.cjs
 node --test tests/xray-guided-v3.test.cjs
 node --test tests/settings-operations.test.cjs
 node --test tests/node-control-live.test.cjs
+
+node --test tests/node-pairing-ui.test.cjs

@@ -1237,51 +1237,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def replacement_activation_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
         return replacement_activation.status(node_id,attempt_id)
 
-    @app.post('/api/nodes/pair')
-    def remote_node_pair(body:NodePair,p:Principal=Depends(owner)):
-        writable();code=body.code.strip()
-        if not code.startswith('DXN1.'):raise HTTPException(400,'Unsupported DARK Node pair code')
-        encoded=code[5:]
-        if not encoded or len(encoded)>3800:raise HTTPException(400,'Invalid DARK Node pair code')
-        try:
-            raw=base64.urlsafe_b64decode(encoded+'='*((4-len(encoded)%4)%4))
-            doc=json.loads(raw.decode('utf-8'))
-        except Exception as ex:raise HTTPException(400,'Malformed DARK Node pair code') from ex
-        required={'schema','nodeId','name','origin','token','dataAddress','priority','failoverEnabled'}
-        if not isinstance(doc,dict) or set(doc)!=required or doc.get('schema')!=1:
-            raise HTTPException(400,'Invalid DARK Node pair payload')
-        node_id=doc.get('nodeId');name=doc.get('name');origin=doc.get('origin');token=doc.get('token')
-        data_address=doc.get('dataAddress');priority=doc.get('priority');failover=doc.get('failoverEnabled')
-        if not isinstance(node_id,str) or not NAME_RE.fullmatch(node_id) or not isinstance(name,str) or not 1<=len(name)<=128:
-            raise HTTPException(400,'Invalid paired node identity')
-        if not isinstance(origin,str) or not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:
-            raise HTTPException(400,'Invalid paired node credential')
-        if not isinstance(data_address,str) or type(priority)is not int or not 1<=priority<=1000 or type(failover)is not bool:
-            raise HTTPException(400,'Invalid paired node settings')
-        with store.lock:
-            if store.db.execute('SELECT 1 FROM remote_nodes WHERE id=? OR origin=?',(node_id,origin)).fetchone():
-                raise HTTPException(409,'Node ID or Origin is already registered')
-        rotated=False
-        try:
-            nodes.put(node_id,name,origin,token,True,[],data_address,priority,failover)
-            probe=nodes.probe(node_id,timeout=8.0)
-            ensure_node_desired_state(node_id)
-            # The installer Pair Code is bootstrap-only. Rotate its credential
-            # after the authenticated probe so a copied DXN1 code cannot be
-            # reused as the long-lived Hub -> Node bearer credential.
-            active_token='dkn_'+secrets.token_urlsafe(48)
-            nodes.rotate_token(node_id,active_token);rotated=True
-        except Exception:
-            # Before credential rotation the bootstrap registration is safe to
-            # remove. After rotation, retain the registered Node rather than
-            # orphaning an Agent whose original Pair Code has been invalidated.
-            if not rotated:
-                try:nodes.delete(node_id)
-                except Exception:pass
-            raise
-        manager.audit(p.actor,p.actor.id,'node.pair',node_id,'agent-only pair code; bootstrap credential rotated')
-        return {'paired':True,'pair_code_consumed':True,'node':nodes.get(node_id),
-                'health':probe.get('health',{}),'latency_ms':probe.get('latency_ms',0)}
+    from node_pairing import install_hub_pairing
+    install_hub_pairing(app,nodes,owner,writable,manager.audit)
 
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
