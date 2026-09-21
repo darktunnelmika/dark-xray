@@ -149,7 +149,53 @@ class NodeReplacement(ReplacementResolution):
                 'cutover_performed':False,'requires_cutover_confirmation':not bool(row.get('resolution')),
                 'credentials_retained_in_journal':True}
 
+    def current_status(self, node_id):
+        """Owner-only route alias: GET replacement/current, no remote I/O/writes.
+
+        Find pending work after a lost first response or browser reload. Prefer
+        the current binding's committed receipt over a later discarded candidate.
+        Resume hashes identify previously consented operations, not credentials;
+        POST still requires the normal interactive owner and fresh consent.
+        """
+        with self.store.lock:
+            binding = self.registry.installations.capture(node_id)
+            row = self.store.db.execute('SELECT attempt_id FROM remote_node_replacements '
+                                        'WHERE node_id=?', (node_id,)).fetchone()
+            attempt_id = row['attempt_id'] if row else None
+            if not attempt_id:
+                latest = None
+                for saved in self.store.db.execute('SELECT attempt_id,summary_json FROM '
+                        'remote_node_replacement_history WHERE node_id=? ORDER BY rowid DESC', (node_id,)):
+                    summary = json.loads(saved['summary_json'])
+                    latest = latest or saved['attempt_id']
+                    if summary.get('committed_binding_id') == binding['binding_id']:
+                        attempt_id = saved['attempt_id']
+                        break
+                attempt_id = attempt_id or latest
+            result = {'node_id':node_id, 'attempt':None, 'has_deployment':False,
+                      'has_activation':False, 'activation_resume':None,
+                      'status_scope':'local_saved_operation', 'network_verified':False}
+            if not attempt_id:
+                return result
+            result['attempt'] = self.status(node_id, attempt_id)
+            for table, key in (('remote_node_replacement_deployments','has_deployment'),
+                               ('remote_node_replacement_activations','has_activation')):
+                exists = self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                               (table,)).fetchone()
+                if exists:
+                    result[key] = bool(self.store.db.execute('SELECT 1 FROM '+table+
+                        ' WHERE node_id=? AND attempt_id=?', (node_id,attempt_id)).fetchone())
+            if result['has_activation'] and result['attempt'].get('binding_current'):
+                active = self.store.db.execute('SELECT binding_id,phase,review_hash FROM '
+                    'remote_node_replacement_activations WHERE node_id=? AND attempt_id=?',
+                    (node_id,attempt_id)).fetchone()
+                if active['phase'] in {'starting','stopping'} and active['binding_id']==binding['binding_id']:
+                    result['activation_resume'] = dict(active)
+            return result
+
     def status(self, node_id, attempt_id):
+        if attempt_id == 'current':
+            return self.current_status(node_id)
         # Pure read, including when authentication to either VPS is impossible.
         terminal=self._terminal(node_id,attempt_id)
         if terminal is not None:return terminal
