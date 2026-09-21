@@ -38,6 +38,7 @@ python -m pytest tests/test_node_ordered_control.py -q --junitxml=qa/junit/node-
 python -m pytest tests/test_hub_node_control_live.py -q --junitxml=qa/junit/hub-node-control-live.xml
 python -m pytest tests/test_node_installations.py -q --junitxml=qa/junit/node-installations.xml
 python -m pytest tests/test_node_replacement_prepare.py -q --junitxml=qa/junit/node-replacement-prepare.xml
+python -m pytest tests/test_node_replacement_resolution.py -q --junitxml=qa/junit/node-replacement-resolution.xml
 python -m pytest tests/test_node_token_handoff.py -q --junitxml=qa/junit/node-token-handoff.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml

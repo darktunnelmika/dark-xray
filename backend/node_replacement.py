@@ -2,9 +2,10 @@
 
 Only a Pair Code is accepted from the owner. Identity/health come from pinned,
 authenticated HTTPS, never from a browser descriptor. An encrypted credential
-journal survives lost replies and Hub recreation. Prepared != cut over: this
-checkpoint does not call replace_verified, deploy configuration, move endpoints
-or stop the old VPS. Those require a separate, explicit cutover coordinator.
+journal survives lost replies and Hub recreation. Preparation alone does not
+replace the live binding, deploy configuration, move endpoints or stop the old
+VPS. The companion resolution module implements explicit binding commit and
+candidate disposal; service activation and endpoint cutover remain separate.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import uuid
 
 from dark_policy import NAME_RE, PolicyError
 from node_installations import NodeInstallations
+from node_replacement_resolution import ReplacementResolution
 
 
 class PreparationChanged(PolicyError):
@@ -66,7 +68,7 @@ def parse_pair_code(code: str) -> dict:
     return doc
 
 
-class NodeReplacement:
+class NodeReplacement(ReplacementResolution):
     def __init__(self, registry):
         self.registry, self.store, self.cipher = registry, registry.store, registry.cipher
         with self.store.lock:
@@ -84,6 +86,7 @@ class NodeReplacement:
             CREATE UNIQUE INDEX IF NOT EXISTS replacement_reserved_installation
               ON remote_node_replacements(target_installation_id) WHERE target_installation_id!='';
             ''')
+        self._init_resolution()
 
     def begin(self, node_id: str, code: str) -> dict:
         doc = parse_pair_code(code)
@@ -140,12 +143,21 @@ class NodeReplacement:
         fields = ('attempt_id','node_id','source_binding_id','target_origin','target_agent_id',
                   'target_installation_id','data_address','phase','created_at','updated_at','prepared_at','last_error')
         return {**{key:row[key] for key in fields},
-                'prepared':row['phase'] == 'prepared' and not row['last_error'],
-                'cutover_performed':False,'requires_cutover_confirmation':True}
+                'phase':row.get('resolution') or row['phase'],
+                'binding_committed':False,'service_activated':False,
+                'prepared':row['phase'] == 'prepared' and not row.get('resolution') and not row['last_error'],
+                'cutover_performed':False,'requires_cutover_confirmation':not bool(row.get('resolution')),
+                'credentials_retained_in_journal':True}
 
     def status(self, node_id, attempt_id):
         # Pure read, including when authentication to either VPS is impossible.
-        row=self._get(node_id,attempt_id)
+        terminal=self._terminal(node_id,attempt_id)
+        if terminal is not None:return terminal
+        try:row=self._get(node_id,attempt_id)
+        except PolicyError:
+            terminal=self._terminal(node_id,attempt_id)
+            if terminal is not None:return terminal
+            raise
         result=self._public(row)
         with self.store.lock:
             active=self.store.db.execute('SELECT i.binding_id,n.origin FROM remote_node_installations i '
@@ -158,7 +170,7 @@ class NodeReplacement:
         active = db.execute('SELECT i.binding_id,n.origin FROM remote_node_installations i '
                             'JOIN remote_nodes n ON n.id=i.node_id WHERE i.node_id=? AND i.retired_at=0',
                             (row['node_id'],)).fetchone()
-        if not active or active['binding_id'] != row['source_binding_id'] or active['origin'] != row['source_origin']:
+        if row.get('resolution')!='cancelling' and (not active or active['binding_id'] != row['source_binding_id'] or active['origin'] != row['source_origin']):
             raise PreparationRejected('source_changed')
         current = db.execute('SELECT operation_revision FROM remote_node_replacements WHERE attempt_id=?',
                              (row['attempt_id'],)).fetchone()
@@ -229,12 +241,27 @@ class NodeReplacement:
         # writes from another registry instance. Competing retries use the SAME
         # persisted candidate token; Agent CAS prevents old-token overwrites.
         with self.registry._node_operation('replacement:' + attempt_id):
-            row = self._get(node_id, attempt_id)
+            terminal=self._terminal(node_id,attempt_id)
+            if terminal is not None:return terminal
             with self.store.transaction() as db:
-                db.execute('UPDATE remote_node_replacements SET operation_revision=operation_revision+1 '
-                           'WHERE attempt_id=?', (attempt_id,))
-                row = dict(db.execute('SELECT * FROM remote_node_replacements WHERE attempt_id=?',
-                                      (attempt_id,)).fetchone())
+                stored=db.execute('SELECT * FROM remote_node_replacements WHERE attempt_id=? AND node_id=?',
+                                  (attempt_id,node_id)).fetchone()
+                if stored is None:
+                    terminal=self._terminal(node_id,attempt_id)
+                    if terminal is not None:return terminal
+                    raise PolicyError('Replacement preparation not found')
+                row=dict(stored)
+                if not row['resolution']:
+                    if int(row['operation_revision'])+1>=2**63:
+                        raise PolicyError('Replacement operation sequence exhausted')
+                    db.execute('UPDATE remote_node_replacements SET operation_revision=operation_revision+1 '
+                               'WHERE attempt_id=?', (attempt_id,))
+                    row = dict(db.execute('SELECT * FROM remote_node_replacements WHERE attempt_id=?',
+                                          (attempt_id,)).fetchone())
+            if row['resolution']=='committing':
+                return self.commit(node_id,attempt_id,**json.loads(row['confirmation_json']))
+            if row['resolution']=='cancelling':
+                return self.cancel(node_id,attempt_id,discard_candidate=True)
             try:
                 with self.store.lock:
                     self._assert_current(self.store.db, row)

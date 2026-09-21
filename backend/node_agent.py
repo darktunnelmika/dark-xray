@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import contextlib
 import hmac
+import functools
 import json
 import os
 import re
@@ -278,6 +279,17 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         token.require(request)
         return node_id
 
+    def current_mutation(function):
+        # Authentication before parsing is necessary but not sufficient: a
+        # buffered request can wait for the engine lock while its token rotates.
+        # All HTTP mutations (including rotations) share this final boundary.
+        @functools.wraps(function)
+        def guarded(*args, **kwargs):
+            with engine.lock:
+                token.require(kwargs['request'])
+                return function(*args, **kwargs)
+        return guarded
+
     updater=UpdateBrokerClient('/run/dark-xray-node-update/control.sock',timeout=12)
 
     @app.get('/node/api/health')
@@ -307,7 +319,8 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'run_control':runtime.control_status(),'control_receipt':runtime.command_status()}
 
     @app.post('/node/api/v1/state/apply')
-    def apply_state(body:dict,_scope:str=Depends(auth)):
+    @current_mutation
+    def apply_state(body:dict,request:Request,_scope:str=Depends(auth)):
         try:result=runtime.apply(body)
         except (PolicyError,CoreError,ValueError) as ex:raise HTTPException(422,str(ex))
         return {'service':'DARK XRAY NODE',**result}
@@ -332,7 +345,8 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         return {'items':items,'capturedAt':time.time()}
 
     @app.post('/node/api/mirrors/traffic/reset')
-    def traffic_reset(body:dict,_scope:str=Depends(auth)):
+    @current_mutation
+    def traffic_reset(body:dict,request:Request,_scope:str=Depends(auth)):
         source=str(body.get('sourceEmail') or '');reset_id=str(body.get('resetId') or '')
         if not source or not 8<=len(reset_id)<=128:raise HTTPException(400,'Invalid traffic reset request')
         with engine.lock:
@@ -366,7 +380,8 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'items':items,'capturedAt':time.time(),'guard':engine.ip_status()}
 
     @app.post('/node/api/mirrors/security/clear')
-    def security_clear(body:dict,_scope:str=Depends(auth)):
+    @current_mutation
+    def security_clear(body:dict,request:Request,_scope:str=Depends(auth)):
         source=str(body.get('sourceEmail') or '');kind=str(body.get('kind') or '')
         if kind not in {'ips','devices','all'}:raise HTTPException(400,'Invalid security clear kind')
         mirror=runtime.mirror_for_source(source)
@@ -385,13 +400,15 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         except UpdateBrokerError as ex:raise HTTPException(503,str(ex))
 
     @app.post('/node/api/v1/update/check')
-    def update_check(body:dict,_scope:str=Depends(auth)):
+    @current_mutation
+    def update_check(body:dict,request:Request,_scope:str=Depends(auth)):
         commit=str(body.get('commit') or '').lower() if isinstance(body,dict) else ''
         try:return {'service':'DARK XRAY NODE','update':updater.check('exact',commit)}
         except UpdateBrokerError as ex:raise HTTPException(422,str(ex))
 
     @app.post('/node/api/v1/update/start')
-    def update_start(body:dict,_scope:str=Depends(auth)):
+    @current_mutation
+    def update_start(body:dict,request:Request,_scope:str=Depends(auth)):
         commit=str(body.get('commit') or '').lower() if isinstance(body,dict) else ''
         try:return {'service':'DARK XRAY NODE','update':updater.start(commit)}
         except UpdateBrokerError as ex:raise HTTPException(422,str(ex))
@@ -407,6 +424,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
             raise HTTPException(409,'Replacement candidate is not a fresh unassigned installation')
 
     @app.post('/node/api/v1/replacement/rotate-token')
+    @current_mutation
     def prepare_credential(body:dict,request:Request,_scope:str=Depends(auth)):
         if set(body)!={'token'}:raise HTTPException(422,'Invalid replacement credential envelope')
         with engine.lock:
@@ -420,6 +438,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'installation_id':runtime.installation_id}
 
     @app.post('/node/api/v1/replacement/idle')
+    @current_mutation
     def prepare_idle(body:dict,request:Request,_scope:str=Depends(auth)):
         if body:raise HTTPException(422,'Replacement idle accepts an empty object only')
         with engine.lock:
@@ -432,6 +451,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'installation_id':runtime.installation_id}
 
     @app.post('/node/api/v1/token/rotate')
+    @current_mutation
     def rotate_token(body:dict,request:Request,_scope:str=Depends(auth)):
         value=body.get('token') if isinstance(body,dict) else None
         try:
@@ -442,13 +462,15 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         return {'service':'DARK XRAY NODE','rotated':True}
 
     @app.post('/node/api/v1/control')
-    def ordered_control(body:dict,_scope:str=Depends(auth)):
+    @current_mutation
+    def ordered_control(body:dict,request:Request,_scope:str=Depends(auth)):
         try:return runtime.ordered_command(body)
         except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
         except PolicyError as ex:raise HTTPException(422,str(ex))
 
     @app.post('/node/api/core/{action}')
-    def core_action(action:str,_scope:str=Depends(auth)):
+    @current_mutation
+    def core_action(action:str,request:Request,_scope:str=Depends(auth)):
         if action not in {'validate','restart','start','stop'}:raise HTTPException(404,'Unknown node core action')
         try:return {'engine':runtime.command(action),'node_agent':True,'run_control':runtime.control_status()}
         except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))

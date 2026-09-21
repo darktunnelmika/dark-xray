@@ -197,55 +197,72 @@ class NodeInstallations:
         if not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256 or not token.isascii():
             raise PolicyError('Invalid replacement Node credential')
         credential = self.registry.cipher.encrypt(token.encode()).decode()
-        now = time.time()
         with self.store.transaction() as db:
-            old = self.capture(node_id)
-            if old['binding_id']!=expected_binding_id:
-                raise StaleInstallation('Replacement was prepared for an obsolete installation')
-            if db.execute('SELECT 1 FROM remote_node_installations WHERE installation_id=?', (installation_id,)).fetchone():
-                raise PolicyError('Cannot reuse a registered or retired installation')
-            control = db.execute('SELECT * FROM remote_node_control WHERE node_id=?', (node_id,)).fetchone()
-            state = db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?', (node_id,)).fetchone()
-            usage = [dict(r) for r in db.execute('SELECT * FROM remote_node_client_usage WHERE node_id=?', (node_id,))]
-            retirement = {'origin':old['origin'],'data_address':old['data_address'],
-                          'last_seen':old['last_seen'],'usage':usage,
-                          'control':dict(control) if control else {},
-                          'desired_revision':int(state['revision']) if state else 0,
-                          'traffic_tail_complete':False,'old_stop_confirmed':False}
-            generation = int(old['generation'])+1
-            if generation>=2**63:
-                raise PolicyError('Node installation generation exhausted')
-            db.execute('UPDATE remote_node_installations SET retired_at=?,retirement_json=? WHERE binding_id=?',
-                       (now,json.dumps(retirement),old['binding_id']))
-            db.execute('INSERT INTO remote_node_installations(binding_id,node_id,generation,agent_id,installation_id,created_at) '
-                       'VALUES(?,?,?,?,?,?)', (uuid.uuid4().hex,node_id,generation,agent_id,installation_id,now))
-            db.execute("UPDATE remote_nodes SET origin=?,token_enc=?,data_address=?,enabled=0,last_seen=0,last_latency_ms=0,"
-                       "last_health='{}',last_error='',updated_at=? WHERE id=?", (origin,credential,data_address,now,node_id))
-            # Keep central accumulated usage AND ledger event sequence. The new
-            # freshly empty installation begins at zero; count its first byte.
-            db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=1,last_seen=0 WHERE node_id=?', (node_id,))
-            # A client assigned but never sampled on the old Node also starts
-            # from a known zero on this clean replacement, not a first-use gap.
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_clients'").fetchone():
-                for email in self.registry._allowed_traffic_clients(node_id):
-                    db.execute('INSERT OR IGNORE INTO remote_node_client_usage(node_id,client_id,initialized) VALUES(?,?,1)',
-                               (node_id,email))
-            for table in ('remote_node_ips','remote_node_devices','remote_node_security_state'):
-                db.execute('DELETE FROM '+table+' WHERE node_id=?', (node_id,))
-            db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=0,last_sync=0,last_error='',updated_at=? WHERE node_id=?", (now,node_id))
-            # Never carry a queued old Restart/Start into a different installation.
-            db.execute('DELETE FROM remote_node_control WHERE node_id=?', (node_id,))
-            db.execute("INSERT INTO remote_node_control(node_id,revision,command_id,action,updated_at) VALUES(?,1,?,'stop',?)",
-                       (node_id,uuid.uuid4().hex,now))
-            if state:
-                value = self.registry._open_desired_payload(state['desired_json'])
-                value = {**value,'nodeId':agent_id,'desiredRunning':False}
-                _, digest = self.registry._desired_payload(value)
-                revision = int(state['revision'])+1
-                if revision>=2**63:
-                    raise PolicyError('Node desired state sequence exhausted')
-                sealed = self.registry._seal_desired_payload(value)
-                db.execute("UPDATE remote_node_desired_state SET revision=?,desired_hash=?,desired_json=?,updated_at=?,"
-                           "applied_revision=0,applied_hash='',applied_at=0,last_error='' WHERE node_id=?",
-                           (revision,digest,sealed,now,node_id))
-        return self.public_status(node_id)
+            return self._replace_locked(db, node_id, expected_binding_id=expected_binding_id,
+                agent_id=agent_id, installation_id=installation_id, origin=origin,
+                credential=credential, data_address=data_address)
+
+    def _replace_locked(self, db, node_id, *, expected_binding_id, agent_id,
+                        installation_id, origin, credential, data_address, attempt_id=None):
+        """Internal transaction body. Caller has verified fresh target and HTTPS.
+
+        No network I/O: a coordinator may publish its terminal receipt and remove
+        its credential journal in THIS transaction, not after a separate commit.
+        """
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_replacements'").fetchone():
+            reservation=db.execute('SELECT attempt_id FROM remote_node_replacements WHERE target_origin=?',
+                                   (origin,)).fetchone()
+            if reservation and reservation['attempt_id'] != attempt_id:
+                raise PolicyError('Replacement target belongs to an unresolved preparation')
+        now = time.time()
+        old = self.capture(node_id)
+        if old['binding_id']!=expected_binding_id:
+            raise StaleInstallation('Replacement was prepared for an obsolete installation')
+        if db.execute('SELECT 1 FROM remote_node_installations WHERE installation_id=?', (installation_id,)).fetchone():
+            raise PolicyError('Cannot reuse a registered or retired installation')
+        control = db.execute('SELECT * FROM remote_node_control WHERE node_id=?', (node_id,)).fetchone()
+        state = db.execute('SELECT * FROM remote_node_desired_state WHERE node_id=?', (node_id,)).fetchone()
+        usage = [dict(r) for r in db.execute('SELECT * FROM remote_node_client_usage WHERE node_id=?', (node_id,))]
+        retirement = {'origin':old['origin'],'data_address':old['data_address'],
+                      'last_seen':old['last_seen'],'usage':usage,
+                      'control':dict(control) if control else {},
+                      'desired_revision':int(state['revision']) if state else 0,
+                      'traffic_tail_complete':False,'old_stop_confirmed':False}
+        generation = int(old['generation'])+1
+        if generation>=2**63:
+            raise PolicyError('Node installation generation exhausted')
+        db.execute('UPDATE remote_node_installations SET retired_at=?,retirement_json=? WHERE binding_id=?',
+                   (now,json.dumps(retirement),old['binding_id']))
+        db.execute('INSERT INTO remote_node_installations(binding_id,node_id,generation,agent_id,installation_id,created_at) '
+                   'VALUES(?,?,?,?,?,?)', (uuid.uuid4().hex,node_id,generation,agent_id,installation_id,now))
+        db.execute("UPDATE remote_nodes SET origin=?,token_enc=?,data_address=?,enabled=0,last_seen=0,last_latency_ms=0,"
+                   "last_health='{}',last_error='',updated_at=? WHERE id=?", (origin,credential,data_address,now,node_id))
+        # Keep central accumulated usage AND ledger event sequence. The new
+        # freshly empty installation begins at zero; count its first byte.
+        db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=1,last_seen=0 WHERE node_id=?', (node_id,))
+        # A client assigned but never sampled on the old Node also starts
+        # from a known zero on this clean replacement, not a first-use gap.
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_clients'").fetchone():
+            for email in self.registry._allowed_traffic_clients(node_id):
+                db.execute('INSERT OR IGNORE INTO remote_node_client_usage(node_id,client_id,initialized) VALUES(?,?,1)',
+                           (node_id,email))
+        for table in ('remote_node_ips','remote_node_devices','remote_node_security_state'):
+            db.execute('DELETE FROM '+table+' WHERE node_id=?', (node_id,))
+        db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=0,last_sync=0,last_error='',updated_at=? WHERE node_id=?", (now,node_id))
+        # Never carry a queued old Restart/Start into a different installation.
+        db.execute('DELETE FROM remote_node_control WHERE node_id=?', (node_id,))
+        db.execute("INSERT INTO remote_node_control(node_id,revision,command_id,action,updated_at) VALUES(?,1,?,'stop',?)",
+                   (node_id,uuid.uuid4().hex,now))
+        if state:
+            value = self.registry._open_desired_payload(state['desired_json'])
+            value = {**value,'nodeId':agent_id,'desiredRunning':False}
+            _, digest = self.registry._desired_payload(value)
+            revision = int(state['revision'])+1
+            if revision>=2**63:
+                raise PolicyError('Node desired state sequence exhausted')
+            sealed = self.registry._seal_desired_payload(value)
+            db.execute("UPDATE remote_node_desired_state SET revision=?,desired_hash=?,desired_json=?,updated_at=?,"
+                       "applied_revision=0,applied_hash='',applied_at=0,last_error='' WHERE node_id=?",
+                       (revision,digest,sealed,now,node_id))
+        row = db.execute('SELECT * FROM remote_node_installations WHERE node_id=? AND retired_at=0', (node_id,)).fetchone()
+        return {key: row[key] for key in ('binding_id','generation','agent_id','installation_id')}

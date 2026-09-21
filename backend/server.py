@@ -95,6 +95,13 @@ class RepresentativeBody(Model):
     prefix:str=Field(default='',max_length=64)
     max_client_ips:StrictInt=Field(default=0,ge=0,le=1000)
     max_client_hwid:StrictInt=Field(default=0,ge=0,le=1000)
+class ReplacementCommit(Model):
+    sourceBindingId:str=Field(pattern=r'^[0-9a-f]{32}$')
+    acceptUnconfirmedOldServer:bool
+    acceptUnreportedTraffic:bool
+class ReplacementCancel(Model):
+    discardCandidate:bool
+
 class ResolveReset(Model):confirmation:str=Field(min_length=1,max_length=128)
 class Action(Model): action:Literal['enable','disable','reset','delete']
 class Bulk(Model):
@@ -1141,6 +1148,24 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         replacements.status(node_id,attempt_id)
         manager.audit(p.actor,p.actor.id,'node.replacement.retry',node_id,'attempt='+attempt_id)
         return replacements.resume(node_id,attempt_id)
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/commit')
+    def commit_node_replacement(node_id:str,attempt_id:str,body:ReplacementCommit,p:Principal=Depends(owner)):
+        writable()
+        result=replacements.commit(node_id,attempt_id,source_binding_id=body.sourceBindingId,
+            accept_unconfirmed_old_server=body.acceptUnconfirmedOldServer,
+            accept_unreported_traffic=body.acceptUnreportedTraffic)
+        manager.audit(p.actor,p.actor.id,'node.replacement.commit',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/cancel')
+    def cancel_node_replacement(node_id:str,attempt_id:str,body:ReplacementCancel,p:Principal=Depends(owner)):
+        writable()
+        result=replacements.cancel(node_id,attempt_id,discard_candidate=body.discardCandidate)
+        manager.audit(p.actor,p.actor.id,'node.replacement.cancel',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
 
     @app.post('/api/nodes/pair')
     def remote_node_pair(body:NodePair,p:Principal=Depends(owner)):
