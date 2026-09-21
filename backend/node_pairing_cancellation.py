@@ -105,8 +105,14 @@ class PairingCancellation:
                     raise PairingRejected('pairing_cancellation_state_invalid')
                 if not row['installation_id']:
                     raise PairingRejected('pairing_cancellation_identity_missing')
-                sealed = row['disposal_enc'] or self.cipher.encrypt(
-                    ('dkn_' + secrets.token_urlsafe(48)).encode()).decode()
+                sealed = row['disposal_enc']
+                if not sealed:
+                    # A wrong/restored Hub key must not create a mixed-key
+                    # journal that becomes unreadable when the correct key returns.
+                    # Local withdrawal above intentionally needs no decryption.
+                    self._open(row['bootstrap_enc'])
+                    self._open(row['candidate_enc'])
+                    sealed = self.cipher.encrypt(('dkn_' + secrets.token_urlsafe(48)).encode()).decode()
                 db.execute("UPDATE remote_node_pairings SET resolution='cancelling',disposal_enc=?,"
                            "operation_revision=?,last_error='',updated_at=? WHERE attempt_id=?",
                            (sealed,revision,time.time(),attempt_id))
@@ -141,6 +147,19 @@ class PairingCancellation:
                     self._exchange(row,disposal,'/node/api/v1/replacement/idle','POST',{})
                     health = self._exchange(row, disposal)
                 self._require_idle(row, health)
+                # Verify revocation rather than inferring it from acceptance of
+                # the disposal token. Only a verified HTTPS 401 is rejection;
+                # a timeout, TLS failure or 5xx must retain the recovery journal.
+                for sealed in (row['candidate_enc'], row['bootstrap_enc']):
+                    try:
+                        self._exchange(row, self._open(sealed))
+                    except NodeHTTPError as exc:
+                        if exc.status != 401:
+                            raise
+                    else:
+                        raise PairingRejected('pairing_cancellation_old_credential_accepted')
+                # Earlier idle evidence must not outlive the credential probes.
+                self._require_idle(row, self._exchange(row, disposal))
                 with self.store.transaction() as db:
                     self._finish_cancel(db, row, 'discarded_after_rotation')
             except Exception as exc:

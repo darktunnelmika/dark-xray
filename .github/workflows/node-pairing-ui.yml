@@ -29,7 +29,7 @@ jobs:
       - name: Pairing protocol and full-panel HTTP browser flow
         run: |
           test -z "${DARK_BROWSER_TEST_BRIDGE:-}"
-          python -m pytest tests/test_node_pairing.py tests/test_pair_loss_regression.py tests/test_node_pairing_cancellation.py tests/test_node_pairing_browser.py tests/test_node_pairing_cancellation_browser.py -q --junitxml=qa/junit/pairing-ui.xml
+          python -m pytest tests/test_node_pairing.py tests/test_pair_loss_regression.py tests/test_node_pairing_cancellation.py tests/test_node_pairing_cancellation_guards.py tests/test_node_pairing_browser.py tests/test_node_pairing_cancellation_browser.py -q --junitxml=qa/junit/pairing-ui.xml
       - name: Upload pairing UI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
