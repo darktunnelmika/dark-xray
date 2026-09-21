@@ -109,6 +109,59 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
+class NodeHTTPError(PolicyError):
+    """Typed HTTP rejection; callers must not infer 401 from an error string."""
+    def __init__(self, status:int, detail:str=''):
+        self.status=status
+        super().__init__(f'Node HTTP {status}'+(': '+detail if detail else ''))
+
+
+def node_https_request(origin:str, token:str, path:str, method:str='GET', body:dict|None=None,
+                       timeout:float=8.0, *, agent_id:str='', installation_id:str='',
+                       allow_auth_failure:bool=False)->tuple[dict,int]:
+    """Same pinned HTTPS transport for registered Nodes and isolated candidates.
+
+    No database writes. Candidate probes may distinguish a TLS-verified 401
+    (which has no authenticated identity headers) to try the journaled bootstrap
+    credential. No other identity/TLS/status failure permits that fallback.
+    """
+    if not isinstance(path,str) or not path.startswith('/node/api/') or any(ch in path for ch in '\r\n?#'):
+        raise PolicyError('Invalid node API path')
+    if not .2<=timeout<=30:raise PolicyError('Invalid node timeout')
+    _origin,host,port,addresses=resolve_origin(origin)
+    data=None if body is None else json.dumps(body,separators=(',',':'),allow_nan=False).encode()
+    if data is not None and len(data)>8*1024*1024:raise PolicyError('Node request exceeds 8 MiB limit')
+    headers={'Accept':'application/json','Authorization':'Bearer '+token}
+    if installation_id:
+        headers['X-Dark-Expected-Node-Id']=agent_id
+        headers['X-Dark-Expected-Installation-Id']=installation_id
+    if data is not None:headers['Content-Type']='application/json'
+    context=ssl.create_default_context();last_error=None;start=time.monotonic();deadline=start+timeout
+    for address in addresses:
+        remaining=deadline-time.monotonic()
+        if remaining<=0:break
+        conn=_PinnedHTTPSConnection(host,port,address,timeout=max(.2,remaining),context=context)
+        try:
+            conn.request(method,path,body=data,headers=headers)
+            res=conn.getresponse();raw=res.read(1024*1024+1)
+            if len(raw)>1024*1024:raise PolicyError('Node response exceeds 1 MiB limit')
+            if allow_auth_failure and res.status==401:raise NodeHTTPError(401)
+            if installation_id and (res.getheader('X-Dark-Node-Id')!=agent_id or
+                    res.getheader('X-Dark-Installation-Id')!=installation_id):
+                raise PolicyError('Node response installation identity mismatch')
+            if res.status<200 or res.status>=300:raise NodeRegistry._response_error(res.status,raw)
+            try:doc=json.loads(raw.decode())
+            except Exception as ex:raise PolicyError('Node returned invalid JSON') from ex
+            if not isinstance(doc,(dict,list)):raise PolicyError('Unexpected node response shape')
+            return doc,max(1,int((time.monotonic()-start)*1000))
+        except PolicyError:raise
+        except (ssl.SSLError,http.client.HTTPException,TimeoutError,OSError) as ex:last_error=ex
+        finally:
+            try:conn.close()
+            except Exception:pass
+    raise PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'Timeout')) from last_error
+
+
 class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
@@ -323,6 +376,11 @@ class NodeRegistry:
                 reset_probe=old['origin']!=origin or old_token!=token or bool(old['enabled'])!=enabled
         enc=self.cipher.encrypt(token.encode()).decode();now=time.time()
         with self.store.transaction() as db:
+            # A pending handoff owns its target endpoint. Normal Add/Edit/Pair
+            # must not register that candidate while its credential is changing.
+            if (db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_replacements'").fetchone()
+                    and db.execute('SELECT 1 FROM remote_node_replacements WHERE target_origin=?',(origin,)).fetchone()):
+                raise PolicyError('Node endpoint is reserved by a replacement preparation')
             db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health,data_address,priority,failover_enabled)
               VALUES(?,?,?,?,?,?,?,0,0,'','{}',?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
               token_enc=excluded.token_enc,enabled=excluded.enabled,updated_at=excluded.updated_at,
@@ -512,7 +570,7 @@ class NodeRegistry:
             parsed=json.loads(raw[:65536].decode())
             if isinstance(parsed,dict):detail=str(parsed.get('detail',''))[:200]
         except Exception:pass
-        return PolicyError(f'Node HTTP {status}'+(': '+detail if detail else ''))
+        return NodeHTTPError(status,detail)
 
     @installation_operation
     def _request(self,node_id:str,path:str,method:str='GET',body:dict|None=None,timeout:float=8.0)->tuple[dict,int]:
@@ -521,44 +579,13 @@ class NodeRegistry:
         try:token=self.cipher.decrypt(node['token_enc'].encode()).decode()
         except Exception as ex:raise PolicyError('Node credential cannot be decrypted') from ex
         if not node['enabled']:raise PolicyError('Node is disabled')
-        if not isinstance(path,str) or not path.startswith('/node/api/') or any(ch in path for ch in '\r\n?#'):
-            raise PolicyError('Invalid node API path')
-        if not .2<=timeout<=30:raise PolicyError('Invalid node timeout')
-        _origin,host,port,addresses=resolve_origin(node['origin'])
-        data=None if body is None else json.dumps(body,separators=(',',':')).encode()
-        if data is not None and len(data)>8*1024*1024:raise PolicyError('Node request exceeds 8 MiB limit')
-        headers={'Accept':'application/json','Authorization':'Bearer '+token}
-        if node['installation_id']:
-            headers['X-Dark-Expected-Node-Id']=node['agent_id']
-            headers['X-Dark-Expected-Installation-Id']=node['installation_id']
-        if data is not None:headers['Content-Type']='application/json'
-        context=ssl.create_default_context();last_error=None;start=time.monotonic();deadline=start+timeout
-        for address in addresses:
-            remaining=deadline-time.monotonic()
-            if remaining<=0:break
-            conn=_PinnedHTTPSConnection(host,port,address,timeout=max(.2,remaining),context=context)
-            try:
-                conn.request(method,path,body=data,headers=headers)
-                res=conn.getresponse();raw=res.read(1024*1024+1)
-                if len(raw)>1024*1024:raise PolicyError('Node response exceeds 1 MiB limit')
-                if node['installation_id'] and (res.getheader('X-Dark-Node-Id')!=node['agent_id'] or
-                        res.getheader('X-Dark-Installation-Id')!=node['installation_id']):
-                    raise PolicyError('Node response installation identity mismatch')
-                if res.status<200 or res.status>=300:raise self._response_error(res.status,raw)
-                try:doc=json.loads(raw.decode())
-                except Exception as ex:raise PolicyError('Node returned invalid JSON') from ex
-                if not isinstance(doc,(dict,list)):raise PolicyError('Unexpected node response shape')
-                elapsed=max(1,int((time.monotonic()-start)*1000));self._request_ok(node_id,elapsed)
-                return doc,elapsed
-            except PolicyError as ex:
-                self._request_failed(node_id,str(ex));raise
-            except (ssl.SSLError,http.client.HTTPException,TimeoutError,OSError) as ex:
-                last_error=ex
-            finally:
-                try:conn.close()
-                except Exception:pass
-        err=PolicyError('Node connection failed: '+(type(last_error).__name__ if last_error else 'Timeout'))
-        self._request_failed(node_id,str(err));raise err from last_error
+        try:
+            doc,elapsed=node_https_request(node['origin'],token,path,method,body,timeout,
+                                          agent_id=node['agent_id'],installation_id=node['installation_id'])
+        except PolicyError as ex:
+            self._request_failed(node_id,str(ex));raise
+        self._request_ok(node_id,elapsed)
+        return doc,elapsed
 
     @installation_operation
     def probe(self,node_id:str,*,timeout:float=8.0)->dict:

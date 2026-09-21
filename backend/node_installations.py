@@ -166,6 +166,21 @@ class NodeInstallations:
             return [dict(row) for row in self.store.db.execute(
                 'SELECT * FROM remote_node_installations WHERE node_id=? ORDER BY generation', (node_id,))]
 
+    @staticmethod
+    def validate_fresh(health, *, allow_running=False):
+        agent_id, installation_id = NodeInstallations.descriptor(health)
+        core, desired = health.get('core'), health.get('desired_state')
+        receipt=health.get('control_receipt')
+        ordered=health.get('capabilities',{}).get('ordered_control')
+        if (health.get('writes_enabled') is not True or type(ordered) is not int or ordered!=1
+            or not isinstance(receipt,dict) or receipt.get('persisted') is not False
+            or not isinstance(core,dict) or core.get('state') not in ({'running','stopped'} if allow_running else {'stopped'})
+            or not isinstance(desired,dict) or type(desired.get('appliedRevision')) is not int
+            or desired['appliedRevision']!=0 or type(health.get('inbounds')) is not int or health['inbounds']!=0
+            or type(health.get('managed_clients')) is not int or health['managed_clients']!=0):
+            raise PolicyError('Replacement must be a fresh, stopped, unassigned Node installation')
+        return agent_id, installation_id
+
     def replace_verified(self, node_id, *, expected_binding_id, health, origin, token, data_address):
         """Commit a verified *fresh/stopped* installation, disabled for cutover.
 
@@ -174,17 +189,7 @@ class NodeInstallations:
         This method does not perform enrollment, rotate tokens, stop the old VPS,
         change DNS, activate subscriptions or promise recovery of missing traffic.
         """
-        agent_id, installation_id = self.descriptor(health)
-        core, desired = health.get('core'), health.get('desired_state')
-        receipt=health.get('control_receipt')
-        ordered=health.get('capabilities',{}).get('ordered_control')
-        if (health.get('writes_enabled') is not True or type(ordered) is not int or ordered!=1
-            or not isinstance(receipt,dict) or receipt.get('persisted') is not False
-            or not isinstance(core,dict) or core.get('state')!='stopped'
-            or not isinstance(desired,dict) or type(desired.get('appliedRevision')) is not int
-            or desired['appliedRevision']!=0 or type(health.get('inbounds')) is not int or health['inbounds']!=0
-            or type(health.get('managed_clients')) is not int or health['managed_clients']!=0):
-            raise PolicyError('Replacement must be a fresh, stopped, unassigned Node installation')
+        agent_id, installation_id = self.validate_fresh(health)
         # Existing URL/TLS/SSRF validation is retained, not relaxed for replacement.
         from nodes import validate_origin, validate_data_address
         origin = validate_origin(origin)

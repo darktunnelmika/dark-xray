@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import time
 import threading
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
@@ -207,6 +208,8 @@ class NodeTokenCreate(Model):
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
+    from node_replacement import NodeReplacement
+    replacements=NodeReplacement(nodes)
     node_reset_lock=threading.RLock()
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
     def apply_global_security(_node_id:str='',_result:dict|None=None):
@@ -224,6 +227,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         yield
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app.state.replacements=replacements
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
     public=urlsplit(config.public_origin);panel_path=config.panel_path
 
@@ -1119,6 +1123,24 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/nodes')
     def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
+
+    @app.post('/api/nodes/{node_id}/replacement/prepare')
+    def prepare_node_replacement(node_id:str,body:NodePair,p:Principal=Depends(owner)):
+        writable()
+        attempt=replacements.begin(node_id,body.code)
+        manager.audit(p.actor,p.actor.id,'node.replacement.prepare',node_id,'attempt='+attempt['attempt_id'])
+        return replacements.resume(node_id,attempt['attempt_id'])
+
+    @app.get('/api/nodes/{node_id}/replacement/{attempt_id}')
+    def node_replacement_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        return replacements.status(node_id,attempt_id)
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/retry')
+    def retry_node_replacement(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        writable()
+        replacements.status(node_id,attempt_id)
+        manager.audit(p.actor,p.actor.id,'node.replacement.retry',node_id,'attempt='+attempt_id)
+        return replacements.resume(node_id,attempt_id)
 
     @app.post('/api/nodes/pair')
     def remote_node_pair(body:NodePair,p:Principal=Depends(owner)):

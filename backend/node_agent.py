@@ -16,6 +16,7 @@ import json
 import os
 import re
 import stat
+import tempfile
 import threading
 import time
 
@@ -33,6 +34,7 @@ VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
 
 class AgentToken:
     def __init__(self,path:Path):
+        self.lock=threading.RLock()
         self.path=Path(path)
         if self.path.is_symlink() or not self.path.is_file():raise PolicyError('Node token file is missing or unsafe')
         if self.path.stat().st_size>4096:raise PolicyError('Node token file is too large')
@@ -50,32 +52,38 @@ class AgentToken:
         except TypeError:valid=False
         if not valid:raise HTTPException(401,'Invalid DARK node token')
 
-    def rotate(self,value:str):
+    def rotate(self,value:str,*,request:Request|None=None):
         if not isinstance(value,str) or not value.startswith('dkn_') or not 40<=len(value)<=256 or not value.isascii():
             raise PolicyError('Invalid replacement node token')
-        temp=self.path.with_name('.token.rotate.'+str(os.getpid()))
-        fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-        try:
-            with os.fdopen(fd,'w',encoding='utf-8') as out:
-                out.write(value+'\n');out.flush();os.fsync(out.fileno())
-            os.replace(temp,self.path)
-        finally:
-            try:temp.unlink(missing_ok=True)
-            except OSError:pass
-        self.token=value
-        # A successful authenticated rotation is the terminal step of DXN1
-        # bootstrap pairing. Remove the reusable bootstrap material locally.
-        pair=self.path.parent/'pair.json'
-        try:
-            if pair.is_file() and not pair.is_symlink():pair.unlink()
-            marker=self.path.parent/'pair-consumed'
-            fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
-            with os.fdopen(fd,'w',encoding='utf-8') as out:
-                out.write(str(time.time())+'\n');out.flush();os.fsync(out.fileno())
-        except OSError:
-            # Credential rotation already succeeded. Bootstrap cleanup is
-            # best-effort and must never strand Hub/Agent authentication.
-            pass
+        # Reauthenticate under the rotation lock, not only before body parsing.
+        # An already buffered request with the old token cannot overwrite a
+        # completed rotation. Hubs recover a lost response using the new token.
+        with self.lock:
+            if request is not None:self.require(request)
+            fd,name=tempfile.mkstemp(prefix='.token.rotate.',dir=self.path.parent)
+            temp=Path(name)
+            try:
+                with os.fdopen(fd,'w',encoding='utf-8') as out:
+                    out.write(value+'\n');out.flush();os.fsync(out.fileno())
+                os.replace(temp,self.path)
+                # Replacement has happened even if directory fsync fails. Keep
+                # disk and in-memory authentication aligned; do not report success.
+                self.token=value
+                parent=os.open(self.path.parent,os.O_RDONLY|os.O_DIRECTORY)
+                try:os.fsync(parent)
+                finally:os.close(parent)
+            finally:temp.unlink(missing_ok=True)
+            pair=self.path.parent/'pair.json'
+            try:
+                if pair.is_file() and not pair.is_symlink():pair.unlink()
+                marker=self.path.parent/'pair-consumed'
+                fd=os.open(marker,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+                with os.fdopen(fd,'w',encoding='utf-8') as out:
+                    out.write(str(time.time())+'\n');out.flush();os.fsync(out.fileno())
+            except OSError:
+                # The bootstrap bearer is invalid already. Artifact cleanup is
+                # best effort, never a reason to roll the credential back.
+                pass
 
 
 def node_identity(path:Path)->str:
@@ -290,7 +298,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'ordered_control':1,'installation_identity':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'ordered_control':1,'installation_identity':1,'replacement_prepare':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')
@@ -388,10 +396,48 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         try:return {'service':'DARK XRAY NODE','update':updater.start(commit)}
         except UpdateBrokerError as ex:raise HTTPException(422,str(ex))
 
+    def require_fresh_candidate():
+        # Caller holds engine.lock. A previous authenticated Health is not an
+        # authorization to stop/rotate a candidate that has since gained users.
+        engine._write()
+        with store.lock:
+            inbounds=store.db.execute('SELECT COUNT(*) FROM core_inbounds').fetchone()[0]
+            clients=store.db.execute('SELECT COUNT(*) FROM core_clients').fetchone()[0]
+        if (inbounds or clients or runtime.status()['appliedRevision'] or runtime.command_status()['persisted']):
+            raise HTTPException(409,'Replacement candidate is not a fresh unassigned installation')
+
+    @app.post('/node/api/v1/replacement/rotate-token')
+    def prepare_credential(body:dict,request:Request,_scope:str=Depends(auth)):
+        if set(body)!={'token'}:raise HTTPException(422,'Invalid replacement credential envelope')
+        with engine.lock:
+            token.require(request)
+            try:
+                require_fresh_candidate()
+                token.rotate(body['token'],request=request)
+            except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
+            except PolicyError as ex:raise HTTPException(422,str(ex))
+        return {'service':'DARK XRAY NODE','rotated':True,'node_id':node_id,
+                'installation_id':runtime.installation_id}
+
+    @app.post('/node/api/v1/replacement/idle')
+    def prepare_idle(body:dict,request:Request,_scope:str=Depends(auth)):
+        if body:raise HTTPException(422,'Replacement idle accepts an empty object only')
+        with engine.lock:
+            token.require(request)
+            try:
+                require_fresh_candidate()
+                runtime.command('stop')
+            except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
+        return {'service':'DARK XRAY NODE','idle':True,'node_id':node_id,
+                'installation_id':runtime.installation_id}
+
     @app.post('/node/api/v1/token/rotate')
-    def rotate_token(body:dict,_scope:str=Depends(auth)):
+    def rotate_token(body:dict,request:Request,_scope:str=Depends(auth)):
         value=body.get('token') if isinstance(body,dict) else None
-        try:token.rotate(value)
+        try:
+            engine._write()
+            token.rotate(value,request=request)
+        except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
         except PolicyError as ex:raise HTTPException(422,str(ex))
         return {'service':'DARK XRAY NODE','rotated':True}
 
