@@ -363,19 +363,48 @@ def test_browser_changed_owner_cannot_keep_or_reuse_prior_recovery_view(recovery
     assert not env['errors']
 
 
-def test_browser_close_button_retires_view_before_delayed_review_resolves(recovery_env):
+def _recovery_close_actions(calls):
+    # The full panel keeps its normal read-only fleet refresh running. Do not
+    # confuse those two known GETs with actions from the closed dialog. Every
+    # mutation (including POST to either fleet path) and other GET stays audited.
+    passive = {('/api/nodes', 'GET'), ('/api/nodes/orchestration', 'GET')}
+    return [call for call in calls if tuple(call) not in passive]
+
+
+def test_close_api_audit_accepts_review_with_only_known_readonly_fleet_refresh():
+    review = [URL + '/review', 'POST']
+    calls = [['/api/nodes', 'GET'], review, ['/api/nodes/orchestration', 'GET']]
+    assert calls != [review]  # The former unscoped assertion reproduces the CI failure.
+    assert _recovery_close_actions(calls) == [review]
+
+
+@pytest.mark.parametrize('extra', [
+    [URL + '/stop', 'POST'], [URL + '/review', 'POST'],
+    ['/api/nodes', 'POST'], ['/api/nodes/orchestration', 'POST'],
+    [URL + '/current', 'GET'], ['/api/nodes/other/core/stop', 'POST'],
+])
+def test_close_api_audit_does_not_ignore_unexpected_requests(extra):
+    review = [URL + '/review', 'POST']
+    assert _recovery_close_actions([['/api/nodes', 'GET'], review, extra]) == [review, extra]
+
+
+@pytest.mark.parametrize('interleave_fleet_reads', [False, True])
+def test_browser_close_button_retires_view_before_delayed_review_resolves(recovery_env, interleave_fleet_reads):
     env = recovery_env;p = enter(env);pid = env['target'].process.pid
-    p.evaluate("""()=>{
+    p.evaluate("""interleave=>{
       const prior=api;window.recoveryCloseCalls=[];
       api=async(...args)=>{
-        window.recoveryCloseCalls.push(args[0]);const result=await prior(...args);
+        window.recoveryCloseCalls.push([args[0],args[1]||'GET']);const result=await prior(...args);
         if(args[0].endsWith('/review')){
+          // Deterministically cover normal full-panel refresh interleaving;
+          // never turn off timers or suppress the actual production API calls.
+          if(interleave){await api('/api/nodes');await api('/api/nodes/orchestration');}
           document.documentElement.dataset.recoveryHeld='yes';
           await new Promise(resolve=>window.releaseClosedReview=resolve);
         }
         return result;
       };
-    }""")
+    }""", interleave_fleet_reads)
     p.locator('[data-nrec=review]').click()
     expect(p.locator('html')).to_have_attribute('data-recovery-held', 'yes')
     count = p.evaluate("""()=>{
@@ -385,7 +414,10 @@ def test_browser_close_button_retires_view_before_delayed_review_resolves(recove
     }""")
     assert count == 0, 'Close left the old live view until a later browser task'
     expect(p.locator('.nrec-dialog')).to_have_count(0)
-    assert p.evaluate('window.recoveryCloseCalls') == [URL + '/review']
+    calls = p.evaluate('window.recoveryCloseCalls')
+    assert _recovery_close_actions(calls) == [[URL + '/review', 'POST']]
+    if interleave_fleet_reads:
+        assert ['/api/nodes', 'GET'] in calls and ['/api/nodes/orchestration', 'GET'] in calls
     assert env['target'].running and env['target'].process.pid == pid
     assert not env['errors']
 
