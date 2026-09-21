@@ -520,6 +520,8 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         except OSError as ex:raise HTTPException(503,type(ex).__name__)
         return {'kind':kind,'lines':[x[-2000:] for x in text.splitlines()[-limit:]],'truncated':start>0}
 
+    from node_recovery_protocol import install_agent_recovery
+    install_agent_recovery(app,runtime,auth,current_mutation)
     return app
 
 

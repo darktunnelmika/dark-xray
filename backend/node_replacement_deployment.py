@@ -25,6 +25,8 @@ class DeploymentRejected(PolicyError):
 
 def assert_deployment_allows(db, node_id, action):
     """Called inside the caller's write transaction; no network or secrets."""
+    from node_recovery import assert_recovery_allows
+    assert_recovery_allows(db,node_id,action)
     if action not in {'enable', 'start', 'restart'}:
         return
     if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND "

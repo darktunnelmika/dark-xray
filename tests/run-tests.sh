@@ -42,6 +42,7 @@ python -m pytest tests/test_node_replacement_prepare.py -q --junitxml=qa/junit/n
 python -m pytest tests/test_node_replacement_resolution.py -q --junitxml=qa/junit/node-replacement-resolution.xml
 python -m pytest tests/test_node_replacement_deployment.py -q --junitxml=qa/junit/node-replacement-deployment.xml
 python -m pytest tests/test_node_replacement_current.py -q --junitxml=qa/junit/replacement-current.xml
+python -m pytest tests/test_node_recovery.py -q --junitxml=qa/junit/node-recovery.xml
 python -m pytest tests/test_node_replacement_activation.py -q --junitxml=qa/junit/node-replacement-activation.xml
 python -m pytest tests/test_node_token_handoff.py -q --junitxml=qa/junit/node-token-handoff.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml

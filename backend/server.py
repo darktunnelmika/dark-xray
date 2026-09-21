@@ -319,6 +319,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def writable():
         if not config.writes_enabled:raise HTTPException(409,'Local writes disabled by administrator')
 
+    from node_recovery import install_hub_recovery
+    install_hub_recovery(app,nodes,owner,writable,manager.audit)
+
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
 
