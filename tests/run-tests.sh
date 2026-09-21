@@ -34,6 +34,7 @@ python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/p
 python -m pytest tests/test_node_guard_recovery.py -q --junitxml=qa/junit/node-guard-recovery.xml
 python -m pytest tests/test_hub_node_control_store.py -q --junitxml=qa/junit/hub-node-control-store.xml
 python -m pytest tests/test_node_control_lifecycle.py -q --junitxml=qa/junit/node-control-lifecycle.xml
+python -m pytest tests/test_core_api_time_wait.py -q --junitxml=qa/junit/core-api-time-wait.xml
 python -m pytest tests/test_node_ordered_control.py -q --junitxml=qa/junit/node-ordered-control.xml
 python -m pytest tests/test_hub_node_control_live.py -q --junitxml=qa/junit/hub-node-control-live.xml
 python -m pytest tests/test_node_installations.py -q --junitxml=qa/junit/node-installations.xml

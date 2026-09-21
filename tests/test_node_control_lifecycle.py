@@ -164,7 +164,7 @@ def test_crashed_running_child_recovers_but_manual_stop_does_not(tmp_path):
     with rebooted_agent(tmp_path/'node') as (_,engine,runtime,client,loop):
         post_state(client,payload(engine));engine.process.kill();engine.process.wait(timeout=3)
         engine.last_start=0
-        loop.tick();assert engine.running
+        loop.tick();assert engine.running, {'core':engine.runtime_state(),'maintenance_error':loop.last_error}
         control(client,'stop');engine.last_start=0
         loop.tick();assert not engine.running
 
