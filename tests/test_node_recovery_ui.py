@@ -287,8 +287,9 @@ def test_browser_duplicate_click_is_one_mutation_and_role_change_drops_late_view
     expect(p.locator('[data-nrec-phase=recovered_stopped]')).to_be_visible()
     assert len([r for r in posts(env) if r[1].endswith('/stop')])==1
     # Hold a read response to test a disappearing owner session without more mutation.
-    p.evaluate("""()=>{const prior=api;api=async(...args)=>{const value=await prior(...args);window.readReady=true;await new Promise(r=>window.releaseRecoveryRead=r);return value;};}""")
-    p.locator('[data-nrec=refresh]').click();p.wait_for_function('window.readReady===true')
+    p.evaluate("""()=>{const prior=api;api=async(...args)=>{const value=await prior(...args);document.documentElement.dataset.recoveryRead='ready';await new Promise(r=>window.releaseRecoveryRead=r);return value;};}""")
+    p.locator('[data-nrec=refresh]').click()
+    expect(p.locator('html')).to_have_attribute('data-recovery-read','ready')
     p.evaluate('()=>{state.me=null;window.releaseRecoveryRead();}')
     expect(p.locator('.nrec-dialog')).to_have_count(0);assert not env['errors']
 
