@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from dark_policy import PolicyError
 from node_installations import NodeInstallations
 from node_replacement import parse_pair_code
+from node_pairing_cancellation import PairingCancellation
 
 
 class PairingRejected(PolicyError):
@@ -54,7 +55,7 @@ def install_pairing_reservations(store):
                     BEGIN SELECT RAISE(ABORT,'Target reserved by pending Node pairing'); END''')
 
 
-class NodePairing:
+class NodePairing(PairingCancellation):
     def __init__(self, registry):
         self.registry, self.store, self.cipher = registry, registry.store, registry.cipher
         with self.store.lock:
@@ -74,6 +75,7 @@ class NodePairing:
                     installation_id TEXT NOT NULL,name TEXT NOT NULL,origin TEXT NOT NULL,
                     created_at REAL NOT NULL,completed_at REAL NOT NULL);
             ''')
+        self._init_cancellation()
         install_pairing_reservations(self.store)
 
     def _open(self, sealed):
@@ -93,7 +95,9 @@ class NodePairing:
     @staticmethod
     def _public(row):
         return {**{key: row[key] for key in ('attempt_id','node_id','name','origin','installation_id',
-                                             'phase','last_error','created_at','updated_at')},
+                                             'last_error','created_at','updated_at')},
+                'phase': 'cancelling' if row['resolution'] == 'cancelling' else row['phase'],
+                'cancelled': False, 'credentials_retained_in_journal': True, 'reservation_released': False,
                 'paired': False, 'pair_code_consumed': None, 'registration_current': False,
                 'status_scope': 'saved_pairing_operation', 'live_state_verified': False}
 
@@ -102,6 +106,9 @@ class NodePairing:
             row = self._pending(attempt_id)
             if row:
                 return self._public(row)
+            cancelled = self._cancelled(attempt_id)
+            if cancelled is not None:
+                return cancelled
             receipt = self.store.db.execute('SELECT * FROM remote_node_pair_history WHERE attempt_id=?',
                                             (attempt_id,)).fetchone()
             if not receipt:
@@ -165,7 +172,7 @@ class NodePairing:
         latest = self._pending(row['attempt_id'])
         if not latest or latest['operation_revision'] != row['operation_revision']:
             raise PairingRejected('pairing_operation_superseded')
-        if any(latest[k] != row[k] for k in ('node_id','origin','installation_id','bootstrap_enc','candidate_enc')):
+        if any(latest[k] != row[k] for k in ('node_id','origin','installation_id','bootstrap_enc','candidate_enc','resolution','disposal_enc')):
             raise PairingRejected('pairing_operation_changed')
         self._available(self.store.db, row)
 
@@ -198,6 +205,8 @@ class NodePairing:
         now = time.time()
         with self.store.transaction() as db:
             self._assert(row)
+            if row['resolution']:
+                raise PairingRejected('pairing_cancellation_in_progress')
             # Release only within this transaction; failures roll this back too.
             db.execute('DELETE FROM remote_node_pairings WHERE attempt_id=?', (row['attempt_id'],))
             db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,
@@ -214,11 +223,13 @@ class NodePairing:
                                            row['name'],row['origin'],row['created_at'],now))
 
     def retry(self, attempt_id):
-        with self.registry._node_operation('pairing:' + str(attempt_id)):
+        with self._pair_operation(attempt_id):
             with self.store.transaction() as db:
                 row = self._pending(attempt_id)
                 if row is None:
                     return self.status(attempt_id)  # Historical receipt, never re-enable or contact the target.
+                if row['resolution']:
+                    raise PairingRejected('pairing_cancellation_in_progress')
                 self._available(db, row)
                 if row['operation_revision'] >= 2**63 - 2:
                     raise PolicyError('Node pairing operation sequence exhausted')
@@ -274,6 +285,12 @@ class PairRetryBody(BaseModel):
     confirmRetry: bool
 
 
+class PairCancelBody(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    confirmCancel: bool
+    acknowledgeCredentialReset: bool
+
+
 def install_hub_pairing(app, registry, owner, writable, audit):
     pairing = NodePairing(registry)
     app.state.pairing = pairing
@@ -301,4 +318,12 @@ def install_hub_pairing(app, registry, owner, writable, audit):
             raise PolicyError('Explicit Node pairing retry confirmation required')
         result = pairing.retry(attempt_id)
         audit(p.actor,p.actor.id,'node.pair.retry',result['node_id'],result['phase'])
+        return result
+
+    @app.post('/api/nodes/pairings/{attempt_id}/cancel')
+    def cancel(attempt_id: str, body: PairCancelBody, p=Depends(owner)):
+        writable()
+        result = pairing.cancel(attempt_id, confirm_cancel=body.confirmCancel,
+                                acknowledge_credential_reset=body.acknowledgeCredentialReset)
+        audit(p.actor,p.actor.id,'node.pair.cancel',result['node_id'],result['phase'])
         return result

@@ -57,3 +57,69 @@ test('an incomplete positive response cannot close the dialog',async()=>{
  const h=harness();await h.open();h.result={...completed};delete h.result.node;delete h.result.node_id;
  await assert.rejects(h.send({code:'DXN1.fixture'}),/not confirmed/);assert.equal(h.closed,0);
 });
+
+const cancelled=(discarded=false)=>({attempt_id:attempt,node_id:pending.node_id,origin:pending.origin,
+ phase:'cancelled',cancelled:true,paired:false,registration_current:false,
+ outcome:discarded?'discarded_after_rotation':'withdrawn_before_rotation',
+ pair_code_consumed:discarded,candidate_discarded:discarded,candidate_requires_reinstall:discarded,
+ credential_revocation_confirmed:discarded,remote_idle_confirmed:discarded,
+ credentials_retained_in_journal:false,reservation_released:true,
+ status_scope:'saved_pairing_cancellation_receipt',live_state_verified:false});
+const cancelFields={resume:attempt,pairAction:'cancel',confirmCancel:'on',acknowledgeCredentialReset:'on'};
+test('cancel needs selection, empty code and two confirmations distinct from retry',async()=>{
+ const h=harness([pending]);await h.open();h.result=cancelled();
+ for(const change of [{resume:''},{confirmCancel:''},{acknowledgeCredentialReset:''},{code:'DXN1.conflict'},{confirmRetry:'on'}]){
+  await assert.rejects(h.send({...cancelFields,...change}),/confirm both/);
+ }
+ assert.equal(h.calls.length,1);assert.equal(h.closed,0);
+ await h.send(cancelFields);assert.equal(h.calls[1].path,'/api/nodes/pairings/'+attempt+'/cancel');
+ assert.deepEqual(JSON.parse(JSON.stringify(h.calls[1].body)),{confirmCancel:true,acknowledgeCredentialReset:true});
+ assert.equal(h.closed,1);assert.match(h.messages[0],/without contacting/);
+});
+test('confirmed remote cancellation warns about reinstall, never says Node paired',async()=>{
+ const h=harness([pending]);await h.open();h.result=cancelled(true);await h.send(cancelFields);
+ assert.match(h.messages[0],/Reinstall/);assert.doesNotMatch(h.messages[0],/Node paired/);
+});
+test('cancelling status is readable but cannot resume enrollment',async()=>{
+ const h=harness([{...pending,phase:'cancelling'}]);await h.open();assert.match(h.html,/CANCELLATION PENDING/);
+ await assert.rejects(h.send({resume:attempt,confirmRetry:'on'}),/Cancellation has started/);
+ assert.equal(h.calls.length,1);
+ h.result={...pending,phase:'cancelling'};await assert.rejects(h.send(cancelFields),/Cancellation is not confirmed/);
+ assert.equal(h.closed,0);assert.equal(h.messages.length,0);
+});
+test('malformed or mismatched cancellation receipts never close the view',async()=>{
+ for(const change of [{attempt_id:'b'.repeat(32)},{node_id:'other'},{origin:'https://other.test'},
+  {paired:true},{remote_idle_confirmed:true},{reservation_released:false},{live_state_verified:true},
+  {status_scope:'live'},{outcome:'unknown'},{cancelled:'true'},{credentials_retained_in_journal:true}]){
+  const h=harness([pending]);await h.open();h.result={...cancelled(),...change};
+  await assert.rejects(h.send(cancelFields),/Cancellation is not confirmed/);assert.equal(h.closed,0);
+ }
+});
+test('stale write capability prevents cancel, both before dispatch and after a late response',async()=>{
+ const h=harness([pending]);await h.open();h.result=cancelled();h.state.me.writes_enabled=false;
+ await h.send(cancelFields);assert.equal(h.calls.length,1);
+ h.state.me.writes_enabled=true;const original=h.context.api;
+ h.context.api=async(...args)=>{const doc=await original(...args);h.state.me={id:'reseller',role:'reseller'};return doc;};
+ await h.send(cancelFields);assert.equal(h.closed,0);assert.equal(h.messages.length,0);
+});
+test('two direct cancel submissions share one in-flight request',async()=>{
+ const h=harness([pending]);await h.open();h.result=cancelled();let release;
+ const original=h.context.api;h.context.api=async(...args)=>{const doc=await original(...args);await new Promise(r=>release=r);return doc;};
+ const first=h.send(cancelFields);await new Promise(r=>setImmediate(r));await h.send(cancelFields);
+ assert.equal(h.calls.length,2);release();await first;assert.equal(h.closed,1);
+});
+test('selection changes and requests clear all consent; requests also erase the Pair Code',async()=>{
+ const h=harness([pending]);const controls={code:{value:'secret'},confirmRetry:{checked:true},confirmCancel:{checked:true},acknowledgeCredentialReset:{checked:true}};
+ const form={isConnected:true,querySelector:s=>controls[s.slice(6,-1)],addEventListener:(event,handler)=>{h.change=handler;}};
+ h.context.$=()=>form;await h.open();h.change({target:{name:'pairAction'}});
+ for(const name of ['confirmRetry','confirmCancel','acknowledgeCredentialReset'])assert.equal(controls[name].checked,false);
+ h.result=cancelled();for(const name of ['confirmCancel','acknowledgeCredentialReset'])controls[name].checked=true;
+ await h.submit(new Map(Object.entries(cancelFields)),form);
+ assert.equal(controls.code.value,'');for(const name of ['confirmRetry','confirmCancel','acknowledgeCredentialReset'])assert.equal(controls[name].checked,false);
+});
+test('cancel consent cannot accidentally submit enrollment',async()=>{
+ const h=harness([pending]);await h.open();
+ await assert.rejects(h.send({...cancelFields,pairAction:'resume'}),/Choose cancellation/);
+ await assert.rejects(h.send({...cancelFields,pairAction:'unknown'}),/Invalid connection action/);
+ assert.equal(h.calls.length,1);
+});

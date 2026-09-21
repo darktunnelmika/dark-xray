@@ -29,6 +29,7 @@ python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
 python -m pytest tests/test_node_pairing.py tests/test_pair_loss_regression.py -q --junitxml=qa/junit/node-pairing.xml
+python -m pytest tests/test_node_pairing_cancellation.py -q --junitxml=qa/junit/node-pairing-cancellation.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
 python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/preupdate-node-hardening.xml

@@ -131,22 +131,52 @@ async function nodeDialog(id){
 async function pairNodeDialog(){
  if(!isOwner())return;
  const ownerId=state.me?.id, saved=await api('/api/nodes/pairings');
- const valid=x=>x&&typeof x.attempt_id==='string'&&/^[0-9a-f]{32}$/.test(x.attempt_id)&&typeof x.node_id==='string'&&typeof x.origin==='string'&&typeof x.name==='string'&&x.paired===false&&['pending','rotating'].includes(x.phase);
+ const valid=x=>x&&typeof x.attempt_id==='string'&&/^[0-9a-f]{32}$/.test(x.attempt_id)&&typeof x.node_id==='string'&&typeof x.origin==='string'&&typeof x.name==='string'&&x.paired===false&&['pending','rotating','cancelling'].includes(x.phase);
  if(!saved||!Array.isArray(saved.items)||!saved.items.every(valid)||new Set(saved.items.map(x=>x.attempt_id)).size!==saved.items.length)throw Error(L('Invalid saved pairing status.','وضعیت ذخیره‌شدهٔ اتصال نامعتبر است.'));
  if(!isOwner()||state.me?.id!==ownerId)return;
- const items=saved.items,canWrite=state.me?.writes_enabled===true;
+ const items=saved.items,canWrite=state.me?.writes_enabled===true;let submitting=false;
  dialog(L('Pair lightweight Node','اتصال Node سبک'),`<div class="nv5-pair"><div class="notice">${L('On the new VPS run install-node.sh. It prints one DXN1 Pair Code. Paste that code below; no second web panel is installed.','روی VPS جدید install-node.sh را اجرا کن. یک Pair Code با DXN1 می‌دهد؛ همان را اینجا وارد کن و پنل وب دوم نصب نمی‌شود.')}</div>
- ${items.length?`<label>${L('Saved pending connection','اتصال ذخیره‌شدهٔ در انتظار')}<select name="resume"><option value="">${L('Use a new Pair Code below','استفاده از کد اتصال جدید')}</option>${items.map(x=>`<option value="${e(x.attempt_id)}">${e(x.name)} · ${e(x.origin)}</option>`).join('')}</select></label><label><input type="checkbox" name="confirmRetry">${L('I authorize continuing the selected saved connection with its retained credential.','ادامهٔ اتصال ذخیره‌شدهٔ انتخاب‌شده با اطلاعات ارتباطی محفوظ را تأیید می‌کنم.')}</label>`:''}
- <label><span>${L('Pair Code (new connections only)','کد اتصال (فقط برای اتصال جدید)')}</span><textarea class="field-input" name="code" rows="6" dir="ltr" autocomplete="off" placeholder="DXN1...."></textarea></label><div class="notice">${L('Opening this dialog only reads saved operations. A pending response is not a completed connection; retry is always explicit.','بازکردن این پنجره فقط عملیات ذخیره‌شده را می‌خواند. پاسخ در انتظار، اتصال موفق نیست؛ ادامه فقط با اقدام خودت انجام می‌شود.')}</div></div>`,canWrite?async (fd,form)=>{
-   if(!form.isConnected||!isOwner()||state.me?.id!==ownerId)return;
-   const attempt=String(fd.get('resume')||''),code=String(fd.get('code')||'').trim();
-   if(attempt&&(!items.some(x=>x.attempt_id===attempt)||!fd.get('confirmRetry')||code))throw Error(L('Select a saved connection, leave Pair Code empty and explicitly confirm retry.','یک اتصال ذخیره‌شده انتخاب کن، کد را خالی بگذار و ادامه را صریح تأیید کن.'));
-   if(!attempt&&!code)throw Error(L('Enter a Pair Code.','کد اتصال را وارد کن.'));
-   const r=attempt?await api('/api/nodes/pairings/'+enc(attempt)+'/retry','POST',{confirmRetry:true}):await api('/api/nodes/pair','POST',{code});
-   if(!form.isConnected||!isOwner()||state.me?.id!==ownerId)return;
-   if(r?.paired!==true||r.phase!=='paired'||r.pair_code_consumed!==true||r.registration_current!==true||typeof r.node_id!=='string'||!r.node_id||!r.node||r.node.id!==r.node_id||typeof r.attempt_id!=='string'||!/^[0-9a-f]{32}$/.test(r.attempt_id)||(attempt&&r.attempt_id!==attempt))throw Error(L('Connection is not confirmed. Reopen Add Node to resume its saved operation; do not delete recovery data.','اتصال تأیید نشده است. افزودن نود را دوباره باز کن و عملیات ذخیره‌شده را ادامه بده؛ اطلاعات بازیابی را حذف نکن.'));
-   closeDialog();toast(`${L('Node paired','نود متصل شد')} · ${r.node.name||r.node.id}`);await renderPage();
- }:null,L('Pair / resume Node','اتصال / ادامهٔ نود'));
+ ${items.length?`<label>${L('Saved pending connection','اتصال ذخیره‌شدهٔ در انتظار')}<select name="resume"><option value="">${L('Use a new Pair Code below','استفاده از کد اتصال جدید')}</option>${items.map(x=>`<option value="${e(x.attempt_id)}">${e(x.name)} · ${e(x.origin)}${x.phase==='cancelling'?' · '+L('CANCELLATION PENDING','لغو در انتظار تأیید'):''}</option>`).join('')}</select></label>
+ <label>${L('Action for selected connection','اقدام برای اتصال انتخاب‌شده')}<select name="pairAction"><option value="resume">${L('Resume enrollment','ادامهٔ ثبت نود')}</option><option value="cancel">${L('Cancel / continue cancellation','لغو / پیگیری لغو')}</option></select></label>
+ <label><input type="checkbox" name="confirmRetry">${L('I authorize continuing the selected saved connection with its retained credential.','ادامهٔ اتصال ذخیره‌شدهٔ انتخاب‌شده با اطلاعات ارتباطی محفوظ را تأیید می‌کنم.')}</label>
+ <div class="notice warning">${L('Cancellation is not Node deletion. Before token rotation is dispatched, it only withdraws the saved request and leaves the Pair Code unchanged. After dispatch, the Hub must revoke the saved credentials and confirm the empty target is stopped. Offline or unknown results keep the reservation and recovery data.','لغو، حذف نود نیست. پیش از ارسال تعویض توکن فقط درخواست ذخیره‌شده کنار گذاشته می‌شود و کد اتصال تغییر نمی‌کند. پس از ارسال، پنل باید توکن‌های محفوظ را بی‌اعتبار و توقف هدف خالی را تأیید کند. در حالت قطع ارتباط یا نتیجهٔ نامعلوم، رزرو و اطلاعات بازیابی حفظ می‌شوند.')}</div>
+ <label><input type="checkbox" name="confirmCancel">${L('I authorize cancelling the selected pending enrollment, not a registered Node.','لغو فرایند افزودن نیمه‌کارهٔ انتخاب‌شده را تأیید می‌کنم؛ نه حذف یک نود ثبت‌شده.')}</label>
+ <label><input type="checkbox" name="acknowledgeCredentialReset">${L('I understand that after remote disposal the old Pair Code is unusable; reuse requires reinstall or an authorized local token reset.','می‌دانم بعد از کنارگذاشتن هدف از راه دور، کد قبلی قابل استفاده نیست؛ استفادهٔ دوباره نیازمند نصب مجدد یا بازنشانی مجاز توکن روی سرور است.')}</label>`:''}
+ <label><span>${L('Pair Code (new connections only)','کد اتصال (فقط برای اتصال جدید)')}</span><textarea class="field-input" name="code" rows="6" dir="ltr" autocomplete="off" placeholder="DXN1...."></textarea></label><div class="notice">${L('Opening this dialog only reads saved operations. A pending response is not completion; every retry or cancellation requires explicit confirmation.','بازکردن این پنجره فقط عملیات ذخیره‌شده را می‌خواند. پاسخ در انتظار، پایان عملیات نیست؛ ادامه یا لغو همیشه تأیید صریح می‌خواهد.')}</div></div>`,canWrite?async (fd,form)=>{
+   if(submitting||!form.isConnected||!isOwner()||state.me?.id!==ownerId||state.me?.writes_enabled!==true)return;
+   const attempt=String(fd.get('resume')||''),code=String(fd.get('code')||'').trim(),action=String(fd.get('pairAction')||'resume');
+   const selected=items.find(x=>x.attempt_id===attempt),cancelling=action==='cancel';
+   if(!['resume','cancel'].includes(action))throw Error(L('Invalid connection action.','اقدام اتصال نامعتبر است.'));
+   if(cancelling){
+    if(!selected||code||!fd.get('confirmCancel')||!fd.get('acknowledgeCredentialReset')||fd.get('confirmRetry'))throw Error(L('Select a saved connection, leave Pair Code empty and confirm both cancellation warnings. Clear retry consent.','اتصال ذخیره‌شده را انتخاب کن، کد را خالی بگذار و هر دو هشدار لغو را تأیید کن. تأیید ادامهٔ ثبت را بردار.'));
+   }else{
+    if(fd.get('confirmCancel')||fd.get('acknowledgeCredentialReset'))throw Error(L('Choose cancellation or clear its confirmations before enrollment.','برای لغو، اقدام لغو را انتخاب کن؛ برای ثبت نود تأییدهای لغو را بردار.'));
+    if(attempt&&(!selected||!fd.get('confirmRetry')||code))throw Error(L('Select a saved connection, leave Pair Code empty and explicitly confirm retry.','یک اتصال ذخیره‌شده انتخاب کن، کد را خالی بگذار و ادامه را صریح تأیید کن.'));
+    if(selected?.phase==='cancelling')throw Error(L('Cancellation has started. Select cancellation to continue it; enrollment cannot resume.','لغو شروع شده است؛ برای پیگیری، اقدام لغو را انتخاب کن. ثبت نود قابل ادامه نیست.'));
+    if(!attempt&&!code)throw Error(L('Enter a Pair Code.','کد اتصال را وارد کن.'));
+   }
+   submitting=true;
+   try{
+    let r;
+    try{r=cancelling?await api('/api/nodes/pairings/'+enc(attempt)+'/cancel','POST',{confirmCancel:true,acknowledgeCredentialReset:true}):attempt?await api('/api/nodes/pairings/'+enc(attempt)+'/retry','POST',{confirmRetry:true}):await api('/api/nodes/pair','POST',{code});}
+    finally{
+     const input=form.querySelector?.('[name=code]');if(input)input.value='';
+     for(const name of ['confirmRetry','confirmCancel','acknowledgeCredentialReset']){const box=form.querySelector?.('[name='+name+']');if(box)box.checked=false;}
+    }
+    if(!form.isConnected||!isOwner()||state.me?.id!==ownerId||state.me?.writes_enabled!==true)return;
+    if(cancelling){
+     const discarded=r?.outcome==='discarded_after_rotation';
+     if(!r||r.attempt_id!==attempt||r.node_id!==selected.node_id||r.origin!==selected.origin||r.phase!=='cancelled'||r.cancelled!==true||r.paired!==false||r.registration_current!==false||r.status_scope!=='saved_pairing_cancellation_receipt'||r.live_state_verified!==false||r.credentials_retained_in_journal!==false||r.reservation_released!==true||!['withdrawn_before_rotation','discarded_after_rotation'].includes(r.outcome)||['pair_code_consumed','candidate_discarded','candidate_requires_reinstall','credential_revocation_confirmed','remote_idle_confirmed'].some(k=>r[k]!==discarded))throw Error(L('Cancellation is not confirmed. Recovery data remains reserved; reopen Add Node and explicitly continue cancellation.','لغو تأیید نشده است. اطلاعات بازیابی و رزرو محفوظ‌اند؛ افزودن نود را دوباره باز کن و لغو را صریح پیگیری کن.'));
+     closeDialog();toast(discarded?L('Enrollment cancelled; target disposal was confirmed. Reinstall or locally reset its token before reuse.','ثبت نود لغو و کنارگذاشتن هدف تأیید شد. پیش از استفادهٔ دوباره، نصب مجدد یا بازنشانی محلی توکن لازم است.'):L('Saved enrollment withdrawn without contacting the target. The Pair Code was not revoked.','درخواست ثبت بدون تماس با هدف کنار گذاشته شد. کد اتصال بی‌اعتبار نشده است.'));await renderPage();return;
+    }
+    if(r?.paired!==true||r.phase!=='paired'||r.pair_code_consumed!==true||r.registration_current!==true||typeof r.node_id!=='string'||!r.node_id||!r.node||r.node.id!==r.node_id||typeof r.attempt_id!=='string'||!/^[0-9a-f]{32}$/.test(r.attempt_id)||(attempt&&r.attempt_id!==attempt))throw Error(L('Connection is not confirmed. Reopen Add Node to resume its saved operation; do not delete recovery data.','اتصال تأیید نشده است. افزودن نود را دوباره باز کن و عملیات ذخیره‌شده را ادامه بده؛ اطلاعات بازیابی را حذف نکن.'));
+    closeDialog();toast(`${L('Node paired','نود متصل شد')} · ${r.node.name||r.node.id}`);await renderPage();
+   }finally{submitting=false;}
+ }:null,L('Apply selected connection action','اجرای اقدام اتصال'));
+ const form=typeof $==='function'?$('#dialog-form'):null;
+ form?.addEventListener('change',ev=>{
+  if(['resume','pairAction'].includes(ev.target.name))for(const name of ['confirmRetry','confirmCancel','acknowledgeCredentialReset']){const box=form.querySelector('[name='+name+']');if(box)box.checked=false;}
+ });
 }
 async function createToken(){dialog(L('New node agent token','توکن عامل جدید'),`<div class="nv2-form">${field(L('Token name','نام توکن'),'name','central','text','required maxlength="64"')}${field(L('Validity days','اعتبار روز'),'days',365,'number','required min="1" max="3650"')}</div>`,async f=>{let r=await api('/api/node-agent/tokens','POST',{name:f.get('name'),days:Number(f.get('days'))});await renderPage();dialog(L('Copy this token now','این توکن را همین حالا کپی کن'),`<div class="notice warning">${L('The plaintext token will never be shown again.','متن اصلی توکن دیگر نمایش داده نمی‌شود.')}</div><div class="nv2-token">${e(r.token)}</div>`);});}
 async function showNodeInbounds(id){let r=await api('/api/nodes/'+enc(id)+'/inbounds');dialog(L('Remote inbounds','اینباندهای راه‌دور'),`<div class="notice">${L('Read live from the remote DARK node.','به‌صورت زنده از نود راه‌دور DARK خوانده شده است.')} · ${r.latency_ms} ms</div><div class="nv2-inbounds">${r.items.length?r.items.map(i=>`<div class="nv2-inbound"><span><b>${e(i.remark||i.tag)}</b><br><small>${e(i.protocol)} · ${e(i.listen||'0.0.0.0')}:${i.port}</small></span><span class="tag ${i.enable?'green':'red'}">${i.enable?L('ON','روشن'):L('OFF','خاموش')}</span></div>`).join(''):empty(L('No inbounds on node.','اینباندی روی نود نیست.'))}</div>`);}
