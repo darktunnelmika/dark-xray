@@ -102,6 +102,16 @@ class ReplacementCommit(Model):
 class ReplacementStage(Model):
     bindingId:str=Field(pattern=r'^[0-9a-f]{32}$')
 
+class ReplacementActivate(ReplacementStage):
+    reviewHash:str=Field(pattern=r'^[0-9a-f]{64}$')
+    confirmStart:bool=Field(strict=True)
+    acceptEndpointResponsibility:bool=Field(strict=True)
+    acceptUnconfirmedOldServer:bool=Field(strict=True)
+    acceptUnreportedTraffic:bool=Field(strict=True)
+
+class ReplacementPause(ReplacementStage):
+    confirmStop:bool=Field(strict=True)
+
 class ReplacementCancel(Model):
     discardCandidate:bool
 
@@ -855,6 +865,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     from node_replacement_deployment import ReplacementDeployment
     replacement_deployments=ReplacementDeployment(nodes,replacements,build_node_desired_payload,refresh_replacement_policy)
     app.state.replacement_deployments=replacement_deployments
+    from node_replacement_activation import ReplacementActivation
+    replacement_activation=ReplacementActivation(replacement_deployments)
+    app.state.replacement_activation=replacement_activation
 
     def sync_node_assignments(node_id:str)->dict:
         pre=nodes.sync_traffic(node_id)
@@ -1189,6 +1202,37 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.audit(p.actor,p.actor.id,'node.replacement.stage',node_id,
                       'attempt='+attempt_id+'; phase='+result['phase'])
         return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/activation/review')
+    def review_replacement_activation(node_id:str,attempt_id:str,body:ReplacementStage,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_activation.review(node_id,attempt_id,binding_id=body.bindingId)
+        manager.audit(p.actor,p.actor.id,'node.replacement.activation.review',node_id,'attempt='+attempt_id)
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/activation/start')
+    def activate_replacement(node_id:str,attempt_id:str,body:ReplacementActivate,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_activation.activate(node_id,attempt_id,binding_id=body.bindingId,
+            review_hash=body.reviewHash,confirm_start=body.confirmStart,
+            accept_endpoint_responsibility=body.acceptEndpointResponsibility,
+            accept_unconfirmed_old_server=body.acceptUnconfirmedOldServer,
+            accept_unreported_traffic=body.acceptUnreportedTraffic)
+        manager.audit(p.actor,p.actor.id,'node.replacement.activation.start',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/activation/pause')
+    def pause_replacement_activation(node_id:str,attempt_id:str,body:ReplacementPause,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_activation.pause(node_id,attempt_id,binding_id=body.bindingId,confirm_stop=body.confirmStop)
+        manager.audit(p.actor,p.actor.id,'node.replacement.activation.pause',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.get('/api/nodes/{node_id}/replacement/{attempt_id}/activation')
+    def replacement_activation_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        return replacement_activation.status(node_id,attempt_id)
 
     @app.post('/api/nodes/pair')
     def remote_node_pair(body:NodePair,p:Principal=Depends(owner)):

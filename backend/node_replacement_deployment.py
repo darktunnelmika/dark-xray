@@ -134,6 +134,11 @@ class ReplacementDeployment:
             raise DeploymentRejected('target_maintenance_error')
 
     def _begin(self, node_id, attempt_id, binding_id):
+        with self.store.lock:
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_replacement_activations'").fetchone():
+                active=self.store.db.execute('SELECT phase FROM remote_node_replacement_activations WHERE attempt_id=?',(attempt_id,)).fetchone()
+                if active and active['phase'] in {'starting','stopping'}:
+                    raise PolicyError('Resolve pending activation with retry or pause before restaging')
         receipt = self.replacements._terminal(node_id, attempt_id)
         if (not receipt or receipt['phase'] != 'committed' or not receipt['binding_current']
                 or receipt['committed_binding_id'] != binding_id):
@@ -258,11 +263,22 @@ class ReplacementDeployment:
         traffic, _ = request('/node/api/mirrors/traffic')
         expected = {client['sourceEmail'] for assignment in state['payload']['assignments'] for client in assignment['clients']}
         items = traffic.get('items') if isinstance(traffic,dict) else None
+        # A confirmed compensating Stop may have metered real activation bytes.
+        # Keep strict zero checks for never-started candidates, not for a paused
+        # activation. No counters are reset; accept/account the stopped snapshot.
+        with self.store.lock:
+            has_activation=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_replacement_activations'").fetchone()
+            paused=self.store.db.execute("SELECT 1 FROM remote_node_replacement_activations WHERE attempt_id=? AND binding_id=? AND phase='paused'",(row['attempt_id'],binding['binding_id'])).fetchone() if has_activation else None
         if (not isinstance(items,list) or any(not isinstance(x,dict) or set(x)!={'sourceEmail','up','down'}
-                or not isinstance(x['sourceEmail'],str) or type(x['up']) is not int or x['up']!=0
-                or type(x['down']) is not int or x['down']!=0 for x in items)
+                or not isinstance(x['sourceEmail'],str) or type(x['up']) is not int or x['up']<0
+                or type(x['down']) is not int or x['down']<0
+                or (not paused and (x['up']!=0 or x['down']!=0)) for x in items)
                 or len(items)!=len(expected) or {x['sourceEmail'] for x in items}!=expected):
             raise DeploymentRejected('unexpected_target_counters')
+        if paused:
+            with self.store.lock:
+                self._assert(self.store.db,row,binding)
+                self.registry.apply_traffic_snapshot(node_id,items)
         health, _ = request('/node/api/health')
         self._stopped(health,binding)
         desired, receipt = health.get('desired_state'), health.get('control_receipt')

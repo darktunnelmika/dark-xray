@@ -310,7 +310,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'ordered_control':1,'installation_identity':1,'replacement_prepare':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')
@@ -460,6 +460,31 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
         except PolicyError as ex:raise HTTPException(422,str(ex))
         return {'service':'DARK XRAY NODE','rotated':True}
+
+    @app.post('/node/api/v1/control/activate')
+    @current_mutation
+    def conditional_activation(body:dict,request:Request,_scope:str=Depends(auth)):
+        # Same final auth/engine lock as config and rotation. An old review may
+        # not start a newer configuration, even between probe and POST.
+        fields={'nodeId','revision','commandId','action','desiredRevision','desiredHash','validatedHash'}
+        if (set(body)!=fields or body.get('action')!='start' or body.get('nodeId')!=node_id
+                or type(body.get('revision')) is not int or not 0<body['revision']<2**63
+                or not isinstance(body.get('commandId'),str) or not re.fullmatch('[0-9a-f]{32}',body['commandId'])
+                or type(body.get('desiredRevision')) is not int or not 0<body['desiredRevision']<2**63
+                or any(not isinstance(body.get(k),str) or not re.fullmatch('[0-9a-f]{64}',body[k])
+                       for k in ('desiredHash','validatedHash'))):
+            raise HTTPException(422,'Invalid conditional activation envelope')
+        current=runtime.status()
+        if (current['appliedRevision']!=body['desiredRevision'] or current['appliedHash']!=body['desiredHash']
+                or current['lastError']):
+            raise HTTPException(409,'Activation configuration changed; review again')
+        try:
+            engine._write()
+            if engine.validate()['hash']!=body['validatedHash']:
+                raise HTTPException(409,'Activation runtime configuration changed; review again')
+            return runtime.ordered_command({k:body[k] for k in ('nodeId','revision','commandId','action')})
+        except CoreError as ex:raise HTTPException(getattr(ex,'status',422),str(ex))
+        except PolicyError as ex:raise HTTPException(422,str(ex))
 
     @app.post('/node/api/v1/control')
     @current_mutation
