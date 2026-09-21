@@ -28,6 +28,9 @@ class LocalTLS(http.client.HTTPSConnection):
         raw=socket.create_connection(('127.0.0.1',9443),timeout=3)
         try:self.sock=self._context.wrap_socket(raw,server_hostname='node.example.test')
         except BaseException:raw.close();raise
+        # The short connect/handshake budget must not replace the caller's
+        # configured HTTP read budget (15 seconds in agent_request).
+        self.sock.settimeout(self.timeout)
 
 
 def agent_request(path,body=None):
