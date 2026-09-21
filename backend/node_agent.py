@@ -310,7 +310,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
 
     @app.get('/node/api/v1/state')

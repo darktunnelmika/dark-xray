@@ -1027,16 +1027,12 @@ class NodeRegistry:
             raise PolicyError('Invalid Node update start response')
         return {'latency_ms':ms,'update':doc['update']}
 
-    @installation_operation
     def rotate_token(self,node_id:str,new_token:str)->dict:
-        if not isinstance(new_token,str) or not new_token.startswith('dkn_') or not 40<=len(new_token)<=256:
-            raise PolicyError('Invalid replacement DARK node token')
-        doc,ms=self._request(node_id,'/node/api/v1/token/rotate','POST',{'token':new_token},12.0)
-        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('rotated') is not True:
-            raise PolicyError('Node did not confirm token rotation')
-        enc=self.cipher.encrypt(new_token.encode()).decode()
-        with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET token_enc=?,updated_at=? WHERE id=?',(enc,time.time(),node_id))
-        return {'rotated':True,'latency_ms':ms}
+        from node_credentials import NodeCredentials
+        coordinator=NodeCredentials(self)
+        binding=self.installations.capture(node_id)
+        saved=coordinator.begin(node_id,new_token,binding_id=binding['binding_id'])
+        return coordinator.retry(node_id,saved['attempt_id'])
 
     def remote_core(self,node_id:str,action:str)->dict:
         self.get(node_id)  # Unknown IDs are errors, not superseded operations.

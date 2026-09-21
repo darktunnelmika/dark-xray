@@ -188,6 +188,22 @@ def test_retired_response_cannot_publish_new_installation_state(hub,monkeypatch,
         if endpoint=='rotation':return {'service':'DARK XRAY NODE','rotated':True},1
         return {'service':'DARK XRAY NODE','appliedRevision':body['revision'],'appliedHash':body['hash'],
                 'items':[{'sourceInboundId':1,'remoteInboundId':1}],'core':{'state':'running'}},1
+    if endpoint=='rotation':
+        # A durable handoff prevents retirement before remote credential effects.
+        # Keep the same account/configuration preservation assertions.
+        import sqlite3
+        def credential_transport(*args,**kwargs):
+            before={t:sql_rows(reg,t) for t in ('remote_nodes','remote_node_control',
+                'remote_node_desired_state','remote_node_inbounds','remote_node_client_usage',
+                'remote_node_security_state','clients')}
+            with pytest.raises(sqlite3.IntegrityError):replace(reg)
+            captured.append(before)
+            raise PolicyError('Replacement conflicted with the pinned credential handoff')
+        monkeypatch.setattr(nodes_module,'node_https_request',credential_transport)
+        result=reg.rotate_token(NODE,'dkn_'+'C'*60)
+        assert result['pending'] and not result['rotated'] and captured
+        assert {t:sql_rows(reg,t) for t in captured[0]}==captured[0]
+        return
     monkeypatch.setattr(reg,'_request',transport)
     with pytest.raises(PolicyError):
         if endpoint=='traffic':reg.sync_traffic(NODE)

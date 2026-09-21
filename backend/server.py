@@ -1239,6 +1239,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     from node_pairing import install_hub_pairing
     install_hub_pairing(app,nodes,owner,writable,manager.audit)
+    from node_credentials import install_hub_credentials
+    install_hub_credentials(app,nodes,owner,writable,manager.audit)
 
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
@@ -1251,14 +1253,24 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return result
     @app.patch('/api/nodes/{node_id}')
     def remote_node_edit(node_id:str,body:NodePatch,p:Principal=Depends(owner)):
-        writable();token=body.token
-        if token:
-            nodes.rotate_token(node_id,token)
-        else:
-            if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
-            token=nodes.get(node_id,secret=True)['token']
+        writable()
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
+        if body.token:
+            # Credential handoff is independent of configuration. Do not rotate
+            # first, then discover that the requested metadata is invalid.
+            current_node=nodes.get(node_id)
+            expected={'name':current_node['name'],'origin':current_node['origin'],
+                'dataAddress':current_node['data_address'],'enabled':current_node['enabled'],
+                'priority':current_node['priority'],'failoverEnabled':current_node['failover_enabled'],
+                'inboundIds':sorted(current_node['inboundIds'])}
+            supplied=body.model_dump(include=set(expected));supplied['inboundIds']=sorted(set(body.inboundIds))
+            if supplied!=expected:raise HTTPException(409,'Save settings separately from token rotation')
+            result=nodes.rotate_token(node_id,body.token)
+            manager.audit(p.actor,p.actor.id,'node.credential.rotate',node_id,'phase='+result['phase'])
+            return result
+        if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
+        token=nodes.get(node_id,secret=True)['token']
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
         for target in {node_id}:ensure_node_desired_state(target)

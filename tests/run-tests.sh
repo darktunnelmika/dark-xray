@@ -88,3 +88,9 @@ node --test tests/settings-operations.test.cjs
 node --test tests/node-control-live.test.cjs
 
 node --test tests/node-pairing-ui.test.cjs
+
+python -m pytest tests/test_node_credentials.py -q --junitxml=qa/junit/node-credentials.xml
+
+node --test tests/node-credentials-ui.test.cjs
+
+python -m pytest tests/test_credential_loss_regression.py -q --junitxml=qa/junit/credential-loss.xml
