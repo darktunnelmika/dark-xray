@@ -94,3 +94,5 @@ python -m pytest tests/test_node_credentials.py -q --junitxml=qa/junit/node-cred
 node --test tests/node-credentials-ui.test.cjs
 
 python -m pytest tests/test_credential_loss_regression.py -q --junitxml=qa/junit/credential-loss.xml
+
+python -m pytest tests/test_node_credential_concurrency.py -q --junitxml=qa/junit/node-credential-concurrency.xml

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+import threading
 import time
 import uuid
 
@@ -32,6 +33,12 @@ class NodeCredentials:
     def __init__(self, registry):
         self.registry, self.store, self.cipher = registry, registry.store, registry.cipher
         with self.store.lock:
+            # Multiple registry objects may share this live SQLite Store. Their
+            # registry-local locks do not serialize the same credential journal.
+            # Keep only process-local locks here; durable recovery is still SQL.
+            if not hasattr(self.store, '_node_credential_locks'):
+                self.store._node_credential_locks = {}
+            self._credential_locks = self.store._node_credential_locks
             self.store.db.executescript('''
                 CREATE TABLE IF NOT EXISTS remote_node_credentials(
                     attempt_id TEXT PRIMARY KEY,node_id TEXT NOT NULL,binding_id TEXT NOT NULL,
@@ -61,6 +68,12 @@ class NodeCredentials:
                     BEGIN SELECT RAISE(ABORT,'Resolve pending Node credential handoff before deletion'); END;
             ''')
         self.install_workflow_guards()
+
+    def _credential_operation(self, node_id):
+        # Release the Store lock before waiting or performing any network I/O.
+        # Different nodes get independent locks. This is not a cross-process lease.
+        with self.store.lock:
+            return self._credential_locks.setdefault(node_id, threading.RLock())
 
     def install_workflow_guards(self):
         # Tables may be initialized after the registry, before the first handoff.
@@ -130,7 +143,7 @@ class NodeCredentials:
         if not isinstance(candidate,str) or not re.fullmatch(r'dkn_[A-Za-z0-9_-]{36,252}',candidate):
             raise PolicyError('Invalid replacement DARK node token')
         self.install_workflow_guards()
-        with self.registry._node_operation(node_id), self.store.transaction() as db:
+        with self._credential_operation(node_id), self.registry._node_operation(node_id), self.store.transaction() as db:
             binding = self.registry.installations.capture(node_id)
             if not binding['installation_id'] or binding['binding_id']!=binding_id:
                 raise CredentialRejected('credential_pinned_installation_required')
@@ -199,7 +212,7 @@ class NodeCredentials:
 
     def retry(self, node_id, attempt_id):
         from nodes import NodeHTTPError
-        with self.registry._node_operation(node_id):
+        with self._credential_operation(node_id), self.registry._node_operation(node_id):
             with self.store.transaction() as db:
                 row = self._row(node_id,attempt_id)
                 if not row:raise PolicyError('Credential handoff not found')

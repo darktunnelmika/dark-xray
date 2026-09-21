@@ -87,3 +87,15 @@ The dedicated CI workflow runs API regressions and the browser against the full
 Hub HTTP shell under `/control`. Local managed Chromium may prohibit loopback;
 explicit bridge-mode DOM/API tests are labelled separately and are not full HTTP
 or WAN evidence. Assertions are not weakened to accommodate that restriction.
+
+## Same-process coordinator overlap
+
+Credential operations on the same node now share a per-node lock through their
+live SQLite Store, even when separate NodeRegistry objects were constructed.
+A second coordinator waits for the first remote handoff instead of superseding
+its operation revision while I/O is in flight. If the first one completes, the
+waiter reads its saved receipt without another rotation. The Store lock is not
+held while waiting or contacting an Agent; other nodes and ordinary disabling
+can still proceed. These locks are process-local and not a multi-process lease.
+The persisted operation revisions, identity checks, independent candidate-token
+verification and atomic publication remain authoritative after restart/restore.
