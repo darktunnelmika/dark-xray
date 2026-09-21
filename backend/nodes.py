@@ -241,7 +241,7 @@ class NodeRegistry:
                 if name not in node_cols:store.db.execute(ddl)
             # Existing Node V3 records predate data_address. Preserve their
             # behavior without requiring an Edit/Save round trip after upgrade.
-            for row in store.db.execute("SELECT id,origin,data_address FROM remote_nodes WHERE data_address=''").fetchall():
+            for row in store.db.execute("SELECT id,origin,data_address FROM remote_nodes WHERE data_address='' ").fetchall():
                 try:address=validate_data_address('',str(row['origin']))
                 except PolicyError:continue
                 store.db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',(address,row['id']))
@@ -376,6 +376,8 @@ class NodeRegistry:
                 reset_probe=old['origin']!=origin or old_token!=token or bool(old['enabled'])!=enabled
         enc=self.cipher.encrypt(token.encode()).decode();now=time.time()
         with self.store.transaction() as db:
+            from node_replacement_deployment import assert_deployment_allows
+            if enabled:assert_deployment_allows(db,node_id,'enable')
             # A pending handoff owns its target endpoint. Normal Add/Edit/Pair
             # must not register that candidate while its credential is changing.
             if (db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_replacements'").fetchone()
@@ -522,6 +524,8 @@ class NodeRegistry:
     def set_enabled(self,node_id:str,enabled:bool)->dict:
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
         with self.store.transaction() as db:
+            from node_replacement_deployment import assert_deployment_allows
+            if enabled:assert_deployment_allows(db,node_id,'enable')
             if not db.execute('SELECT 1 FROM remote_nodes WHERE id=?',(node_id,)).fetchone():raise PolicyError('Node not found')
             db.execute("UPDATE remote_nodes SET enabled=?,updated_at=?,last_seen=0,last_latency_ms=0,last_error='',last_health='{}' WHERE id=?",(int(enabled),time.time(),node_id))
         return self.get(node_id)
@@ -1120,12 +1124,12 @@ class NodeRegistry:
             if control.get('executed'):result['core']=control['result']['engine']
             return result
 
-    def _sync_desired_state_locked(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None)->dict:
+    def _sync_desired_state_locked(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None,_requester=None)->dict:
         if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
             raise PolicyError('Invalid Hub desired-state envelope')
         body={'revision':state['revision'],'hash':state['hash'],'payload':state['payload']}
         try:
-            doc,ms=self._request(node_id,'/node/api/v1/state/apply','POST',body,30.0)
+            doc,ms=(_requester or self._request)(node_id,'/node/api/v1/state/apply','POST',body,30.0)
         except PolicyError as ex:
             if legacy_bundles is not None and str(ex).startswith('Node HTTP 404'):
                 legacy=self.sync_mirrors(node_id,legacy_bundles)

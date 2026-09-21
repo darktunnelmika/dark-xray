@@ -99,6 +99,9 @@ class ReplacementCommit(Model):
     sourceBindingId:str=Field(pattern=r'^[0-9a-f]{32}$')
     acceptUnconfirmedOldServer:bool
     acceptUnreportedTraffic:bool
+class ReplacementStage(Model):
+    bindingId:str=Field(pattern=r'^[0-9a-f]{32}$')
+
 class ReplacementCancel(Model):
     discardCandidate:bool
 
@@ -845,6 +848,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         nodes.set_desired_state(node_id,build_node_desired_payload(node_id))
         return nodes.desired_state(node_id)
 
+    def refresh_replacement_policy():
+        manager.tick(suppress=False)
+        apply_global_security()
+
+    from node_replacement_deployment import ReplacementDeployment
+    replacement_deployments=ReplacementDeployment(nodes,replacements,build_node_desired_payload,refresh_replacement_policy)
+    app.state.replacement_deployments=replacement_deployments
+
     def sync_node_assignments(node_id:str)->dict:
         pre=nodes.sync_traffic(node_id)
         if pre.get('charged_bytes'):manager.tick(suppress=True)
@@ -1164,6 +1175,18 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         result=replacements.cancel(node_id,attempt_id,discard_candidate=body.discardCandidate)
         manager.audit(p.actor,p.actor.id,'node.replacement.cancel',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.get('/api/nodes/{node_id}/replacement/{attempt_id}/deployment')
+    def node_replacement_deployment_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        return replacement_deployments.status(node_id,attempt_id)
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/stage')
+    def stage_node_replacement(node_id:str,attempt_id:str,body:ReplacementStage,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_deployments.stage(node_id,attempt_id,binding_id=body.bindingId)
+        manager.audit(p.actor,p.actor.id,'node.replacement.stage',node_id,
                       'attempt='+attempt_id+'; phase='+result['phase'])
         return result
 

@@ -37,6 +37,8 @@ class NodeCommands:
         if not isinstance(action,str) or action not in {'start','stop','restart'}:raise PolicyError('Unsupported durable Node action')
         self.registry.get(node_id)
         with self.registry._node_transaction(node_id) as db:
+            from node_replacement_deployment import assert_deployment_allows
+            assert_deployment_allows(db,node_id,action)
             if not db.execute('SELECT 1 FROM remote_nodes WHERE id=?',(node_id,)).fetchone():
                 raise PolicyError('Node no longer exists')
             old=db.execute('SELECT * FROM remote_node_control WHERE node_id=?',(node_id,)).fetchone()
