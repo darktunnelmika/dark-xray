@@ -32,6 +32,7 @@ jobs:
         run: python tools/fetch-core.py --version v26.3.27 --destination "$GITHUB_WORKSPACE/.test-core"
       - name: Automatic policy through real Hub HTTP and Agent HTTPS
         run: |
+          mkdir -p qa/node-automatic-limits
           export DARK_SECURITY_PARENT_NETNS="$(readlink /proc/self/ns/net)"
           sudo --preserve-env=DARK_REAL_XRAY_BINARY,DARK_SECURITY_PARENT_NETNS,PYTEST_DISABLE_PLUGIN_AUTOLOAD \
             unshare --net -- "$(command -v python)" tests/node_automatic_lab.py
