@@ -1,8 +1,10 @@
 # 2F4: complete replacement with real Xray in an isolated lab
 
-This completes the **isolated replacement acceptance** checkpoint, not provider
-VPS/WAN acceptance or deployment approval. The exact-head workflow verifies the
-pinned official Xray v26.3.27 release with the existing downloader and runs:
+This suite covers the **isolated replacement acceptance** checkpoint, not
+provider VPS/WAN acceptance or deployment approval. Acceptance requires a
+successful exact-commit CI run; this document is not a test result. The workflow
+verifies the pinned official Xray v26.3.27 release with the existing downloader
+and runs:
 
 ```sh
 DARK_REAL_XRAY_BINARY="$PWD/.test-core/xray" \
