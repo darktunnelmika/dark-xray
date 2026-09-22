@@ -15,6 +15,7 @@ python -m pytest tests/test_runtime_path_safety.py -q --junitxml=qa/junit/runtim
 python -m pytest tests/test_live_check.py -q --junitxml=qa/junit/live-check.xml
 python -m pytest tests/test_production_gate.py -q --junitxml=qa/junit/production-gate.xml
 python -m pytest tests/test_target_vps_gate.py -q --junitxml=qa/junit/target-vps-gate.xml
+python -m pytest tests/test_node_wan_gate.py tests/test_node_wan_readiness.py -q --junitxml=qa/junit/node-wan-readiness.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
 python -m pytest tests/test_client_presence.py -q --junitxml=qa/junit/client-presence.xml
