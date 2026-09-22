@@ -169,11 +169,11 @@ def transfer(socks_port, target, *, allowed=True):
 
 
 @contextlib.contextmanager
-def xray_client(root, binary, uri, *, wrong_uuid=False):
+def xray_client(root, binary, uri, *, wrong_uuid=False, expected_uuid=CLIENT_UUID):
     root.mkdir(mode=0o700)
     parsed = urlsplit(uri); query = parse_qs(parsed.query)
     assert parsed.scheme == 'vless' and parsed.hostname == '127.0.0.1'
-    assert parsed.username == CLIENT_UUID
+    assert parsed.username == expected_uuid
     assert query.get('security') == ['none'] and query.get('type') == ['tcp']
     port = free_port()
     config = {'log':{'loglevel':'warning'},
@@ -260,7 +260,7 @@ def real_fleet(tmp_path, monkeypatch, tls_material, real_binary):
         clients = [stack.enter_context(xray_client(tmp_path/f'client{i}', real_binary.path, raw[node.data_port]))
                    for i, node in enumerate(agents)]
         fixture = SimpleNamespace(agents=agents, clients=clients, reg=reg, store=store, engine=engine,
-            api=api, links=links, target=target, root=tmp_path, binary=real_binary, uris=raw, evidence={})
+            api=api, http=http, links=links, target=target, root=tmp_path, binary=real_binary, uris=raw, evidence={})
         try: yield fixture
         finally:
             report = {'binary_sha256':real_binary.digest,'binary_version':real_binary.version,
