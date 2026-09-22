@@ -89,3 +89,59 @@ def test_matrix_covers_explicit_distinct_cases_without_claiming_every_combinatio
     assert len(CASES)==16 and len({x.label for x in CASES})==16
     assert {x.protocol for x in CASES}=={'vless','vmess','trojan','shadowsocks'}
     assert {x.network for x in CASES}=={'tcp','raw','ws','grpc','httpupgrade','xhttp','kcp'}
+
+
+# These use actual local TLS sockets, not a REALITY/Xray substitute.
+from test_node_real_transports import reality_target, tls_material
+
+
+@pytest.mark.parametrize('pending_count',[1,3])
+def test_stalled_tls_clients_do_not_serialize_target_accept(tls_material,pending_count):
+    import contextlib
+    import socket
+    import ssl
+    ca,materials=tls_material
+    with reality_target(materials[0]) as address, contextlib.ExitStack() as stack:
+        host,port=address.split(':')
+        for _ in range(pending_count):
+            stack.enter_context(socket.create_connection((host,int(port)),timeout=1))
+        context=ssl.create_default_context(cafile=str(ca));context.set_alpn_protocols(['h2'])
+        with socket.create_connection((host,int(port)),timeout=1) as good:
+            with context.wrap_socket(good,server_hostname=materials[0][0]) as stream:
+                assert stream.version()=='TLSv1.3' and stream.selected_alpn_protocol()=='h2'
+        assert context.check_hostname and context.verify_mode==ssl.CERT_REQUIRED
+
+
+@pytest.mark.parametrize('fault',['untrusted-ca','wrong-name'])
+def test_target_rejects_bad_verification_then_remains_usable(tls_material,fault):
+    import socket
+    import ssl
+    ca,materials=tls_material
+    with reality_target(materials[0]) as address:
+        host,port=address.split(':')
+        bad=ssl.create_default_context() if fault=='untrusted-ca' else ssl.create_default_context(cafile=str(ca))
+        with socket.create_connection((host,int(port)),timeout=1) as raw:
+            with pytest.raises(ssl.SSLCertVerificationError):
+                bad.wrap_socket(raw,server_hostname='wrong.example.test' if fault=='wrong-name' else materials[0][0])
+        good=ssl.create_default_context(cafile=str(ca))
+        with socket.create_connection((host,int(port)),timeout=1) as raw:
+            with good.wrap_socket(raw,server_hostname=materials[0][0]) as conn:
+                assert conn.version()=='TLSv1.3'
+
+
+def test_target_shutdown_closes_a_stalled_handshake(tls_material):
+    import socket
+    import time
+    _,materials=tls_material
+    raw=None;started=time.monotonic()
+    try:
+        with reality_target(materials[0]) as address:
+            host,port=address.split(':')
+            raw=socket.create_connection((host,int(port)),timeout=1)
+        assert time.monotonic()-started<2
+        # A socket accepted just as shutdown begins must also be closed.
+        raw.settimeout(1)
+        try: assert raw.recv(1)==b''
+        except ConnectionResetError: pass
+    finally:
+        if raw is not None: raw.close()

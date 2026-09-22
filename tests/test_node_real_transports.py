@@ -2,8 +2,8 @@
 
 Real Xray and Agent HTTPS; Hub handlers use TestClient. TLS verification stays
 on with the disposable CA explicitly trusted. REALITY's handshake target is a
-private loopback TLS 1.3 fixture, never an external website. No product method,
-transport, counter or core is mocked. Negative packets must not hit the target.
+private loopback TLS 1.3 fixture, never an external website. No Agent response,
+packet transport, counter or core is mocked. Negative packets must not hit the target.
 This matrix is not proof of every option combination, WAN or client-app support.
 """
 from __future__ import annotations
@@ -172,16 +172,59 @@ class HandshakeTarget(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
 
+class ConcurrentHandshakeServer(http.server.ThreadingHTTPServer):
+    """Accept TCP promptly; perform each TLS handshake in its own bounded worker.
+
+    Wrapping the listening socket blocks accept() on the first unfinished TLS
+    connection, despite ThreadingHTTPServer. REALITY probes several TLS flows.
+    Only this disposable target owns these sockets; no global timeout changes.
+    """
+    daemon_threads = True
+
+    def __init__(self, context):
+        self.context = context
+        self.active_lock = threading.Lock()
+        self.active_sockets = set()
+        self.closing = False
+        super().__init__(('127.0.0.1', 0), HandshakeTarget)
+
+    def finish_request(self, request, address):
+        tls = None
+        try:
+            request.settimeout(4)
+            tls = self.context.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
+            with self.active_lock:
+                if self.closing: return
+                self.active_sockets.add(tls)
+            tls.do_handshake()
+            self.RequestHandlerClass(tls, address, self)
+        except (OSError, ssl.SSLError):
+            # Invalid and abandoned probes are expected here, not positive data.
+            pass
+        finally:
+            if tls is not None:
+                with self.active_lock: self.active_sockets.discard(tls)
+                tls.close()
+
+    def server_close(self):
+        with self.active_lock:
+            self.closing = True
+            pending = list(self.active_sockets)
+        for sock in pending:
+            try: sock.shutdown(socket.SHUT_RDWR)
+            except OSError: pass
+            sock.close()
+        super().server_close()
+
+
 @contextlib.contextmanager
 def reality_target(material):
     _, cert, key = material
-    server = http.server.ThreadingHTTPServer(('127.0.0.1',0), HandshakeTarget)
-    server.daemon_threads = True
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ctx.maximum_version = ssl.TLSVersion.TLSv1_3
     ctx.set_ecdh_curve('X25519'); ctx.set_alpn_protocols(['h2','http/1.1'])
     ctx.load_cert_chain(str(cert),str(key))
-    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    server = ConcurrentHandshakeServer(ctx)
     thread = threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.05}); thread.start()
     try: yield f'127.0.0.1:{server.server_port}'
     finally:

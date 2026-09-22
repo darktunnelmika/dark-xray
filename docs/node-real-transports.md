@@ -46,7 +46,10 @@ trust the disposable CA with hostname verification enabled; this does not bypass
 certificate validation and no system trust store is changed. The Hub deploys
 TLS files through its normal managed-file path to each Agent.
 
-REALITY borrows a loopback-only Python/OpenSSL TLS 1.3 handshake target. It is not
+REALITY borrows a loopback-only Python/OpenSSL TLS 1.3 handshake target.
+The target accepts raw TCP and handles each TLS handshake in its own bounded
+worker; an unfinished peer cannot block other incoming TLS connections. Five
+local TLS regressions cover concurrent stalled peers, bad trust/SNI and cleanup. It is not
 an external website and does not prove production camouflage compatibility.
 The target is not the nonce-bearing HTTP destination. Client-side REALITY
 settings are derived from the exported pbk/sid/fp/sni/flow values; private keys
@@ -79,3 +82,13 @@ at https://xtls.github.io/en/config/transport.html and
 https://xtls.github.io/en/config/transports/tls.html and
 https://xtls.github.io/en/config/transports/reality.html . The binary is pinned;
 current documentation alone is not used as evidence of runtime compatibility.
+
+## Initial fixture failure and required rerun
+
+The first exact-head matrix at 53d499a passed 16 tests and failed all five
+REALITY-related positive paths. A separate real-socket regression reproduced a
+fixture defect: wrapping the listening socket performed the TLS handshake inside
+accept(), blocking every other connection behind a peer that had not finished.
+The fixture now handles handshakes concurrently, with the original matrix and
+packet deadlines unchanged. This local regression is not by itself proof that
+all REALITY failures are fixed; the new exact-head CI result remains required.
