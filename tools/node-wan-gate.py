@@ -32,6 +32,7 @@ from core import Config
 from dark_policy import PolicyError,Store
 from nodes import NodeRegistry
 from node_installations import NodeInstallations
+from node_gate_budget import node_budget
 
 
 def atomic_report(path:Path,doc:dict)->None:
@@ -199,6 +200,7 @@ def main()->None:
     ap.add_argument('--config',type=Path,required=True)
     ap.add_argument('--data',type=Path,required=True)
     ap.add_argument('--min-nodes',type=int,default=2)
+    ap.add_argument('--expected-node-count',type=int,default=None,help='Parent budget snapshot; mismatch fails before probes')
     ap.add_argument('--timeout',type=float,default=8.0)
     ap.add_argument('--watch-seconds',type=float,default=0.0)
     ap.add_argument('--interval',type=float,default=5.0)
@@ -212,6 +214,9 @@ def main()->None:
         raise SystemExit('timing values must be finite')
     if a.watch_seconds<0 or a.interval<=0:raise SystemExit('watch/interval values are invalid')
     if a.expect_outage and a.watch_seconds<=0:raise SystemExit('--expect-outage requires --watch-seconds')
+
+    if a.expected_node_count is not None and a.expected_node_count<0:
+        raise SystemExit('--expected-node-count must be >= 0')
 
     cfg=Config.load(a.config)
     db_path=a.data/'dark.sqlite3';secret=a.data/'secret.key'
@@ -243,8 +248,10 @@ def main()->None:
             rounds.append({'at':now,'nodes':rows})
             return rows
 
-        final=one_round()
-        if a.watch_seconds>0:
+        budget=node_budget(len(nodes),a.timeout,a.watch_seconds)
+        budget_matches=a.expected_node_count is None or a.expected_node_count==len(nodes)
+        final=one_round() if budget_matches else []
+        if a.watch_seconds>0 and budget_matches:
             deadline=time.monotonic()+a.watch_seconds
             while time.monotonic()<deadline:
                 time.sleep(min(a.interval,max(0,deadline-time.monotonic())))
@@ -253,7 +260,7 @@ def main()->None:
         enabled_count=len(nodes);healthy=sum(bool(x['ok']) for x in final)
         failover_ready=sum(bool(x['ok'] and x['failover_ready']) for x in final)
         recovery_ok=all(v['saw_down'] and v['saw_recovered'] for v in transitions.values()) and not unknown
-        passed=(not fleet_changed and enabled_count>=a.min_nodes and healthy==enabled_count and failover_ready>=min(a.min_nodes,enabled_count)
+        passed=(budget_matches and not fleet_changed and enabled_count>=a.min_nodes and healthy==enabled_count and failover_ready>=min(a.min_nodes,enabled_count)
                 and (recovery_ok if a.expect_outage else True))
         report={'version':(ROOT/'VERSION').read_text(encoding='utf-8').strip(),
                 'passed':passed,'started_at':started,'finished_at':time.time(),
@@ -261,13 +268,16 @@ def main()->None:
                 'healthy_nodes':healthy,'failover_ready_nodes':failover_ready,
                 'expected_outages':a.expect_outage,'unknown_expected_nodes':unknown,
                 'recovery':transitions,'final':final,
-                'round_count':len(rounds),'real_wan_requests':bool(nodes),
+                'round_count':len(rounds),'real_wan_requests':bool(nodes and budget_matches),
+                'observation_complete':budget_matches,'budget_matches_fleet':budget_matches,
+                'expected_node_count':a.expected_node_count,'timing_budget':budget,
                 'fleet_changed':fleet_changed,
                 'observation_basis':'authenticated Agent reports and Hub intent; not customer traffic',
                 'customer_connection_tested':False,'global_ip_guard_tested':False,
                 'network_outage_proven':False,
                 'network_loss_injected_by_gate':False,
                 'changes_made':'normal probe health/identity metadata and private report only; no customer/Xray/firewall mutation'}
+        if not budget_matches:report['error']='node_count_changed_since_budget'
         if a.watch_seconds>0:report['rounds']=rounds
         report_path=a.report or (a.data/'qa/node-wan-gate.json')
         atomic_report(report_path,report);report['report_path']=str(report_path)

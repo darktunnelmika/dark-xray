@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import socket
@@ -35,6 +36,7 @@ from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
 from core import Config
+from node_gate_budget import enabled_node_count, node_budget
 
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip() if (ROOT/'VERSION').is_file() else 'unknown'
 BOOT_ID_PATH=Path('/proc/sys/kernel/random/boot_id')
@@ -189,16 +191,35 @@ def production_phase(config:Path,data:Path,timeout:float)->dict[str,Any]:
 
 def node_phase(config:Path,data:Path,min_nodes:int,timeout:float,watch_seconds:float,expected_outages:list[str])->dict[str,Any]:
     if min_nodes<=0:return {'passed':True,'skipped':True,'minimum_nodes':0,'detail':'node WAN gate not requested'}
+    try:
+        count=enabled_node_count(data)
+        budget=node_budget(count,timeout,watch_seconds)
+    except Exception:
+        return {'passed':False,'skipped':False,'observation_complete':False,
+                'error':'node_budget_unavailable'}
     args=[sys.executable,ROOT/'tools/node-wan-gate.py','--config',config,'--data',data,'--min-nodes',str(min_nodes),
-          '--timeout',str(timeout),'--watch-seconds',str(watch_seconds),'--report',data/'qa/target-node-wan-gate.json','--json-only']
+          '--timeout',str(timeout),'--watch-seconds',str(watch_seconds),'--expected-node-count',str(count),
+          '--report',data/'qa/target-node-wan-gate.json','--json-only']
     for node_id in expected_outages:args.extend(['--expect-outage',node_id])
-    total=max(30.0,watch_seconds+timeout*max(2,min_nodes)+20.0)
-    try:cp=_child(args,total)
-    except subprocess.TimeoutExpired:return {'passed':False,'skipped':False,'exit_code':124,'error':'node WAN gate timed out'}
-    try:result=_json_text(cp.stdout)
-    except Exception as ex:result={'passed':False,'error':'invalid node WAN gate JSON: '+type(ex).__name__}
-    result['exit_code']=cp.returncode
-    if cp.stderr.strip():result['stderr']=cp.stderr.strip()[-3000:]
+    try:cp=_child(args,budget['subprocess_timeout_seconds'])
+    except subprocess.TimeoutExpired:
+        # run() kills and reaps the child. Never trust partial stdout or a report
+        # left by an earlier invocation, even if it says passed=true.
+        return {'passed':False,'skipped':False,'observation_complete':False,'exit_code':124,
+                'error':'node WAN gate timed out','timing_budget':budget}
+    except OSError:
+        return {'passed':False,'skipped':False,'observation_complete':False,
+                'error':'node_gate_launch_failed','timing_budget':budget}
+    try:
+        result=_json_text(cp.stdout)
+        if (type(result.get('passed')) is not bool or type(result.get('configured_enabled_nodes')) is not int
+                or result['configured_enabled_nodes']!=count or result.get('observation_complete') is not True):
+            raise ValueError('incomplete_or_changed_node_observation')
+    except Exception:
+        result={'passed':False,'observation_complete':False,'error':'invalid_or_incomplete_node_gate_result'}
+    result.update(exit_code=cp.returncode,skipped=False,timing_budget=budget)
+    # A child traceback can contain credentials or config text; only record its presence.
+    result['stderr_present']=bool(cp.stderr.strip())
     if cp.returncode!=0:result['passed']=False
     return result
 
@@ -250,7 +271,9 @@ def main()->None:
     ap.add_argument('--json-only',action='store_true')
     a=ap.parse_args()
     if os.geteuid()!=0:raise SystemExit('Target VPS gate requires root so service/TLS evidence is complete')
-    if a.production_timeout<=0 or a.node_timeout<=0 or a.node_watch_seconds<0:raise SystemExit('Timeouts must be positive')
+    if (not all(math.isfinite(x) for x in (a.production_timeout,a.node_timeout,a.node_watch_seconds))
+        or a.production_timeout<=0 or not .2<=a.node_timeout<=30 or a.node_watch_seconds<0):
+        raise SystemExit('Invalid finite timeout/watch values')
     if a.min_nodes<0:raise SystemExit('--min-nodes must be >= 0')
     expected=a.expect_source_commit.strip().lower()
     if expected and not SHA_RE.fullmatch(expected):raise SystemExit('--expect-source-commit must be an immutable 40-character SHA')
