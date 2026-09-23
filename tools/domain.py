@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-CONF=Path('/etc/dark-xray');SOURCE=CONF/'tls-source.json';GUARD=CONF/'guard.json';TLS_DIR=CONF/'tls'
+CONF=Path('/etc/dark-xray');SOURCE=CONF/'tls-source.json';GUARD=CONF/'guard.json';TLS_DIR=CONF/'tls';HOOK_DIR=Path('/etc/letsencrypt/renewal-hooks/deploy')
 DOMAIN_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}')
 EMAIL_RE=re.compile(r'[^\s@]+@[^\s@]+\.[^\s@]+')
 
@@ -280,6 +280,56 @@ def _activate_tls(previous_config:dict,candidate:dict,previous_guard:dict|None,g
         raise SystemExit('TLS activation failed; previous DARK config, guard state and certificate pair were restored') from ex
 
 
+def _file_snapshot(path:Path)->tuple[bool,bytes,int]:
+    if path.is_symlink():raise ValueError('Managed TLS metadata path must not be a symlink')
+    if not path.exists():return False,b'',0
+    if not path.is_file():raise ValueError('Managed TLS metadata path must be a regular file')
+    return True,path.read_bytes(),path.stat().st_mode&0o777
+
+
+def _restore_file(path:Path,snapshot:tuple[bool,bytes,int]):
+    existed,raw,mode=snapshot
+    if existed:write(path,raw,mode)
+    else:path.unlink(missing_ok=True)
+
+
+def _install_renewal_metadata(lineage:Path,domain:str):
+    if HOOK_DIR.is_symlink():raise ValueError('Renewal hook directory must not be a symlink')
+    hook=HOOK_DIR/'dark-xray-panel'
+    source_snapshot=_file_snapshot(SOURCE);hook_snapshot=_file_snapshot(hook)
+    content=(
+        '#!/bin/sh\n'
+        'set -eu\n'
+        f'if [ "${{RENEWED_LINEAGE:-}}" = "{lineage}" ]; then\n'
+        ' /opt/dark-xray/.venv/bin/python /opt/dark-xray/tools/domain.py --renew\n'
+        'fi\n'
+    )
+    try:
+        write_json(SOURCE,{'lineage':str(lineage),'domain':domain},0o600)
+        HOOK_DIR.mkdir(parents=True,exist_ok=True)
+        write(hook,content.encode(),0o750)
+    except BaseException:
+        rollback_error=None
+        try:_restore_file(SOURCE,source_snapshot)
+        except BaseException as ex:rollback_error=ex
+        try:_restore_file(hook,hook_snapshot)
+        except BaseException as ex:rollback_error=rollback_error or ex
+        if rollback_error is not None:
+            raise SystemExit('CRITICAL: renewal metadata installation failed and previous metadata could not be restored') from rollback_error
+        raise
+    return hook
+
+
+def _commit_renewal_metadata(previous_config:dict,previous_guard:dict|None,guard_existed:bool,pair_snapshot:dict[str,bytes|None],guard_was_active:bool,lineage:Path,domain:str):
+    try:
+        return _install_renewal_metadata(lineage,domain)
+    except BaseException as ex:
+        try:_restore_runtime(previous_config,previous_guard,guard_existed,pair_snapshot,guard_was_active)
+        except Exception as rollback_ex:
+            raise SystemExit('CRITICAL: renewal metadata installation failed and previous DARK runtime could not be restored') from rollback_ex
+        raise SystemExit('Renewal metadata installation failed; previous DARK runtime was restored') from ex
+
+
 def _renewal_source_active(state:dict,config:dict)->bool:
     try:origin=urlsplit(str(config.get('public_origin','')))
     except Exception:return False
@@ -334,22 +384,14 @@ def main():
                     '--http-01-port','80','--agree-tos','--email',email,'--cert-name',certname,'-d',domain],check=True)
 
     pair=_prepare_pair(lineage,domain)
-    pair_snapshot=_pair_snapshot();previous_guard=json.loads(GUARD.read_text()) if GUARD.exists() else None
+    pair_snapshot=_pair_snapshot();guard_existed=GUARD.exists()
+    previous_guard=json.loads(GUARD.read_text()) if guard_existed else None
+    guard_was_active=_service_active('dark-xray-guard.service')
     cert,key=str(TLS_DIR/'cert.pem'),str(TLS_DIR/'key.pem')
     candidate=_activation_config(previous_config,domain,a.port,cert,key)
     guard_candidate=_activation_guard(previous_guard,candidate)
     _activate_tls(previous_config,candidate,previous_guard,guard_candidate,pair_snapshot,pair)
-
-    write_json(SOURCE,{'lineage':str(lineage),'domain':domain},0o600)
-    hooks=Path('/etc/letsencrypt/renewal-hooks/deploy');hooks.mkdir(parents=True,exist_ok=True)
-    hook=hooks/'dark-xray-panel'
-    content=f'''#!/bin/sh
-set -eu
-if [ "${{RENEWED_LINEAGE:-}}" = "{lineage}" ]; then
- /opt/dark-xray/.venv/bin/python /opt/dark-xray/tools/domain.py --renew
-fi
-'''
-    write(hook,content.encode(),0o750)
+    _commit_renewal_metadata(previous_config,previous_guard,guard_existed,pair_snapshot,guard_was_active,lineage,domain)
     panel_path=str(candidate.get('panel_path','/'));print('Panel TLS enabled:',candidate['public_origin']+(panel_path if panel_path!='/' else '')+'/')
     print('Renewal hook installed. Renewal restarts DARK and can interrupt Xray sessions.')
 

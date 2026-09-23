@@ -72,7 +72,7 @@ def certs(tmp_path):
 @pytest.fixture
 def domain(tmp_path,monkeypatch,certs):
     mod=load_domain();conf=tmp_path/'conf';conf.mkdir()
-    mod.CONF=conf;mod.TLS_DIR=conf/'tls';mod.SOURCE=conf/'tls-source.json';mod.GUARD=conf/'guard.json'
+    mod.CONF=conf;mod.TLS_DIR=conf/'tls';mod.SOURCE=conf/'tls-source.json';mod.GUARD=conf/'guard.json';mod.HOOK_DIR=tmp_path/'hooks'
     mod.pwd=SimpleNamespace(getpwnam=lambda name:SimpleNamespace(pw_gid=os.getgid()))
     fake_os=SimpleNamespace(**{key:getattr(os,key) for key in dir(os)})
     def chown(path,*args,**kwargs):
@@ -396,3 +396,92 @@ def test_interrupted_partial_copy_restores_old_bytes(domain,certs,monkeypatch):
     monkeypatch.setattr(domain,'write',interrupted)
     with pytest.raises(KeyboardInterrupt):domain.copy_pair(new,DOMAIN)
     assert snapshot(domain)==before
+
+
+def test_renewal_metadata_install_is_private_and_executable(domain,tmp_path):
+    lineage=tmp_path/'lineage'
+    hook=domain._install_renewal_metadata(lineage,DOMAIN)
+    state=json.loads(domain.SOURCE.read_text())
+    assert state=={'lineage':str(lineage),'domain':DOMAIN}
+    assert domain.SOURCE.stat().st_mode&0o777==0o600
+    assert hook.stat().st_mode&0o777==0o750
+    body=hook.read_text()
+    assert str(lineage) in body and '--renew' in body and 'RENEWED_LINEAGE' in body
+
+
+def test_hook_write_failure_restores_previous_metadata(domain,tmp_path,monkeypatch):
+    lineage=tmp_path/'new-lineage';old={'lineage':'/old','domain':'old.example.test'}
+    domain.write_json(domain.SOURCE,old,0o600);domain.HOOK_DIR.mkdir()
+    hook=domain.HOOK_DIR/'dark-xray-panel';domain.write(hook,b'#!/bin/sh\necho old\n',0o750)
+    source_before=domain.SOURCE.read_bytes();hook_before=hook.read_bytes()
+    real_write=domain.write;failed=False
+    def fail(path,*args,**kwargs):
+        nonlocal failed
+        if Path(path)==hook and not failed:
+            failed=True;raise OSError('simulated hook write failure')
+        return real_write(path,*args,**kwargs)
+    monkeypatch.setattr(domain,'write',fail)
+    with pytest.raises(OSError,match='hook write failure'):domain._install_renewal_metadata(lineage,DOMAIN)
+    assert domain.SOURCE.read_bytes()==source_before
+    assert hook.read_bytes()==hook_before
+    assert domain.SOURCE.stat().st_mode&0o777==0o600
+    assert hook.stat().st_mode&0o777==0o750
+
+
+def test_source_write_failure_does_not_create_hook(domain,tmp_path,monkeypatch):
+    lineage=tmp_path/'new-lineage';hook=domain.HOOK_DIR/'dark-xray-panel'
+    real_write=domain.write
+    def fail(path,*args,**kwargs):
+        if Path(path)==domain.SOURCE:raise OSError('simulated source write failure')
+        return real_write(path,*args,**kwargs)
+    monkeypatch.setattr(domain,'write',fail)
+    with pytest.raises(OSError,match='source write failure'):domain._install_renewal_metadata(lineage,DOMAIN)
+    assert not domain.SOURCE.exists() and not hook.exists()
+
+
+def test_metadata_symlinks_are_refused_before_write(domain,tmp_path,monkeypatch):
+    outside=tmp_path/'outside';outside.write_text('preserve')
+    domain.SOURCE.symlink_to(outside)
+    monkeypatch.setattr(domain,'write',lambda *a,**k:pytest.fail('symlink path reached write'))
+    with pytest.raises(ValueError,match='symlink'):domain._install_renewal_metadata(tmp_path/'lineage',DOMAIN)
+    assert outside.read_text()=='preserve'
+
+
+def test_hook_directory_symlink_is_refused(domain,tmp_path,monkeypatch):
+    real=tmp_path/'real-hooks';real.mkdir()
+    domain.HOOK_DIR.symlink_to(real,target_is_directory=True)
+    monkeypatch.setattr(domain,'write',lambda *a,**k:pytest.fail('symlink hook dir reached write'))
+    with pytest.raises(ValueError,match='directory.*symlink'):domain._install_renewal_metadata(tmp_path/'lineage',DOMAIN)
+    assert list(real.iterdir())==[]
+
+
+def test_metadata_restore_failure_is_critical(domain,tmp_path,monkeypatch):
+    domain.write_json(domain.SOURCE,{'lineage':'/old','domain':'old.example.test'},0o600)
+    domain.HOOK_DIR.mkdir();hook=domain.HOOK_DIR/'dark-xray-panel';domain.write(hook,b'old',0o750)
+    real_write=domain.write;hook_failed=False
+    def fail(path,*args,**kwargs):
+        nonlocal hook_failed
+        path=Path(path)
+        if path==hook and not hook_failed:
+            hook_failed=True;raise OSError('new hook failed')
+        if hook_failed and path==domain.SOURCE:raise OSError('source rollback failed')
+        return real_write(path,*args,**kwargs)
+    monkeypatch.setattr(domain,'write',fail)
+    with pytest.raises(SystemExit,match='CRITICAL'):domain._install_renewal_metadata(tmp_path/'lineage',DOMAIN)
+
+
+def test_metadata_failure_restores_previous_runtime(domain,tmp_path,monkeypatch):
+    previous={'public_origin':'http://127.0.0.1:2087','bind_host':'127.0.0.1','bind_port':2087}
+    guard={'allowed_ports':[2020]};pair={'cert.pem':b'oldcert','key.pem':b'oldkey'};calls=[]
+    monkeypatch.setattr(domain,'_install_renewal_metadata',lambda *a:(_ for _ in ()).throw(OSError('metadata failed')))
+    monkeypatch.setattr(domain,'_restore_runtime',lambda *args:calls.append(args))
+    with pytest.raises(SystemExit,match='previous DARK runtime was restored'):
+        domain._commit_renewal_metadata(previous,guard,True,pair,True,tmp_path/'lineage',DOMAIN)
+    assert calls==[(previous,guard,True,pair,True)]
+
+
+def test_metadata_failure_with_runtime_rollback_failure_is_critical(domain,tmp_path,monkeypatch):
+    monkeypatch.setattr(domain,'_install_renewal_metadata',lambda *a:(_ for _ in ()).throw(OSError('metadata failed')))
+    monkeypatch.setattr(domain,'_restore_runtime',lambda *a:(_ for _ in ()).throw(RuntimeError('runtime restore failed')))
+    with pytest.raises(SystemExit,match='CRITICAL'):
+        domain._commit_renewal_metadata({},None,False,{},False,tmp_path/'lineage',DOMAIN)
