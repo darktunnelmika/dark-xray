@@ -16,6 +16,7 @@ Pinned lightweight Agents and an acknowledged desired configuration are required
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import math
 import re
@@ -53,6 +54,38 @@ def atomic_report(path:Path,doc:dict)->None:
 
 class GateRejected(PolicyError):
     """Fixed diagnostic codes only; never copy an Agent response into a report."""
+
+
+def parse_source_expectations(values:list[str])->dict[str,list[tuple[str,str]]]:
+    """Parse NODE_ID,EMAIL,IP without leaking malformed values into reports."""
+    out:dict[str,list[tuple[str,str]]]={}
+    for raw in values:
+        parts=raw.split(',',2)
+        if len(parts)!=3 or not parts[0].strip() or not parts[1].strip():
+            raise SystemExit('--expect-source-ip must use NODE_ID,EMAIL,IP')
+        node_id,email,raw_ip=(x.strip() for x in parts)
+        try:ip=str(ipaddress.ip_address(raw_ip))
+        except ValueError:raise SystemExit('--expect-source-ip contains an invalid IP address') from None
+        pair=(email,ip)
+        if pair not in out.setdefault(node_id,[]):out[node_id].append(pair)
+    return out
+
+
+def security_source_evidence(security:dict,expected:list[tuple[str,str]],not_before:float)->dict:
+    if not expected:return {'required':False,'matched':0}
+    if security.get('sourceVerified') is not True:raise GateRejected('source_unverified')
+    observed:dict[str,dict[str,float]]={}
+    for item in security.get('items',[]):
+        if not isinstance(item,dict):continue
+        email=str(item.get('sourceEmail') or '')
+        for row in item.get('ips',[]):
+            if not isinstance(row,dict):continue
+            try:ip=str(ipaddress.ip_address(str(row.get('ip') or '')));last=float(row.get('lastSeen') or 0)
+            except (ValueError,TypeError):continue
+            observed.setdefault(email,{})[ip]=max(last,observed.get(email,{}).get(ip,0.0))
+    if any(observed.get(email,{}).get(ip,0.0)<not_before for email,ip in expected):
+        raise GateRejected('expected_source_ip_missing_or_stale')
+    return {'required':True,'matched':len(expected),'fresh_after':not_before}
 
 
 def node_signature(node:dict)->dict:
@@ -126,7 +159,7 @@ def require_ready_health(node:dict,health:dict)->None:
         raise GateRejected('assignments_not_ready')
 
 
-def inspect_node(registry:NodeRegistry,node:dict,timeout:float)->dict:
+def inspect_node(registry:NodeRegistry,node:dict,timeout:float,expected_sources:list[tuple[str,str]]|None=None,source_not_before:float=0.0)->dict:
     """A read-only runtime observation, NOT an actual customer connection test."""
     node_id=str(node['id']);started=time.monotonic()
     out={'id':node_id,'name':str(node.get('name') or node_id),'ok':False,
@@ -149,6 +182,7 @@ def inspect_node(registry:NodeRegistry,node:dict,timeout:float)->dict:
             if (not isinstance(security,dict) or type(security.get('sourceVerified')) is not bool
                 or not isinstance(security.get('items'),list)):
                 raise GateRejected('invalid_security_response')
+            source_evidence=security_source_evidence(security,expected_sources or [],source_not_before)
             if (not isinstance(remote,list) or any(not isinstance(a,dict) or type(a.get('id')) is not int
                                                    or a['id']<1 for a in remote)):
                 raise GateRejected('invalid_inbound_response')
@@ -164,6 +198,8 @@ def inspect_node(registry:NodeRegistry,node:dict,timeout:float)->dict:
             verified={'latency_ms':int(final_probe['latency_ms']),
                       'traffic_latency_ms':int(traffic_ms),'security_latency_ms':int(security_ms),
                       'source_verified':security['sourceVerified'],
+                      'source_ip_checks':source_evidence['matched'],
+                      'source_ip_fresh_after':source_evidence.get('fresh_after'),
                       'mirrored_traffic_clients':len(traffic['items']),
                       'mirrored_security_clients':len(security['items']),
                       'remote_inbounds':len(remote),'core_state':'running',
@@ -205,6 +241,10 @@ def main()->None:
     ap.add_argument('--watch-seconds',type=float,default=0.0)
     ap.add_argument('--interval',type=float,default=5.0)
     ap.add_argument('--expect-outage',action='append',default=[],metavar='NODE_ID')
+    ap.add_argument('--expect-source-ip',action='append',default=[],metavar='NODE_ID,EMAIL,IP',
+                    help='Require a fresh trusted source-IP observation for the mirrored client')
+    ap.add_argument('--source-ip-max-age',type=float,default=180.0,
+                    help='Maximum age in seconds for --expect-source-ip observations')
     ap.add_argument('--report',type=Path)
     ap.add_argument('--json-only',action='store_true')
     a=ap.parse_args()
@@ -214,6 +254,9 @@ def main()->None:
         raise SystemExit('timing values must be finite')
     if a.watch_seconds<0 or a.interval<=0:raise SystemExit('watch/interval values are invalid')
     if a.expect_outage and a.watch_seconds<=0:raise SystemExit('--expect-outage requires --watch-seconds')
+    if not math.isfinite(a.source_ip_max_age) or not 1<=a.source_ip_max_age<=3600:
+        raise SystemExit('--source-ip-max-age must be between 1 and 3600 seconds')
+    source_expectations=parse_source_expectations(a.expect_source_ip)
 
     if a.expected_node_count is not None and a.expected_node_count<0:
         raise SystemExit('--expected-node-count must be >= 0')
@@ -232,13 +275,15 @@ def main()->None:
         fleet_changed=False
         ids={str(n['id']) for n in nodes}
         unknown=sorted(set(a.expect_outage)-ids)
+        unknown_source_nodes=sorted(set(source_expectations)-ids)
+        source_not_before=started-a.source_ip_max_age
         transitions={node_id:{'saw_ready_before':False,'saw_down':False,'saw_recovered':False,'down_at':0,'recovered_at':0}
                      for node_id in a.expect_outage}
         rounds=[]
 
         def one_round()->list[dict]:
             nonlocal fleet_changed
-            rows=[inspect_node(registry,n,a.timeout) for n in nodes]
+            rows=[inspect_node(registry,n,a.timeout,source_expectations.get(str(n['id']),[]),source_not_before) for n in nodes]
             fleet_changed=fleet_changed or fleet_signature(registry)!=baseline
             now=time.time()
             for row in rows:
@@ -260,20 +305,29 @@ def main()->None:
         enabled_count=len(nodes);healthy=sum(bool(x['ok']) for x in final)
         failover_ready=sum(bool(x['ok'] and x['failover_ready']) for x in final)
         recovery_ok=all(v['saw_down'] and v['saw_recovered'] for v in transitions.values()) and not unknown
-        passed=(budget_matches and not fleet_changed and enabled_count>=a.min_nodes and healthy==enabled_count and failover_ready>=min(a.min_nodes,enabled_count)
+        source_checks=sum(len(v) for v in source_expectations.values())
+        source_observation_verified=bool(source_checks and not unknown_source_nodes and
+            all(row.get('source_ip_checks',0)==len(source_expectations.get(str(row['id']),[]))
+                for row in final if str(row['id']) in source_expectations))
+        passed=(budget_matches and not fleet_changed and not unknown_source_nodes and enabled_count>=a.min_nodes
+                and healthy==enabled_count and failover_ready>=min(a.min_nodes,enabled_count)
                 and (recovery_ok if a.expect_outage else True))
         report={'version':(ROOT/'VERSION').read_text(encoding='utf-8').strip(),
                 'passed':passed,'started_at':started,'finished_at':time.time(),
                 'configured_enabled_nodes':enabled_count,'minimum_nodes':a.min_nodes,
                 'healthy_nodes':healthy,'failover_ready_nodes':failover_ready,
                 'expected_outages':a.expect_outage,'unknown_expected_nodes':unknown,
+                'expected_source_ip_checks':source_checks,'unknown_source_ip_nodes':unknown_source_nodes,
+                'source_observation_verified':source_observation_verified,
+                'source_ip_max_age_seconds':a.source_ip_max_age,
                 'recovery':transitions,'final':final,
                 'round_count':len(rounds),'real_wan_requests':bool(nodes and budget_matches),
                 'observation_complete':budget_matches,'budget_matches_fleet':budget_matches,
                 'expected_node_count':a.expected_node_count,'timing_budget':budget,
                 'fleet_changed':fleet_changed,
-                'observation_basis':'authenticated Agent reports and Hub intent; not customer traffic',
-                'customer_connection_tested':False,'global_ip_guard_tested':False,
+                'observation_basis':'authenticated Agent reports and Hub intent; optional fresh source-IP evidence comes from Agent observations',
+                'customer_connection_tested':False,'fresh_customer_source_observation_tested':source_observation_verified,
+                'global_ip_guard_tested':False,
                 'network_outage_proven':False,
                 'network_loss_injected_by_gate':False,
                 'changes_made':'normal probe health/identity metadata and private report only; no customer/Xray/firewall mutation'}
@@ -290,6 +344,8 @@ def main()->None:
             if a.expect_outage:
                 for node_id,state in transitions.items():
                     print(' Recovery',node_id,':','PASS' if state['saw_down'] and state['saw_recovered'] else 'FAIL')
+            if source_checks:
+                print(' Source IP evidence :','PASS' if source_observation_verified else 'FAIL','('+str(source_checks)+' checks)')
             print(' Report:',report_path)
             print('\nJSON RESULT')
         print(json.dumps(report,ensure_ascii=False,indent=2))
