@@ -68,3 +68,30 @@ def test_wan_gate_does_not_claim_to_inject_outages():
     assert "'network_loss_injected_by_gate':False" in source
     assert "--expect-outage" in source
     assert "saw_down" in source and "saw_recovered" in source
+
+
+def test_source_expectation_parser_accepts_ipv4_and_ipv6_without_logging_raw_failures():
+    gate=load_gate()
+    parsed=gate.parse_source_expectations([
+        'node-a,user@example.test,203.0.113.7',
+        'node-a,user@example.test,2001:db8::7',
+    ])
+    assert parsed=={'node-a':[('user@example.test','203.0.113.7'),('user@example.test','2001:db8::7')]}
+
+
+def test_fresh_source_evidence_requires_verified_recent_exact_pair():
+    gate=load_gate();now=1000.0
+    security={'sourceVerified':True,'items':[{
+        'sourceEmail':'user@example.test',
+        'ips':[{'ip':'203.0.113.7','lastSeen':999.0},{'ip':'203.0.113.8','lastSeen':700.0}],
+    }]}
+    evidence=gate.security_source_evidence(security,[('user@example.test','203.0.113.7')],900.0)
+    assert evidence['required'] is True and evidence['matched']==1
+    for bad in (
+        {'sourceVerified':False,'items':security['items']},
+        {'sourceVerified':True,'items':[{'sourceEmail':'user@example.test','ips':[{'ip':'203.0.113.7','lastSeen':800.0}]}]},
+        {'sourceVerified':True,'items':[{'sourceEmail':'other@example.test','ips':[{'ip':'203.0.113.7','lastSeen':999.0}]}]},
+    ):
+        try:gate.security_source_evidence(bad,[('user@example.test','203.0.113.7')],900.0)
+        except gate.GateRejected:pass
+        else:raise AssertionError('unverified, stale or wrong-client source evidence must fail')
