@@ -46,13 +46,14 @@ jobs:
           grep -q 'vps-verify)' darkxray
           grep -q 'production-gate)' darkxray
           grep -q 'target-vps-gate)' darkxray
+          grep -q 'load-gate)' darkxray
           grep -q 'node-wan-gate)' darkxray
           grep -q 'tools/production-gate.py' darkxray
           grep -q 'stage-runtime|stage-panel-path)' darkxray
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/update.py
           grep -q 'reset-password|account|stage-runtime|stage-panel-path' tools/provision.py
           python -m py_compile \
-            tools/menu.py tools/update.py tools/provision.py tools/provision_node.py tools/update_node.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/smoke-real.py \
+            tools/menu.py tools/update.py tools/provision.py tools/provision_node.py tools/update_node.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/load-scale-gate.py tools/smoke-real.py \
             tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py tests/test_node_agent_architecture.py tests/test_node_hub_recovery.py tests/verify-node-install.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py backend/node_agent.py backend/node_runtime.py backend/node_updated.py \
             backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
