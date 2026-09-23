@@ -1,6 +1,10 @@
 # تغییرات DARK XRAY
 
-## Unreleased — main بعد از 0.9.0-rc7
+## Unreleased — بعد از 0.9.0-rc7
+
+- فعلاً موردی ثبت نشده است.
+
+## 0.9.0-rc7 — Stage-4 validated Release Candidate
 
 - **Traffic Engine V4** برای Outbound / Routing / Balancer / Observatory با UX Guided/Basic-first و preview تصمیم Routing اضافه شد.
 - **DNS Guided V3**، **Public Endpoints V3**، **Clients V5 Delivery Center**، **Nodes V4 Orchestrator**، **Security Center V4** و **Sync Runtime V4** وارد Browser QA واقعی شده‌اند.
@@ -8,9 +12,13 @@
 - Gate دائمی **Fresh Install E2E** اضافه شد: Installer تعاملی واقعی روی Ubuntu 24.04، Xray رسمی، systemd، Update Broker، readiness، `vps-verify` و `production-gate`.
 - همین Gate یک startup race واقعی را پیدا کرد: `dark-xray.service` می‌توانست قبل از آماده‌شدن HTTP listener Active شود و Final Doctor `ConnectionRefusedError` بگیرد. Installer اکنون تا endpoint محلی `/health` به‌صورت fail-closed صبر می‌کند.
 - Snapshot `88e9e5967c3577378f0cca03305b6d127f238176` روی `main` در Run 761 هر **۸ Gate** را پاس کرده است.
-- این تغییرات هنوز به Tag/Release جدید تبدیل نشده‌اند و Production Ready محسوب نمی‌شوند.
 
-## 0.9.0-rc7 — Web Update Center + root update broker
+- **Stage 4 independent VPS acceptance** روی exact head `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS شد؛ merge commit `37a640817fe64e8e5c066df7f691b624c6ed5707` همان tree دقیق را دارد.
+- reboot واقعی، HTTPS/HSTS، دو Node واقعی، source-IP verified و Ready → Down → Recovered روی Node انتخابی ثبت شد.
+- Let's Encrypt public staging HTTP-01 renewal rehearsal با deploy-hook restart PASS شد و certificate production جایگزین نشد.
+- Load acceptance سه run مستقل 1000 Client / concurrency 12 را PASS کرد؛ هر سه 100/100 PATCH، SQLite `quick_check=ok` و بدون 5xx/timeout بودند.
+- باگ write amplification در `bulk_adjust_500` با batch policy/managed/core writes بسته شد؛ زمان سه run نهایی 1.358s، 1.422s و 1.534s بود.
+- RC7 هنوز Stable/Production Ready نیست؛ fresh exact-artifact install، production certificate issue/renewal، final artifact rollback rehearsal و مرزهای کامل global multi-node enforcement باز هستند.
 
 - Update Center داخل خود پنل اضافه شد و فقط برای Interactive Owner قابل دسترسی است؛ Reseller و API Key نمی‌توانند Check/Start آپدیت انجام دهند.
 - یک `dark-xray-update.service` مستقل و root-owned با Unix socket محدود اضافه شد؛ Web process همچنان non-root باقی می‌ماند و هیچ shell دلخواهی از API قابل اجرا نیست.

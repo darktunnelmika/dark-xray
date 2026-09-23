@@ -5,7 +5,7 @@
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
 > [!CAUTION]
-> این نسخه **Release Candidate** برای تست VPS است. CI با Xray رسمی، nftables واقعی، systemd واقعی، Chromium واقعی و Load/Scale هزار Client سبز است؛ Production Ready فقط بعد از VPS هدف، reboot واقعی، TLS renewal واقعی و Nodeهای چندسروری اعلام می‌شود.
+> این نسخه همچنان **Release Candidate** است و Stable/Production Ready اعلام نشده؛ اما Stage 4 روی VPS مستقل PASS شده است: reboot واقعی، HTTPS/HSTS، دو Node واقعی، Down → Recovery، source-IP تأییدشده، public ACME staging rehearsal و سه اجرای 1000 Client / 12 worker. برای Stable هنوز fresh install از exact release artifact روی image/provider نهایی، production certificate issue/renewal، exact artifact rollback rehearsal و مرزهای کامل enforcement چندنودی باز هستند.
 
 ## محدودهٔ نسخهٔ نخست نودها
 
@@ -257,18 +257,28 @@ SOCKS client → VLESS → DARK-managed Xray → local HTTP target
 
 همراه با دو Client روی Inbound مشترک، Subscription، Traffic Metering، reseller quota isolation، top-up، manual disable، reset/delete accounting و stop تمیز Core.
 
-## چه چیزهایی هنوز باید روی VPS هدف انجام شوند؟
+## وضعیت Stage 4 و گیت‌های باقی‌مانده
 
-1. Fresh install با online installer روی image/provider واقعی.
-2. Reboot/Power-cycle واقعی ماشین و بررسی Panel/Xray/DB بعد boot.
-3. Domain/TLS واقعی: issue و renewal گواهی، Secure Cookie و HSTS.
-4. IP Guard در topology واقعی سرور/تونل/CDN.
-5. دو VPS واقعی Node با HTTPS معتبر، اجرای `darkxray node-wan-gate`، Traffic/Security Sync، Failover readiness، reset coordination و مشاهده واقعی network-loss → recovery روی WAN.
-6. ظرفیت‌سنجی روی پلن واقعی VPS؛ smoke هزار Client و SQLite contention در CI قبلاً سبز شده است.
-7. Update/Rollback rehearsal با exact release artifact نهایی.
-8. تولید دوباره `SHA256SUMS` فقط برای همان release/tag ثابت.
+Stage 4 روی سورس دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS شده و merge commit `37a640817fe64e8e5c066df7f691b624c6ed5707` همان tree را دارد. موارد زیر با evidence واقعی بسته شده‌اند:
 
-تا تکمیل این موارد، نام نسخه **`0.9.0-rc7`** حفظ می‌شود.
+- reboot واقعی ماشین با boot-id جدید و همان source/config؛
+- HTTPS/HSTS و certificate verification؛
+- دو Node واقعی و failover readiness؛
+- source-IP verified روی Node؛
+- Down → Recovery واقعی Node؛
+- Let's Encrypt public staging HTTP-01 renewal rehearsal با deploy-hook restart، بدون جایگزینی certificate production؛
+- سه اجرای مستقل 1000 Client / concurrency 12 با SQLite `quick_check=ok` و 100/100 PATCH.
+
+موارد باز برای **Stable / Production Ready**:
+
+1. Fresh install از exact release artifact روی image/provider نهایی.
+2. issue و renewal واقعی production certificate روی DNS/provider نهایی.
+3. IP Guard / global multi-node enforcement کامل روی topology نهایی، مخصوصاً رفتار نود آفلاین و packet-level enforcement محلی.
+4. capacity/SLA sizing روی پلن نهایی فراتر از workload پذیرش Stage 4.
+5. Update/Rollback rehearsal با همان ZIP/tar.gz/tag نهایی که منتشر می‌شود.
+6. بازتولید source/release checksum برای snapshot دقیق release.
+
+نام نسخه **`0.9.0-rc7`** حفظ می‌شود و وضعیت آن **Stage-4 validated RC** است، نه Stable.
 
 ## منابع وضعیت
 

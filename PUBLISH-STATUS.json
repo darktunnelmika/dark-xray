@@ -2,8 +2,8 @@
   "project": "DARK XRAY",
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
-  "date": "2026-09-19",
-  "status": "release_candidate_target_vps_validation",
+  "date": "2026-09-23",
+  "status": "release_candidate_stage4_passed_release_preparation",
   "current_version": "0.9.0-rc7",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
@@ -143,18 +143,22 @@
   },
   "target_infrastructure_validation": {
     "fresh_install_on_target_vps_image": false,
-    "real_machine_reboot_or_power_cycle": false,
+    "real_machine_reboot_or_power_cycle": true,
     "lets_encrypt_issue_and_renewal_on_target_provider": false,
-    "secure_cookie_and_hsts_on_target_tls": false,
-    "ip_guard_source_mapping_on_target_traffic_topology": false,
-    "two_real_vps_node_https_validation": false,
-    "node_network_loss_and_recovery": false,
-    "production_load_and_sqlite_contention": false,
+    "secure_cookie_and_hsts_on_target_tls": true,
+    "ip_guard_source_mapping_on_target_traffic_topology": true,
+    "two_real_vps_node_https_validation": true,
+    "node_network_loss_and_recovery": true,
+    "production_load_and_sqlite_contention": true,
     "exact_release_artifact_update_rollback_rehearsal": false,
     "global_multi_node_ip_limit_complete": false,
     "distributed_client_traffic_convergence_complete": false,
     "ci_load_scale_1000_clients_complete": true,
-    "ci_fresh_install_disposable_ubuntu_complete": true
+    "ci_fresh_install_disposable_ubuntu_complete": true,
+    "stage4_independent_vps_acceptance_complete": true,
+    "lets_encrypt_public_staging_http01_renewal_rehearsal": true,
+    "lets_encrypt_deploy_hook_restart_observed": true,
+    "production_certificate_replaced_during_rehearsal": false
   },
   "claim_boundaries": {
     "kernel_ci_is_not_provider_topology_proof": true,
@@ -166,7 +170,7 @@
   },
   "release_hygiene": {
     "version_file_current": true,
-    "readmes_current_for_rc": false,
+    "readmes_current_for_rc": true,
     "status_current_for_rc": true,
     "validation_doc_path_current": true,
     "source_sha256sums_regenerated_for_rc": false,
@@ -174,10 +178,14 @@
     "exact_main_snapshot_documented": true,
     "published_tag_for_current_source_version": false
   },
-  "checksum_note": "The current source still reports 0.9.0-rc7, but no v0.9.0-rc7 tag has been published. Generate fresh source/release checksums only when the next exact release snapshot/tag is fixed.",
+  "checksum_note": "Stage 4 passed on the exact RC7 runtime tree. Stage 5 must regenerate source and release-archive checksums on the final release-preparation commit before v0.9.0-rc7 is tagged.",
   "release_candidate": true,
   "control_center_v2": true,
-  "validated_main_commit": "88e9e5967c3577378f0cca03305b6d127f238176",
-  "validated_main_ci_run": 761,
-  "current_source_version_tag_published": false
+  "validated_main_commit": "37a640817fe64e8e5c066df7f691b624c6ed5707",
+  "validated_main_ci_run": null,
+  "current_source_version_tag_published": false,
+  "validated_stage4_head": "94ae50548f105bea7e79b40a28f7f5ae3704056d",
+  "validated_stage4_tree": "539d93abc8a6ce833f20d382797730bf3f09e47d",
+  "validated_stage4_ci_workflows": 14,
+  "validated_stage4_target_gate": true
 }
