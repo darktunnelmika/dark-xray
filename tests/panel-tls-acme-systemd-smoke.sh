@@ -120,8 +120,13 @@ curl -fL --retry 3 --retry-delay 1 \
 echo "$PEBBLE_ARCHIVE_SHA256  /tmp/dark-pebble.tar.gz" | sha256sum -c -
 mkdir -p "$PEBBLE_BIN_DIR"
 tar -xzf /tmp/dark-pebble.tar.gz -C "$PEBBLE_BIN_DIR"
-PEBBLE_BIN="$(find "$PEBBLE_BIN_DIR" -type f -name pebble -perm -u+x -print -quit)"
-[[ -n "$PEBBLE_BIN" && -x "$PEBBLE_BIN" ]]
+# GitHub Actions artifacts do not preserve executable mode; the release archive
+# is built from those artifacts. Locate the checksum-pinned binary by exact name,
+# then restore only its expected executable mode on this disposable runner.
+PEBBLE_BIN="$(find "$PEBBLE_BIN_DIR" -type f -name pebble -print -quit)"
+[[ -n "$PEBBLE_BIN" && -f "$PEBBLE_BIN" ]]
+chmod 0755 "$PEBBLE_BIN"
+[[ -x "$PEBBLE_BIN" ]]
 
 PHASE=pebble-start
 cd "$PEBBLE_SRC"
