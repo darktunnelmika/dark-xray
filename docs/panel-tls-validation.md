@@ -2,8 +2,9 @@
 
 ## محدودهٔ این اصلاح
 
-این تغییر بخشی از مرحلهٔ سوم است، نه بسته‌شدن آن یا مجوز انتشار.
-مبنای پچ `f051624d7bf324d5a7c64a4cdf7f61ddaf60d2d6` است. در این گام
+این سند محدودهٔ مرحلهٔ سوم را ثبت می‌کند. پذیرش ایزولهٔ گواهی با کامیت‌های
+`ae5bde4` تا `a670729` کامل شده است؛ این به معنی مجوز انتشار یا پذیرش شبکهٔ
+ارائه‌دهنده نیست. مبنای اولیهٔ پچ `f051624d7bf324d5a7c64a4cdf7f61ddaf60d2d6` بود. در این گام
 کد `tools/domain.py` و آزمون‌هایش تغییر می‌کنند؛ Agent، Xray، DNS عمومی،
 قواعد محدودیت مشتری، نصب‌کننده و شمارهٔ نسخه تغییر نمی‌کنند.
 
@@ -30,20 +31,36 @@ DARK XRAY/standalone باشد و برای تنظیم HTTPS امن، HSTS مثب�
 
 ## مرز آزمون
 
-آزمون جدید `tests/test_domain_tls_validation.py` در runner موجود اضافه شده است.
+آزمون واحد `tests/test_domain_tls_validation.py` در runner موجود اجرا می‌شود.
 CA خصوصی فقط به context همان آزمون افزوده می‌شود؛ تأیید نام و زنجیره خاموش نیست.
 آزمون ادغام، خودِ برنامهٔ DARK/FastAPI/Uvicorn و SQLite موقت را روی loopback
-اجرا می‌کند. restart سرویس توسط یک شبیه‌ساز کنترل‌شده به stop/start همان
-برنامهٔ محلی تبدیل می‌شود. chown در پوشهٔ موقت شبیه‌سازی شده؛ فایل‌نویسی،
-TLS و HTTP واقعی‌اند. Xray واقعی، systemd و Certbot فراخوانی نشده‌اند.
-آزمون‌های failure اولیه و نهایی جای پذیرش CI کامیت منتشرشده را نمی‌گیرند.
+اجرا می‌کند. در این لایه restart سرویس شبیه‌سازی می‌شود، اما فایل‌نویسی،
+TLS و HTTP واقعی‌اند.
+
+پذیرش جداگانهٔ `tests/panel-tls-acme-systemd-smoke.sh` روی Ubuntu دورریختنی
+**Certbot بستهٔ سیستم و systemd واقعی** را اجرا می‌کند. DARK از مسیر واقعی
+`setup.sh` نصب می‌شود؛ Certbot از یک Pebble v2.10.1 پین‌شده به‌عنوان CA
+آزمایشی گواهی می‌گیرد و `certbot renew --force-renewal` واقعاً اجرا می‌شود.
+deploy hook با تغییر PID سرویس مشاهده می‌شود و پس از صدور و renewal، HTTPS،
+گواهی جدید، HSTS و ویژگی‌های `Secure`، `HttpOnly`، `SameSite=Strict`
+و Path کوکی ورود بررسی می‌شوند. این runner پس از آزمون پاک می‌شود و از دادهٔ
+مشتری استفاده نمی‌کند.
+
+Pebble عمداً با حالت `always-valid` اجرا می‌شود؛ بنابراین این پذیرش **اثبات
+Let’s Encrypt عمومی، DNS عمومی، دسترسی WAN یا اعتبارسنجی خارجی HTTP-01 نیست**.
+این موارد در مرحلهٔ پذیرش VPS مستقل باقی می‌مانند و با موفقیت CI جایگزین
+نمی‌شوند.
 
 ثبت منبع تمدید `tls-source.json` و deploy hook اکنون به‌صورت یک واحد rollback-aware انجام می‌شود. پیش از نوشتن، فایل‌های قبلی snapshot می‌شوند؛ symlink یا فایل غیرعادی برای metadata پذیرفته نمی‌شود. اگر نوشتن source یا hook شکست بخورد، هر دو به وضعیت قبلی برمی‌گردند. اگر این شکست پس از فعال‌شدن TLS رخ دهد، runtime، Guard و زوج گواهی قبلی نیز بازیابی و listener قبلی بررسی می‌شود؛ شکست بازیابی CRITICAL است. وضعیت Guard مورد استفاده برای rollback از قبلِ فعال‌سازی گرفته می‌شود، نه بعد از آن.
 
-موارد باقی‌مانده: صدور/تمدید واقعی Certbot و systemd روی محیط مجاز؛ بررسی
-Secure Cookie/مسیر UI؛ DNS و شبکهٔ VPS؛ پذیرش بستهٔ نهایی. این گام atomicity
-در قطع برق/قتل فرایند، هماهنگی چند نویسندهٔ مستقل فایل TLS، وضعیت ابطال OCSP/CRL
-یا احیای دسترسی با گواهی قبلیِ از قبل منقضی را تضمین نمی‌کند.
+**وضعیت مرحلهٔ سوم:** در محدودهٔ ایزوله بسته است؛ صدور، renewal، deploy hook،
+systemd، HTTPS و Secure Cookie آزمایش شده‌اند. کار باقی‌ماندهٔ گواهی در سطح
+ارائه‌دهنده شامل DNS عمومی، CA عمومی/Let’s Encrypt و HTTP-01 از بیرون است و
+به مرحلهٔ VPS مستقل منتقل می‌شود. پذیرش بستهٔ نهایی نیز مرحلهٔ انتشار است.
+
+این پذیرش atomicity در قطع برق/قتل فرایند، هماهنگی چند نویسندهٔ مستقل فایل TLS،
+وضعیت ابطال OCSP/CRL یا احیای دسترسی با گواهی قبلیِ از قبل منقضی را تضمین
+نمی‌کند.
 
 ## English implementation boundary
 
@@ -55,11 +72,16 @@ response. A service-active flag alone is insufficient. Invalid renewal material
 is rejected before changing active files or restarting. Error rollback verifies
 the prior local listener rather than merely reporting that files were restored.
 
-Existing issuance and Certbot deploy-hook behavior remains; public ACME issuance,
-external DNS, real systemd and renewal metadata transactionality are not claimed
-validated by the local test harness. Default OpenSSL trust validation is not an
-OCSP/CRL revocation-status guarantee. Trust files belonging to the OS are not
-modified. No real key, certificate or customer database is included in evidence.
+The local unit harness remains separate from host acceptance. A disposable
+Ubuntu workflow additionally runs packaged Certbot and real systemd against a
+pinned Pebble test CA, verifies issuance, forced renewal, deploy-hook restart,
+HTTPS/HSTS and secure login-cookie attributes, then removes its disposable
+state. Pebble challenge validation is intentionally bypassed in test mode, so
+public ACME/Let's Encrypt, external DNS/WAN and external HTTP-01 remain provider
+VPS acceptance items. Default OpenSSL trust validation is not an OCSP/CRL
+revocation-status guarantee. The workflow temporarily adds only its disposable
+test root to the disposable runner trust store; product code does not modify OS
+trust. No customer database or production key/certificate is evidence.
 
 Run selected tests from the repository root:
 
