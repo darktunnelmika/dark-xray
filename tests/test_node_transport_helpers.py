@@ -4,6 +4,7 @@ import json
 from urllib.parse import urlencode
 
 import pytest
+import test_node_real_transports as transports
 from test_node_real_transports import decode_link, outbound_from_link, CASES
 
 
@@ -145,3 +146,12 @@ def test_target_shutdown_closes_a_stalled_handshake(tls_material):
         except ConnectionResetError: pass
     finally:
         if raw is not None: raw.close()
+
+
+def test_unique_fixture_ports_do_not_reuse_an_unbound_candidate(monkeypatch):
+    values=iter([25001,25001,25002])
+    monkeypatch.setattr(transports,'free_port',lambda:next(values))
+    used=set()
+    assert transports.unique_free_port(used)==25001
+    assert transports.unique_free_port(used)==25002
+    assert used=={25001,25002}

@@ -71,6 +71,16 @@ CASES = [
 ]
 
 
+def unique_free_port(used:set[int])->int:
+    """Keep fixture ports distinct before any remote Xray has bound them."""
+    for _ in range(64):
+        port=free_port()
+        if port not in used:
+            used.add(port)
+            return port
+    raise AssertionError('Could not allocate a distinct fixture port')
+
+
 def b64decode(raw):
     return base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4))
 
@@ -271,8 +281,9 @@ def transport_fleet(request,tmp_path,monkeypatch,tls_material,real_binary):
         monkeypatch.setattr(nodes_module,'resolve_origin',resolve)
         root=tmp_path/'hub';root.mkdir(mode=0o700)
         store=Store(root/'dark.sqlite3');stack.callback(store.close)
+        used_ports=set()
         cfg=Config(core_autostart=False,test_engine=False,xray_binary=str(real_binary.path),
-                   xray_assets=str(real_binary.path.parent),xray_api_port=free_port())
+                   xray_assets=str(real_binary.path.parent),xray_api_port=unique_free_port(used_ports))
         engine=CoreEngine(cfg,store,root/'runtime');stack.callback(engine.close)
         manager=Manager(store,engine);stack.callback(manager.close)
         auth=Auth(store,root/'secret.key');auth.bootstrap('dark',PASSWORD)
@@ -285,7 +296,7 @@ def transport_fleet(request,tmp_path,monkeypatch,tls_material,real_binary):
         http.headers['X-Dark-CSRF']=api('/api/auth/login',{'username':'dark','password':PASSWORD})['csrf']
         ids=[];hosts=[]
         for i,(node,mat) in enumerate(zip(agents,materials,strict=True),1):
-            node.data_port=free_port()
+            node.data_port=unique_free_port(used_ports)
             settings={'decryption':'none'} if case.protocol=='vless' else {}
             if case.protocol=='shadowsocks':settings={'method':'aes-128-gcm','network':'tcp'}
             # Both REALITY listeners may borrow this single local TLS handshake target.
