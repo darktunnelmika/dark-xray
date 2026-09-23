@@ -438,8 +438,15 @@ def main()->None:
                        production_timeout=a.production_timeout,min_nodes=a.min_nodes,node_timeout=a.node_timeout,
                        node_watch_seconds=a.node_watch_seconds,expected_outages=a.expect_outage,
                        expected_sources=a.expect_source_ip,source_ip_max_age=a.source_ip_max_age)
-    public_renewal=public_renewal_rehearsal(a.config,a.rehearse_public_renewal,a.allow_service_restart,a.renewal_timeout)
-    load=load_acceptance(a.data,a.run_load_acceptance,a.load_timeout)
+    if base['passed']:
+        public_renewal=public_renewal_rehearsal(a.config,a.rehearse_public_renewal,a.allow_service_restart,a.renewal_timeout)
+        load=load_acceptance(a.data,a.run_load_acceptance,a.load_timeout)
+    else:
+        public_renewal={'passed':not a.rehearse_public_renewal,'skipped':True,'requested':a.rehearse_public_renewal,
+                        'performed':False,'renewal_rehearsed':False,'detail':'base gate failed; active renewal not started',
+                        'production_certificate_replaced':False}
+        load={'passed':not a.run_load_acceptance,'skipped':True,'requested':a.run_load_acceptance,
+              'runs_required':3,'runs_completed':0,'detail':'base gate failed; load acceptance not started'}
     active_passed=bool(public_renewal.get('passed') is True and load.get('passed') is True)
     reboot={'ok':False,'required':a.phase=='post-reboot','detail':'reboot proof not requested in single phase'}
     passed=bool(base['passed'] and active_passed)
