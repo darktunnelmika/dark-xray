@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -121,7 +122,7 @@ def test_full_hub_backup_restores_node_state_secret_and_inbound_tls(tmp_path):
         'certificateFile':str(cert),'keyFile':str(key)
     }]}}
     import sqlite3
-    with sqlite3.connect(db) as con:
+    with contextlib.closing(sqlite3.connect(db)) as con, con:
         con.executescript('''
         CREATE TABLE clients(id TEXT PRIMARY KEY);
         CREATE TABLE owners(id TEXT PRIMARY KEY);
@@ -141,7 +142,7 @@ def test_full_hub_backup_restores_node_state_secret_and_inbound_tls(tmp_path):
     assert manifest['schema']==2 and len(manifest['external_files'])==2
     restored_dir=tmp_path/'restored'
     restore_backup(archive,restored_dir,PASS)
-    with sqlite3.connect(restored_dir/'data/dark.sqlite3') as con:
+    with contextlib.closing(sqlite3.connect(restored_dir/'data/dark.sqlite3')) as con, con:
         body=json.loads(con.execute('SELECT body FROM core_inbounds WHERE id=1').fetchone()[0])
         row=con.execute("SELECT revision,applied_revision FROM remote_node_desired_state WHERE node_id='n1'").fetchone()
     tls=body['streamSettings']['tlsSettings']['certificates'][0]

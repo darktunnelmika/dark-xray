@@ -39,6 +39,15 @@ Current major workspaces include:
 - **Backup / Restore / Doctor** are Hub-owned. A Full Encrypted Backup can be created from Web and includes SQLite, `secret.key`, panel TLS, managed Inbound TLS, Node registry and Desired State. Nodes require no independent management backup.
 - **Cyber UI** with English/LTR default, Persian/RTL switching, responsive layout and refresh/focus stability.
 
+## First node release: explicit limits
+
+> [!IMPORTANT]
+> During management disconnection, a node whose customer path still works continues with its last applied configuration. An earlier direct URI may remain usable after Hub quota exhaustion, causing additional usage. Hard offline cutoff is not implemented.
+>
+> HWID limits **self-declared subscription identifiers**, not authenticated physical devices; copied-configuration prevention is not guaranteed. IP limits are not exact people/device counts, and original sources behind tunnels require separate verification.
+>
+> [Node v1 scope and decisions](docs/node-v1-scope.md#english) defines the selected 16-case transport coverage, load risk and outstanding certificate/VPS/release gates. These decisions do not authorize production updates or establish coverage of every Xray option.
+
 ## Online installation
 
 ### Main Panel / Hub
@@ -119,7 +128,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for the exact evidence boundaries.
 - Representatives never receive sensitive finance mutation scopes; legacy role records remain sanitized only for migration compatibility.
 - Node origins must be public HTTPS; redirects and environment proxies are not followed for node control requests.
 - IP Guard enforcement should only be enabled after verifying that Xray's observed client source corresponds to the packet source seen by nftables on that same host.
-- The global multi-node guard aggregates only source IPs reported as directly verified by each node and device SHA-256 digests; raw HWIDs are never transferred. A global violation disables the Central credential and its mirrors. nftables enforcement remains host-local and is not presented as a distributed firewall.
+- The global multi-node guard aggregates trusted source observations and evaluates declared HWIDs registered at the Hub. Lightweight Agents do not authenticate a physical device on every VLESS connection. A customer restriction takes effect when applied on a node; an unreachable node may remain pending. nftables remains host-local; see the [v1 boundaries](docs/node-v1-scope.md#english).
 
 ## One-time bootstrap for RC6 and older installs
 

@@ -1,0 +1,59 @@
+name: External public panel acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: Public DARK panel domain without protocol
+        required: true
+        type: string
+      port:
+        description: Public HTTPS panel port
+        required: true
+        default: '2087'
+        type: string
+      expected_ipv4:
+        description: Exact public IPv4 expected from independent DNS resolvers
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  public-panel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout selected candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install external DNS tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -q dnsutils >/dev/null
+      - name: Verify independent public DNS answers
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          EXPECTED_IPV4: ${{ inputs.expected_ipv4 }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import ipaddress,os; assert ipaddress.ip_address(os.environ["EXPECTED_IPV4"]).version==4 and ipaddress.ip_address(os.environ["EXPECTED_IPV4"]).is_global'
+          for resolver in 1.1.1.1 8.8.8.8; do
+            mapfile -t answers < <(dig +short "@$resolver" A "$DOMAIN" | sort -u)
+            printf '%s -> %s\n' "$resolver" "${answers[*]}"
+            test "${#answers[@]}" -eq 1
+            test "${answers[0]}" = "$EXPECTED_IPV4"
+          done
+      - name: Probe public TLS and DARK health without insecure fallback
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          PORT: ${{ inputs.port }}
+          EXPECTED_IPV4: ${{ inputs.expected_ipv4 }}
+        run: |
+          mkdir -p qa
+          python tools/public-panel-gate.py --domain "$DOMAIN" --port "$PORT"             --expected-ip "$EXPECTED_IPV4" --require-exact-dns --report qa/public-panel-gate.json --json-only
+      - name: Upload bounded public acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-public-panel-gate
+          path: qa/public-panel-gate.json
+          if-no-files-found: error
+          retention-days: 14

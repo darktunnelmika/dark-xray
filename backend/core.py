@@ -830,7 +830,11 @@ class CoreEngine:
             else:
                 # Avoid attaching to an unrelated process on the control API port.
                 s=socket.socket()
-                try:s.bind(('127.0.0.1',self.config.xray_api_port))
+                try:
+                    # A closed API connection may retain TIME_WAIT after a crash.
+                    # Reuse that address, not a live listener; never use SO_REUSEPORT.
+                    s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                    s.bind(('127.0.0.1',self.config.xray_api_port))
                 except OSError:raise CoreError('Core API port already occupied by another process',status=409)
                 finally:s.close()
             if old:self._atomic(self.runtime/'previous.json',old)

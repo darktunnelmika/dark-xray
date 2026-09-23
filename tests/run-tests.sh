@@ -13,9 +13,15 @@ python -m pytest tests/test_settings_v2.py -q --junitxml=qa/junit/settings-v2.xm
 python -m pytest tests/test_runtime_apply.py -q --junitxml=qa/junit/runtime-apply.xml
 python -m pytest tests/test_runtime_path_safety.py -q --junitxml=qa/junit/runtime-path-safety.xml
 python -m pytest tests/test_live_check.py -q --junitxml=qa/junit/live-check.xml
+python -m pytest tests/test_fetch_core.py -q --junitxml=qa/junit/fetch-core.xml
 python -m pytest tests/test_production_gate.py -q --junitxml=qa/junit/production-gate.xml
 python -m pytest tests/test_target_vps_gate.py -q --junitxml=qa/junit/target-vps-gate.xml
+python -m pytest tests/test_public_panel_gate.py -q --junitxml=qa/junit/public-panel-gate.xml
+python -m pytest tests/test_node_wan_gate.py tests/test_node_wan_readiness.py -q --junitxml=qa/junit/node-wan-readiness.xml
+python -m pytest tests/test_target_node_budget.py -q --junitxml=qa/junit/target-node-budget.xml
+python -m pytest tests/test_node_wan_https.py -q --junitxml=qa/junit/node-wan-https.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
+python -m pytest tests/test_domain_tls_validation.py -q --junitxml=qa/junit/domain-tls-validation.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
 python -m pytest tests/test_client_presence.py -q --junitxml=qa/junit/client-presence.xml
 python -m pytest tests/test_bulk_batching.py -q --junitxml=qa/junit/bulk-batching.xml
@@ -23,13 +29,33 @@ python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscripti
 python -m pytest tests/test_subscription_path.py -q --junitxml=qa/junit/subscription-path.xml
 python -m pytest tests/test_hosts_v3.py -q --junitxml=qa/junit/hosts-v3.xml
 python -m pytest tests/test_accounting_stability.py -q --junitxml=qa/junit/accounting-stability.xml
+python -m pytest tests/test_meter_write_amplification.py -q --junitxml=qa/junit/meter-write-amplification.xml
 python -m pytest tests/test_finance_hardening.py -q --junitxml=qa/junit/finance-hardening.xml
 python -m pytest tests/test_destructive_recovery.py -q --junitxml=qa/junit/destructive-recovery.xml
 python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-consistency.xml
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
 python -m pytest tests/test_ops_v2.py -q --junitxml=qa/junit/ops-v2.xml
+python -m pytest tests/test_node_pairing.py tests/test_pair_loss_regression.py -q --junitxml=qa/junit/node-pairing.xml
+python -m pytest tests/test_node_pairing_cancellation.py -q --junitxml=qa/junit/node-pairing-cancellation.xml
+python -m pytest tests/test_node_pairing_cancellation_guards.py -q --junitxml=qa/junit/node-pairing-cancellation-guards.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
+python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/preupdate-node-hardening.xml
+python -m pytest tests/test_node_guard_recovery.py -q --junitxml=qa/junit/node-guard-recovery.xml
+python -m pytest tests/test_hub_node_control_store.py -q --junitxml=qa/junit/hub-node-control-store.xml
+python -m pytest tests/test_node_control_lifecycle.py -q --junitxml=qa/junit/node-control-lifecycle.xml
+python -m pytest tests/test_node_update_http_timeout.py -q --junitxml=qa/junit/node-update-http-timeout.xml
+python -m pytest tests/test_core_api_time_wait.py -q --junitxml=qa/junit/core-api-time-wait.xml
+python -m pytest tests/test_node_ordered_control.py -q --junitxml=qa/junit/node-ordered-control.xml
+python -m pytest tests/test_hub_node_control_live.py -q --junitxml=qa/junit/hub-node-control-live.xml
+python -m pytest tests/test_node_installations.py -q --junitxml=qa/junit/node-installations.xml
+python -m pytest tests/test_node_replacement_prepare.py -q --junitxml=qa/junit/node-replacement-prepare.xml
+python -m pytest tests/test_node_replacement_resolution.py -q --junitxml=qa/junit/node-replacement-resolution.xml
+python -m pytest tests/test_node_replacement_deployment.py -q --junitxml=qa/junit/node-replacement-deployment.xml
+python -m pytest tests/test_node_replacement_current.py -q --junitxml=qa/junit/replacement-current.xml
+python -m pytest tests/test_node_recovery.py -q --junitxml=qa/junit/node-recovery.xml
+python -m pytest tests/test_node_replacement_activation.py -q --junitxml=qa/junit/node-replacement-activation.xml
+python -m pytest tests/test_node_token_handoff.py -q --junitxml=qa/junit/node-token-handoff.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
 python -m pytest tests/test_menu_owner_selection.py -q --junitxml=qa/junit/menu-owner-selection.xml
@@ -68,3 +94,17 @@ node --test tests/overview-v4.test.cjs
 node --test tests/i18n-cpu-branding.test.cjs
 node --test tests/xray-guided-v3.test.cjs
 node --test tests/settings-operations.test.cjs
+node --test tests/node-control-live.test.cjs
+node --test tests/render-generation.test.cjs
+node --test tests/subscription-policy-v3.test.cjs
+node --test tests/sync-v4.test.cjs
+
+node --test tests/node-pairing-ui.test.cjs
+
+python -m pytest tests/test_node_credentials.py -q --junitxml=qa/junit/node-credentials.xml
+
+node --test tests/node-credentials-ui.test.cjs
+
+python -m pytest tests/test_credential_loss_regression.py -q --junitxml=qa/junit/credential-loss.xml
+
+python -m pytest tests/test_node_credential_concurrency.py -q --junitxml=qa/junit/node-credential-concurrency.xml

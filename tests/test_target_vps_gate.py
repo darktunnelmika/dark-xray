@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -44,11 +45,62 @@ def test_source_expectation_is_exact_commit(tmp_path):
     assert bad['ok'] is False
 
 
-def test_tls_renewal_evidence_does_not_overclaim_rehearsal():
+def _renewal_fixture(gate,tmp_path,monkeypatch,server=None):
+    live=tmp_path/'letsencrypt'/'live';renewal=tmp_path/'letsencrypt'/'renewal'
+    lineage=live/'dark-xray-panel.example.test';lineage.mkdir(parents=True);renewal.mkdir(parents=True)
+    conf=renewal/(lineage.name+'.conf')
+    conf.write_text('[renewalparams]\nserver = '+(server or gate.LE_PRODUCTION_DIRECTORY)+'\n')
+    gate.LE_LIVE=live;gate.LE_RENEWAL=renewal
+    gate.TLS_SOURCE=tmp_path/'tls-source.json';gate.TLS_HOOK=tmp_path/'dark-xray-panel'
+    gate.TLS_SOURCE.write_text(json.dumps({'lineage':str(lineage),'domain':'panel.example.test'}))
+    gate.TLS_HOOK.write_text('#!/bin/sh\nexit 0\n');gate.TLS_HOOK.chmod(0o750)
+    cert=tmp_path/'cert.pem';key=tmp_path/'key.pem';cert.write_bytes(b'cert-a');key.write_bytes(b'key-a')
+    cfg=SimpleNamespace(public_origin='https://panel.example.test:2087',
+        tls_certificate=str(cert),tls_private_key=str(key))
+    monkeypatch.setattr(gate.Config,'load',lambda path:cfg)
+    monkeypatch.setattr(gate,'_systemctl_check',lambda *a:True)
+    monkeypatch.setattr(gate.shutil,'which',lambda name:'/usr/bin/certbot')
+    return cfg,cert,key,lineage
+
+
+def test_renewal_rehearsal_is_explicit_real_dry_run_and_keeps_active_pair(tmp_path,monkeypatch):
+    gate=load_gate();cfg,cert,key,lineage=_renewal_fixture(gate,tmp_path,monkeypatch)
+    calls=[]
+    def child(args,timeout):
+        calls.append((args,timeout));return SimpleNamespace(returncode=0,stdout='ok',stderr='')
+    monkeypatch.setattr(gate,'_child',child)
+    result=gate.renewal_evidence(tmp_path/'config.json',rehearse=True,require_letsencrypt=True,timeout=90)
+    assert result['ok'] is True and result['renewal_rehearsed'] is True
+    assert result['letsencrypt_production'] is True
+    args,timeout=calls[0]
+    assert args==['/usr/bin/certbot','renew','--dry-run','--cert-name',lineage.name,
+                  '--no-random-sleep-on-renew','--no-directory-hooks']
+    assert timeout==90 and result['rehearsal']['active_pair_unchanged'] is True
+
+
+def test_renewal_rehearsal_rejects_wrong_acme_server(tmp_path,monkeypatch):
+    gate=load_gate();_renewal_fixture(gate,tmp_path,monkeypatch,server='https://acme.invalid/directory')
+    monkeypatch.setattr(gate,'_child',lambda *a,**k:SimpleNamespace(returncode=0,stdout='',stderr=''))
+    result=gate.renewal_evidence(tmp_path/'config.json',rehearse=False,require_letsencrypt=True)
+    assert result['ok'] is False and result['letsencrypt_production'] is False
+
+
+def test_renewal_dry_run_cannot_change_active_pair_silently(tmp_path,monkeypatch):
+    gate=load_gate();cfg,cert,key,_=_renewal_fixture(gate,tmp_path,monkeypatch)
+    def child(args,timeout):
+        cert.write_bytes(b'changed-by-bad-dry-run')
+        return SimpleNamespace(returncode=0,stdout='',stderr='')
+    monkeypatch.setattr(gate,'_child',child)
+    result=gate.renewal_evidence(tmp_path/'config.json',rehearse=True,require_letsencrypt=True)
+    assert result['ok'] is False and result['renewal_rehearsed'] is False
+    assert result['rehearsal']['active_pair_unchanged'] is False
+
+
+def test_tls_renewal_gate_keeps_external_actions_opt_in():
     gate=load_gate()
     source=(ROOT/'tools/target-vps-gate.py').read_text(encoding='utf-8')
-    assert "'renewal_rehearsed':False" in source
-    assert "'certificate_renewal_rehearsed':False" in source
+    assert "--rehearse-renewal" in source and "--require-letsencrypt" in source
+    assert "'certificate_issuance_performed':False" in source
     assert "'reboot_injected_by_gate':False" in source
     assert "'node_outage_injected_by_gate':False" in source
 

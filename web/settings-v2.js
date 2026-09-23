@@ -33,8 +33,22 @@ function network(d){const r=d.runtime,s=d.runtimeStatus;return `<form class="sv2
 function tls(d){const r=d.runtime,s=d.runtimeStatus,a=s.actual||{};return `<form class="sv2-grid" data-sv2-form="runtime-tls">${card(L('Panel exposure mode','حالت دسترسی پنل'),L('SSH mode stays loopback-only. Domain mode requires real TLS.','حالت SSH فقط روی لوپ‌بک می‌ماند؛ حالت دامنه TLS واقعی می‌خواهد.'),`<label class="sv2-field sv2-span-2"><span>${L('Access mode','حالت دسترسی')}</span>${segment('access_mode',r.access_mode||'ssh',[['ssh',L('SSH Tunnel','تونل SSH')],['domain_tls',L('Domain + HTTPS/TLS','دامنه + HTTPS/TLS')]])}</label><div class="sv2-form-grid" data-sv2-domain-fields ${r.access_mode==='domain_tls'?'':'hidden'}>${field(L('Panel domain','دامنه پنل'),'domain',r.domain||'','text','', 'dir="ltr" placeholder="panel.example.com"')}${field(L('ACME email','ایمیل ACME'),'acme_email',r.acme_email||'','email','', 'dir="ltr" placeholder="admin@example.com"')}</div>`)}${card(L('Current TLS state','وضعیت فعلی TLS'),'',`<div class="sv2-kv"><div><span>${L('Origin','مبدأ')}</span><b class="mono">${esc(a.public_origin||'—')}</b></div><div><span>TLS</span><b>${a.tls_enabled?L('Enabled','فعال'):L('Disabled','غیرفعال')}</b></div><div><span>${L('Certificate','گواهی')}</span><b class="mono">${esc(a.tls_certificate||'—')}</b></div><div><span>${L('Secure cookie','کوکی امن')}</span><b>${a.secure_cookie?L('Yes','بله'):L('No','خیر')}</b></div></div>`)}${card(L('Apply boundary','مرز اعمال'),L('Root-owned listener changes are intentionally not performed by the web process.','تغییرات Listener که متعلق به root هستند عمداً توسط Web process انجام نمی‌شوند.'),diff(s)+`<div class="notice warning">${L('After staging, run the command below from SSH. Domain mode will use Certbot and may restart DARK/Xray.','بعد از ذخیره، دستور زیر را در SSH اجرا کن. حالت دامنه از Certbot استفاده می‌کند و ممکن است DARK/Xray ری‌استارت شود.')}</div><div class="sv2-command"><code>${esc(s.apply_command||'sudo darkxray settings-apply')}</code></div>`,'sv2-span-2')}${saveButton(L('Stage domain / TLS changes','ذخیره تغییرات دامنه / TLS'))}</form>`;}
 function subFormatCard(name,desc,badge=''){return `<div class="sv3-format"><div><b>${esc(name)}</b>${badge?`<span>${esc(badge)}</span>`:''}</div><small>${esc(desc)}</small></div>`;}
 function subStat(label,value,help=''){return `<div class="sv3-substat"><span>${esc(label)}</span><b>${esc(value)}</b>${help?`<small>${esc(help)}</small>`:''}</div>`;}
+function subscriptionObservedPolicy(st={}){
+ const unavailable=L('Unavailable / unverified','نامشخص / تأییدنشده');
+ const traffic=!st.error&&st.traffic_scope==='local_plus_remote_nodes'
+   ?L('global local + node traffic','ترافیک سراسری محلی + نود'):unavailable;
+ const formats={base64:'Base64',raw:'Raw',clash:'Clash / Mihomo',json:'DARK JSON'};
+ const rules=st.auto_detect_rules;
+ const valid=!st.error&&Array.isArray(rules)&&rules.length<=32&&rules.every(r=>
+   r&&typeof r.contains==='string'&&r.contains.trim().length>0&&r.contains.length<=128&&
+   typeof r.format==='string'&&Object.hasOwn(formats,r.format));
+ const detector=valid?(rules.length?rules.map(r=>`${r.contains} → ${formats[r.format]}`).join('; ')
+   :L('No automatic rules reported','قاعدهٔ تشخیص خودکاری گزارش نشده')):unavailable;
+ return {traffic,detector};
+}
 function subscription(d){
  const s=d.subscription,st=d.subscriptionStatus||{},dev=st.device_policy||{},actual=d.runtimeStatus?.actual||{};
+ const observed=subscriptionObservedPolicy(st);
  const base=st.base_url||((actual.public_origin||'')+(s.path||'/sub')+'/<token>');
  const resolver=s.auto_detect!==false
    ?L('No ?format: Clash/Mihomo User-Agent → Clash; everything else → default format.','بدون ?format: User-Agent کلش/میهومو → Clash؛ بقیه → فرمت پیش‌فرض.')
@@ -51,7 +65,8 @@ function subscription(d){
      ${field(L('Profile update interval (hours)','بازه آپدیت پروفایل (ساعت)'),'profile_update_interval_hours',s.profile_update_interval_hours||6,'number',L('Sent as profile-update-interval.','در سرآیند با نام فنی profile-update-interval ارسال می‌شود.'),'min="1" max="168" required')}
      <div class="sv2-span-2">${toggle(L('Auto detect Clash / Mihomo','تشخیص خودکار Clash / Mihomo'),'auto_detect',s.auto_detect!==false,L('Only Clash/Mihomo User-Agent detection exists; other apps use the default format unless ?format is specified.','فقط User-Agent کلش/میهومو تشخیص داده می‌شود؛ بقیه برنامه‌ها فرمت پیش‌فرض می‌گیرند مگر ?format صریح باشد.'))}</div>
    </div>
-   <div class="sv3-resolver"><span>${L('FORMAT RESOLUTION','انتخاب فرمت')}</span><b data-sub-resolver>${esc(resolver)}</b></div>`,'sv2-span-2')}
+   <div class="sv3-resolver"><span>${L('FORMAT RESOLUTION','انتخاب فرمت')}</span><b data-sub-resolver>${esc(resolver)}</b></div>
+   <div class="notice"><b>${L('Backend detection rules','قواعد تشخیص گزارش‌شده از سرور')}</b>: <span data-sub-observed-rules>${esc(observed.detector)}</span></div>`,'sv2-span-2')}
  ${card(L('Output formats','فرمت‌های خروجی'),L('These are real generators in DARK; explicit ?format overrides auto-detection.','این‌ها مولدهای واقعی DARK هستند و پارامتر فنی ?format بر تشخیص خودکار اولویت دارد.'),`
    <div class="sv3-formats">
     ${subFormatCard('Base64',L('Base64-encoded newline-separated share links.','لینک‌های Share خط‌به‌خط با Base64.'),s.default_format==='base64'?L('DEFAULT','پیش‌فرض'):'')}
@@ -68,7 +83,7 @@ function subscription(d){
    <div class="sv3-header-list">
     <code>profile-title: ${esc(s.profile_title||'DARK XRAY')}</code>
     <code>profile-update-interval: ${esc(s.profile_update_interval_hours||6)}</code>
-    <code>subscription-userinfo: ${L('global local + node traffic','ترافیک سراسری محلی + نود')}</code>
+    <code>subscription-userinfo: ${esc(observed.traffic)}</code>
     ${s.support_url?`<code>support-url: ${esc(s.support_url)}</code>`:''}
     ${s.profile_url?`<code>profile-web-page-url: ${esc(s.profile_url)}</code>`:''}
    </div>`)}

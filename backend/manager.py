@@ -507,10 +507,10 @@ class Manager:
         with self.store.transaction() as db:
             user=db.execute('SELECT * FROM clients WHERE id=?',(email,)).fetchone()
             if not user:return
-            owner=db.execute('SELECT * FROM owners WHERE id=?',(user['owner'],)).fetchone()
             seq=meta['seq']+1
             if du or dd:
                 if du+dd>MAX_INT:raise PolicyError('Counter overflow')
+                owner=db.execute('SELECT * FROM owners WHERE id=?',(user['owner'],)).fetchone()
                 db.execute('INSERT INTO traffic_ledger VALUES(?,?,?,?,?,?,?)',
                     ('engine:'+hashlib.sha256(email.encode()).hexdigest()[:20]+':'+str(seq),user['owner'],email,owner['period'],du,dd,time.time()))
             remote=0
@@ -519,8 +519,12 @@ class Manager:
             total=up+down+remote
             if total>MAX_INT:raise PolicyError('Global client traffic counter overflow')
             # The policy meter is the current local counter plus all current remote-node counters.
-            db.execute('UPDATE clients SET used_bytes=? WHERE id=?',(total,email))
-            db.execute('UPDATE managed_clients SET last_up=?,last_down=?,initialized=1,seq=? WHERE email=?',(up,down,seq,email))
+            # Read remote counters on EVERY sample, even with unchanged local bytes.
+            # Stable observations must not manufacture WAL writes or ledger generations.
+            if total!=int(user['used_bytes']):
+                db.execute('UPDATE clients SET used_bytes=? WHERE id=?',(total,email))
+            if up!=meta['last_up'] or down!=meta['last_down'] or not meta['initialized']:
+                db.execute('UPDATE managed_clients SET last_up=?,last_down=?,initialized=1,seq=? WHERE email=?',(up,down,seq,email))
         if decreased:self.audit(SYSTEM,user['owner'],'counter.reset_observed',email,'Ledger preserved; traffic lost between polling observations cannot be reconstructed')
 
     def _apply(self,meta: dict,records: dict[str,dict]):
@@ -706,7 +710,8 @@ class Manager:
                                 payload=CoreEngine.writable(rec);payload['totalGB']=int(policy_row['quota_bytes'])
                                 self.engine.update(meta['email'],payload);rec['totalGB']=int(policy_row['quota_bytes'])
                     with self.store.transaction() as db:
-                        db.execute('UPDATE clients SET expires_at=? WHERE id=?',(observed_expiry,meta['email']))
+                        db.execute('UPDATE clients SET expires_at=? WHERE id=? AND expires_at IS NOT ?',
+                                   (observed_expiry,meta['email'],observed_expiry))
                     reasons=self.store.client_reasons(meta['email'])
                     # Preserve unexpected external disables. Never automatically
                     # resurrect a client whose enable flag changed outside DARK.
@@ -719,7 +724,8 @@ class Manager:
                         self.engine.update(meta['email'],payload)
                         rec['enable']=enabled
                     with self.store.transaction() as db:
-                        db.execute('UPDATE managed_clients SET expected_enable=? WHERE email=?',(int(bool(rec.get('enable'))),meta['email']))
+                        db.execute('UPDATE managed_clients SET expected_enable=? WHERE email=? AND expected_enable IS NOT ?',
+                                   (int(bool(rec.get('enable'))),meta['email'],int(bool(rec.get('enable')))))
                 self.engine.flush()
                 self.last_poll=time.time();self.last_error='' 
             except Exception as e:

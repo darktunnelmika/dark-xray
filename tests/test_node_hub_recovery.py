@@ -264,7 +264,7 @@ def update_fixture(tmp_path,monkeypatch):
     for root,label in ((app/'.venv','old-interpreter'),(tmp_path/'candidate-venv','new-interpreter')):
         (root/'bin').mkdir(parents=True)
         executable=root/'bin/python';executable.write_text(label);executable.chmod(0o755)
-    with sqlite3.connect(data/'node.sqlite3') as db:
+    with contextlib.closing(sqlite3.connect(data/'node.sqlite3')) as db, db:
         db.execute('CREATE TABLE retained(value TEXT)');db.execute("INSERT INTO retained VALUES('before-update')")
     source={'commit':'a'*40,'version':'0.9.0-rc7','ref':'old','role':'node-agent'}
     (data/'installed-source.json').write_text(json.dumps(source));(data/'installed-source.json').chmod(0o640)
@@ -305,7 +305,7 @@ def test_node_update_failed_health_restores_source_database_and_venv(tmp_path,mo
     updater,app,data,src,venv,transaction,calls=update_fixture(tmp_path,monkeypatch)
     def health(**kwargs):
         if kwargs.get('expected_version')=='0.9.0-rc8':
-            with sqlite3.connect(data/'node.sqlite3') as db:
+            with contextlib.closing(sqlite3.connect(data/'node.sqlite3')) as db, db:
                 db.execute("UPDATE retained SET value='new-generation'")
                 db.execute('CREATE TABLE injected_new_schema(value TEXT)')
             raise RuntimeError('injected post-start health failure')
@@ -315,7 +315,7 @@ def test_node_update_failed_health_restores_source_database_and_venv(tmp_path,mo
         updater.activate_candidate(src,venv,'b'*40,'0.9.0-rc8','b'*40,transaction)
     assert (app/'VERSION').read_text()=='0.9.0-rc7'
     assert (app/'.venv/bin/python').read_text()=='old-interpreter'
-    with sqlite3.connect(data/'node.sqlite3') as db:
+    with contextlib.closing(sqlite3.connect(data/'node.sqlite3')) as db, db:
         assert db.execute('SELECT value FROM retained').fetchone()[0]=='before-update'
         assert not db.execute("SELECT name FROM sqlite_master WHERE name='injected_new_schema'").fetchone()
         assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'

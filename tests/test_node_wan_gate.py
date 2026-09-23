@@ -17,19 +17,13 @@ def load_gate():
     return mod
 
 
-class HealthyRegistry:
-    def probe(self,node_id,timeout=8.0):
-        return {'latency_ms':11,'health':{'core':{'state':'running'}}}
+from test_node_wan_readiness import Registry
 
-    def _request(self,node_id,path,method='GET',body=None,timeout=8.0):
-        if path=='/node/api/mirrors/traffic':
-            return {'items':[{'sourceEmail':'alice','up':1,'down':2}]},12
-        if path=='/node/api/mirrors/security':
-            return {'sourceVerified':True,'items':[{'sourceEmail':'alice','ips':[],'devices':[]}]},13
-        raise AssertionError(path)
 
-    def remote_inbounds(self,node_id):
-        return {'latency_ms':14,'items':[{'id':1},{'id':2}]}
+class HealthyRegistry(Registry):
+    def __init__(self):
+        super().__init__()
+        self.remote = {'items': [{'id': 7}, {'id': 8}]}
 
 
 class BrokenRegistry(HealthyRegistry):
@@ -39,8 +33,8 @@ class BrokenRegistry(HealthyRegistry):
 
 def test_inspect_node_requires_real_agent_endpoints():
     gate=load_gate()
-    node={'id':'de1','name':'Germany','failover_enabled':1,'data_address':'de.example.com','priority':10}
-    result=gate.inspect_node(HealthyRegistry(),node,5)
+    registry=HealthyRegistry()
+    result=gate.inspect_node(registry,registry.list()[0],5)
     assert result['ok'] is True
     assert result['latency_ms']==11
     assert result['traffic_latency_ms']==12
@@ -54,10 +48,10 @@ def test_inspect_node_requires_real_agent_endpoints():
 
 def test_inspect_node_records_connection_failure_without_fake_success():
     gate=load_gate()
-    node={'id':'tr1','name':'Turkey','failover_enabled':1,'data_address':'tr.example.com','priority':20}
-    result=gate.inspect_node(BrokenRegistry(),node,5)
+    registry=BrokenRegistry()
+    result=gate.inspect_node(registry,registry.list()[0],5)
     assert result['ok'] is False
-    assert 'network down' in result['error']
+    assert result['error']=='node_observation_failed'  # remote exception text is never exported
     assert 'latency_ms' not in result
 
 
