@@ -1,5 +1,3 @@
-[Reading 97 lines from start (total: 97 lines, 0 remaining)]
-
 from fastapi.testclient import TestClient
 
 from auth import Auth
@@ -97,5 +95,3 @@ def test_bulk_adjust_uses_one_core_batch_transaction(tmp_path,monkeypatch):
         assert all(x.get('result',{}).get('client',{}).get('group')=='FAST' for x in r.json()['items'])
     finally:
         c.__exit__(None,None,None);manager.close();engine.close();store.close()
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]

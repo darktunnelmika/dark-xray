@@ -1,5 +1,3 @@
-[Reading 866 lines from start (total: 866 lines, 0 remaining)]
-
 """Persistent customer ownership and reconciliation for the local Xray runtime.
 
 Only clients explicitly created/adopted here are controlled. Unknown engine
@@ -866,5 +864,3 @@ class Manager:
     def close(self):
         self.stop.set()
         if self.thread:self.thread.join(timeout=35)
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
