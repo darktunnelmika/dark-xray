@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -84,6 +85,32 @@ def test_release_artifacts_are_reproducible_and_self_verifying(tmp_path,monkeypa
     assert verified["passed"] is True and verified["release_commit"]==candidate
     assert verified["verified_source_files"]>=20
 
+
+
+def test_embedded_installer_requires_confirmed_rollback_and_restores_identity(tmp_path,monkeypatch):
+    script=tmp_path/"release-install.py";script.write_text(release.RELEASE_INSTALLER)
+    spec=importlib.util.spec_from_file_location("embedded_release_installer",script)
+    installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer)
+
+    status=tmp_path/"status.json"
+    status.write_text(json.dumps({"state":"rolled_back","rollback_ok":True}))
+    assert installer._rollback_confirmed(status) is True
+    status.write_text(json.dumps({"state":"failed","rollback_ok":False}))
+    assert installer._rollback_confirmed(status) is False
+
+    data=tmp_path/"data";data.mkdir()
+    target=data/"installed-source.json"
+    monkeypatch.setattr(installer,"_identity_target",lambda:target)
+    monkeypatch.setattr(installer.os,"chown",lambda *args:None)
+    snapshot=(b'{"commit":"old"}\n',0o640,os.getuid(),os.getgid())
+    installer.restore_identity(snapshot)
+    assert target.read_bytes()==snapshot[0]
+    assert target.stat().st_mode&0o777==0o640
+    installer.restore_identity(None)
+    assert not target.exists()
+
+    assert 'runtime.parent.is_symlink() or not runtime.is_file()' in release.RELEASE_INSTALLER
+    assert 'not runtime.is_file() or runtime.is_symlink()' not in release.RELEASE_INSTALLER
 
 def test_dirty_tree_is_refused(tmp_path,monkeypatch):
     root,stage4=repo(tmp_path,monkeypatch);candidate=finish_release(root)

@@ -125,17 +125,57 @@ def verify_source(doc:dict)->int:
     return count
 
 
-def atomic_identity(doc:dict,ref:str)->None:
+def _identity_target()->Path:
     data=Path("/var/lib/dark-xray")
     if data.is_symlink() or not data.is_dir():
         raise ReleaseInstallError("installed DARK data directory is missing or unsafe")
+    target=data/"installed-source.json"
+    if target.exists() and (target.is_symlink() or not target.is_file()):
+        raise ReleaseInstallError("installed source identity path is unsafe")
+    return target
+
+
+def _atomic_identity_bytes(payload:bytes,mode:int,uid:int,gid:int)->None:
+    target=_identity_target();data=target.parent
+    fd,name=tempfile.mkstemp(prefix=".installed-source-",dir=data)
+    tmp=Path(name)
+    try:
+        with os.fdopen(fd,"wb") as f:
+            f.write(payload);f.flush();os.fsync(f.fileno())
+        os.chmod(tmp,mode);os.chown(tmp,uid,gid)
+        os.replace(tmp,target)
+        dfd=os.open(data,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(dfd)
+        finally:os.close(dfd)
+    finally:
+        try:tmp.unlink()
+        except FileNotFoundError:pass
+
+
+def identity_snapshot():
+    target=_identity_target()
+    if not target.exists():return None
+    st=target.stat()
+    if st.st_size>65536:
+        raise ReleaseInstallError("installed source identity is unexpectedly large")
+    return (target.read_bytes(),st.st_mode&0o777,st.st_uid,st.st_gid)
+
+
+def restore_identity(snapshot)->None:
+    target=_identity_target()
+    if snapshot is None:
+        try:target.unlink()
+        except FileNotFoundError:pass
+        return
+    payload,mode,uid,gid=snapshot
+    _atomic_identity_bytes(payload,mode,uid,gid)
+
+
+def atomic_identity(doc:dict,ref:str)->None:
     try:
         account=pwd.getpwnam("darkxray")
     except KeyError as ex:
         raise ReleaseInstallError("darkxray service account is missing after installation") from ex
-    target=data/"installed-source.json"
-    if target.exists() and target.is_symlink():
-        raise ReleaseInstallError("installed source identity path is unsafe")
     payload={
         "commit":doc["release_commit"],
         "version":doc["version"],
@@ -147,20 +187,16 @@ def atomic_identity(doc:dict,ref:str)->None:
             "source_sha256sums_sha256":doc["source_sha256sums_sha256"],
         },
     }
-    fd,name=tempfile.mkstemp(prefix=".installed-source-",dir=data)
-    tmp=Path(name)
+    encoded=(json.dumps(payload,indent=2,sort_keys=True)+"\n").encode()
+    _atomic_identity_bytes(encoded,0o640,0,account.pw_gid)
+
+
+def _rollback_confirmed(status:Path)->bool:
     try:
-        with os.fdopen(fd,"w",encoding="utf-8") as f:
-            json.dump(payload,f,indent=2,sort_keys=True)
-            f.write("\n");f.flush();os.fsync(f.fileno())
-        os.chmod(tmp,0o640);os.chown(tmp,0,account.pw_gid)
-        os.replace(tmp,target)
-        dfd=os.open(data,os.O_RDONLY|os.O_DIRECTORY)
-        try:os.fsync(dfd)
-        finally:os.close(dfd)
-    finally:
-        try:tmp.unlink()
-        except FileNotFoundError:pass
+        if status.is_symlink() or not status.is_file() or status.stat().st_size>65536:return False
+        doc=json.loads(status.read_text(encoding="utf-8"))
+    except Exception:return False
+    return doc.get("state")=="rolled_back" and doc.get("rollback_ok") is True
 
 
 def run(action:str,args:list[str])->int:
@@ -183,12 +219,24 @@ def run(action:str,args:list[str])->int:
             raise ReleaseInstallError("update action takes no extra arguments")
         runtime=Path("/opt/dark-xray/.venv/bin/python")
         updater=ROOT/"tools/update.py"
-        if not runtime.is_file() or runtime.is_symlink():
+        if runtime.parent.is_symlink() or not runtime.is_file() or not os.access(runtime,os.X_OK):
             raise ReleaseInstallError("installed DARK runtime Python is missing or unsafe")
-        cp=subprocess.run([str(runtime),str(updater),"--source",str(ROOT),"--non-interactive"])
-        if cp.returncode:return cp.returncode
-        atomic_identity(doc,"update")
-        return 0
+        prior=identity_snapshot()
+        qa=Path("/var/lib/dark-xray/qa");qa.mkdir(mode=0o700,exist_ok=True)
+        status=qa/f".release-update-{os.getpid()}-{int(time.time()*1000)}.json"
+        job="release-artifact-"+doc["release_commit"][:12]+"-"+str(os.getpid())
+        try:
+            cp=subprocess.run([str(runtime),str(updater),"--source",str(ROOT),"--non-interactive",
+                               "--status-file",str(status),"--job-id",job])
+            if cp.returncode:
+                if _rollback_confirmed(status):
+                    restore_identity(prior)
+                return cp.returncode
+            atomic_identity(doc,"update")
+            return 0
+        finally:
+            try:status.unlink()
+            except FileNotFoundError:pass
     raise ReleaseInstallError("action must be verify, fresh or update")
 
 
