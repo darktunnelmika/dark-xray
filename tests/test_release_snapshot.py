@@ -1,6 +1,10 @@
 import hashlib
 import importlib.util
+import json
 import subprocess
+import sys
+import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -27,6 +31,8 @@ def repo(tmp_path,monkeypatch):
     (root/"README.md").write_text("stage4\n")
     (root/"backend/core.py").write_text("RUNTIME=1\n")
     (root/"tools/release_snapshot.py").write_text("# release helper\n")
+    for i in range(24):
+        (root/"docs"/f"fixture-{i:02d}.md").write_text(f"fixture {i}\n")
     (root/"SHA256SUMS").write_text("")
     stage4=commit(root,"stage4")
     monkeypatch.setattr(release,"ROOT",root)
@@ -45,7 +51,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_release_artifacts_are_reproducible(tmp_path,monkeypatch):
+def test_release_artifacts_are_reproducible_and_self_verifying(tmp_path,monkeypatch):
     root,stage4=repo(tmp_path,monkeypatch);candidate=finish_release(root)
     one=tmp_path/"one";two=tmp_path/"two"
     first=release.build(candidate,stage4,one);second=release.build(candidate,stage4,two)
@@ -54,6 +60,29 @@ def test_release_artifacts_are_reproducible(tmp_path,monkeypatch):
         assert digest(one/name)==digest(two/name)
     assert digest(Path(first["manifest"]))==digest(Path(second["manifest"]))
     assert digest(Path(first["release_sha256sums"]))==digest(Path(second["release_sha256sums"]))
+
+    tar_name=next(name for name in first["artifacts"] if name.endswith(".tar.gz"))
+    zip_name=next(name for name in first["artifacts"] if name.endswith(".zip"))
+    prefix="dark-xray-0.9.0-rc7/"
+    with tarfile.open(one/tar_name,"r:gz") as tf:
+        names=tf.getnames()
+        assert prefix+"DARK-RELEASE.json" in names
+        assert prefix+"release-install.py" in names
+        tf.extractall(tmp_path/"unpack",filter="data")
+    with zipfile.ZipFile(one/zip_name) as zf:
+        assert prefix+"DARK-RELEASE.json" in zf.namelist()
+        assert prefix+"release-install.py" in zf.namelist()
+
+    extracted=tmp_path/"unpack"/prefix.rstrip("/")
+    meta=json.loads((extracted/"DARK-RELEASE.json").read_text())
+    assert meta["release_commit"]==candidate
+    assert meta["stage4_accepted_commit"]==stage4
+    cp=subprocess.run([sys.executable,str(extracted/"release-install.py"),"verify"],
+                      cwd=extracted,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    assert cp.returncode==0,cp.stderr
+    verified=json.loads(cp.stdout)
+    assert verified["passed"] is True and verified["release_commit"]==candidate
+    assert verified["verified_source_files"]>=20
 
 
 def test_dirty_tree_is_refused(tmp_path,monkeypatch):
