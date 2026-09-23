@@ -26,6 +26,7 @@ python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscripti
 python -m pytest tests/test_subscription_path.py -q --junitxml=qa/junit/subscription-path.xml
 python -m pytest tests/test_hosts_v3.py -q --junitxml=qa/junit/hosts-v3.xml
 python -m pytest tests/test_accounting_stability.py -q --junitxml=qa/junit/accounting-stability.xml
+python -m pytest tests/test_meter_write_amplification.py -q --junitxml=qa/junit/meter-write-amplification.xml
 python -m pytest tests/test_finance_hardening.py -q --junitxml=qa/junit/finance-hardening.xml
 python -m pytest tests/test_destructive_recovery.py -q --junitxml=qa/junit/destructive-recovery.xml
 python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-consistency.xml
