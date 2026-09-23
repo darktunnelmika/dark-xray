@@ -1,3 +1,5 @@
+[Reading 97 lines from start (total: 97 lines, 0 remaining)]
+
 from fastapi.testclient import TestClient
 
 from auth import Auth
@@ -74,3 +76,26 @@ def test_bulk_create_mixed_duplicate_does_not_poison_other_items(tmp_path,monkey
         assert c.get('/api/clients/mix-3').status_code==200
     finally:
         c.__exit__(None,None,None);manager.close();engine.close();store.close()
+
+
+def test_bulk_adjust_uses_one_core_batch_transaction(tmp_path,monkeypatch):
+    store,engine,manager,c=make_env(tmp_path)
+    try:
+        i1=c.post('/api/inbounds',json=inbound('batch-fast',19704)).json()['id']
+        r=c.post('/api/clients/bulk-create',json={'owner':'dark','prefix':'fast-','postfix':'','first':1,'quantity':25,
+            'inboundIds':[i1],'client':{'totalGB':1024*1024,'limitIp':1}})
+        assert r.status_code==200 and r.json()['created']==25
+        calls=[];real=engine.upsert_many
+        def counted(items):
+            calls.append(len(items));return real(items)
+        monkeypatch.setattr(engine,'upsert_many',counted)
+        r=c.post('/api/clients/bulk-adjust',json={'emails':[f'fast-{i}' for i in range(1,26)],
+            'add_days':1,'group':'FAST'})
+        assert r.status_code==200,r.text
+        assert r.json()['changed']==25
+        assert calls==[25]
+        assert all(x.get('result',{}).get('client',{}).get('group')=='FAST' for x in r.json()['items'])
+    finally:
+        c.__exit__(None,None,None);manager.close();engine.close();store.close()
+
+[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]

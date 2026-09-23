@@ -1,3 +1,5 @@
+[Reading 866 lines from start (total: 866 lines, 0 remaining)]
+
 """Persistent customer ownership and reconciliation for the local Xray runtime.
 
 Only clients explicitly created/adopted here are controlled. Unknown engine
@@ -416,7 +418,7 @@ class Manager:
             self.tick(suppress=True)
             return self.detail(actor,email)
 
-    def update(self, actor: Actor,email: str,patch: dict,ids: list[int]|None=None,*,reconcile:bool=True) -> dict:
+    def update(self, actor: Actor,email: str,patch: dict,ids: list[int]|None=None,*,reconcile:bool=True,return_detail:bool=True) -> dict|None:
         patch=self.validate_client(patch,partial=True)
         if 'email' in patch or 'subId' in patch: raise PolicyError('Identity/subId changes use a separate rotation workflow')
         with self.lock:
@@ -448,7 +450,24 @@ class Manager:
                   (json.dumps(desired),json.dumps(ids),time.time(),'enable' in patch,email))
             self.audit(actor,row['owner'],'client.update',email,','.join(sorted(patch)))
             if reconcile:self.tick(suppress=True)
-            return self.detail(actor,email)
+            return self.detail(actor,email) if return_detail else None
+
+    def update_snapshot(self,actor:Actor,email:str,*,action:str='edit')->dict:
+        # Bulk planning only needs desired fields/inbounds, not presence rendering.
+        with self.lock:
+            row=self.own_row(actor,email,action)
+            meta=self.meta(email)
+            if meta['state']=='uncertain':raise PolicyError('Resolve the uncertain engine operation before editing')
+            desired=json.loads(meta['desired'])
+            if meta['op']=='none':
+                desired=CoreEngine.writable(self.engine.client_detail(email)['client'])
+            return {'client':desired,'inboundIds':json.loads(meta['inbounds']),'owner':row['owner']}
+
+    def details_many(self,actor:Actor,emails:list[str],*,credentials:bool=True)->dict[str,dict]:
+        activity=self._activity_map()
+        fallback={'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}
+        return {email:self.detail(actor,email,credentials=credentials,activity=activity.get(email) or fallback)
+                for email in emails}
 
     def action(self,actor: Actor,email: str,action: str) -> dict:
         if action in ('enable','disable'):return self.update(actor,email,{'enable':action=='enable'})
@@ -674,19 +693,48 @@ class Manager:
                             db.execute("UPDATE managed_clients SET state='missing',error='CoreEngine client missing; automatic recreation refused' WHERE email=?",(meta['email'],))
                         meta['state']='missing'
 
-                changed=False
+                changed=False;batch=[];batch_metas=[]
+                def mark_failure(meta,e):
+                    uncertain=isinstance(e,CoreError) and e.uncertain and meta['op']=='reset'
+                    conflict=isinstance(e,CoreError) and e.status==409
+                    state='uncertain' if uncertain else 'conflict' if conflict else 'error'
+                    attempts=meta['attempts']+1
+                    with self.store.transaction() as db:
+                        db.execute('UPDATE managed_clients SET state=?,error=?,attempts=?,retry_at=? WHERE email=?',
+                            (state,str(e)[:400],attempts,time.time()+min(300,5*2**min(attempts,6)),meta['email']))
                 for meta in metas:
                     if meta['op']=='none' or meta['retry_at']>time.time() or meta['state'] in ('uncertain','conflict'):continue
                     if not self.engine.config.writes_enabled:continue
+                    if meta['op']=='upsert':
+                        try:
+                            email=meta['email'];desired=json.loads(meta['desired']);ids=json.loads(meta['inbounds'])
+                            existing=records.get(email)
+                            if existing and existing.get('subId')!=desired.get('subId'):
+                                raise CoreError('Identity conflict: engine subId changed; explicit re-adoption is required',status=409)
+                            enabled=not self.store.client_reasons(email) and not meta['external_disabled']
+                            desired['enable']=enabled
+                            batch.append({'email':email,'client':desired,'inbounds':ids})
+                            batch_metas.append((meta,int(enabled)))
+                        except (CoreError,PolicyError,ValueError,TypeError) as e:
+                            mark_failure(meta,e if isinstance(e,(CoreError,PolicyError)) else PolicyError('Invalid pending client state'))
+                        continue
                     try:self._apply(meta,records);changed=True
-                    except (CoreError,PolicyError) as e:
-                        uncertain=isinstance(e,CoreError) and e.uncertain and meta['op']=='reset'
-                        conflict=isinstance(e,CoreError) and e.status==409
-                        state='uncertain' if uncertain else 'conflict' if conflict else 'error'
-                        attempts=meta['attempts']+1
+                    except (CoreError,PolicyError) as e:mark_failure(meta,e)
+                if batch:
+                    try:
+                        self.engine.upsert_many(batch)
+                        now=time.time()
                         with self.store.transaction() as db:
-                            db.execute('UPDATE managed_clients SET state=?,error=?,attempts=?,retry_at=? WHERE email=?',
-                                (state,str(e)[:400],attempts,time.time()+min(300,5*2**min(attempts,6)),meta['email']))
+                            db.executemany("""UPDATE managed_clients SET expected_enable=?,op='none',op_id='',state='applied',
+                                error='',retry_at=0,attempts=0,updated_at=? WHERE email=?""",
+                                [(enabled,now,meta['email']) for meta,enabled in batch_metas])
+                        changed=True
+                    except (CoreError,PolicyError):
+                        # Fail closed to the proven per-client path if a batch hits
+                        # an unexpected invariant. The batch transaction is atomic.
+                        for meta,_enabled in batch_metas:
+                            try:self._apply(meta,records);changed=True
+                            except (CoreError,PolicyError) as e:mark_failure(meta,e)
                 if changed:
                     rows=self.engine.clients();records={r['email']:r for r in rows}
                     with self.store.lock:metas=[dict(r) for r in self.store.db.execute("SELECT * FROM managed_clients WHERE state!='deleted'")]
@@ -818,3 +866,5 @@ class Manager:
     def close(self):
         self.stop.set()
         if self.thread:self.thread.join(timeout=35)
+
+[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
