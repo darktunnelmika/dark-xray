@@ -19,6 +19,7 @@ python -m pytest tests/test_node_wan_gate.py tests/test_node_wan_readiness.py -q
 python -m pytest tests/test_target_node_budget.py -q --junitxml=qa/junit/target-node-budget.xml
 python -m pytest tests/test_node_wan_https.py -q --junitxml=qa/junit/node-wan-https.xml
 python -m pytest tests/test_domain_tool.py -q --junitxml=qa/junit/domain-tool.xml
+python -m pytest tests/test_domain_tls_validation.py -q --junitxml=qa/junit/domain-tls-validation.xml
 python -m pytest tests/test_clients_v2.py -q --junitxml=qa/junit/clients-v2.xml
 python -m pytest tests/test_client_presence.py -q --junitxml=qa/junit/client-presence.xml
 python -m pytest tests/test_bulk_batching.py -q --junitxml=qa/junit/bulk-batching.xml
