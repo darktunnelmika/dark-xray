@@ -373,6 +373,17 @@ def reboot_evidence(pre:dict[str,Any],current_boot:dict[str,Any],current_source:
             'same_source':same_source,'source_basis':source_basis,'same_config':same_config}
 
 
+def acceptance_passed(phase:str,base_passed:bool,active_passed:bool,reboot_ok:bool=False)->bool:
+    """Keep opt-in active checks as hard gates in every phase.
+
+    Post-reboot additionally requires an observed reboot. A successful reboot
+    must never mask a failed public-renewal rehearsal or load batch.
+    """
+    if phase=='post-reboot':
+        return bool(base_passed and active_passed and reboot_ok)
+    return bool(base_passed and active_passed)
+
+
 def main()->None:
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--config',type=Path,required=True)
@@ -449,7 +460,7 @@ def main()->None:
               'runs_required':3,'runs_completed':0,'detail':'base gate failed; load acceptance not started'}
     active_passed=bool(public_renewal.get('passed') is True and load.get('passed') is True)
     reboot={'ok':False,'required':a.phase=='post-reboot','detail':'reboot proof not requested in single phase'}
-    passed=bool(base['passed'] and active_passed)
+    passed=acceptance_passed(a.phase,base['passed'],active_passed)
 
     if a.phase=='pre-reboot':
         reboot={'ok':False,'required':True,'detail':'baseline recorded; reboot has not been proven yet'}
@@ -462,7 +473,7 @@ def main()->None:
             reboot={'ok':False,'required':True,'detail':'pre-reboot state is missing or invalid'}
         else:
             reboot=reboot_evidence(pre,boot,source,cfg_sha)|{'required':True}
-        passed=bool(base['passed'] and reboot.get('ok') is True)
+        passed=acceptance_passed(a.phase,base['passed'],active_passed,reboot.get('ok') is True)
 
     phase_passed=bool(passed)
     full_gate_passed=bool(a.phase=='post-reboot' and phase_passed and reboot.get('ok') is True)
