@@ -16,6 +16,7 @@ python -m pytest tests/test_live_check.py -q --junitxml=qa/junit/live-check.xml
 python -m pytest tests/test_fetch_core.py -q --junitxml=qa/junit/fetch-core.xml
 python -m pytest tests/test_production_gate.py -q --junitxml=qa/junit/production-gate.xml
 python -m pytest tests/test_target_vps_gate.py -q --junitxml=qa/junit/target-vps-gate.xml
+python -m pytest tests/test_public_panel_gate.py -q --junitxml=qa/junit/public-panel-gate.xml
 python -m pytest tests/test_node_wan_gate.py tests/test_node_wan_readiness.py -q --junitxml=qa/junit/node-wan-readiness.xml
 python -m pytest tests/test_target_node_budget.py -q --junitxml=qa/junit/target-node-budget.xml
 python -m pytest tests/test_node_wan_https.py -q --junitxml=qa/junit/node-wan-https.xml
