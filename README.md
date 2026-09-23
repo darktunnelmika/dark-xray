@@ -107,6 +107,16 @@ sudo darkxray production-gate --json-only
 
 `production-gate` دیتابیس مشتری‌ها یا firewall نصب‌شده را تغییر نمی‌دهد؛ data-plane را در دیتابیس/پورت‌های موقت loopback تست می‌کند.
 
+برای VPS هدفی که Domain/TLS عمومی روی آن فعال شده، rehearsal تمدید **فقط با درخواست صریح اپراتور** اجرا می‌شود؛ این دستور به ACME staging عمومی متصل می‌شود و باید HTTP-01 از اینترنت قابل دسترس باشد:
+
+```bash
+sudo darkxray target-vps-gate --phase pre-reboot \
+  --expect-source-commit <COMMIT_SHA> \
+  --require-domain-tls --require-letsencrypt --rehearse-renewal
+```
+
+این dry-run نباید زوج گواهی فعال پنل را تغییر دهد. بعد از reboot واقعی، همان gate با `--phase post-reboot` اجرا می‌شود. Gate خودش reboot، DNS change یا outage ایجاد نمی‌کند.
+
 برای بررسی واقعی Nodeهای ثبت‌شده از Central VPS:
 
 ```bash

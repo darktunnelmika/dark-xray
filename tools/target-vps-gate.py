@@ -23,6 +23,7 @@ import json
 import math
 import os
 import re
+import shutil
 import socket
 import ssl
 import subprocess
@@ -43,6 +44,8 @@ BOOT_ID_PATH=Path('/proc/sys/kernel/random/boot_id')
 TLS_SOURCE=Path('/etc/dark-xray/tls-source.json')
 TLS_HOOK=Path('/etc/letsencrypt/renewal-hooks/deploy/dark-xray-panel')
 LE_LIVE=Path('/etc/letsencrypt/live')
+LE_RENEWAL=Path('/etc/letsencrypt/renewal')
+LE_PRODUCTION_DIRECTORY='https://acme-v02.api.letsencrypt.org/directory'
 SHA_RE=re.compile(r'[0-9a-f]{40}')
 
 
@@ -157,12 +160,30 @@ def https_evidence(config:Path)->dict[str,Any]:
             except Exception:pass
 
 
-def renewal_evidence(config:Path)->dict[str,Any]:
+def _renewal_server(path:Path)->str:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size>1024*1024:return ''
+    try:text=path.read_text(encoding='utf-8')
+    except Exception:return ''
+    matches=re.findall(r'(?m)^\s*server\s*=\s*(\S+)\s*$',text)
+    return matches[-1].rstrip('/') if matches else ''
+
+
+def _active_tls_digests(cfg)->dict[str,str]:
+    result={}
+    for key in ('tls_certificate','tls_private_key'):
+        path=Path(str(getattr(cfg,key,'')))
+        result[key]=config_sha256(path)
+    return result
+
+
+def renewal_evidence(config:Path,*,rehearse:bool=False,require_letsencrypt:bool=False,timeout:float=300.0)->dict[str,Any]:
     try:cfg=Config.load(config)
     except Exception as ex:return {'ok':False,'configured':False,'renewal_rehearsed':False,'error':type(ex).__name__+': '+str(ex)}
     origin=urlsplit(cfg.public_origin)
     if origin.scheme!='https':
-        return {'ok':True,'configured':False,'renewal_rehearsed':False,'detail':'not applicable without HTTPS'}
+        requested=bool(rehearse or require_letsencrypt)
+        return {'ok':not requested,'configured':False,'renewal_rehearsed':False,
+                'detail':'HTTPS is required for requested renewal acceptance' if requested else 'not applicable without HTTPS'}
     state=safe_json(TLS_SOURCE);lineage=Path(str(state.get('lineage') or ''))
     try:lineage_parent=lineage.parent.resolve()
     except Exception:lineage_parent=Path()
@@ -171,10 +192,45 @@ def renewal_evidence(config:Path)->dict[str,Any]:
     hook_ok=TLS_HOOK.is_file() and not TLS_HOOK.is_symlink() and os.access(TLS_HOOK,os.X_OK)
     timer_enabled=_systemctl_check('is-enabled','certbot.timer')
     timer_active=_systemctl_check('is-active','certbot.timer')
-    return {'ok':bool(source_ok and hook_ok and timer_enabled and timer_active),'configured':True,
-            'source_ok':source_ok,'hook_ok':hook_ok,'certbot_timer_enabled':timer_enabled,
-            'certbot_timer_active':timer_active,'domain':state.get('domain',''),'lineage':str(lineage) if state else '',
-            'renewal_rehearsed':False,'detail':'renewal plumbing verified; a real/dry-run renewal is a separate target test'}
+    renewal_conf=LE_RENEWAL/(lineage.name+'.conf') if lineage.name else LE_RENEWAL/'invalid.conf'
+    acme_server=_renewal_server(renewal_conf)
+    letsencrypt_production=acme_server==LE_PRODUCTION_DIRECTORY.rstrip('/')
+    rehearsal={'requested':bool(rehearse),'performed':False,'ok':not rehearse,
+               'active_pair_unchanged':None,'exit_code':None,'stderr_present':False}
+    if rehearse:
+        certbot=shutil.which('certbot')
+        if not certbot:
+            rehearsal.update(ok=False,error='certbot_not_found')
+        elif not (source_ok and hook_ok and timer_enabled and timer_active):
+            rehearsal.update(ok=False,error='renewal_plumbing_not_ready')
+        else:
+            before=_active_tls_digests(cfg)
+            try:
+                cp=_child([certbot,'renew','--dry-run','--cert-name',lineage.name,
+                           '--no-random-sleep-on-renew','--no-directory-hooks'],timeout)
+                after=_active_tls_digests(cfg)
+                unchanged=bool(before and before==after and all(before.values()))
+                rehearsal.update(performed=True,ok=bool(cp.returncode==0 and unchanged),
+                                 active_pair_unchanged=unchanged,exit_code=cp.returncode,
+                                 stderr_present=bool(cp.stderr.strip()))
+            except subprocess.TimeoutExpired:
+                rehearsal.update(performed=True,ok=False,active_pair_unchanged=_active_tls_digests(cfg)==before,
+                                 exit_code=124,error='certbot_dry_run_timed_out')
+            except OSError:
+                rehearsal.update(performed=True,ok=False,active_pair_unchanged=_active_tls_digests(cfg)==before,
+                                 error='certbot_dry_run_launch_failed')
+    base_ok=bool(source_ok and hook_ok and timer_enabled and timer_active)
+    server_ok=bool(letsencrypt_production or not require_letsencrypt)
+    overall=bool(base_ok and server_ok and rehearsal.get('ok') is True)
+    return {'ok':overall,'configured':True,'source_ok':source_ok,'hook_ok':hook_ok,
+            'certbot_timer_enabled':timer_enabled,'certbot_timer_active':timer_active,
+            'domain':state.get('domain',''),'lineage':str(lineage) if state else '',
+            'renewal_config':str(renewal_conf),'acme_server':acme_server,
+            'letsencrypt_production':letsencrypt_production,
+            'letsencrypt_required':bool(require_letsencrypt),
+            'renewal_rehearsed':bool(rehearsal.get('performed') and rehearsal.get('ok')),
+            'rehearsal':rehearsal,
+            'detail':'renewal plumbing and requested rehearsal verified' if overall else 'renewal acceptance incomplete'}
 
 
 def production_phase(config:Path,data:Path,timeout:float)->dict[str,Any]:
@@ -226,10 +282,12 @@ def node_phase(config:Path,data:Path,min_nodes:int,timeout:float,watch_seconds:f
 
 def base_evidence(config:Path,data:Path,*,expected_commit:str,require_domain_tls:bool,
                   production_timeout:float,min_nodes:int,node_timeout:float,node_watch_seconds:float,
-                  expected_outages:list[str])->dict[str,Any]:
+                  expected_outages:list[str],rehearse_renewal:bool=False,require_letsencrypt:bool=False,
+                  renewal_timeout:float=300.0)->dict[str,Any]:
     source=source_evidence(data,expected_commit)
     production=production_phase(config,data,production_timeout)
-    https=https_evidence(config);renewal=renewal_evidence(config)
+    https=https_evidence(config);renewal=renewal_evidence(config,rehearse=rehearse_renewal,
+        require_letsencrypt=require_letsencrypt,timeout=renewal_timeout)
     tls_ok=bool(https.get('ok') and renewal.get('ok') and (https.get('https') or not require_domain_tls))
     nodes=node_phase(config,data,min_nodes,node_timeout,node_watch_seconds,expected_outages)
     passed=bool(production.get('production_gate_passed') is True and source.get('ok') is True and tls_ok and nodes.get('passed') is True)
@@ -263,6 +321,9 @@ def main()->None:
     ap.add_argument('--state-file',type=Path)
     ap.add_argument('--expect-source-commit',default='')
     ap.add_argument('--require-domain-tls',action='store_true')
+    ap.add_argument('--require-letsencrypt',action='store_true',help='require the active Certbot lineage to use the public Let\'s Encrypt production directory')
+    ap.add_argument('--rehearse-renewal',action='store_true',help='explicitly run a real Certbot dry-run; may contact the public ACME staging service and requires external HTTP-01 reachability')
+    ap.add_argument('--renewal-timeout',type=float,default=300.0)
     ap.add_argument('--production-timeout',type=float,default=360.0)
     ap.add_argument('--min-nodes',type=int,default=0)
     ap.add_argument('--node-timeout',type=float,default=8.0)
@@ -271,21 +332,26 @@ def main()->None:
     ap.add_argument('--json-only',action='store_true')
     a=ap.parse_args()
     if os.geteuid()!=0:raise SystemExit('Target VPS gate requires root so service/TLS evidence is complete')
-    if (not all(math.isfinite(x) for x in (a.production_timeout,a.node_timeout,a.node_watch_seconds))
-        or a.production_timeout<=0 or not .2<=a.node_timeout<=30 or a.node_watch_seconds<0):
+    if (not all(math.isfinite(x) for x in (a.production_timeout,a.node_timeout,a.node_watch_seconds,a.renewal_timeout))
+        or a.production_timeout<=0 or not .2<=a.node_timeout<=30 or a.node_watch_seconds<0
+        or not 30<=a.renewal_timeout<=900):
         raise SystemExit('Invalid finite timeout/watch values')
     if a.min_nodes<0:raise SystemExit('--min-nodes must be >= 0')
     expected=a.expect_source_commit.strip().lower()
     if expected and not SHA_RE.fullmatch(expected):raise SystemExit('--expect-source-commit must be an immutable 40-character SHA')
     if a.expect_outage and (a.min_nodes<1 or a.node_watch_seconds<=0):
         raise SystemExit('--expect-outage requires --min-nodes >= 1 and --node-watch-seconds > 0')
+    if (a.rehearse_renewal or a.require_letsencrypt) and not a.require_domain_tls:
+        raise SystemExit('--rehearse-renewal/--require-letsencrypt require --require-domain-tls')
 
     report_path=a.report or (a.data/'qa/target-vps-gate.json')
     state_path=a.state_file or (a.data/'qa/target-vps-pre-reboot.json')
     started=time.time();boot=boot_identity();source=installed_source(a.data);cfg_sha=config_sha256(a.config)
     base=base_evidence(a.config,a.data,expected_commit=expected,require_domain_tls=a.require_domain_tls,
                        production_timeout=a.production_timeout,min_nodes=a.min_nodes,node_timeout=a.node_timeout,
-                       node_watch_seconds=a.node_watch_seconds,expected_outages=a.expect_outage)
+                       node_watch_seconds=a.node_watch_seconds,expected_outages=a.expect_outage,
+                       rehearse_renewal=a.rehearse_renewal,require_letsencrypt=a.require_letsencrypt,
+                       renewal_timeout=a.renewal_timeout)
     reboot={'ok':False,'required':a.phase=='post-reboot','detail':'reboot proof not requested in single phase'}
     passed=base['passed']
 
@@ -307,7 +373,9 @@ def main()->None:
     result={'version':VERSION,'phase':a.phase,'target_vps_phase_passed':phase_passed,'target_vps_gate_passed':full_gate_passed,'started_at':started,'finished_at':time.time(),
             'boot':boot,'reboot':reboot,'config_sha256':cfg_sha,'base':base,
             'changes_made':'private validation reports only; optional node gate may update normal node health metadata',
-            'limitations':{'certificate_issuance_performed':False,'certificate_renewal_rehearsed':False,
+            'limitations':{'certificate_issuance_performed':False,
+                           'certificate_renewal_rehearsed':bool(base['tls']['renewal'].get('renewal_rehearsed')),
+                           'public_acme_contact_requested':bool(a.rehearse_renewal),
                            'reboot_injected_by_gate':False,'node_outage_injected_by_gate':False}}
     if a.phase=='pre-reboot':result['state_file']=str(state_path)
     try:
