@@ -371,18 +371,70 @@ def test_unchanged_background_rounds_preserve_pid_and_metering(automatic_fleet):
     f.evidence.update(repeated_background_snapshots_idempotent=True, stable_core_pids=True)
 
 
+def stop_request_identity(response):
+    """Validate acceptance, not completion; a monitor may already have delivered it."""
+    assert isinstance(response, dict), 'Invalid Stop response'
+    control = response.get('control')
+    assert isinstance(control, dict), 'Stop response lacks durable control'
+    assert control.get('persisted') is True and control.get('action') == 'stop'
+    assert control.get('desired_running') is False
+    assert type(control.get('revision')) is int and control['revision'] > 0
+    assert isinstance(control.get('command_id'), str) and re.fullmatch(r'[0-9a-f]{32}', control['command_id'])
+    state = response.get('delivery_state')
+    assert state in {'executed', 'acknowledged', 'pending'}, 'Stop was not accepted'
+    assert response.get('executed') is (state == 'executed')
+    assert response.get('queued') is (state == 'pending')
+    assert control.get('pending') is (state == 'pending')
+    assert type(control.get('applied_revision')) is int
+    if state == 'pending':
+        assert 0 <= control['applied_revision'] < control['revision']
+    else:
+        assert control['applied_revision'] == control['revision'] and not control.get('last_error')
+    if state == 'acknowledged':
+        assert response.get('already_applied') is True
+    return {k:control[k] for k in ('revision', 'command_id', 'action')}
+
+
+def stop_acknowledged(expected, hub_control, agent_receipt, running):
+    """Read-only completion: matching durable receipts AND a currently stopped core."""
+    if running is not False:
+        return False
+    for doc in (hub_control, agent_receipt):
+        if (not isinstance(doc, dict) or doc.get('persisted') is not True
+            or type(doc.get('revision')) is not int
+            or any(doc.get(k) != v for k, v in expected.items())
+            or doc.get('pending') is not False or doc.get('last_error')):
+            return False
+    return (hub_control.get('desired_running') is False
+            and type(hub_control.get('applied_revision')) is int
+            and hub_control['applied_revision'] == expected['revision']
+            and agent_receipt.get('phase') == 'applied')
+
+
 def test_background_does_not_undo_explicit_node_stop(automatic_fleet):
     f = automatic_fleet; first, other = f.agents
     packets(f, True)
     eventually(lambda: usage(f)[0] > 0, 'pre-stop usage')
     charged = usage(f)[0]
-    assert f.api('/api/nodes/'+first.id+'/core/stop', {})['executed'] is True
+    binding = f.reg.installations.public_status(first.id)
+    response = f.api('/api/nodes/'+first.id+'/core/stop', {})
+    f.evidence['stop_initial_response'] = {k:response.get(k) for k in
+        ('executed', 'queued', 'already_applied', 'delivery_state')}
+    expected = stop_request_identity(response)
+    def completed():
+        return (f.reg.installations.public_status(first.id) == binding
+                and stop_acknowledged(expected, f.reg.commands.status(first.id),
+                                      first.runtime.command_status(), first.engine.running))
+    # Observe the SAME saved command. Never issue a second Stop or drive sync.
+    eventually(completed, 'durable Stop acknowledgement and stopped core')
+    f.evidence['stop_final_command'] = expected
     pid = other.engine.process.pid; start = time.monotonic()
     while time.monotonic()-start < 12:
-        assert not first.engine.running
+        assert completed(), 'Stop receipt changed or the core resumed'
         transfer(f.clients[1].port, f.target)
         time.sleep(1)
     transfer(f.clients[0].port, f.target, allowed=False)
+    assert completed()
     assert other.engine.process.pid == pid and usage(f)[0] >= charged
     assert_healthy_loops(f)
     f.evidence['explicit_stop_survived_background_rounds'] = True

@@ -18,7 +18,7 @@ loopback HTTP socket. Both Agents serve separately authenticated HTTPS with
 hostname/CA verification. The normal Hub and Agent application lifespans start
 the actual Manager, NodeRegistry and EngineLoop workers. Configured poll_seconds
 is 1; the production Node monitor's minimum interval of 5 seconds and initial
-5-second delay are not bypassed or shortened. Existing product files and helpers
+5-second delay are not bypassed or shortened. Production code and shared data-plane helpers
 are unchanged. Two registered nodes are installed into the disposable registry;
 this is not a test of initial pairing.
 
@@ -69,3 +69,34 @@ Only allowlisted reports, JUnit, source hashes and core provenance are uploaded;
 no private keys, tokens, temporary databases or raw client configurations. JSON
 observations do not override failed JUnit or CI. The earlier load ReadTimeout
 remains a separate pre-release investigation, not fixed by these tests.
+
+
+## Stop acceptance and the monitor delivery race
+
+`executed` describes delivery by that dispatcher call, not whether any worker has
+already completed the durable command. The monitor can deliver the command after
+HTTP records it but before HTTP obtains the per-node delivery lock. The valid
+response then has `executed=false`, `already_applied=true`,
+`delivery_state=acknowledged`, with an applied Hub register. Requiring only
+`executed=true` in this concurrent suite was an invalid completion test.
+
+A deterministic test runs the real Hub API, monitor, Agent handlers and SQLite
+with fixture Xray to force that ordering. The original assertion fails despite
+matching Hub/Agent receipts and a stopped core. Another case loses the response
+after Agent Stop and verifies that only the same saved command is retried; a
+pending Hub receipt is not completion even when the core has already stopped.
+
+The real-core scenario now pins the returned command ID/revision and installation,
+then observes matching successful Hub AND Agent receipts and a currently stopped
+core. It makes no extra Stop/Sync request, does not drive the workers manually,
+and continues checking the same receipt and stopped state throughout the existing
+12-second observation. The second node must still transmit with an unchanged PID;
+the first node's old link must fail and usage must remain cumulative. Initial
+response state and final command identity are retained in the bounded evidence.
+Malformed, superseded, stale, pending, failed or mismatched receipts cannot pass;
+a historical receipt cannot substitute for current runtime observation.
+
+This is a correction to acceptance tests, not a production Stop/API behavior
+change. The original failing CI did not retain the full initial Stop response;
+the deterministic reproduction demonstrates the contract race, rather than
+inventing missing CI diagnostics. Exact-head real-core CI must pass separately.
