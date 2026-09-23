@@ -6,7 +6,7 @@ Merged main baseline: **`37a640817fe64e8e5c066df7f691b624c6ed5707`**
 Tree هر دو: **`539d93abc8a6ce833f20d382797730bf3f09e47d`**
 Exact-head CI: **14/14 workflow PASS**
 
-> `v0.9.0-rc7` هنوز در مرحلهٔ Release Preparation است و تا ساخت exact release artifact، checksum و tag نهایی Stable محسوب نمی‌شود. Stage 4 واقعی روی VPS مستقل PASS شده و merge هیچ فایل source/runtime را نسبت به head تست‌شده تغییر نداده است.
+> Stage 5 exact-artifact rehearsal روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` PASS شده است: source/release checksum، build reproducible، disposable fresh install، successful update و automatic rollback. نسخه هنوز Stable نیست؛ provider fresh install، production certificate، enforcement boundaryهای باز و tag/GitHub Release نهایی باقی مانده‌اند.
 
 ## نصب دقیق baseline ادغام‌شده
 
@@ -43,6 +43,6 @@ sudo darkxray production-gate
 - issue و renewal واقعی production certificate روی DNS/provider نهایی؛
 - global multi-node enforcement کامل، مخصوصاً semantics نود آفلاین و packet-level enforcement host-local؛
 - capacity/SLA sizing فراتر از workload پذیرش Stage 4؛
-- Update/Rollback rehearsal با exact release artifact منتشرشده.
+- انتشار tag/GitHub Release نهایی برای exact snapshot تأییدشده؛ هر source change نیازمند rehearsal مجدد است.
 
 اگر مرحله‌ای fail شد، log همان بخش را نگه دار؛ credential، password، token، private key و secret را منتشر نکن.

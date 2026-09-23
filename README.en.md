@@ -136,7 +136,7 @@ A server that predates the root update broker needs one final online-installer S
 
 ## Remaining production gates
 
-Stage 4 passed on exact candidate `94ae50548f105bea7e79b40a28f7f5ae3704056d`; merge commit `37a640817fe64e8e5c066df7f691b624c6ed5707` has the identical source tree. Real reboot, HTTPS/HSTS, two-node WAN validation, fresh verified source-IP evidence, observed outage/recovery, public ACME staging rehearsal and three retained 1000-client / concurrency-12 workloads are therefore no longer open Stage 4 items.
+Stage 4 passed on exact candidate `94ae50548f105bea7e79b40a28f7f5ae3704056d`. Stage 5 also passed the exact release-artifact rehearsal on commit `c196207881bdb38e5a40e5f2d0e265061c24dce7`: reproducible archives, exact-source verification, disposable fresh install, successful update and controlled automatic rollback. See [Stage 5 release preparation](docs/stage5-release-preparation.md).
 
 The remaining **Stable / Production Ready** gates are:
 
@@ -144,9 +144,9 @@ The remaining **Stable / Production Ready** gates are:
 - real **production-certificate** issuance and renewal on the final DNS/provider path; Stage 4 proved public Let's Encrypt staging HTTP-01 and the deploy-hook restart without replacing the production certificate;
 - complete IP Guard / global multi-node enforcement semantics on the final topology, especially unreachable-node behavior and host-local packet enforcement;
 - provider-plan capacity/SLA sizing beyond the Stage 4 correctness workload; three 1000-client / concurrency-12 runs prove acceptance behavior, not an unlimited SLA;
-- final update/rollback rehearsal using the exact ZIP/tar.gz/tag that will be deployed.
+- publish the final tag/GitHub Release only for this fixed snapshot; any later source change invalidates the artifact rehearsal.
 
-`0.9.0-rc7` is therefore a **Stage-4 validated Release Candidate**, not Stable.
+`0.9.0-rc7` is therefore a **Stage-5 artifact-rehearsed Release Candidate**, not Stable.
 
 ## Documentation
 

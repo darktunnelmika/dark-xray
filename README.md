@@ -145,7 +145,7 @@ sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
 
 ## هنوز چه چیزهایی برای Production باقی است؟
 
-Stage 4 روی کاندید دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS شده و merge commit `37a640817fe64e8e5c066df7f691b624c6ed5707` دقیقاً همان tree را دارد. بنابراین reboot واقعی، HTTPS/HSTS، دو Node واقعی، source-IP verified، outage/recovery، ACME staging rehearsal و سه workload هزارکلاینتی دیگر گیت باز Stage 4 نیستند.
+Stage 4 روی کاندید دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS شده است. Stage 5 نیز exact release artifact روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` را با build reproducible، fresh install، successful update و rollback کنترل‌شده PASS کرده است. جزئیات: [Stage 5 release preparation](docs/stage5-release-preparation.md).
 
 مواردی که هنوز برای **Stable / Production Ready** باز می‌مانند:
 
@@ -153,9 +153,9 @@ Stage 4 روی کاندید دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` 
 - صدور و renewal واقعی **production certificate** روی DNS/provider نهایی؛ Stage 4 فقط public Let's Encrypt staging + HTTP-01 + deploy-hook restart را ثابت کرد و certificate production را جایگزین نکرد.
 - IP Guard و global multi-node enforcement کامل روی topology نهایی، مخصوصاً semantics نود آفلاین و packet-level enforcement که همچنان host-local است.
 - capacity/SLA sizing روی پلن واقعی مقصد فراتر از workload پذیرش Stage 4؛ سه اجرای 1000 client / concurrency 12 correctness و contention را ثابت کردند، نه SLA نامحدود.
-- rehearsal نهایی Update/Rollback با **همان ZIP/tar.gz/tag** که قرار است منتشر و deploy شود.
+- انتشار tag/GitHub Release نهایی فقط برای همین snapshot ثابت؛ هر تغییر بعدی artifact rehearsal را باطل می‌کند.
 
-بنابراین `0.9.0-rc7` اکنون **Stage-4 validated Release Candidate** است، نه Stable.
+بنابراین `0.9.0-rc7` اکنون **Stage-5 artifact-rehearsed Release Candidate** است، نه Stable.
 
 ### یک‌بار Bootstrap برای نصب‌های RC6 و قدیمی‌تر
 

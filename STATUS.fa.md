@@ -209,8 +209,7 @@ Stage 4 روی exact head `94ae50548f105bea7e79b40a28f7f5ae3704056d` و tree ی�
 2. **Production certificate provider gate**: issue و renewal واقعی گواهی production؛ Stage 4 فقط public staging HTTP-01 rehearsal را ثابت کرد.
 3. **Global multi-node enforcement نهایی**: semantics نود آفلاین، IP/HWID policy و packet-level enforcement که همچنان host-local است.
 4. **Provider capacity/SLA sizing** فراتر از workload پذیرش 3×1000 Client / concurrency 12.
-5. **Update/Rollback rehearsal** با exact ZIP/tar.gz/tag نهایی release.
-6. **Stable promotion** فقط بعد از پاس‌شدن موارد بالا روی همان artifact منتشرشده.
+5. **Stable promotion / publication** فقط بعد از fresh provider install، production certificate و enforcement boundaryهای باز؛ tag نهایی باید همین snapshot ثابت را نشان دهد.
 
 ## مرزهایی که نباید بیش از واقعیت ادعا شوند
 
@@ -223,6 +222,8 @@ Stage 4 روی exact head `94ae50548f105bea7e79b40a28f7f5ae3704056d` و tree ی�
 
 ## مسیر بعدی
 
-Stage 4 بسته شده است. مرحله بعد **Release Preparation برای `v0.9.0-rc7`** است: هم‌تراز کردن README/Status/Changelog، بازتولید source checksum، ساخت ZIP/tar.gz و checksumهای archive، سپس exact release-artifact install/update/rollback rehearsal. فقط بعد از آن و بسته‌شدن مرزهای production certificate و enforcement چندنودی، Stable promotion بررسی می‌شود.
+Stage 5 exact-artifact rehearsal روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` PASS شده است: source/release checksum، build reproducible، fresh install، successful update و automatic rollback. مرحله بعد بستن provider fresh install، production certificate، global enforcement و انتشار tag/GitHub Release برای همین snapshot ثابت است.
 
-جزئیات ماتریس evidence:جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)
+جزئیات Stage 5: [`docs/stage5-release-preparation.md`](docs/stage5-release-preparation.md)
+
+جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)

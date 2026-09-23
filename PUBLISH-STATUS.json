@@ -3,7 +3,7 @@
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
   "date": "2026-09-23",
-  "status": "release_candidate_stage4_passed_release_preparation",
+  "status": "release_candidate_stage5_artifact_rehearsal_passed",
   "current_version": "0.9.0-rc7",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
@@ -150,7 +150,7 @@
     "two_real_vps_node_https_validation": true,
     "node_network_loss_and_recovery": true,
     "production_load_and_sqlite_contention": true,
-    "exact_release_artifact_update_rollback_rehearsal": false,
+    "exact_release_artifact_update_rollback_rehearsal": true,
     "global_multi_node_ip_limit_complete": false,
     "distributed_client_traffic_convergence_complete": false,
     "ci_load_scale_1000_clients_complete": true,
@@ -173,8 +173,8 @@
     "readmes_current_for_rc": true,
     "status_current_for_rc": true,
     "validation_doc_path_current": true,
-    "source_sha256sums_regenerated_for_rc": false,
-    "release_archive_sha256sums_generated_with_prerelease": false,
+    "source_sha256sums_regenerated_for_rc": true,
+    "release_archive_sha256sums_generated_with_prerelease": true,
     "exact_main_snapshot_documented": true,
     "published_tag_for_current_source_version": false
   },
@@ -187,5 +187,41 @@
   "validated_stage4_head": "94ae50548f105bea7e79b40a28f7f5ae3704056d",
   "validated_stage4_tree": "539d93abc8a6ce833f20d382797730bf3f09e47d",
   "validated_stage4_ci_workflows": 14,
-  "validated_stage4_target_gate": true
+  "validated_stage4_target_gate": true,
+  "stage5_release_artifact": {
+    "version": "0.9.0-rc7",
+    "commit": "c196207881bdb38e5a40e5f2d0e265061c24dce7",
+    "tree": "fba10c929ce313e5c32cc35151a865f27455fbae",
+    "stage4_accepted_commit": "94ae50548f105bea7e79b40a28f7f5ae3704056d",
+    "source_sha256sums_sha256": "9fab3d472a181e5a5305bc6b9f6c2b2c7a213d6c656fe01d41d376eb020d4ce6",
+    "tar_gz": {
+      "name": "dark-xray-0.9.0-rc7-c196207881bd.tar.gz",
+      "sha256": "e13c357a6de59ba64af05275d156baf2a5dec23a03caf3192ccb477943d8c8ba",
+      "bytes": 884012
+    },
+    "zip": {
+      "name": "dark-xray-0.9.0-rc7-c196207881bd.zip",
+      "sha256": "be5392b7121646f8718d3e7bed47d387eda8dde9a8196b59cb28fd8f0781e185",
+      "bytes": 1088427
+    },
+    "manifest_sha256": "a5b13665880dc7907ed786a1523c0eff3cf438e3c317b2a5137f79b1b7ee11ed",
+    "release_sha256sums_sha256": "5c9fde1d179b43fb86cd4a594997d51ce5e613fc615d780afd296c0da65705e2",
+    "reproducible_two_builds": true,
+    "verified_source_files": 307,
+    "disposable_rehearsal": {
+      "ubuntu": "24.04.3 LTS",
+      "network_namespace": "private",
+      "fresh_install": true,
+      "successful_update": true,
+      "injected_activation_failure_rollback": true,
+      "identity_preserved": true,
+      "sqlite_quick_check": "ok"
+    },
+    "not_proven": [
+      "fresh install on final provider image",
+      "production certificate issuance/renewal",
+      "stable tag/release publication",
+      "complete global multi-node enforcement"
+    ]
+  }
 }

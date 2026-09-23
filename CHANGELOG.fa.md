@@ -2,7 +2,11 @@
 
 ## Unreleased — بعد از 0.9.0-rc7
 
-- فعلاً موردی ثبت نشده است.
+- Stage 5 exact release-artifact rehearsal روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` PASS شد.
+- tar.gz/ZIP از دو build مستقل checksum یکسان گرفتند؛ 307 فایل source با metadata/checksum embedded verify شدند.
+- fresh install، successful update و activation-failure automatic source/SQLite rollback روی Ubuntu 24.04.3 disposable systemd-nspawn با network namespace خصوصی PASS شدند.
+- exact artifact commit `c196207...` فریز شده است؛ مستندات evidence بعد از artifact روی branch جدا ثبت می‌شوند و tag/Release نهایی باید به همان snapshot فریز‌شده اشاره کند.
+- Stable همچنان به provider fresh install، production certificate issue/renewal، boundaryهای global multi-node enforcement و provider SLA sizing وابسته است.
 
 ## 0.9.0-rc7 — Stage-4 validated Release Candidate
 

@@ -275,10 +275,9 @@ Stage 4 روی سورس دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS
 2. issue و renewal واقعی production certificate روی DNS/provider نهایی.
 3. IP Guard / global multi-node enforcement کامل روی topology نهایی، مخصوصاً رفتار نود آفلاین و packet-level enforcement محلی.
 4. capacity/SLA sizing روی پلن نهایی فراتر از workload پذیرش Stage 4.
-5. Update/Rollback rehearsal با همان ZIP/tar.gz/tag نهایی که منتشر می‌شود.
-6. بازتولید source/release checksum برای snapshot دقیق release.
+5. انتشار tag/GitHub Release نهایی برای snapshot ثابت؛ هر تغییر بعدی نیازمند artifact rehearsal مجدد است.
 
-نام نسخه **`0.9.0-rc7`** حفظ می‌شود و وضعیت آن **Stage-4 validated RC** است، نه Stable.
+Stage 5 exact-artifact rehearsal روی `c196207881bdb38e5a40e5f2d0e265061c24dce7` شامل checksumهای تازه، build reproducible، fresh install، update و automatic rollback PASS شده است. نام نسخه **`0.9.0-rc7`** حفظ می‌شود و وضعیت آن **Stage-5 artifact-rehearsed RC** است، نه Stable.
 
 ## منابع وضعیت
 
