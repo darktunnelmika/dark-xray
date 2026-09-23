@@ -1,0 +1,35 @@
+name: Panel TLS real Certbot and systemd
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: panel-tls-acme-systemd-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  panel-tls-acme-systemd:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Real Certbot issuance renewal and systemd TLS activation
+        run: |
+          set -euo pipefail
+          export DARK_TLS_CI_PASSWORD="DkTls-${GITHUB_RUN_ID}-Aa!9"
+          echo "::add-mask::$DARK_TLS_CI_PASSWORD"
+          sudo --preserve-env=DARK_TLS_CI_PASSWORD bash tests/panel-tls-acme-systemd-smoke.sh
+      - name: Upload bounded TLS ACME evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-panel-tls-acme-systemd
+          path: qa/panel-tls-acme-systemd.json
+          if-no-files-found: error
+          retention-days: 14
