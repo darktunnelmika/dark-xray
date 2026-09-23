@@ -15,6 +15,7 @@ case "${1:-menu}" in
  vps-verify) shift; exec "$PY" "$ROOT/tools/vps-verify.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  node-wan-gate) shift; exec "$PY" "$ROOT/tools/node-wan-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  target-vps-gate) shift; exec "$PY" "$ROOT/tools/target-vps-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
+ load-gate) shift; exec "$PY" "$ROOT/tools/load-scale-gate.py" "$@" ;;
  production-gate) shift; exec "$PY" "$ROOT/tools/production-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
  guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
