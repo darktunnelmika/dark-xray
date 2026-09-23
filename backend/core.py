@@ -185,13 +185,18 @@ class CoreEngine:
                   'subscription':{'enabled':True,'default_format':'base64','auto_detect':True,'profile_update_interval_hours':6,
                                   'remark_template':'{remark} | {email}','support_url':'','profile_title':'DARK XRAY',
                                   'profile_url':'','announce':'','path':'/sub'},
-                  'ipguard':{'mode':'observe','window_seconds':self.config.ip_window_seconds,
+                  'ipguard':{'mode':'observe','node_mode':'observe','window_seconds':self.config.ip_window_seconds,
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
         if not r:return copy.deepcopy(defaults[name])
         saved=json.loads(r[0])
         if name in {'panel','runtime','subscription','ipguard'} and isinstance(saved,dict):
-            base=copy.deepcopy(defaults[name]);base.update(saved);return base
+            base=copy.deepcopy(defaults[name])
+            # Preserve pre-node_mode behavior for existing saved policies: before
+            # this field existed, one mode was propagated to Local and Nodes.
+            if name=='ipguard' and 'node_mode' not in saved:
+                base['node_mode']=saved.get('mode',base['node_mode'])
+            base.update(saved);return base
         return saved
 
     @serialized
@@ -275,8 +280,9 @@ class CoreEngine:
             if not isinstance(value['announce'],str) or len(value['announce'])>2000:raise CoreError('Invalid subscription announcement')
             if any(ch in value['announce'] for ch in ('\r','\n')) and len(value['announce'].splitlines())>100:raise CoreError('Subscription announcement has too many lines')
         if name=='ipguard':
-            if set(value)-{'mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
+            if set(value)-{'mode','node_mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
             if value.get('mode') not in ('observe','enforce'): raise CoreError('Invalid IP Guard mode')
+            if value.get('node_mode',value.get('mode')) not in ('observe','enforce'): raise CoreError('Invalid Node IP Guard mode')
             for key,low,high in [('window_seconds',10,3600),('ban_seconds',10,86400)]:
                 if type(value.get(key))is not int or not low<=value[key]<=high: raise CoreError('Invalid '+key)
             exempt=value.get('exempt_ips',[])

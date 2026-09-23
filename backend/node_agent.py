@@ -295,6 +295,9 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     @app.get('/node/api/health')
     def health(_scope:str=Depends(auth)):
         system=engine.system();state=runtime.status();core=engine.runtime_state()
+        try:engine.sync_ip_guard()
+        except (PolicyError,CoreError,OSError):pass
+        guard=engine.ip_status()
         with store.lock:
             assigned=store.db.execute('SELECT COUNT(*) FROM node_runtime_inbounds WHERE scope=?',(_scope,)).fetchone()[0]
             clients=store.db.execute('SELECT COUNT(*) FROM node_runtime_clients WHERE scope=?',(_scope,)).fetchone()[0]
@@ -310,8 +313,9 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1},'control_receipt':runtime.command_status(),
-                'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},'direct_source_verified':bool(engine.config.direct_source_verified)}
+                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1},'control_receipt':runtime.command_status(),
+                'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},
+                'direct_source_verified':bool(engine.config.direct_source_verified),'guard':guard}
 
     @app.get('/node/api/v1/state')
     def state(_scope:str=Depends(auth)):

@@ -589,3 +589,76 @@ def test_node_data_address_defaults_to_control_hostname(env):
  assert r.status_code==200,r.text
  assert r.json()['data_address']=='node-data.example.com'
  assert r.json()['priority']==100 and bool(r.json()['failover_enabled']) is True
+
+
+def test_global_block_refreshes_all_node_desired_states_and_reports_offline_convergence(env,monkeypatch):
+ store,_,app,c=env
+ inbound=c.post('/api/inbounds',json=_test_vless('STAGE6 GLOBAL',24155,'stage6-global')).json()['id']
+ # This service is Node-only: Hub has no packet source to verify for it.
+ with store.transaction() as db:
+  row=db.execute('SELECT body FROM core_inbounds WHERE id=?',(inbound,)).fetchone()
+  body=__import__('json').loads(row['body']);body['panelMeta']={'deployLocal':False}
+  db.execute('UPDATE core_inbounds SET body=? WHERE id=?',(__import__('json').dumps(body),inbound))
+ _managed_client(c,'stage6-user',inbound,{'limitIp':1})
+ for node,ch in [('stage6-n1','U'),('stage6-n2','V')]:
+  out=c.post('/api/nodes',json={'id':node,'name':node,'origin':'https://'+node+'.example.com',
+    'token':'dkn_'+(ch*60),'enabled':True,'inboundIds':[inbound]})
+  assert out.status_code==200,out.text
+ with store.transaction() as db:
+  db.execute('UPDATE remote_node_inbounds SET remote_inbound_id=55 WHERE local_inbound_id=?',(inbound,))
+ reg=app.state.nodes
+ baseline={}
+ for node in ('stage6-n1','stage6-n2'):
+  state=c.get('/api/nodes/'+node+'/desired').json();baseline[node]=state['revision']
+  reg.mark_desired_state(node,state['revision'],state['hash'])
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='stage6-n1'",(time.time(),))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='stage6-n2'",(time.time()-999,))
+ def security(node_id,path,method='GET',body=None,timeout=8.0):
+  assert path=='/node/api/mirrors/security'
+  ip='203.0.113.61' if node_id=='stage6-n1' else '203.0.113.62'
+  now=time.time()
+  return {'sourceVerified':True,'items':[{'sourceEmail':'stage6-user',
+    'ips':[{'ip':ip,'firstSeen':now-2,'lastSeen':now}],'devices':[]}]},3
+ monkeypatch.setattr(reg,'_request',security)
+ reg.sync_security('stage6-n2')
+ result=c.post('/api/nodes/stage6-n1/security')
+ assert result.status_code==200,result.text
+ refresh=result.json()['global']['desired_state_refresh']
+ assert {x['node_id'] for x in refresh['nodes']}=={'stage6-n1','stage6-n2'} and not refresh['errors']
+ for node in ('stage6-n1','stage6-n2'):
+  state=reg.desired_state(node)
+  assert state['revision']>baseline[node] and state['pending'] is True
+  policy=next(x for x in state['payload']['security']['clients'] if x['sourceEmail']=='stage6-user')
+  assert policy['globalIpBlocked'] is True
+ n1=reg.desired_state('stage6-n1');reg.mark_desired_state('stage6-n1',n1['revision'],n1['hash'])
+ detail=c.get('/api/clients/stage6-user/security-global').json()['convergence']
+ assert detail['authorization_converged'] is False
+ states={x['node_id']:x for x in detail['items']}
+ assert states['stage6-n1']['status']=='converged' and states['stage6-n1']['authorization_applied'] is True
+ assert states['stage6-n2']['status']=='offline_pending' and states['stage6-n2']['authorization_applied'] is False
+ assert detail['pending_nodes']==['stage6-n2'] and detail['offline_nodes']==['stage6-n2']
+ n2=reg.desired_state('stage6-n2');reg.mark_desired_state('stage6-n2',n2['revision'],n2['hash'])
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='stage6-n2'",(time.time(),))
+ settled=c.get('/api/clients/stage6-user/security-global').json()['convergence']
+ assert settled['authorization_converged'] is True and not settled['pending_nodes'] and not settled['offline_nodes']
+ assert settled['boundary'].startswith('authorization convergence')
+
+
+def test_hub_observe_node_enforce_is_translated_only_for_agent_payload(env):
+ store,eng,app,c=env
+ guard=c.get('/api/settings/ipguard').json()['value'];guard['mode']='observe';guard['node_mode']='enforce'
+ saved=c.put('/api/settings/ipguard',json={'value':guard});assert saved.status_code==200,saved.text
+ assert eng.section('ipguard')['mode']=='observe' and eng.section('ipguard')['node_mode']=='enforce'
+ inbound=c.post('/api/inbounds',json=_test_vless('NODE GUARD',24156,'node-guard')).json()['id']
+ _managed_client(c,'node-guard-user',inbound,{'limitIp':1})
+ out=c.post('/api/nodes',json={'id':'guard-node','name':'Guard Node','origin':'https://guard-node.example.com',
+   'token':'dkn_'+('W'*60),'enabled':True,'inboundIds':[inbound]})
+ assert out.status_code==200,out.text
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=56 WHERE node_id='guard-node' AND local_inbound_id=?",(inbound,))
+ state=c.get('/api/nodes/guard-node/desired');assert state.status_code==200,state.text
+ remote_guard=state.json()['payload']['sections']['ipguard']
+ assert remote_guard['mode']=='enforce' and 'node_mode' not in remote_guard
+ assert eng.section('ipguard')['mode']=='observe'

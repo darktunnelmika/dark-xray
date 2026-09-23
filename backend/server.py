@@ -234,7 +234,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
     def apply_global_security(_node_id:str='',_result:dict|None=None):
         result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified))
-        if result.get('changed'):manager.tick(suppress=True)
+        changed=list(result.get('changed') or [])
+        if changed:
+            manager.tick(suppress=True)
+            # Persist the new policy into every affected Node desired state now.
+            # Delivery may still wait for an offline Node, but Hub state must never
+            # pretend the old global blocker is the current desired policy.
+            target_nodes=set()
+            for email in changed:target_nodes.update(nodes._assigned_node_ids(email))
+            refreshed=[];errors=[]
+            for node_id in sorted(target_nodes):
+                try:
+                    state=ensure_node_desired_state(node_id)
+                    refreshed.append({'node_id':node_id,'revision':state.get('revision',0),
+                                      'pending':bool(state.get('pending'))})
+                except (PolicyError,OSError,ValueError) as ex:
+                    errors.append({'node_id':node_id,'error':str(ex)[:300]})
+            result['desired_state_refresh']={'nodes':refreshed,'errors':errors}
         return result
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -854,6 +870,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                              'globalIpBlocked':bool(row.get('global_ip_block')),
                              'globalDeviceBlocked':bool(row.get('global_device_block'))})
         sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
+        # Local and Node packet-source trust are separate boundaries. A Central
+        # host behind Backhaul may have to remain Observe while direct-source
+        # Nodes enforce through their own root-owned broker. Never send the
+        # Central-only node_mode field to an Agent.
+        node_guard=copy.deepcopy(sections['ipguard'])
+        node_guard['mode']=node_guard.get('node_mode',node_guard.get('mode','observe'))
+        node_guard.pop('node_mode',None);sections['ipguard']=node_guard
         return {'schema':1,'nodeId':node_id,'desiredRunning':True,'sections':sections,
                 'assignments':bundles,'security':{'clients':policies},'files':managed_files}
 
@@ -1443,6 +1466,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         verified_nodes=sum(1 for n in node_rows if n.get('security',{}).get('source_verified') and
                            n.get('security',{}).get('last_sync') and now-float(n['security']['last_sync'])<180 and
                            not n['security'].get('last_error'))
+        node_guard_enforce=0;node_guard_ready=0;node_policy_pending=0;offline_nodes=0
+        for n in node_rows:
+            health=n.get('health') if isinstance(n.get('health'),dict) else {}
+            remote_guard=health.get('guard') if isinstance(health.get('guard'),dict) else {}
+            if remote_guard.get('requested_mode')=='enforce':node_guard_enforce+=1
+            if remote_guard.get('requested_mode')=='enforce' and remote_guard.get('state')=='applied' and remote_guard.get('applied') is True:
+                node_guard_ready+=1
+            if n.get('desired_state',{}).get('pending'):node_policy_pending+=1
+            if not n.get('online'):offline_nodes+=1
         guard=engine.ip_status()
         summary={'clients':len(client_rows),'ip_limited':sum(1 for x in client_rows if x['limit_ip']>0),
             'hwid_limited':sum(1 for x in client_rows if x['limit_hwid']>0),
@@ -1451,7 +1483,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'active_local_bans':len(active_bans),'recent_violations':sum(1 for x in events if x['kind']=='violation' and now-float(x['at'])<=window)}
         return {'source':'DARK Native Security Center','guard':guard,'settings':settings,'summary':summary,
             'clients':client_rows,'events':events,'bans':active_bans,
-            'nodes':{'total':len(node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes} if p.actor.role=='owner' else None,
+            'nodes':{'total':len(node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes,
+                     'guard_enforce':node_guard_enforce,'guard_ready':node_guard_ready,
+                     'policy_pending':node_policy_pending,'offline':offline_nodes} if p.actor.role=='owner' else None,
             'architecture':{'local_observer':'Xray access log source-IP observation',
                 'local_enforcer':'root-owned DARK nftables broker','local_firewall_scope':'this host data ports only',
                 'global_policy':'central Local + Node verified-source aggregation',
@@ -1673,7 +1707,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'limit_unit':'recent distinct verified source IPs',
             'global_multi_node_limit':False,
             'global_account_policy':True,
-            'global_policy_note':'Central can block a client from verified Local + Node observations; nftables bans remain local to the host where they are applied.',
+            'global_policy_note':'Central can block a client from verified Local + remote Node observations; nftables bans remain local to the host where they are applied.',
             'packet_test_performed_here':False}
     def sync_status_doc(p:Principal):
         now=time.time()
