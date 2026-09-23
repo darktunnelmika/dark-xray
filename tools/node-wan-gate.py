@@ -306,9 +306,11 @@ def main()->None:
         failover_ready=sum(bool(x['ok'] and x['failover_ready']) for x in final)
         recovery_ok=all(v['saw_down'] and v['saw_recovered'] for v in transitions.values()) and not unknown
         source_checks=sum(len(v) for v in source_expectations.values())
-        source_observation_verified=bool(source_checks and not unknown_source_nodes and
-            all(row.get('source_ip_checks',0)==len(source_expectations.get(str(row['id']),[]))
-                for row in final if str(row['id']) in source_expectations))
+        expected_rows=[row for row in final if str(row['id']) in source_expectations]
+        source_observation_verified=bool(source_checks and not unknown_source_nodes
+            and len(expected_rows)==len(source_expectations)
+            and all(row.get('source_ip_checks',0)==len(source_expectations.get(str(row['id']),[]))
+                    for row in expected_rows))
         passed=(budget_matches and not fleet_changed and not unknown_source_nodes and enabled_count>=a.min_nodes
                 and healthy==enabled_count and failover_ready>=min(a.min_nodes,enabled_count)
                 and (recovery_ok if a.expect_outage else True))
