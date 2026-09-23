@@ -306,7 +306,7 @@ def production_phase(config:Path,data:Path,timeout:float)->dict[str,Any]:
 
 
 def node_phase(config:Path,data:Path,min_nodes:int,timeout:float,watch_seconds:float,expected_outages:list[str],
-               expected_sources:list[str],source_ip_max_age:float)->dict[str,Any]:
+               expected_sources:list[str]|None=None,source_ip_max_age:float=180.0)->dict[str,Any]:
     if min_nodes<=0:return {'passed':True,'skipped':True,'minimum_nodes':0,'detail':'node WAN gate not requested'}
     try:
         count=enabled_node_count(data)
@@ -318,7 +318,7 @@ def node_phase(config:Path,data:Path,min_nodes:int,timeout:float,watch_seconds:f
           '--timeout',str(timeout),'--watch-seconds',str(watch_seconds),'--expected-node-count',str(count),
           '--report',data/'qa/target-node-wan-gate.json','--json-only']
     for node_id in expected_outages:args.extend(['--expect-outage',node_id])
-    for item in expected_sources:args.extend(['--expect-source-ip',item])
+    for item in (expected_sources or []):args.extend(['--expect-source-ip',item])
     args.extend(['--source-ip-max-age',str(source_ip_max_age)])
     try:cp=_child(args,budget['subprocess_timeout_seconds'])
     except subprocess.TimeoutExpired:
