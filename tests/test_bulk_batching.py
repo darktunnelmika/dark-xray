@@ -42,6 +42,9 @@ def test_bulk_paths_reconcile_once_per_request(tmp_path,monkeypatch):
         assert r.json()['created']==5 and calls==1
         assert all(x['result']['state']=='applied' for x in r.json()['items'] if 'result' in x)
 
+        # Bulk edit endpoints must never fall back to one Manager.update()/commit per item.
+        def forbidden_update(*args,**kwargs):raise AssertionError('bulk endpoint used per-client Manager.update')
+        monkeypatch.setattr(manager,'update',forbidden_update)
         calls=0
         r=c.post('/api/clients/bulk-adjust',json={'emails':[f'batch-{i}' for i in range(1,6)],'add_bytes':1024,'group':'LOAD'})
         assert r.status_code==200,r.text
@@ -83,15 +86,18 @@ def test_bulk_adjust_uses_one_core_batch_transaction(tmp_path,monkeypatch):
         r=c.post('/api/clients/bulk-create',json={'owner':'dark','prefix':'fast-','postfix':'','first':1,'quantity':25,
             'inboundIds':[i1],'client':{'totalGB':1024*1024,'limitIp':1}})
         assert r.status_code==200 and r.json()['created']==25
-        calls=[];real=engine.upsert_many
+        calls=[];real=engine.upsert_many;policy_calls=[];real_policy=store.edit_clients_many
         def counted(items):
             calls.append(len(items));return real(items)
+        def counted_policy(actor,items):
+            policy_calls.append(len(items));return real_policy(actor,items)
         monkeypatch.setattr(engine,'upsert_many',counted)
+        monkeypatch.setattr(store,'edit_clients_many',counted_policy)
         r=c.post('/api/clients/bulk-adjust',json={'emails':[f'fast-{i}' for i in range(1,26)],
             'add_days':1,'group':'FAST'})
         assert r.status_code==200,r.text
         assert r.json()['changed']==25
-        assert calls==[25]
+        assert calls==[25] and policy_calls==[25]
         assert all(x.get('result',{}).get('client',{}).get('group')=='FAST' for x in r.json()['items'])
     finally:
         c.__exit__(None,None,None);manager.close();engine.close();store.close()

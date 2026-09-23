@@ -450,6 +450,76 @@ class Manager:
             if reconcile:self.tick(suppress=True)
             return self.detail(actor,email) if return_detail else None
 
+    def update_batch(self,actor:Actor,items:list[dict],*,action:str='edit')->dict:
+        """Stage up to 500 independent client edits with bounded durable commits.
+
+        Read/validation stays per item so authorization and best-effort errors match
+        the single-client path. Policy rows, desired-state rows and audit records are
+        written in batches, then CoreEngine is reconciled once.
+        """
+        if not isinstance(items,list) or not 1<=len(items)<=500:raise PolicyError('Bulk update requires 1..500 clients')
+        if action not in {'edit','attach'}:raise PolicyError('Invalid bulk update action')
+        with self.lock:
+            out=[];plans=[]
+            for raw in items:
+                label=str(raw.get('email',''))[:128] if isinstance(raw,dict) else ''
+                try:
+                    if not isinstance(raw,dict):raise PolicyError('Invalid bulk update item')
+                    email=str(raw.get('email','')).lower();patch=self.validate_client(raw.get('patch') or {},partial=True)
+                    if 'email' in patch or 'subId' in patch:raise PolicyError('Identity/subId changes use a separate rotation workflow')
+                    ids=raw.get('inboundIds')
+                    row=self.own_row(actor,email,'edit')
+                    if action=='attach':actor.require('clients','attach',row['owner'])
+                    with self.store.lock:meta_row=self.store.db.execute('SELECT * FROM managed_clients WHERE email=?',(email,)).fetchone()
+                    if not meta_row:raise PolicyError('Managed metadata missing')
+                    meta=dict(meta_row)
+                    if meta['state']=='uncertain':raise PolicyError('Resolve the uncertain engine operation before editing')
+                    desired=json.loads(meta['desired'])
+                    if meta['op']=='none':desired=CoreEngine.writable(self.engine.client_detail(email)['client'])
+                    if ids is None:ids=json.loads(meta['inbounds'])
+                    self.check_inbounds(actor,row['owner'],ids)
+                    desired.update(patch);desired['email']=email
+                    self.validate_client_transport(desired,ids)
+                    group=''
+                    if desired.get('group'):
+                        group=self._group_name(desired['group']);desired['group']=group
+                    profile=self.profile(row['owner']);ip_cap=int(profile.get('max_client_ips') or 0);hwid_cap=int(profile.get('max_client_hwid') or 0)
+                    if ip_cap and (desired.get('limitIp',0)==0 or desired['limitIp']>ip_cap):raise PolicyError('IP cap exceeds reseller policy')
+                    if hwid_cap and (desired.get('limitHwid',0)==0 or desired['limitHwid']>hwid_cap):raise PolicyError('HWID cap exceeds reseller policy')
+                    changes={}
+                    if 'limitIp' in patch:changes['limit_ip']=patch['limitIp']
+                    if 'totalGB' in patch:changes['quota_bytes']=patch['totalGB']
+                    if 'expiryTime' in patch:changes['expires_at']=max(0,patch['expiryTime']//1000)
+                    if 'enable' in patch:changes['manual']=not patch['enable']
+                    idx=len(out);out.append({'email':email,'_planned':True})
+                    plans.append({'email':email,'owner':row['owner'],'desired':desired,'ids':ids,'group':group,
+                                  'changes':changes,'patch':patch,'out_index':idx})
+                except (PolicyError,CoreError,ValueError,TypeError) as ex:
+                    out.append({'email':label,'error':str(ex)[:300]})
+            policy_edits=[(p['email'],p['changes']) for p in plans if p['changes']]
+            policy_errors=self.store.edit_clients_many(SYSTEM,policy_edits) if policy_edits else {}
+            staged=[]
+            for plan in plans:
+                error=policy_errors.get(plan['email'])
+                if error:
+                    item=out[plan['out_index']];item.pop('_planned',None);item['error']=error
+                else:staged.append(plan)
+            if staged:
+                now=time.time();groups={(p['owner'],p['group']) for p in staged if p['group']}
+                with self.store.transaction() as db:
+                    for owner,group in groups:
+                        db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
+                    db.executemany("""UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?""",
+                        [(json.dumps(p['desired']),json.dumps(p['ids']),now,'enable' in p['patch'],p['email']) for p in staged])
+                    db.executemany('INSERT INTO live_audit(actor,owner,action,target,detail,at) VALUES(?,?,?,?,?,?)',
+                        [(actor.id,p['owner'],'client.update',p['email'],','.join(sorted(p['patch']))[:500],now) for p in staged])
+                self.tick(suppress=True)
+                details=self.details_many(actor,[p['email'] for p in staged])
+                for plan in staged:
+                    item=out[plan['out_index']];item.pop('_planned',None);item['result']=details[plan['email']]
+            for item in out:item.pop('_planned',None)
+            return {'changed':len(staged),'items':out}
+
     def update_snapshot(self,actor:Actor,email:str,*,action:str='edit')->dict:
         # Bulk planning only needs desired fields/inbounds, not presence rendering.
         with self.lock:
@@ -520,6 +590,19 @@ class Manager:
         decreased=up<meta['last_up'] or down<meta['last_down']
         du=up-meta['last_up'] if up>=meta['last_up'] else up
         dd=down-meta['last_down'] if down>=meta['last_down'] else down
+        # Fast read-only path: an idle fleet must not pay one FULL-sync BEGIN/COMMIT
+        # per client merely to prove that counters are unchanged. Remote usage is
+        # still sampled on every call so remote-only changes/overflow are visible.
+        with self.store.lock:
+            observed_user=self.store.db.execute('SELECT owner,used_bytes FROM clients WHERE id=?',(email,)).fetchone()
+            if not observed_user:return
+            observed_remote=0
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_client_usage'").fetchone():
+                observed_remote=int(self.store.db.execute('SELECT COALESCE(SUM(current_up+current_down),0) FROM remote_node_client_usage WHERE client_id=?',(email,)).fetchone()[0])
+        observed_total=up+down+observed_remote
+        if observed_total>MAX_INT:raise PolicyError('Global client traffic counter overflow')
+        checkpoint_changed=up!=meta['last_up'] or down!=meta['last_down'] or not meta['initialized']
+        if not (du or dd or checkpoint_changed or observed_total!=int(observed_user['used_bytes'])):return
         # Both the idempotent ledger and local baseline advance under one transaction.
         with self.store.transaction() as db:
             user=db.execute('SELECT * FROM clients WHERE id=?',(email,)).fetchone()
@@ -746,7 +829,7 @@ class Manager:
                     observed_quota=int(rec.get('totalGB',0))
                     observed_expiry=max(0,int(rec.get('expiryTime',0))//1000)
                     with self.store.lock:
-                        policy_row=self.store.db.execute('SELECT owner,quota_bytes FROM clients WHERE id=?',(meta['email'],)).fetchone()
+                        policy_row=self.store.db.execute('SELECT owner,quota_bytes,expires_at FROM clients WHERE id=?',(meta['email'],)).fetchone()
                     if policy_row and observed_quota!=int(policy_row['quota_bytes']):
                         try:
                             self.store.edit_client(SYSTEM,meta['email'],quota_bytes=observed_quota)
@@ -755,9 +838,9 @@ class Manager:
                             if self.engine.config.writes_enabled:
                                 payload=CoreEngine.writable(rec);payload['totalGB']=int(policy_row['quota_bytes'])
                                 self.engine.update(meta['email'],payload);rec['totalGB']=int(policy_row['quota_bytes'])
-                    with self.store.transaction() as db:
-                        db.execute('UPDATE clients SET expires_at=? WHERE id=? AND expires_at IS NOT ?',
-                                   (observed_expiry,meta['email'],observed_expiry))
+                    if policy_row and observed_expiry!=int(policy_row['expires_at'] or 0):
+                        with self.store.transaction() as db:
+                            db.execute('UPDATE clients SET expires_at=? WHERE id=?',(observed_expiry,meta['email']))
                     reasons=self.store.client_reasons(meta['email'])
                     # Preserve unexpected external disables. Never automatically
                     # resurrect a client whose enable flag changed outside DARK.
@@ -769,9 +852,10 @@ class Manager:
                         payload=CoreEngine.writable(rec);payload['enable']=enabled
                         self.engine.update(meta['email'],payload)
                         rec['enable']=enabled
-                    with self.store.transaction() as db:
-                        db.execute('UPDATE managed_clients SET expected_enable=? WHERE email=? AND expected_enable IS NOT ?',
-                                   (int(bool(rec.get('enable'))),meta['email'],int(bool(rec.get('enable')))))
+                    observed_enable=int(bool(rec.get('enable')))
+                    if meta['expected_enable'] is None or int(meta['expected_enable'])!=observed_enable:
+                        with self.store.transaction() as db:
+                            db.execute('UPDATE managed_clients SET expected_enable=? WHERE email=?',(observed_enable,meta['email']))
                 self.engine.flush()
                 self.last_poll=time.time();self.last_error='' 
             except Exception as e:

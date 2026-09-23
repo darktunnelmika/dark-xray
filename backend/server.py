@@ -583,7 +583,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/clients/bulk-adjust')
     def bulk_adjust(body:BulkAdjust,p:Principal=Depends(current)):
-        writable();out=[];now_ms=int(time.time()*1000);changed=[]
+        writable();now_ms=int(time.time()*1000);updates=[];slots=[]
         for email in dict.fromkeys(body.emails):
             try:
                 d=manager.update_snapshot(p.actor,email);c=d['client'];patch={}
@@ -600,33 +600,29 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 if body.group is not None:patch['group']=body.group
                 if body.limit_hwid is not None:patch['limitHwid']=body.limit_hwid
                 if not patch:raise PolicyError('No bulk adjustment requested')
-                manager.update(p.actor,email,patch,reconcile=False,return_detail=False);changed.append(email);out.append({'email':email,'_changed':True})
-            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
-        if changed:
-            manager.tick(suppress=True);apply_global_security()
-            details=manager.details_many(p.actor,changed)
-        else:details={}
-        for item in out:
-            if item.pop('_changed',False):item['result']=details[item['email']]
-        return {'changed':len(changed),'items':out}
+                updates.append({'email':email,'patch':patch});slots.append(None)
+            except (PolicyError,CoreError) as ex:slots.append({'email':email,'error':str(ex)[:300]})
+        batch=manager.update_batch(p.actor,updates) if updates else {'changed':0,'items':[]}
+        results=iter(batch['items'])
+        out=[next(results) if slot is None else slot for slot in slots]
+        if batch['changed']:apply_global_security()
+        return {'changed':batch['changed'],'items':out}
 
     @app.post('/api/clients/bulk-inbounds')
     def bulk_inbounds(body:BulkInbounds,p:Principal=Depends(current)):
-        writable();out=[];changed=[]
+        writable();updates=[];slots=[]
         for email in dict.fromkeys(body.emails):
             try:
                 d=manager.update_snapshot(p.actor,email,action='attach');current=set(d['inboundIds']);change=set(body.inboundIds)
                 ids=sorted(current|change) if body.mode=='attach' else sorted(current-change)
                 if not ids:raise PolicyError('A client must retain at least one inbound')
-                manager.update(p.actor,email,{},ids,reconcile=False,return_detail=False);changed.append(email);out.append({'email':email,'_changed':True})
-            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
-        if changed:
-            manager.tick(suppress=True);apply_global_security()
-            details=manager.details_many(p.actor,changed)
-        else:details={}
-        for item in out:
-            if item.pop('_changed',False):item['result']=details[item['email']]
-        return {'changed':len(changed),'items':out}
+                updates.append({'email':email,'patch':{},'inboundIds':ids});slots.append(None)
+            except (PolicyError,CoreError) as ex:slots.append({'email':email,'error':str(ex)[:300]})
+        batch=manager.update_batch(p.actor,updates,action='attach') if updates else {'changed':0,'items':[]}
+        results=iter(batch['items'])
+        out=[next(results) if slot is None else slot for slot in slots]
+        if batch['changed']:apply_global_security()
+        return {'changed':batch['changed'],'items':out}
 
     @app.get('/api/clients/{email}')
     def client(email:str,p:Principal=Depends(current)):

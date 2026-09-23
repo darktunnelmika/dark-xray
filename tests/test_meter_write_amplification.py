@@ -3,6 +3,7 @@
 These use the real manager and SQLite, with the project's test engine. They are
 accounting/write-amplification regressions, not a WAN or production SLA claim.
 """
+import contextlib
 import json
 import sqlite3
 import time
@@ -45,12 +46,20 @@ def meter(fleet, up, down):
     return manager.meta('meter-1')
 
 
-def test_unchanged_full_tick_does_not_write_per_customer(fleet):
+def test_unchanged_full_tick_does_not_write_per_customer(fleet,monkeypatch):
     store, engine, manager = fleet
     before = store.db.total_changes
     seq = [tuple(r) for r in store.db.execute('SELECT email,seq FROM managed_clients ORDER BY email')]
+    transactions=0;real_transaction=store.transaction
+    @contextlib.contextmanager
+    def counted_transaction():
+        nonlocal transactions
+        transactions+=1
+        with real_transaction() as db:yield db
+    monkeypatch.setattr(store,'transaction',counted_transaction)
     manager.tick(); manager.tick()
     assert manager.last_error == ''
+    assert transactions<=2  # one bounded cycle-scheduler transaction per idle tick, not one per client
     assert store.db.total_changes == before
     assert [tuple(r) for r in store.db.execute('SELECT email,seq FROM managed_clients ORDER BY email')] == seq
     assert store.db.execute('PRAGMA synchronous').fetchone()[0] == 2  # FULL retained
