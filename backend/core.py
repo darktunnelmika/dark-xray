@@ -655,6 +655,44 @@ class CoreEngine:
         with self.store.transaction() as db:db.execute('UPDATE core_clients SET body=? WHERE email=?',(json.dumps(old),email))
 
     @serialized
+    def upsert_many(self,items:list[dict])->dict:
+        """Apply validated managed-client upserts in one durable SQLite transaction.
+
+        Manager already owns policy/identity validation. This method keeps CoreEngine
+        invariants while avoiding one FULL-sync transaction per client during bulk reconciliation.
+        """
+        self._write()
+        if not isinstance(items,list) or not items or len(items)>500:
+            raise CoreError('Core batch upsert requires 1..500 clients')
+        known={r['id'] for r in self.inbounds()}
+        with self.store.lock:
+            rows={r['email']:r for r in self.store.db.execute('SELECT email,body,inbounds FROM core_clients')}
+        prepared=[];seen=set()
+        for raw in items:
+            if not isinstance(raw,dict):
+                raise CoreError('Invalid core batch item')
+            email=raw.get('email');client=raw.get('client');inbounds=raw.get('inbounds')
+            if not isinstance(email,str) or not EMAIL_RE.fullmatch(email) or email in seen:
+                raise CoreError('Invalid or duplicate core batch identity')
+            seen.add(email)
+            if not isinstance(client,dict) or not isinstance(inbounds,list) or not inbounds:
+                raise CoreError('Invalid core batch payload')
+            if any(type(i)is not int or i<1 for i in inbounds) or len(set(inbounds))!=len(inbounds) or not set(inbounds)<=known:
+                raise CoreError('Unknown inbound')
+            if client.get('email',email)!=email:
+                raise CoreError('Identity cannot change')
+            existing=rows.get(email)
+            if existing:
+                body=json.loads(existing['body']);body.update(self.writable(client));body['email']=email
+            else:
+                body=self.writable(client);body['email']=email
+            prepared.append((email,json.dumps(body),json.dumps(inbounds)))
+        with self.store.transaction() as db:
+            db.executemany("""INSERT INTO core_clients(email,body,inbounds) VALUES(?,?,?)
+                ON CONFLICT(email) DO UPDATE SET body=excluded.body,inbounds=excluded.inbounds""",prepared)
+        return {'updated':len(prepared)}
+
+    @serialized
     def delete(self,email:str):
         self._write();self.collect_stats(force=True)
         final=None
@@ -830,7 +868,11 @@ class CoreEngine:
             else:
                 # Avoid attaching to an unrelated process on the control API port.
                 s=socket.socket()
-                try:s.bind(('127.0.0.1',self.config.xray_api_port))
+                try:
+                    # A closed API connection may retain TIME_WAIT after a crash.
+                    # Reuse that address, not a live listener; never use SO_REUSEPORT.
+                    s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                    s.bind(('127.0.0.1',self.config.xray_api_port))
                 except OSError:raise CoreError('Core API port already occupied by another process',status=409)
                 finally:s.close()
             if old:self._atomic(self.runtime/'previous.json',old)

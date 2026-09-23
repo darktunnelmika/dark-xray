@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import time
 import threading
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Literal
@@ -94,6 +95,26 @@ class RepresentativeBody(Model):
     prefix:str=Field(default='',max_length=64)
     max_client_ips:StrictInt=Field(default=0,ge=0,le=1000)
     max_client_hwid:StrictInt=Field(default=0,ge=0,le=1000)
+class ReplacementCommit(Model):
+    sourceBindingId:str=Field(pattern=r'^[0-9a-f]{32}$')
+    acceptUnconfirmedOldServer:bool
+    acceptUnreportedTraffic:bool
+class ReplacementStage(Model):
+    bindingId:str=Field(pattern=r'^[0-9a-f]{32}$')
+
+class ReplacementActivate(ReplacementStage):
+    reviewHash:str=Field(pattern=r'^[0-9a-f]{64}$')
+    confirmStart:bool=Field(strict=True)
+    acceptEndpointResponsibility:bool=Field(strict=True)
+    acceptUnconfirmedOldServer:bool=Field(strict=True)
+    acceptUnreportedTraffic:bool=Field(strict=True)
+
+class ReplacementPause(ReplacementStage):
+    confirmStop:bool=Field(strict=True)
+
+class ReplacementCancel(Model):
+    discardCandidate:bool
+
 class ResolveReset(Model):confirmation:str=Field(min_length=1,max_length=128)
 class Action(Model): action:Literal['enable','disable','reset','delete']
 class Bulk(Model):
@@ -207,6 +228,8 @@ class NodeTokenCreate(Model):
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
+    from node_replacement import NodeReplacement
+    replacements=NodeReplacement(nodes)
     node_reset_lock=threading.RLock()
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
     def apply_global_security(_node_id:str='',_result:dict|None=None):
@@ -224,6 +247,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         yield
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+    app.state.replacements=replacements
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
     public=urlsplit(config.public_origin);panel_path=config.panel_path
 
@@ -294,6 +318,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return p
     def writable():
         if not config.writes_enabled:raise HTTPException(409,'Local writes disabled by administrator')
+
+    from node_recovery import install_hub_recovery
+    install_hub_recovery(app,nodes,owner,writable,manager.audit)
 
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
@@ -556,10 +583,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/clients/bulk-adjust')
     def bulk_adjust(body:BulkAdjust,p:Principal=Depends(current)):
-        writable();out=[];now_ms=int(time.time()*1000);changed=[]
+        writable();now_ms=int(time.time()*1000);updates=[];slots=[]
         for email in dict.fromkeys(body.emails):
             try:
-                d=manager.detail(p.actor,email,credentials=False);c=d['client'];patch={}
+                d=manager.update_snapshot(p.actor,email);c=d['client'];patch={}
                 if body.add_bytes:
                     current=int(c.get('totalGB',0))
                     if current==0:raise PolicyError('Unlimited quota is unchanged by add-bytes; set a quota explicitly per client')
@@ -573,29 +600,29 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 if body.group is not None:patch['group']=body.group
                 if body.limit_hwid is not None:patch['limitHwid']=body.limit_hwid
                 if not patch:raise PolicyError('No bulk adjustment requested')
-                manager.update(p.actor,email,patch,reconcile=False);changed.append(email);out.append({'email':email,'_changed':True})
-            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
-        if changed:
-            manager.tick(suppress=True);apply_global_security()
-        for item in out:
-            if item.pop('_changed',False):item['result']=manager.detail(p.actor,item['email'])
-        return {'changed':len(changed),'items':out}
+                updates.append({'email':email,'patch':patch});slots.append(None)
+            except (PolicyError,CoreError) as ex:slots.append({'email':email,'error':str(ex)[:300]})
+        batch=manager.update_batch(p.actor,updates) if updates else {'changed':0,'items':[]}
+        results=iter(batch['items'])
+        out=[next(results) if slot is None else slot for slot in slots]
+        if batch['changed']:apply_global_security()
+        return {'changed':batch['changed'],'items':out}
 
     @app.post('/api/clients/bulk-inbounds')
     def bulk_inbounds(body:BulkInbounds,p:Principal=Depends(current)):
-        writable();out=[];changed=[]
+        writable();updates=[];slots=[]
         for email in dict.fromkeys(body.emails):
             try:
-                manager.own_row(p.actor,email,'attach');d=manager.detail(p.actor,email,credentials=False);current=set(d['inboundIds']);change=set(body.inboundIds)
+                d=manager.update_snapshot(p.actor,email,action='attach');current=set(d['inboundIds']);change=set(body.inboundIds)
                 ids=sorted(current|change) if body.mode=='attach' else sorted(current-change)
                 if not ids:raise PolicyError('A client must retain at least one inbound')
-                manager.update(p.actor,email,{},ids,reconcile=False);changed.append(email);out.append({'email':email,'_changed':True})
-            except (PolicyError,CoreError) as ex:out.append({'email':email,'error':str(ex)[:300]})
-        if changed:
-            manager.tick(suppress=True);apply_global_security()
-        for item in out:
-            if item.pop('_changed',False):item['result']=manager.detail(p.actor,item['email'])
-        return {'changed':len(changed),'items':out}
+                updates.append({'email':email,'patch':{},'inboundIds':ids});slots.append(None)
+            except (PolicyError,CoreError) as ex:slots.append({'email':email,'error':str(ex)[:300]})
+        batch=manager.update_batch(p.actor,updates,action='attach') if updates else {'changed':0,'items':[]}
+        results=iter(batch['items'])
+        out=[next(results) if slot is None else slot for slot in slots]
+        if batch['changed']:apply_global_security()
+        return {'changed':batch['changed'],'items':out}
 
     @app.get('/api/clients/{email}')
     def client(email:str,p:Principal=Depends(current)):
@@ -833,6 +860,17 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def ensure_node_desired_state(node_id:str)->dict:
         nodes.set_desired_state(node_id,build_node_desired_payload(node_id))
         return nodes.desired_state(node_id)
+
+    def refresh_replacement_policy():
+        manager.tick(suppress=False)
+        apply_global_security()
+
+    from node_replacement_deployment import ReplacementDeployment
+    replacement_deployments=ReplacementDeployment(nodes,replacements,build_node_desired_payload,refresh_replacement_policy)
+    app.state.replacement_deployments=replacement_deployments
+    from node_replacement_activation import ReplacementActivation
+    replacement_activation=ReplacementActivation(replacement_deployments)
+    app.state.replacement_activation=replacement_activation
 
     def sync_node_assignments(node_id:str)->dict:
         pre=nodes.sync_traffic(node_id)
@@ -1120,51 +1158,89 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/nodes')
     def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
 
-    @app.post('/api/nodes/pair')
-    def remote_node_pair(body:NodePair,p:Principal=Depends(owner)):
-        writable();code=body.code.strip()
-        if not code.startswith('DXN1.'):raise HTTPException(400,'Unsupported DARK Node pair code')
-        encoded=code[5:]
-        if not encoded or len(encoded)>3800:raise HTTPException(400,'Invalid DARK Node pair code')
-        try:
-            raw=base64.urlsafe_b64decode(encoded+'='*((4-len(encoded)%4)%4))
-            doc=json.loads(raw.decode('utf-8'))
-        except Exception as ex:raise HTTPException(400,'Malformed DARK Node pair code') from ex
-        required={'schema','nodeId','name','origin','token','dataAddress','priority','failoverEnabled'}
-        if not isinstance(doc,dict) or set(doc)!=required or doc.get('schema')!=1:
-            raise HTTPException(400,'Invalid DARK Node pair payload')
-        node_id=doc.get('nodeId');name=doc.get('name');origin=doc.get('origin');token=doc.get('token')
-        data_address=doc.get('dataAddress');priority=doc.get('priority');failover=doc.get('failoverEnabled')
-        if not isinstance(node_id,str) or not NAME_RE.fullmatch(node_id) or not isinstance(name,str) or not 1<=len(name)<=128:
-            raise HTTPException(400,'Invalid paired node identity')
-        if not isinstance(origin,str) or not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:
-            raise HTTPException(400,'Invalid paired node credential')
-        if not isinstance(data_address,str) or type(priority)is not int or not 1<=priority<=1000 or type(failover)is not bool:
-            raise HTTPException(400,'Invalid paired node settings')
-        with store.lock:
-            if store.db.execute('SELECT 1 FROM remote_nodes WHERE id=? OR origin=?',(node_id,origin)).fetchone():
-                raise HTTPException(409,'Node ID or Origin is already registered')
-        rotated=False
-        try:
-            nodes.put(node_id,name,origin,token,True,[],data_address,priority,failover)
-            probe=nodes.probe(node_id,timeout=8.0)
-            ensure_node_desired_state(node_id)
-            # The installer Pair Code is bootstrap-only. Rotate its credential
-            # after the authenticated probe so a copied DXN1 code cannot be
-            # reused as the long-lived Hub -> Node bearer credential.
-            active_token='dkn_'+secrets.token_urlsafe(48)
-            nodes.rotate_token(node_id,active_token);rotated=True
-        except Exception:
-            # Before credential rotation the bootstrap registration is safe to
-            # remove. After rotation, retain the registered Node rather than
-            # orphaning an Agent whose original Pair Code has been invalidated.
-            if not rotated:
-                try:nodes.delete(node_id)
-                except Exception:pass
-            raise
-        manager.audit(p.actor,p.actor.id,'node.pair',node_id,'agent-only pair code; bootstrap credential rotated')
-        return {'paired':True,'pair_code_consumed':True,'node':nodes.get(node_id),
-                'health':probe.get('health',{}),'latency_ms':probe.get('latency_ms',0)}
+    @app.post('/api/nodes/{node_id}/replacement/prepare')
+    def prepare_node_replacement(node_id:str,body:NodePair,p:Principal=Depends(owner)):
+        writable()
+        attempt=replacements.begin(node_id,body.code)
+        manager.audit(p.actor,p.actor.id,'node.replacement.prepare',node_id,'attempt='+attempt['attempt_id'])
+        return replacements.resume(node_id,attempt['attempt_id'])
+
+    @app.get('/api/nodes/{node_id}/replacement/{attempt_id}')
+    def node_replacement_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        return replacements.status(node_id,attempt_id)
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/retry')
+    def retry_node_replacement(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        writable()
+        replacements.status(node_id,attempt_id)
+        manager.audit(p.actor,p.actor.id,'node.replacement.retry',node_id,'attempt='+attempt_id)
+        return replacements.resume(node_id,attempt_id)
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/commit')
+    def commit_node_replacement(node_id:str,attempt_id:str,body:ReplacementCommit,p:Principal=Depends(owner)):
+        writable()
+        result=replacements.commit(node_id,attempt_id,source_binding_id=body.sourceBindingId,
+            accept_unconfirmed_old_server=body.acceptUnconfirmedOldServer,
+            accept_unreported_traffic=body.acceptUnreportedTraffic)
+        manager.audit(p.actor,p.actor.id,'node.replacement.commit',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/cancel')
+    def cancel_node_replacement(node_id:str,attempt_id:str,body:ReplacementCancel,p:Principal=Depends(owner)):
+        writable()
+        result=replacements.cancel(node_id,attempt_id,discard_candidate=body.discardCandidate)
+        manager.audit(p.actor,p.actor.id,'node.replacement.cancel',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.get('/api/nodes/{node_id}/replacement/{attempt_id}/deployment')
+    def node_replacement_deployment_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        return replacement_deployments.status(node_id,attempt_id)
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/stage')
+    def stage_node_replacement(node_id:str,attempt_id:str,body:ReplacementStage,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_deployments.stage(node_id,attempt_id,binding_id=body.bindingId)
+        manager.audit(p.actor,p.actor.id,'node.replacement.stage',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/activation/review')
+    def review_replacement_activation(node_id:str,attempt_id:str,body:ReplacementStage,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_activation.review(node_id,attempt_id,binding_id=body.bindingId)
+        manager.audit(p.actor,p.actor.id,'node.replacement.activation.review',node_id,'attempt='+attempt_id)
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/activation/start')
+    def activate_replacement(node_id:str,attempt_id:str,body:ReplacementActivate,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_activation.activate(node_id,attempt_id,binding_id=body.bindingId,
+            review_hash=body.reviewHash,confirm_start=body.confirmStart,
+            accept_endpoint_responsibility=body.acceptEndpointResponsibility,
+            accept_unconfirmed_old_server=body.acceptUnconfirmedOldServer,
+            accept_unreported_traffic=body.acceptUnreportedTraffic)
+        manager.audit(p.actor,p.actor.id,'node.replacement.activation.start',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.post('/api/nodes/{node_id}/replacement/{attempt_id}/activation/pause')
+    def pause_replacement_activation(node_id:str,attempt_id:str,body:ReplacementPause,p:Principal=Depends(owner)):
+        writable()
+        result=replacement_activation.pause(node_id,attempt_id,binding_id=body.bindingId,confirm_stop=body.confirmStop)
+        manager.audit(p.actor,p.actor.id,'node.replacement.activation.pause',node_id,
+                      'attempt='+attempt_id+'; phase='+result['phase'])
+        return result
+
+    @app.get('/api/nodes/{node_id}/replacement/{attempt_id}/activation')
+    def replacement_activation_status(node_id:str,attempt_id:str,p:Principal=Depends(owner)):
+        return replacement_activation.status(node_id,attempt_id)
+
+    from node_pairing import install_hub_pairing
+    install_hub_pairing(app,nodes,owner,writable,manager.audit)
+    from node_credentials import install_hub_credentials
+    install_hub_credentials(app,nodes,owner,writable,manager.audit)
 
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
@@ -1177,14 +1253,24 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return result
     @app.patch('/api/nodes/{node_id}')
     def remote_node_edit(node_id:str,body:NodePatch,p:Principal=Depends(owner)):
-        writable();token=body.token
-        if token:
-            nodes.rotate_token(node_id,token)
-        else:
-            if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
-            token=nodes.get(node_id,secret=True)['token']
+        writable()
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
+        if body.token:
+            # Credential handoff is independent of configuration. Do not rotate
+            # first, then discover that the requested metadata is invalid.
+            current_node=nodes.get(node_id)
+            expected={'name':current_node['name'],'origin':current_node['origin'],
+                'dataAddress':current_node['data_address'],'enabled':current_node['enabled'],
+                'priority':current_node['priority'],'failoverEnabled':current_node['failover_enabled'],
+                'inboundIds':sorted(current_node['inboundIds'])}
+            supplied=body.model_dump(include=set(expected));supplied['inboundIds']=sorted(set(body.inboundIds))
+            if supplied!=expected:raise HTTPException(409,'Save settings separately from token rotation')
+            result=nodes.rotate_token(node_id,body.token)
+            manager.audit(p.actor,p.actor.id,'node.credential.rotate',node_id,'phase='+result['phase'])
+            return result
+        if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
+        token=nodes.get(node_id,secret=True)['token']
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
         for target in {node_id}:ensure_node_desired_state(target)

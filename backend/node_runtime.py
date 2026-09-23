@@ -11,8 +11,10 @@ import copy
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
+import uuid
 
 from core import CoreEngine,CoreError
 from dark_policy import Store,PolicyError
@@ -27,6 +29,8 @@ class NodeRuntime:
         if not self.scope or len(self.scope)>128:raise PolicyError('Invalid node runtime scope')
         with store.lock:
             store.db.executescript('''
+            CREATE TABLE IF NOT EXISTS node_runtime_identity(
+              scope TEXT PRIMARY KEY,installation_id TEXT NOT NULL UNIQUE,created_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS node_runtime_state(
               scope TEXT PRIMARY KEY,applied_revision INTEGER NOT NULL DEFAULT 0,
               applied_hash TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL DEFAULT 0,
@@ -42,7 +46,160 @@ class NodeRuntime:
               scope TEXT NOT NULL,reset_id TEXT NOT NULL,source_email TEXT NOT NULL,
               up_bytes INTEGER NOT NULL,down_bytes INTEGER NOT NULL,at REAL NOT NULL,
               PRIMARY KEY(scope,reset_id));
+            CREATE TABLE IF NOT EXISTS node_runtime_commands(
+              scope TEXT PRIMARY KEY,revision INTEGER NOT NULL,
+              command_id TEXT NOT NULL,action TEXT NOT NULL,
+              phase TEXT NOT NULL CHECK(phase IN ('pending','applied','failed')),
+              updated_at REAL NOT NULL,applied_at REAL NOT NULL DEFAULT 0,
+              last_error TEXT NOT NULL DEFAULT '');
+            CREATE TABLE IF NOT EXISTS node_runtime_control(
+              scope TEXT PRIMARY KEY,
+              desired_running INTEGER NOT NULL CHECK(desired_running IN (0,1)),
+              manual_stop INTEGER NOT NULL CHECK(manual_stop IN (0,1)),
+              updated_at REAL NOT NULL);
             ''')
+        # The identity belongs to this durable Agent state, not its address,
+        # token or Python process. Fresh state gets a fresh identity; cloning an
+        # entire state directory deliberately clones it (not hardware attestation).
+        with store.transaction() as db:
+            db.execute('INSERT OR IGNORE INTO node_runtime_identity VALUES(?,?,?)',
+                       (self.scope,uuid.uuid4().hex,time.time()))
+            self.installation_id=db.execute(
+                'SELECT installation_id FROM node_runtime_identity WHERE scope=?',(self.scope,)).fetchone()[0]
+        if not isinstance(self.installation_id,str) or not re.fullmatch(r'[0-9a-f]{32}',self.installation_id):
+            raise PolicyError('Invalid persisted Node installation identity')
+        self.engine.wants_running=self.control_status()['effective_running']
+
+    def control_status(self)->dict:
+        with self.store.lock:
+            row=self.store.db.execute(
+                'SELECT desired_running,manual_stop,updated_at FROM node_runtime_control WHERE scope=?',
+                (self.scope,)).fetchone()
+        desired=bool(row['desired_running']) if row else bool(self.engine.config.core_autostart)
+        paused=bool(row['manual_stop']) if row else False
+        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused,
+                'persisted':row is not None,'updated_at':float(row['updated_at']) if row else 0.0}
+
+    def _write_control(self,db,desired:bool,paused:bool)->None:
+        db.execute('''INSERT INTO node_runtime_control(scope,desired_running,manual_stop,updated_at)
+                      VALUES(?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
+                      desired_running=excluded.desired_running,manual_stop=excluded.manual_stop,
+                      updated_at=excluded.updated_at''',
+                   (self.scope,int(desired),int(paused),time.time()))
+
+    def command_status(self)->dict:
+        """Latest accepted control identity; `phase` is historical, not liveness."""
+        with self.store.lock:
+            row=self.store.db.execute(
+                'SELECT * FROM node_runtime_commands WHERE scope=?',(self.scope,)).fetchone()
+        if not row:
+            return {'persisted':False,'revision':0,'command_id':'','action':'',
+                    'phase':'','pending':False,'last_error':''}
+        return {**dict(row),'persisted':True,'pending':row['phase']!='applied'}
+
+    def ordered_command(self,body:dict)->dict:
+        """Apply a Hub identity under the same lock as desired-state changes.
+
+        Persist the high-water mark BEFORE touching Xray. A rejected/failed newer
+        command must still fence delayed older commands. A committed receipt
+        makes a retry after a lost HTTP response a read, not another Restart.
+        A crash between process effects and receipt commit remains ambiguous:
+        pending/failed commands may be retried (no physical exactly-once claim).
+        """
+        if not isinstance(body,dict) or set(body)!={'nodeId','revision','commandId','action'}:
+            raise PolicyError('Invalid ordered Node command envelope')
+        revision=body['revision'];identity=body['commandId'];action=body['action']
+        if body['nodeId']!=self.scope:raise PolicyError('Command targets a different Node')
+        if type(revision) is not int or not 0<revision<2**63:raise PolicyError('Invalid command revision')
+        if not isinstance(identity,str) or not re.fullmatch(r'[0-9a-f]{32}',identity):
+            raise PolicyError('Invalid command identity')
+        if not isinstance(action,str) or action not in {'start','stop','restart'}:
+            raise PolicyError('Unsupported ordered Node action')
+        with self.engine.lock:
+            self.engine._write()
+            previous=self.command_status()
+            if previous['persisted']:
+                if revision<previous['revision']:
+                    raise CoreError('Refusing stale Node command revision',status=409)
+                if revision==previous['revision']:
+                    if identity!=previous['command_id'] or action!=previous['action']:
+                        raise CoreError('Command revision belongs to a different identity/action',status=409)
+                    if previous['phase']=='applied':return self._command_ack(previous,duplicate=True)
+                elif identity==previous['command_id']:
+                    raise CoreError('Command identity already belongs to a different revision',status=409)
+            with self.store.transaction() as db:
+                db.execute("""INSERT INTO node_runtime_commands
+                              (scope,revision,command_id,action,phase,updated_at)
+                              VALUES(?,?,?,?,'pending',?) ON CONFLICT(scope) DO UPDATE SET
+                              revision=excluded.revision,command_id=excluded.command_id,
+                              action=excluded.action,phase='pending',updated_at=excluded.updated_at,
+                              applied_at=0,last_error=''""",
+                           (self.scope,revision,identity,action,time.time()))
+            try:
+                result=self._command_locked(action)
+                expected='stopped' if action=='stop' else 'running'
+                if not isinstance(result,dict) or result.get('state')!=expected:
+                    raise CoreError('Xray did not reach the commanded state',status=503)
+                with self.store.transaction() as db:
+                    db.execute("""UPDATE node_runtime_commands SET phase='applied',applied_at=?,last_error=''
+                                  WHERE scope=? AND revision=? AND command_id=?""",
+                               (time.time(),self.scope,revision,identity))
+            except Exception as exc:
+                with self.store.transaction() as db:
+                    db.execute("""UPDATE node_runtime_commands SET phase='failed',last_error=?
+                                  WHERE scope=? AND revision=? AND command_id=?""",
+                               (str(exc)[:500],self.scope,revision,identity))
+                raise
+            return self._command_ack(self.command_status(),duplicate=False)
+
+    def _command_ack(self,receipt:dict,*,duplicate:bool)->dict:
+        core=self.engine.runtime_state()
+        expected='stopped' if receipt['action']=='stop' else 'running'
+        return {'service':'DARK XRAY NODE','node_id':self.scope,'revision':receipt['revision'],
+                'commandId':receipt['command_id'],'action':receipt['action'],
+                'applied':receipt['phase']=='applied' and core.get('state')==expected,
+                'duplicate':duplicate,'engine':core,'run_control':self.control_status(),
+                'control_receipt':receipt}
+
+    def command(self,action:str)->dict:
+        with self.engine.lock:
+            # Keep the old Hub contract until ordered control is first used.
+            # Afterwards, an unversioned request cannot bypass the receipt fence.
+            if action!='validate' and self.command_status()['persisted']:
+                raise CoreError('Ordered Node control is active; use /node/api/v1/control',status=409)
+            return self._command_locked(action)
+
+    def _command_locked(self,action:str)->dict:
+        # An authenticated Stop is a durable pause, not a temporary process kill.
+        # Caller holds engine.lock; ordinary configuration cannot undo this pause.
+        if action=='validate':return self.engine.command(action)
+        if action not in {'start','restart','stop'}:raise PolicyError('Unsupported Node core action')
+        self.engine._write()
+        previous=self.control_status()
+        if action=='stop':
+            with self.store.transaction() as db:
+                self._write_control(db,previous['desired_running'],True)
+            # Even a failed final traffic snapshot must not cause an automatic
+            # restart. Maintenance retries the safe stop later.
+            self.engine.wants_running=False
+            return self.engine.command('stop')
+        with self.store.transaction() as db:self._write_control(db,True,False)
+        try:return self.engine.command(action)
+        except Exception:
+            with self.store.transaction() as db:
+                self._write_control(db,previous['desired_running'],previous['manual_stop'])
+            self.engine.wants_running=previous['effective_running']
+            raise
+
+    def reconcile_control(self)->bool:
+        # Restore the last accepted control intent from local SQLite, with no
+        # Hub connectivity needed. Never start a child here: flush/start owns it.
+        with self.engine.lock:
+            self.engine.wants_running=False
+            wanted=self.control_status()['effective_running']
+            self.engine.wants_running=wanted
+            if not wanted and self.engine.running:self.engine.command('stop')
+            return wanted
 
     def mirror_email(self,source_email:str)->str:
         if not isinstance(source_email,str) or not source_email or len(source_email)>128:
@@ -225,7 +382,7 @@ class NodeRuntime:
 
     def _snapshot(self)->dict:
         names=('core_inbounds','core_clients','core_sections','clients','owners','observations','bans','core_devices',
-               'node_runtime_inbounds','node_runtime_clients','node_runtime_state','node_runtime_traffic_resets')
+               'node_runtime_inbounds','node_runtime_clients','node_runtime_state','node_runtime_traffic_resets','node_runtime_control')
         out={}
         with self.store.lock:
             for name in names:
@@ -259,10 +416,27 @@ class NodeRuntime:
         if mode=='enforce' and not status.get('direct_source_verified'):
             raise PolicyError('Node Guard has not verified direct packet sources')
         if status.get('runtime_port_updates'):
-            client.set_ports(ports)
+            if set(ports)!=set(old):client.set_ports(ports)
         elif set(ports)-set(old):
             if mode=='enforce':raise PolicyError('Node Guard root approval is missing for desired Xray ports')
         return client,old
+
+    def reconcile_guard(self)->None:
+        """Recover volatile broker ports from applied local state, even offline.
+
+        No new revision, inbound edit or Xray restart is needed. The root
+        broker continues to validate protected ports and direct-source approval.
+        An unpaired/never-applied Node must not change the broker allowlist.
+        """
+        with self.engine.lock:
+            if self.status()['appliedRevision']<1:return
+            with self.store.lock:
+                rows=self.store.db.execute(
+                    'SELECT c.body FROM core_inbounds c JOIN node_runtime_inbounds n '
+                    'ON c.id=n.local_inbound_id WHERE n.scope=?',(self.scope,)).fetchall()
+            local={'sections':{'ipguard':self.engine.section('ipguard')},
+                   'assignments':[{'inbound':json.loads(row['body'])} for row in rows]}
+            self._sync_guard_ports(local)
 
     def apply(self,envelope:dict)->dict:
         # Validation, revision comparison, snapshot and commit share one lock.
@@ -278,9 +452,18 @@ class NodeRuntime:
         if revision==current['appliedRevision']:
             if digest!=current['appliedHash']:raise PolicyError('Revision already belongs to a different desired state')
             if not current['lastError']:
+                self.reconcile_control()
+                self.reconcile_guard()
                 return {'changed':False,'appliedRevision':revision,'appliedHash':digest,
                         'items':self.assignment_status(),'core':self.engine.runtime_state()}
         model=self._validated_model(payload);now=time.time()
+        control=self.control_status()
+        # Once ordered control is established, configuration snapshots (including
+        # an in-flight old desiredRunning=False) cannot reverse accepted control.
+        # Failed Start/Restart leaves the previous effective intent authoritative.
+        desired_running=(control['desired_running'] if self.command_status()['persisted']
+                         else payload.get('desiredRunning',True))
+        effective_running=desired_running and not control['manual_stop']
         was_running=self.engine.running;wanted_running=self.engine.wants_running
         guard=None;old_guard_ports=None;snap=None
         try:
@@ -334,11 +517,12 @@ class NodeRuntime:
                 for mirror in stale:
                     db.execute('DELETE FROM observations WHERE client_id=?',(mirror,))
                     db.execute('DELETE FROM core_devices WHERE email=?',(mirror,))
-            if payload.get('desiredRunning',True):
+            if effective_running:
                 core=self.engine.command('start')
             else:
                 self.engine.validate();core=self.engine.runtime_state()
             with self.store.transaction() as db:
+                self._write_control(db,desired_running,control['manual_stop'])
                 db.execute('''INSERT INTO node_runtime_state(scope,applied_revision,applied_hash,updated_at,last_error)
                               VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
                               applied_revision=excluded.applied_revision,applied_hash=excluded.applied_hash,
@@ -379,8 +563,8 @@ class NodeRuntime:
                 if not detail:continue
                 for inbound_id in json.loads(detail['inbounds']):
                     if int(inbound_id) in counts:counts[int(inbound_id)]+=1
-        return [{'sourceInboundId':int(r['source_inbound_id']),'remoteInboundId':int(r['local_inbound_id']),
-                 'clients':counts.get(int(r['source_inbound_id']),0)} for r in rows]
+        return [{'sourceInboundId':int(row['source_inbound_id']),'remoteInboundId':int(row['local_inbound_id']),
+                 'clients':counts.get(int(row['source_inbound_id']),0)} for row in rows]
 
     def reset_result(self,reset_id:str,source_email:str)->dict|None:
         if not isinstance(reset_id,str) or not 8<=len(reset_id)<=128 or not isinstance(source_email,str) or not source_email:

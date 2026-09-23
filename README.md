@@ -46,6 +46,15 @@ DARK UI → DARK API / Owner + Representative Scope → DARK Database → Xray-c
 - **Backup / Restore / Doctor** روی Hub متمرکز است؛ Full Encrypted Backup از خود پنل شامل SQLite، `secret.key`، TLS پنل، TLS اینباندها و Node/Desired State قابل دریافت است. Nodeها بکاپ مدیریتی مستقل ندارند و از Hub بازسازی می‌شوند.
 - **Cyber UI** با English/LTR پیش‌فرض، فارسی/RTL، responsive layout و refresh/focus stability.
 
+## محدودهٔ نسخهٔ نخست نودها
+
+> [!IMPORTANT]
+> هنگام قطع ارتباط مدیریت، اگر مسیر مشتری برقرار باشد نود با آخرین تنظیمات ادامه می‌دهد؛ لینک مستقیم قبلی ممکن است حتی پس از تمام‌شدن سهمیه در Hub کار کند و مصرف اضافه ایجاد شود. قطع سخت آفلاین نداریم.
+>
+> HWID محدودیت **شناسهٔ اعلامی هنگام دریافت اشتراک** است، نه قفل سخت‌افزاری یا تضمین ضدکپی کانفیگ. IP Limit هم تعداد دقیق افراد یا دستگاه‌ها نیست؛ مبدأ در مسیر تانل باید جدا تأیید شود.
+>
+> [محدوده و تصمیم‌های نسخهٔ نخست](docs/node-v1-scope.md#persian) شامل پوشش ۱۶ ترکیب منتخب، ریسک بار و گیت‌های باز گواهی/VPS/انتشار است. این تصمیم‌ها مجوز آپدیت عملیاتی نیستند و همهٔ گزینه‌های Xray را آزموده‌شده اعلام نمی‌کنند.
+
 ## نصب آنلاین
 
 ### سرور اصلی / Hub
@@ -132,7 +141,7 @@ sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
 - `finance.credit` و `finance.refund` در سقف Roleهای پایین‌تر قرار ندارند.
 - Node URL باید HTTPS باشد و به IP عمومی resolve شود؛ redirect و proxy environment در مسیر Node دنبال نمی‌شود.
 - IP Guard فقط وقتی باید enforce شود که تطابق IP مشاهده‌شده در Xray و source packet روی همان host تأیید شده باشد.
-- **Global Multi-node Guard** فقط IPهایی را که Node با source مستقیمِ تأییدشده دیده تجمیع می‌کند؛ HWID خام بین Nodeها جابه‌جا نمی‌شود و فقط SHA-256 آن Sync می‌شود. عبور از limit باعث Block credential در Central و Mirrorها می‌شود؛ nftables همچنان host-local است.
+- **Global Multi-node Guard** IPهای مشاهده‌شدهٔ معتبر را تجمیع و سیاست HWID اعلامیِ ثبت‌شده در Hub را ارزیابی می‌کند؛ Agent سبک از هر اتصال VLESS شناسهٔ دستگاه فیزیکی دریافت نمی‌کند. محدودیت مشتری پس از اعمال روی نود مؤثر می‌شود؛ نودِ دور از دسترس می‌تواند در انتظار بماند. nftables همچنان host-local است؛ [مرزهای نسخهٔ نخست](docs/node-v1-scope.md#persian).
 
 ## هنوز چه چیزهایی برای Production باقی است؟
 

@@ -424,6 +424,47 @@ class Store:
             if changes:
                 db.execute("UPDATE clients SET "+",".join(k+"=?" for k in changes)+" WHERE id=?", (*changes.values(), client_id))
 
+    def edit_clients_many(self, actor: Actor, edits: list[tuple[str,dict[str,Any]]]) -> dict[str,str]:
+        """Apply up to 500 independent policy-row edits in one SQLite transaction.
+
+        Validation remains per client and failed items are skipped, preserving the
+        bulk API's best-effort semantics without one FULL-sync commit per client.
+        """
+        if not isinstance(edits,list) or len(edits)>500:
+            raise PolicyError("Bulk client edit requires at most 500 clients")
+        errors:dict[str,str]={};seen:set[str]=set()
+        with self.transaction() as db:
+            for client_id,requested in edits:
+                try:
+                    if not isinstance(client_id,str) or client_id in seen or not isinstance(requested,dict):
+                        raise PolicyError("Invalid or duplicate bulk client edit")
+                    seen.add(client_id)
+                    u=db.execute("SELECT * FROM clients WHERE id=?",(client_id,)).fetchone()
+                    if not u:raise PolicyError("Client does not exist")
+                    actor.require("clients","edit",u["owner"])
+                    changes:dict[str,int]={}
+                    if "limit_ip" in requested:changes["limit_ip"]=integer(requested["limit_ip"],0,1000)
+                    if "quota_bytes" in requested:
+                        new_quota=integer(requested["quota_bytes"])
+                        if self._resource_credit_enforced(db,u["owner"],actor):
+                            owner=db.execute("SELECT * FROM owners WHERE id=?",(u["owner"],)).fetchone()
+                            if not owner:raise PolicyError("Owner is not registered")
+                            allocated_volume,allocated_unlimited=self._allocation(db,u["owner"],exclude_client=client_id)
+                            if new_quota>0 and allocated_volume+new_quota>int(owner["volume_credit_bytes"]):
+                                raise PolicyError("Insufficient representative volume credit")
+                            if new_quota==0 and allocated_unlimited+1>int(owner["unlimited_credit"]):
+                                raise PolicyError("Insufficient representative unlimited credit")
+                        changes["quota_bytes"]=new_quota
+                    if "expires_at" in requested:changes["expires_at"]=integer(requested["expires_at"])
+                    if "manual" in requested:
+                        if not isinstance(requested["manual"],bool):raise PolicyError("manual must be boolean")
+                        changes["manual"]=int(requested["manual"])
+                    if changes:
+                        db.execute("UPDATE clients SET "+",".join(k+"=?" for k in changes)+" WHERE id=?",(*changes.values(),client_id))
+                except PolicyError as ex:
+                    errors[client_id]=str(ex)[:300]
+        return errors
+
     def delete_client(self, actor: Actor, client_id: str) -> None:
         with self.transaction() as db:
             u = db.execute("SELECT owner FROM clients WHERE id=?", (client_id,)).fetchone()
