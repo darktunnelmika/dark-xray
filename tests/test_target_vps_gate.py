@@ -120,3 +120,16 @@ def test_fresh_installer_persists_source_identity_and_uses_neutral_branding():
     assert '/var/lib/dark-xray/installed-source.json' in source
     assert 'SOURCE_VERSION=' in source
     assert 'No Sanayi runtime' not in source
+
+
+def test_post_reboot_active_checks_remain_hard_gate():
+    gate=load_gate()
+    assert gate.acceptance_passed('post-reboot',True,True,True) is True
+    assert gate.acceptance_passed('post-reboot',True,False,True) is False
+    assert gate.acceptance_passed('post-reboot',True,True,False) is False
+    assert gate.acceptance_passed('post-reboot',False,True,True) is False
+
+
+def test_installed_load_gate_dependency_is_runtime_requirement():
+    requirements=(ROOT/'requirements.txt').read_text(encoding='utf-8').splitlines()
+    assert 'httpx==0.28.1' in requirements
