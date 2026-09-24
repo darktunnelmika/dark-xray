@@ -1,0 +1,117 @@
+name: Stage 7 Smart Routing
+
+on:
+  push:
+    branches:
+      - work/stage7-smart-routing
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test:
+    if: ${{ !contains(github.event.head_commit.message, 'Refresh checksums for Stage 7 smart routing') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Stage 7 branch
+        uses: actions/checkout@v4
+        with:
+          ref: work/stage7-smart-routing
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Patch server preview API
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('backend/server.py')
+          s=p.read_text()
+          needle='from update_bridge import UpdateBrokerClient,UpdateBrokerError\n'
+          rep=needle+'from smart_routing import SmartRoutingError,build_stage7_patch,build_stage7_plan,rank_warp_paths\n'
+          if rep not in s:
+              s=s.replace(needle,rep)
+          model_after="""class TrafficRoutePreview(Model):
+              domain:str=Field(default='',max_length=2048)
+              ip:str=Field(default='',max_length=80)
+              port:StrictInt=Field(default=0,ge=0,le=65535)
+              source_ip:str=Field(default='',max_length=80)
+              source_port:StrictInt=Field(default=0,ge=0,le=65535)
+              local_ip:str=Field(default='',max_length=80)
+              local_port:StrictInt=Field(default=0,ge=0,le=65535)
+              network:Literal['tcp','udp']='tcp'
+              protocol:str=Field(default='',max_length=64)
+              user:str=Field(default='',max_length=128)
+              inbound_tag:str=Field(default='',max_length=128)
+              process:str=Field(default='',max_length=1024)
+              vless_route:StrictInt=Field(default=0,ge=0,le=65535)
+              attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
+          """
+          model_insert=model_after+"""class SmartRoutingPreview(Model):
+              warpAi:bool=True
+              adblock:bool=True
+              warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)
+          class SmartWarpRank(Model):
+              observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
+
+          """
+          if 'class SmartRoutingPreview(Model):' not in s:
+              s=s.replace(model_after,model_insert)
+          route_anchor="""    @app.get('/api/traffic-engine')
+              def traffic_engine(p:Principal=Depends(owner)):return traffic_engine_doc()
+
+              @app.post('/api/traffic-engine/preview')
+              def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
+
+          """
+          route_insert=route_anchor+"""    @app.get('/api/smart-routing/plan')
+              def smart_routing_plan(p:Principal=Depends(owner)):
+                  return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))
+
+              @app.post('/api/smart-routing/preview')
+              def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+                  try:
+                      return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),
+                                                warp_outbound_tags=body.warpOutboundTags,
+                                                enable_warp_ai=body.warpAi,enable_adblock=body.adblock)
+                  except SmartRoutingError as ex:
+                      raise HTTPException(400,str(ex))
+
+              @app.post('/api/smart-routing/warp-rank')
+              def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):
+                  return {'items':rank_warp_paths(body.observations),'previewOnly':True}
+
+          """
+          if "/api/smart-routing/plan" not in s:
+              s=s.replace(route_anchor,route_insert)
+          p.write_text(s)
+          PY
+          python3 -m py_compile backend/smart_routing.py backend/server.py
+          if ! git diff --quiet -- backend/server.py; then
+            git add backend/server.py
+            git commit -m "Expose Stage 7 smart routing preview API"
+          fi
+
+      - name: Install test dependencies
+        run: |
+          python3 -m pip install -q --disable-pip-version-check pytest pydantic fastapi psutil cryptography pyotp httpx2 httpx uvicorn
+
+      - name: Run Stage 7 tests
+        run: |
+          PYTHONPATH=backend python3 -m pytest -q tests/test_smart_routing.py tests/test_reality_scan.py tests/test_v06.py tests/test_web_contract.py
+          python3 tools/repo-check.py
+
+      - name: Refresh source checksums
+        run: |
+          python3 tools/release_snapshot.py --refresh-source-sums --json-only
+          if ! git diff --quiet -- SHA256SUMS; then
+            git add SHA256SUMS
+            git commit -m "Refresh checksums for Stage 7 smart routing"
+          fi
+
+      - name: Push Stage 7 branch
+        run: git push origin HEAD:work/stage7-smart-routing
