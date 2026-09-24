@@ -81,11 +81,19 @@ def metadata()->dict:
     except Exception as ex:
         raise ReleaseInstallError("DARK-RELEASE.json is invalid") from ex
     required={"schema","project","version","release_commit","release_tree",
-              "stage4_accepted_commit","source_sha256sums_sha256"}
+              "stage4_accepted_commit","accepted_runtime_commit",
+              "accepted_runtime_stage","stage4_runtime_equivalent",
+              "source_sha256sums_sha256"}
     if set(doc)!=required or doc.get("schema")!=1 or doc.get("project")!="DARK XRAY":
         raise ReleaseInstallError("release metadata schema is invalid")
-    if not SHA40.fullmatch(str(doc["release_commit"])) or not SHA40.fullmatch(str(doc["stage4_accepted_commit"])):
+    if (not SHA40.fullmatch(str(doc["release_commit"])) or
+        not SHA40.fullmatch(str(doc["stage4_accepted_commit"])) or
+        not SHA40.fullmatch(str(doc["accepted_runtime_commit"]))):
         raise ReleaseInstallError("release metadata commit identity is invalid")
+    if not isinstance(doc.get("stage4_runtime_equivalent"),bool):
+        raise ReleaseInstallError("release metadata runtime equivalence is invalid")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{1,80}",str(doc.get("accepted_runtime_stage") or "")):
+        raise ReleaseInstallError("release metadata accepted runtime stage is invalid")
     if not SHA40.fullmatch(str(doc["release_tree"])):
         raise ReleaseInstallError("release metadata tree identity is invalid")
     if not SHA256.fullmatch(str(doc["source_sha256sums_sha256"])):
@@ -368,7 +376,7 @@ def refresh_source_sums()->Path:
     return target
 
 
-def release_metadata(commit:str,stage4:str,version:str)->dict:
+def release_metadata(commit:str,stage4:str,version:str,accepted_runtime:str,accepted_stage:str,stage4_equivalent:bool)->dict:
     return {
         "schema":1,
         "project":"DARK XRAY",
@@ -376,6 +384,9 @@ def release_metadata(commit:str,stage4:str,version:str)->dict:
         "release_commit":commit,
         "release_tree":tree_sha(commit),
         "stage4_accepted_commit":stage4,
+        "accepted_runtime_commit":accepted_runtime,
+        "accepted_runtime_stage":accepted_stage,
+        "stage4_runtime_equivalent":stage4_equivalent,
         "source_sha256sums_sha256":hashlib.sha256(blob(commit,"SHA256SUMS")).hexdigest(),
     }
 
@@ -415,13 +426,17 @@ def repo_check()->None:
         raise ReleaseError("repository pre-publication check failed: "+cp.stdout[-1200:])
 
 
-def build(commit:str,stage4:str,output:Path)->dict:
+def build(commit:str,stage4:str,output:Path,*,accepted_runtime:str|None=None,accepted_runtime_stage:str="stage4")->dict:
     commit=exact_commit(commit);stage4=exact_commit(stage4)
+    accepted_runtime=stage4 if accepted_runtime is None else exact_commit(accepted_runtime)
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{1,80}",accepted_runtime_stage):
+        raise ReleaseError("invalid accepted runtime stage")
     if head_commit()!=commit:raise ReleaseError("HEAD must equal the exact release commit")
     clean_worktree();repo_check()
     drift=runtime_drift(stage4,commit)
-    if drift:
-        raise ReleaseError("runtime drift from Stage 4 requires acceptance rerun: "+", ".join(drift[:20]))
+    stage4_equivalent=not drift
+    if drift and accepted_runtime!=commit:
+        raise ReleaseError("runtime drift from Stage 4 requires an explicit accepted runtime commit: "+", ".join(drift[:20]))
     verify_source_sums(commit);ls_tree(commit)
 
     version=blob(commit,"VERSION").decode("utf-8","strict").strip()
@@ -433,7 +448,7 @@ def build(commit:str,stage4:str,output:Path)->dict:
     except ValueError:pass
     else:raise ReleaseError("release output directory must be outside the repository")
 
-    identity=release_metadata(commit,stage4,version)
+    identity=release_metadata(commit,stage4,version,accepted_runtime,accepted_runtime_stage,stage4_equivalent)
     identity_text=json.dumps(identity,indent=2,sort_keys=True)+"\n"
     extras={"DARK-RELEASE.json":identity_text,"release-install.py":RELEASE_INSTALLER}
 
@@ -454,13 +469,16 @@ def build(commit:str,stage4:str,output:Path)->dict:
     manifest={
         "schema":1,"project":"DARK XRAY","version":version,"release_commit":commit,
         "release_tree":tree_sha(commit),"stage4_accepted_commit":stage4,
-        "stage4_runtime_equivalent":True,"release_only_changes":changed,
+        "accepted_runtime_commit":accepted_runtime,"accepted_runtime_stage":accepted_runtime_stage,
+        "stage4_runtime_equivalent":stage4_equivalent,
+        "release_only_changes":[x for x in changed if release_only(x)],
+        "runtime_drift_accepted":drift,
         "commit_time_utc":when,
         "source_sha256sums_sha256":identity["source_sha256sums_sha256"],
         "embedded_release_metadata_sha256":hashlib.sha256(identity_text.encode()).hexdigest(),
         "embedded_release_installer_sha256":hashlib.sha256(RELEASE_INSTALLER.encode()).hexdigest(),
         "artifacts":artifacts,
-        "claim":"release snapshot artifact; Stage 5 install/update/rollback rehearsal is separate evidence",
+        "claim":"release snapshot artifact; install/update/rollback and Stage 4 replay evidence are separate gates",
     }
     manifest_path=output/(stem+".manifest.json");release_sums=output/"SHA256SUMS.release"
     atomic_write(manifest_path,(json.dumps(manifest,indent=2,sort_keys=True)+"\n").encode())
@@ -475,6 +493,8 @@ def main()->int:
     ap.add_argument("--commit",help="exact 40-character release commit")
     ap.add_argument("--stage4-commit",default=DEFAULT_STAGE4)
     ap.add_argument("--output",type=Path,default=Path("/tmp/dark-xray-release"))
+    ap.add_argument("--accepted-runtime-commit",default=None,help="exact commit whose runtime has independent acceptance evidence")
+    ap.add_argument("--accepted-runtime-stage",default="stage4")
     ap.add_argument("--refresh-source-sums",action="store_true")
     ap.add_argument("--json-only",action="store_true")
     a=ap.parse_args()
@@ -483,7 +503,7 @@ def main()->int:
             result={"refreshed":True,"path":str(refresh_source_sums())}
         else:
             if not a.commit:raise ReleaseError("--commit is required unless --refresh-source-sums is used")
-            result=build(a.commit,a.stage4_commit,a.output)
+            result=build(a.commit,a.stage4_commit,a.output,accepted_runtime=a.accepted_runtime_commit,accepted_runtime_stage=a.accepted_runtime_stage)
     except ReleaseError as ex:
         if a.json_only:print(json.dumps({"passed":False,"error":str(ex)}))
         else:print("RELEASE SNAPSHOT FAIL:",ex)
