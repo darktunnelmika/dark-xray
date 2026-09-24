@@ -1,0 +1,126 @@
+name: Publish Stage 6 Final Release
+
+on:
+  push:
+    branches:
+      - automation/publish-d4f263-stage6-final
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      TARGET_COMMIT: d4f263924dbf873859aba069d856c52decc8204d
+      TARGET_TREE: e964d4f12d8330c04acb7eb1aa9409b13c45762b
+      RELEASE_TAG: v0.9.0-rc7-stage6-final
+      RELEASE_TITLE: DARK XRAY 0.9.0-rc7 Stage 6 Final Acceptance
+      VERSION: 0.9.0-rc7
+    steps:
+      - name: Checkout target commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_COMMIT }}
+          fetch-depth: 0
+
+      - name: Verify target identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+
+      - name: Build reproducible release artifact
+        run: |
+          set -euo pipefail
+          python3 tools/release_snapshot.py \
+            --commit "$TARGET_COMMIT" \
+            --accepted-runtime-commit "$TARGET_COMMIT" \
+            --accepted-runtime-stage stage6-provider \
+            --output "$PWD/dist" \
+            --json-only
+          (cd dist && sha256sum -c SHA256SUMS.release)
+          python3 - <<'PY'
+          import json, pathlib, sys
+          p = next(pathlib.Path('dist').glob('*.manifest.json'))
+          doc = json.loads(p.read_text())
+          assert doc['release_commit'] == 'd4f263924dbf873859aba069d856c52decc8204d'
+          assert doc['release_tree'] == 'e964d4f12d8330c04acb7eb1aa9409b13c45762b'
+          assert doc['accepted_runtime_stage'] == 'stage6-provider'
+          assert doc['stage4_runtime_equivalent'] is False
+          print(json.dumps({
+              'manifest': str(p),
+              'release_commit': doc['release_commit'],
+              'release_tree': doc['release_tree'],
+              'stage4_runtime_equivalent': doc['stage4_runtime_equivalent'],
+              'accepted_runtime_stage': doc['accepted_runtime_stage'],
+              'artifacts': doc['artifacts'],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Prepare release notes
+        run: |
+          cat > RELEASE_NOTES.md <<'MD'
+          ## DARK XRAY 0.9.0-rc7 Stage 6 Final Acceptance
+
+          This is the Stage 6 final acceptance build for DARK XRAY.
+
+          Target commit:
+          `d4f263924dbf873859aba069d856c52decc8204d`
+
+          Release tree:
+          `e964d4f12d8330c04acb7eb1aa9409b13c45762b`
+
+          ### Included artifacts
+
+          - `dark-xray-0.9.0-rc7-d4f263924dbf.tar.gz`
+          - `dark-xray-0.9.0-rc7-d4f263924dbf.zip`
+          - `dark-xray-0.9.0-rc7-d4f263924dbf.manifest.json`
+          - `SHA256SUMS.release`
+
+          ### Artifact checksums
+
+          ```text
+          245c2dd3bf7af0509b29ecdaa399cff56d807f13f04a5b5d67ad52ea63d1e0a5  dark-xray-0.9.0-rc7-d4f263924dbf.tar.gz
+          fbd987b26673bd32359348d1797a6ad55b075d2f568ef7f5dd341cdfcb6a697f  dark-xray-0.9.0-rc7-d4f263924dbf.zip
+          1ed93b8b5015ca7871413fceb5af6244f335d67f4e80012adb78aaa6cdea5c57  dark-xray-0.9.0-rc7-d4f263924dbf.manifest.json
+          f4f1279dbcb7b38ff6d8587f48ef70859943c954aa0973b331974ed4c158c8fa  SHA256SUMS.release
+          ```
+
+          ### Acceptance status
+
+          Passed before publishing:
+
+          - Stage 6 provider enforcement acceptance: Node1, Node2, offline/reconnect convergence
+          - Stage 5 exact-artifact rehearsal: fresh install, update, rollback failure injection
+          - Stage 4 replay: reboot proof, node outage/recovery, source-IP observation, public ACME staging HTTP-01 rehearsal, and 3 retained load runs
+
+          ### Scope notes
+
+          This release records `accepted_runtime_stage=stage6-provider` and `stage4_runtime_equivalent=false`, because Stage 6 intentionally changed runtime files after the original Stage 4 baseline. The final Stage 4 replay was run again on the final runtime.
+
+          This build does not claim provider SLA sizing or replace the production certificate; ACME validation was a staging/dry-run rehearsal with real HTTP-01 and deploy-hook restart observation.
+          MD
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets=(
+            dist/dark-xray-0.9.0-rc7-d4f263924dbf.tar.gz
+            dist/dark-xray-0.9.0-rc7-d4f263924dbf.zip
+            dist/dark-xray-0.9.0-rc7-d4f263924dbf.manifest.json
+            dist/SHA256SUMS.release
+          )
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TITLE" --notes-file RELEASE_NOTES.md --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --target "$TARGET_COMMIT" \
+              --title "$RELEASE_TITLE" \
+              --notes-file RELEASE_NOTES.md \
+              --prerelease
+          fi
+          gh release view "$RELEASE_TAG" --json tagName,targetCommitish,url,isPrerelease
