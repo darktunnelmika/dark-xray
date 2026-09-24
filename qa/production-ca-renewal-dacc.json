@@ -1,0 +1,36 @@
+{
+  "activation": {
+    "darkxray_check": "ok",
+    "database": "ok",
+    "external_2087_serves_new_cert": true,
+    "lineage_matches_active_panel_cert": true,
+    "panel_port": 2087,
+    "services_active": [
+      "dark-xray.service",
+      "dark-xray-update.service",
+      "desktop-commander-remote.service"
+    ]
+  },
+  "after": {
+    "leaf_sha256": "dadce4dd11af4ecada104a15f8825463a76829382a057f5dbca9e92b7c01a68a",
+    "not_after": "Dec 23 17:53:07 2026 GMT",
+    "not_before": "Sep 24 17:53:08 2026 GMT",
+    "serial": "05C5592C6970E84191AD99EBCC15A14BB248",
+    "sha256_fingerprint": "DA:DC:E4:DD:11:AF:4E:CA:DA:10:4A:15:F8:82:54:63:A7:68:29:38:2A:05:7F:5D:BC:A9:E9:2B:7C:01:A6:8A"
+  },
+  "before": {
+    "not_after": "Dec 11 22:11:58 2026 GMT",
+    "not_before": "Sep 12 22:11:59 2026 GMT",
+    "serial": "06A70BE9421B6A735C242C9198DE2ECF9EF8",
+    "sha256_fingerprint": "C3:1D:57:B4:47:4F:8F:6F:68:14:1E:DD:5E:96:1A:0F:BD:D6:3D:86:7B:12:A2:EA:07:B7:D8:FB:8C:8C:C3:B7"
+  },
+  "ca_endpoint": "https://acme-v02.api.letsencrypt.org/directory",
+  "cert_name": "dark-xray-newdark.darkvpn.info",
+  "domain": "newdark.darkvpn.info",
+  "gate": "production-ca-real-renewal",
+  "issuer": "C = US, O = Let's Encrypt, CN = YE1",
+  "method": "certbot renew --cert-name dark-xray-newdark.darkvpn.info --force-renewal --no-random-sleep-on-renew",
+  "passed": true,
+  "recorded_at": 1790275953.7965715,
+  "scope_note": "This closes the real production CA renewal/issuance blocker for the RC. It does not claim provider capacity/SLA sizing."
+}
