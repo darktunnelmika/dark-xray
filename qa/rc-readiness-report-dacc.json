@@ -13,13 +13,21 @@
   "notes": [
     "RC is suitable as a validated prerelease candidate based on current gates.",
     "Do not label as Stable/Production Ready until the remaining stable items are completed.",
-    "No provider SLA or production certificate replacement is claimed by this report."
+    "Production CA renewal was completed against the real Let's Encrypt production endpoint on Sep 24 2026."
   ],
   "passed_gates": {
+    "production_ca_real_renewal": true,
     "production_sync": true,
     "public_release_full_gate": true,
     "stage4_replay": true,
     "stage6_provider_enforcement": true
+  },
+  "production_ca_real_renewal": {
+    "domain": "newdark.darkvpn.info",
+    "evidence": "/var/lib/dark-xray/qa/production-ca-renewal-dacc.json",
+    "fingerprint": "DA:DC:E4:DD:11:AF:4E:CA:DA:10:4A:15:F8:82:54:63:A7:68:29:38:2A:05:7F:5D:BC:A9:E9:2B:7C:01:A6:8A",
+    "not_after": "Dec 23 17:53:07 2026 GMT",
+    "passed": true
   },
   "production_sync": {
     "evidence": "/var/lib/dark-xray/qa/prod-rollbackfix-sync-dacc.json",
@@ -42,9 +50,7 @@
   },
   "rc_readiness": "passed_for_prerelease_rc",
   "remaining_for_stable": [
-    "Production CA renewal / issuance against the real CA path, not only ACME staging dry-run.",
-    "Provider capacity and SLA sizing claim: document expected load, bandwidth, node sizing, and operating limits.",
-    "Optional cleanup of test rootfs/data on Node2: /var/lib/machines/dark-rollbackfix-gate and /root/public-release-gate-dacc."
+    "Provider capacity and SLA sizing claim: document expected load, bandwidth, CPU/RAM, node sizing, and operating limits."
   ],
   "rollback_fix_evidence": {
     "evidence": "/var/lib/dark-xray/qa/public-release-update-rollback-fix-d4f263.json",
@@ -52,7 +58,7 @@
   },
   "schema": 1,
   "stable_not_claimed": true,
-  "stable_status": "not_promoted_to_stable",
+  "stable_status": "not_promoted_to_stable_provider_sla_remaining",
   "stage4_replay": {
     "domain_tls_required": true,
     "evidence": "/var/lib/dark-xray/qa/target-vps-gate.json",
