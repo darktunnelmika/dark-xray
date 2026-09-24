@@ -17,7 +17,6 @@ jobs:
       RELEASE_TAG: v0.9.0-rc7-stage6-final
       RELEASE_TITLE: DARK XRAY 0.9.0-rc7 Stage 6 Final Acceptance
       VERSION: 0.9.0-rc7
-      DIST_DIR: ${{ runner.temp }}/dark-xray-release
     steps:
       - name: Checkout target commit
         uses: actions/checkout@v4
@@ -34,6 +33,8 @@ jobs:
       - name: Build reproducible release artifact
         run: |
           set -euo pipefail
+          export DIST_DIR="$RUNNER_TEMP/dark-xray-release"
+          echo "DIST_DIR=$DIST_DIR" >> "$GITHUB_ENV"
           rm -rf "$DIST_DIR"
           mkdir -p "$DIST_DIR"
           python3 tools/release_snapshot.py \
