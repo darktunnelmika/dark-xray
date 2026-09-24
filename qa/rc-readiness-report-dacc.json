@@ -13,11 +13,13 @@
   "notes": [
     "RC is suitable as a validated prerelease candidate based on current gates.",
     "Do not label as Stable/Production Ready until the remaining stable items are completed.",
-    "Production CA renewal was completed against the real Let's Encrypt production endpoint on Sep 24 2026."
+    "Production CA renewal was completed against the real Let's Encrypt production endpoint on Sep 24 2026.",
+    "Provider capacity/SLA sizing was completed for the current small-production RC profile; larger fleet or bandwidth claims require retesting."
   ],
   "passed_gates": {
     "production_ca_real_renewal": true,
     "production_sync": true,
+    "provider_capacity_sla": true,
     "public_release_full_gate": true,
     "stage4_replay": true,
     "stage6_provider_enforcement": true
@@ -38,6 +40,12 @@
     "target_commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9"
   },
   "project": "DARK XRAY",
+  "provider_capacity_sla": {
+    "evidence": "/var/lib/dark-xray/qa/provider-capacity-sla-dacc.json",
+    "passed": true,
+    "scope": "current small-production RC profile only",
+    "stable_blocker_closed": true
+  },
   "public_release_full_gate": {
     "download_verify": true,
     "evidence": "/var/lib/dark-xray/qa/public-release-rollbackfix-full-gate-dacc.json",
@@ -49,16 +57,14 @@
     "update_happy_path": true
   },
   "rc_readiness": "passed_for_prerelease_rc",
-  "remaining_for_stable": [
-    "Provider capacity and SLA sizing claim: document expected load, bandwidth, CPU/RAM, node sizing, and operating limits."
-  ],
+  "remaining_for_stable": [],
   "rollback_fix_evidence": {
     "evidence": "/var/lib/dark-xray/qa/public-release-update-rollback-fix-d4f263.json",
     "passed": true
   },
   "schema": 1,
   "stable_not_claimed": true,
-  "stable_status": "not_promoted_to_stable_provider_sla_remaining",
+  "stable_status": "stable_promotion_ready_pending_stable_tag",
   "stage4_replay": {
     "domain_tls_required": true,
     "evidence": "/var/lib/dark-xray/qa/target-vps-gate.json",
