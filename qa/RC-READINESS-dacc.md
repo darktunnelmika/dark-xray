@@ -25,6 +25,7 @@ https://github.com/darktunnelmika/dark-xray/releases/tag/v0.9.0-rc7-stage6-rollb
 | Stage 6 provider enforcement | PASS | provider node/offline evidence |
 | Public Release full gate | PASS | `/var/lib/dark-xray/qa/public-release-rollbackfix-full-gate-dacc.json` |
 | Production Hub/Node sync | PASS | `/var/lib/dark-xray/qa/prod-rollbackfix-sync-dacc.json` |
+| Production CA real renewal | PASS | `/var/lib/dark-xray/qa/production-ca-renewal-dacc.json` |
 
 ## What Passed
 
@@ -35,10 +36,8 @@ https://github.com/darktunnelmika/dark-xray/releases/tag/v0.9.0-rc7-stage6-rollb
 
 ## Stable Blockers Remaining
 
-1. Production CA renewal/issuance against the real CA path, not only staging dry-run.
-2. Provider capacity and SLA sizing claim: bandwidth, CPU/RAM, node sizing, and operating limits.
-3. Optional cleanup of test data on Node2.
+1. Provider capacity and SLA sizing claim: bandwidth, CPU/RAM, node sizing, and operating limits.
 
 ## Scope Note
 
-This report validates the current **prerelease RC**. It does not claim provider SLA sizing and does not claim a production certificate replacement. Do not mark this release as Stable until the blockers above are completed.
+This report validates the current **prerelease RC**. It does not claim provider SLA sizing. Production CA renewal has been completed against the real Let's Encrypt production endpoint. Do not mark this release as Stable until the blockers above are completed.
