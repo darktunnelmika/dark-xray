@@ -38,6 +38,7 @@ from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
+from smart_routing import SmartRoutingError,build_stage7_patch,build_stage7_plan,rank_warp_paths
 
 ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
@@ -186,6 +187,13 @@ class TrafficRoutePreview(Model):
     process:str=Field(default='',max_length=1024)
     vless_route:StrictInt=Field(default=0,ge=0,le=65535)
     attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
+class SmartRoutingPreview(Model):
+    warpAi:bool=True
+    adblock:bool=True
+    warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)
+class SmartWarpRank(Model):
+    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
+
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
 class NodePair(Model):
@@ -1697,6 +1705,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/traffic-engine/preview')
     def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
+
+    @app.get('/api/smart-routing/plan')
+    def smart_routing_plan(p:Principal=Depends(owner)):
+        return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))
+
+    @app.post('/api/smart-routing/preview')
+    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+        try:
+            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),
+                                      warp_outbound_tags=body.warpOutboundTags,
+                                      enable_warp_ai=body.warpAi,enable_adblock=body.adblock)
+        except SmartRoutingError as ex:
+            raise HTTPException(400,str(ex))
+
+    @app.post('/api/smart-routing/warp-rank')
+    def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):
+        return {'items':rank_warp_paths(body.observations),'previewOnly':True}
 
     @app.get('/api/security-center')
     def security_center(p:Principal=Depends(current)):return security_center_payload(p)
