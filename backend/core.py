@@ -1051,14 +1051,30 @@ class CoreEngine:
         if policy.enforce:
             try:
                 executor=BrokerExecutor(policy,BrokerClient(self.config.guard_socket));info=executor.check()
-                # The broker resets only its own temporary sets on restart. Never
-                # claim that old SQLite ban records are still enforced afterward.
+                # The broker's nftables set is volatile. SQLite is the durable
+                # source for not-yet-expired bans, so a broker restart or lost
+                # lease must replay active bans instead of leaving a false
+                # `applied` row with no packet-level element.
                 with self.store.transaction() as db:
                     db.execute("CREATE TABLE IF NOT EXISTS core_guard_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-                    old=db.execute("SELECT value FROM core_guard_meta WHERE key='boot_id'").fetchone()
-                    if not old or old[0]!=info['boot_id']:
-                        db.execute("UPDATE bans SET state='released',expires_at=? WHERE state='applied'",(time.time(),))
                     db.execute("INSERT INTO core_guard_meta VALUES('boot_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(info['boot_id'],))
+                restored=0;released=0;now=time.time()
+                with self.store.lock:
+                    active=[dict(r) for r in self.store.db.execute(
+                        "SELECT jail,ip,expires_at FROM bans WHERE state='applied' AND expires_at>?",(now,))]
+                for ban in active:
+                    remaining=max(1,int(float(ban['expires_at'])-now))
+                    try:
+                        executor.ban(str(ban['jail']),str(ban['ip']),seconds=remaining);restored+=1
+                    except PolicyError as ex:
+                        if 'Unmanaged data-port group' not in str(ex):raise
+                        with self.store.transaction() as db:
+                            db.execute("UPDATE bans SET state='released',expires_at=? WHERE jail=? AND ip=?",
+                                       (now,ban['jail'],ban['ip']))
+                        released+=1
+                if restored:
+                    info=executor.client.status()
+                info={**info,'restored_active_bans':restored,'released_unmanaged_bans':released}
                 self._guard_executor=executor;status.update(state='applied',applied=True,broker=info)
             except (PolicyError,OSError) as exc:
                 status.update(state='error',error=str(exc)[:500],loaded_policy_hash='')
