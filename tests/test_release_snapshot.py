@@ -143,3 +143,25 @@ def test_release_only_policy_is_narrow():
     assert not release.release_only("backend/core.py")
     assert not release.release_only("tools/update.py")
     assert not release.release_only("web/index.html")
+
+def test_runtime_drift_can_be_bound_to_explicit_accepted_runtime(tmp_path,monkeypatch):
+    root,stage4=repo(tmp_path,monkeypatch)
+    (root/"backend/core.py").write_text("RUNTIME=stage6\n")
+    commit(root,"stage6 runtime")
+    release.refresh_source_sums();candidate=commit(root,"stage6 checksums")
+    built=release.build(candidate,stage4,tmp_path/"stage6",accepted_runtime=candidate,accepted_runtime_stage="stage6-provider")
+    assert built["stage4_runtime_equivalent"] is False
+    assert built["accepted_runtime_commit"]==candidate
+    assert built["accepted_runtime_stage"]=="stage6-provider"
+    assert built["runtime_drift_accepted"]==["backend/core.py"]
+    tar_name=next(name for name in built["artifacts"] if name.endswith(".tar.gz"))
+    with tarfile.open(tmp_path/"stage6"/tar_name,"r:gz") as tf:
+        tf.extractall(tmp_path/"stage6-unpack",filter="data")
+    extracted=next((tmp_path/"stage6-unpack").iterdir())
+    meta=json.loads((extracted/"DARK-RELEASE.json").read_text())
+    assert meta["accepted_runtime_commit"]==candidate
+    assert meta["accepted_runtime_stage"]=="stage6-provider"
+    assert meta["stage4_runtime_equivalent"] is False
+    cp=subprocess.run([sys.executable,str(extracted/"release-install.py"),"verify"],
+                      cwd=extracted,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    assert cp.returncode==0,cp.stderr
