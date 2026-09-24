@@ -1,0 +1,57 @@
+{
+  "gate": "stable-production-sync",
+  "hub_darkxray_check": "ok",
+  "hub_services": [
+    "active",
+    "active",
+    "active"
+  ],
+  "hub_source": {
+    "commit": "c880c3b2f1e9f039e4a18815784ebb501fe58112",
+    "installed_at": 1790277152.4113772,
+    "ref": "c880c3b2f1e9f039e4a18815784ebb501fe58112",
+    "version": "0.9.0"
+  },
+  "mika_summary": {
+    "assigned_nodes": 2,
+    "authorization_converged": true,
+    "offline_nodes": [],
+    "packet_guard_ready": true,
+    "pending_nodes": []
+  },
+  "nodes": [
+    {
+      "assignment_count": 1,
+      "commit": null,
+      "direct_source_verified": true,
+      "failover_ready": true,
+      "guard_applied": true,
+      "guard_mode": "enforce",
+      "guard_state": "applied",
+      "id": "node-stage4-node-1-949db7",
+      "name": "stage4-node-1",
+      "online": true,
+      "version": "0.9.0"
+    },
+    {
+      "assignment_count": 1,
+      "commit": null,
+      "direct_source_verified": true,
+      "failover_ready": true,
+      "guard_applied": true,
+      "guard_mode": "enforce",
+      "guard_state": "applied",
+      "id": "node-stage4-node-2-70a3ad",
+      "name": "stage4-node-2",
+      "online": true,
+      "version": "0.9.0"
+    }
+  ],
+  "passed": true,
+  "recorded_at": 1790277313.5367432,
+  "release": "v0.9.0",
+  "scope_note": "Stable production sync after v0.9.0 release. Version bump only; no new runtime behavior beyond accepted RC evidence.",
+  "stable_public_gate": "/var/lib/dark-xray/qa/stable-public-gate-c880.json",
+  "target_commit": "c880c3b2f1e9f039e4a18815784ebb501fe58112",
+  "version": "0.9.0"
+}
