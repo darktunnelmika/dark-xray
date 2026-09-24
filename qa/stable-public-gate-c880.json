@@ -1,0 +1,25 @@
+{
+  "assets": {
+    "SHA256SUMS.release": "bdd9a0f7565f8d4a249e0dc2aefd68c0688d8ad25888bdcf7483a8ea94a3ac39",
+    "dark-xray-0.9.0-c880c3b2f1e9.manifest.json": "a80087fc7a055d11232f5ab76f5e91e6adef3adf78cb4cafa63600235a6c5618",
+    "dark-xray-0.9.0-c880c3b2f1e9.tar.gz": "3bb7b0b876df743d5a4848ac39d00fc7db724542fe2202607bac9401d1034992",
+    "dark-xray-0.9.0-c880c3b2f1e9.zip": "836b79b4420665d747cd7c638af0f56da8cbd22585ae06f6e707bf119419105b"
+  },
+  "download_checksum_verified": true,
+  "gate": "stable-public-artifact-integrity",
+  "passed": true,
+  "recorded_at": 1790277073.5013876,
+  "release_commit": "c880c3b2f1e9f039e4a18815784ebb501fe58112",
+  "release_install_verify": {
+    "passed": true,
+    "release_commit": "c880c3b2f1e9f039e4a18815784ebb501fe58112",
+    "release_tree": "746ca161689b81bd4a3a08534fe2dc4860ea1a10",
+    "verified_source_files": 327,
+    "version": "0.9.0"
+  },
+  "release_tree": "746ca161689b81bd4a3a08534fe2dc4860ea1a10",
+  "release_url": "https://github.com/darktunnelmika/dark-xray/releases/tag/v0.9.0",
+  "scope_note": "Stable public artifact integrity + embedded source verification. Full fresh/update/rollback acceptance is inherited from committed RC public gate evidence; production sync is separate.",
+  "tag": "v0.9.0",
+  "version": "0.9.0"
+}
