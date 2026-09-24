@@ -1,0 +1,154 @@
+name: Publish Stable 0.9.0 Release
+
+on:
+  push:
+    branches:
+      - automation/publish-d4f263-stage6-final
+    paths:
+      - .github/workflows/publish-stable-v0.9.0.yml
+
+permissions:
+  contents: write
+
+env:
+  TARGET_BRANCH: work/stage6-global-enforcement
+  STABLE_VERSION: 0.9.0
+  STABLE_TAG: v0.9.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Promote version and refresh checksums
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$STABLE_VERSION" > VERSION
+          git add VERSION
+          if ! git diff --cached --quiet; then
+            git commit -m "Bump version for ${STABLE_VERSION} stable promotion"
+          fi
+          python3 tools/release_snapshot.py --refresh-source-sums --json-only
+          git add SHA256SUMS
+          if ! git diff --cached --quiet; then
+            git commit -m "Refresh checksums for ${STABLE_VERSION} stable promotion"
+          fi
+          git push origin HEAD:${TARGET_BRANCH}
+          echo "TARGET_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "TARGET_TREE=$(git rev-parse HEAD^{tree})" >> "$GITHUB_ENV"
+
+      - name: Test stable source
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          PY="$RUNNER_TEMP/venv/bin/python"
+          "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt pytest
+          "$PY" -m pytest -q tests/test_release_snapshot.py tests/test_update_transaction.py
+          "$PY" tools/repo-check.py
+          test "$(cat VERSION)" = "$STABLE_VERSION"
+
+      - name: Build reproducible stable artifacts
+        run: |
+          set -euo pipefail
+          PY="$RUNNER_TEMP/venv/bin/python"
+          DIST_A="$RUNNER_TEMP/stable-a"
+          DIST_B="$RUNNER_TEMP/stable-b"
+          mkdir -p "$DIST_A" "$DIST_B"
+          "$PY" tools/release_snapshot.py \
+            --commit "$TARGET_COMMIT" \
+            --accepted-runtime-commit "$TARGET_COMMIT" \
+            --accepted-runtime-stage stable-v0.9.0 \
+            --output "$DIST_A" \
+            --json-only > "$DIST_A/release-result.json"
+          "$PY" tools/release_snapshot.py \
+            --commit "$TARGET_COMMIT" \
+            --accepted-runtime-commit "$TARGET_COMMIT" \
+            --accepted-runtime-stage stable-v0.9.0 \
+            --output "$DIST_B" \
+            --json-only > "$DIST_B/release-result.json"
+          cd "$DIST_A"
+          for f in SHA256SUMS.release dark-xray-${STABLE_VERSION}-*.manifest.json dark-xray-${STABLE_VERSION}-*.tar.gz dark-xray-${STABLE_VERSION}-*.zip; do
+            cmp "$f" "$DIST_B/$f"
+          done
+          echo "DIST_DIR=$DIST_A" >> "$GITHUB_ENV"
+          echo "SHORT=${TARGET_COMMIT:0:12}" >> "$GITHUB_ENV"
+
+      - name: Prepare stable release notes
+        run: |
+          set -euo pipefail
+          cd "$DIST_DIR"
+          MANIFEST="dark-xray-${STABLE_VERSION}-${SHORT}.manifest.json"
+          TAR="dark-xray-${STABLE_VERSION}-${SHORT}.tar.gz"
+          ZIP="dark-xray-${STABLE_VERSION}-${SHORT}.zip"
+          {
+            echo "## DARK XRAY ${STABLE_VERSION} Stable"
+            echo
+            echo "Stable promotion for the current small-production profile."
+            echo
+            echo "Target commit:"
+            echo "\`${TARGET_COMMIT}\`"
+            echo
+            echo "Release tree:"
+            echo "\`${TARGET_TREE}\`"
+            echo
+            echo "### Included artifacts"
+            echo
+            echo "- \`${TAR}\`"
+            echo "- \`${ZIP}\`"
+            echo "- \`${MANIFEST}\`"
+            echo "- \`SHA256SUMS.release\`"
+            echo
+            echo "### Acceptance evidence"
+            echo
+            echo "Stable is promoted from RC evidence already committed under \`qa/\`:"
+            echo
+            echo "- Stage 4 final runtime replay: PASS"
+            echo "- Stage 6 provider enforcement: PASS"
+            echo "- Public Release fresh/update/rollback gate: PASS"
+            echo "- Production Hub/Node sync: PASS"
+            echo "- Production CA real renewal: PASS"
+            echo "- Provider capacity/SLA sizing for current small profile: PASS"
+            echo
+            echo "### Scope"
+            echo
+            echo "This stable release is scoped to the validated current small-production profile."
+            echo "It does not claim larger-fleet or bandwidth/throughput SLA without retesting."
+            echo
+            echo "### Artifact checksums"
+            echo
+            echo '```text'
+            cat SHA256SUMS.release
+            echo '```'
+          } > RELEASE-NOTES.md
+
+      - name: Publish GitHub stable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$DIST_DIR"
+          if gh release view "$STABLE_TAG" >/dev/null 2>&1; then
+            echo "Release $STABLE_TAG already exists; refusing to overwrite stable release" >&2
+            exit 1
+          fi
+          gh release create "$STABLE_TAG" \
+            dark-xray-${STABLE_VERSION}-${SHORT}.tar.gz \
+            dark-xray-${STABLE_VERSION}-${SHORT}.zip \
+            dark-xray-${STABLE_VERSION}-${SHORT}.manifest.json \
+            SHA256SUMS.release \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "DARK XRAY ${STABLE_VERSION} Stable" \
+            --notes-file RELEASE-NOTES.md \
+            --target "$TARGET_COMMIT" \
+            --latest
