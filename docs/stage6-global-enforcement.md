@@ -83,14 +83,20 @@ mount namespace جدا مسیر `/run/dark-xray-guard` host را با tmpfs خص
 - Xray: official `v26.3.27`
 - host firewall namespace modified: **false**
 
-## مواردی که هنوز provider gate می‌خواهند
+## Provider acceptance روی VPS واقعی
 
-Lab acceptance به‌تنهایی این‌ها را ثابت نمی‌کند:
+Provider acceptance روی exact Stage 6 runtime انجام شد:
 
-- direct-source verification روی topology واقعی هر Node/Tunnel؛
-- packet DROP روی هر دو VPS واقعی بعد از فعال‌کردن Node Enforce؛
-- offline → reconnect → desired-policy convergence روی WAN واقعی؛
-- رفتار NAT/shared-source مخصوص مشتریان واقعی؛
-- SLA یا زمان حداکثر convergence در دیتاسنتر.
+- Node1 و Node2 هر دو `direct_source_verified=true` و Guard `enforce/applied` داشتند؛
+- Node2: source اول Hub عبور کرد، source دوم Node1 violation ساخت، nftables element `212.74.39.3 . 19092` ساخته شد، اتصال fresh Node1 با `RC=28` قطع شد و Hub همچنان عبور کرد؛
+- Node1: source اول Hub عبور کرد، source دوم Node2 violation ساخت، nftables element `82.47.63.165 . 19091` ساخته شد، اتصال fresh Node2 با `RC=28` قطع شد و Hub همچنان عبور کرد؛
+- WAN management outage: Hub→Node2 روی 9443 واقعاً reject شد؛ convergence به `offline_pending` رفت و بعد از reconnect به `converged` برگشت؛
+- fixtureهای موقت حذف شدند و هر دو Node فقط inbound اصلی را نگه داشتند.
 
-Stage 6 فقط پس از اجرای این provider acceptance روی exact commit نهایی بسته می‌شود.
+Evidence:
+
+- `qa/stage6-provider-node1.json`
+- `qa/stage6-provider-node2.json`
+- `qa/stage6-offline-convergence.json`
+
+Stage 6 از نظر Global Multi-Node Enforcement بسته است. همچنان Stable promotion به artifact نهایی تازه، replay Stage 5/Stage 4 روی runtime نهایی، production certificate و provider sizing نهایی نیاز دارد.
