@@ -1,0 +1,63 @@
+name: Stage 7 Smart Routing Patch
+
+on:
+  push:
+    branches:
+      - work/stage7-smart-routing
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-24.04
+    if: ${{ !contains(github.event.head_commit.message, '[stage7-bot]') }}
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: work/stage7-smart-routing
+          fetch-depth: 0
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Patch server API endpoints
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('backend/server.py')
+          text=p.read_text()
+          imp='from reality_scan import RealityScanError,scan_target,search_targets\n'
+          new_imp=imp+'from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths\n'
+          if 'from smart_routing import ' not in text:
+              text=text.replace(imp,new_imp)
+          model_marker='class FullBackupBody(Model):\n'
+          models='''class SmartRoutingPreview(Model):\n    warpAi:bool=True\n    adblock:bool=True\n    warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)\n\nclass SmartWarpRank(Model):\n    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=128)\n    maxResults:StrictInt=Field(default=8,ge=1,le=50)\n\n'''
+          if 'class SmartRoutingPreview(Model):' not in text:
+              text=text.replace(model_marker,models+model_marker)
+          route_marker="    @app.get('/api/security-center')\n"
+          routes='''    @app.get('/api/smart-routing/plan')\n    def smart_routing_plan(p:Principal=Depends(owner)):\n        return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))\n\n    @app.post('/api/smart-routing/preview')\n    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):\n        try:\n            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),\n                warp_outbound_tags=body.warpOutboundTags,enable_warp_ai=body.warpAi,enable_adblock=body.adblock)\n        except SmartRoutingError as ex:\n            raise HTTPException(400,str(ex))\n\n    @app.post('/api/smart-routing/warp-rank')\n    def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):\n        return {'previewOnly':True,'items':rank_warp_paths(body.observations,max_results=body.maxResults)}\n\n'''
+          if "/api/smart-routing/plan" not in text:
+              text=text.replace(route_marker,routes+route_marker)
+          p.write_text(text)
+          PY
+      - name: Install test dependencies
+        run: |
+          python3 -m pip install -q --disable-pip-version-check -r requirements.txt pytest httpx httpx2 uvicorn
+      - name: Run Stage 7 tests
+        run: |
+          PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_v06.py tests/test_web_contract.py
+          python3 tools/repo-check.py
+      - name: Refresh SHA256SUMS
+        run: |
+          python3 tools/release_snapshot.py --refresh-source-sums --json-only
+      - name: Commit Stage 7 patch
+        run: |
+          git add backend/server.py backend/smart_routing.py docs/stage7-smart-routing.md tests/test_smart_routing.py SHA256SUMS
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "[stage7-bot] Wire smart routing preview API"
+            git push origin HEAD:work/stage7-smart-routing
+          fi
