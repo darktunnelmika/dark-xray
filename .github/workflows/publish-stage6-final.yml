@@ -17,6 +17,7 @@ jobs:
       RELEASE_TAG: v0.9.0-rc7-stage6-final
       RELEASE_TITLE: DARK XRAY 0.9.0-rc7 Stage 6 Final Acceptance
       VERSION: 0.9.0-rc7
+      DIST_DIR: ${{ runner.temp }}/dark-xray-release
     steps:
       - name: Checkout target commit
         uses: actions/checkout@v4
@@ -33,16 +34,19 @@ jobs:
       - name: Build reproducible release artifact
         run: |
           set -euo pipefail
+          rm -rf "$DIST_DIR"
+          mkdir -p "$DIST_DIR"
           python3 tools/release_snapshot.py \
             --commit "$TARGET_COMMIT" \
             --accepted-runtime-commit "$TARGET_COMMIT" \
             --accepted-runtime-stage stage6-provider \
-            --output "$PWD/dist" \
+            --output "$DIST_DIR" \
             --json-only
-          (cd dist && sha256sum -c SHA256SUMS.release)
+          (cd "$DIST_DIR" && sha256sum -c SHA256SUMS.release)
           python3 - <<'PY'
-          import json, pathlib, sys
-          p = next(pathlib.Path('dist').glob('*.manifest.json'))
+          import json, os, pathlib
+          dist = pathlib.Path(os.environ['DIST_DIR'])
+          p = next(dist.glob('*.manifest.json'))
           doc = json.loads(p.read_text())
           assert doc['release_commit'] == 'd4f263924dbf873859aba069d856c52decc8204d'
           assert doc['release_tree'] == 'e964d4f12d8330c04acb7eb1aa9409b13c45762b'
@@ -108,10 +112,10 @@ jobs:
         run: |
           set -euo pipefail
           assets=(
-            dist/dark-xray-0.9.0-rc7-d4f263924dbf.tar.gz
-            dist/dark-xray-0.9.0-rc7-d4f263924dbf.zip
-            dist/dark-xray-0.9.0-rc7-d4f263924dbf.manifest.json
-            dist/SHA256SUMS.release
+            "$DIST_DIR/dark-xray-0.9.0-rc7-d4f263924dbf.tar.gz"
+            "$DIST_DIR/dark-xray-0.9.0-rc7-d4f263924dbf.zip"
+            "$DIST_DIR/dark-xray-0.9.0-rc7-d4f263924dbf.manifest.json"
+            "$DIST_DIR/SHA256SUMS.release"
           )
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
