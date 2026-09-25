@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import zipfile
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dark_policy import PolicyError
@@ -107,6 +108,41 @@ def rewrite_inbound_tls_paths(dbpath: Path, mapping: dict[str,str], destination:
         db.rollback();raise PolicyError('Cannot rewrite restored inbound TLS paths') from ex
     finally:db.close()
 
+def prepare_telegram_disaster_recovery(db: sqlite3.Connection) -> dict:
+    """Preserve Telegram business state but require a fresh bot identity after restore."""
+    tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    result={'state_present':False,'bot_rows_reset':0,'forum_rows_preserved':0,
+            'topic_rows_preserved':0,'commerce_tables_preserved':[],'token_required':False,
+            'forum_rebind_required':False}
+    if 'telegram_bots' in tables:
+        cols={r[1] for r in db.execute('PRAGMA table_info(telegram_bots)')}
+        assigns=[]
+        for name,value in (
+            ('enabled','0'),('token_enc',"''"),('update_offset','0'),('bot_username',"''"),
+            ('last_error',"''"),('last_seen','0'),('forum_prompted_at','0')):
+            if name in cols:assigns.append(name+'='+value)
+        if 'updated_at' in cols:assigns.append('updated_at='+str(float(time.time())))
+        count=int(db.execute('SELECT COUNT(*) FROM telegram_bots').fetchone()[0])
+        if assigns and count:db.execute('UPDATE telegram_bots SET '+','.join(assigns))
+        result.update(state_present=bool(count),bot_rows_reset=count,token_required=bool(count))
+    if 'telegram_forums' in tables:
+        cols={r[1] for r in db.execute('PRAGMA table_info(telegram_forums)')}
+        if 'rebind_required' not in cols:
+            db.execute("ALTER TABLE telegram_forums ADD COLUMN rebind_required INTEGER NOT NULL DEFAULT 0")
+        if 'rebind_reason' not in cols:
+            db.execute("ALTER TABLE telegram_forums ADD COLUMN rebind_reason TEXT NOT NULL DEFAULT ''")
+        count=int(db.execute('SELECT COUNT(*) FROM telegram_forums').fetchone()[0])
+        if count:
+            db.execute("UPDATE telegram_forums SET rebind_required=1,rebind_reason='restored-backup',updated_at=?",
+                       (time.time(),))
+        result.update(state_present=result['state_present'] or bool(count),
+                      forum_rows_preserved=count,forum_rebind_required=bool(count))
+    if 'telegram_forum_topics' in tables:
+        result['topic_rows_preserved']=int(db.execute('SELECT COUNT(*) FROM telegram_forum_topics').fetchone()[0])
+    for table in ('commerce_products','commerce_prices','commerce_gateways','commerce_orders','commerce_payments'):
+        if table in tables:result['commerce_tables_preserved'].append(table)
+    return result
+
 def create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
     data,config,output=Path(data),Path(config),Path(output)
     # These are privileged runtime inputs. Refuse indirection before resolve() so
@@ -151,6 +187,11 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
     manifest = {'schema': 2, 'project': 'DARK XRAY', 'version': project_version(),
                 'files': {name: hashlib.sha256(raw).hexdigest() for name,raw in files.items()},
                 'external_files': external_map,
+                'telegram_disaster_recovery':{
+                    'business_state_in_database':True,
+                    'bot_token_reset_on_restore':True,
+                    'forum_and_topics_preserved':True,
+                    'forum_rebind_required_after_restore':True},
                 'excluded': ['Xray binary and geo assets','root firewall allowlist','systemd service definitions',
                              'Node Agent host TLS (reissued when a disposable node is reinstalled)'],
                 'restore_into_empty_destination_only': True}
@@ -231,6 +272,7 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
             # Stolen old session cookies must not survive recovery. Older lab
             # snapshots without live_sessions remain restorable.
             if 'live_sessions' in tables:db.execute('DELETE FROM live_sessions')
+            telegram_recovery=prepare_telegram_disaster_recovery(db)
             db.commit()
         except sqlite3.Error as ex:raise PolicyError('Restored database validation failed') from ex
         finally:db.close()
@@ -241,4 +283,7 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
         (staging/'config.json').write_text(json.dumps(cfg,indent=2),encoding='utf-8')
         os.rename(staging,dest)
     return {'restored':True,'destination':str(dest),'core_autostart':False,
-            'sessions_revoked':True,'mfa_key_restored':True,'excluded':excluded,'backup_version':manifest.get('version','unknown')}
+            'sessions_revoked':True,'mfa_key_restored':True,'telegram_recovery':telegram_recovery,
+            'new_bot_token_required':bool(telegram_recovery.get('token_required')),
+            'forum_rebind_required':bool(telegram_recovery.get('forum_rebind_required')),
+            'excluded':excluded,'backup_version':manifest.get('version','unknown')}
