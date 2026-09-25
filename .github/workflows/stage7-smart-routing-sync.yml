@@ -1,0 +1,86 @@
+name: Stage 7 Smart Routing Sync
+
+on:
+  push:
+    branches:
+      - work/stage7-smart-routing
+    paths:
+      - .github/workflows/stage7-smart-routing-sync.yml
+      - backend/smart_routing.py
+      - tests/test_smart_routing.py
+      - docs/stage7-smart-routing.md
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Stage 7 branch
+        uses: actions/checkout@v4
+        with:
+          ref: work/stage7-smart-routing
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Patch Smart Routing API into server.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('backend/server.py')
+          text = path.read_text()
+
+          imp = "from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths\n"
+          if imp not in text:
+              needle = "from reality_scan import RealityScanError,scan_target,search_targets\n"
+              if needle not in text:
+                  raise SystemExit('reality_scan import anchor not found')
+              text = text.replace(needle, needle + imp)
+
+          models = '''\nclass SmartRoutingPreview(Model):\n    warpAi:bool=True\n    adblock:bool=True\n    warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)\n\nclass SmartWarpRankBody(Model):\n    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)\n\n'''
+          if 'class SmartRoutingPreview(Model):' not in text:
+              anchor = "class FullBackupBody(Model):\n    pass\n"
+              if anchor not in text:
+                  raise SystemExit('FullBackupBody anchor not found')
+              text = text.replace(anchor, models + anchor)
+
+          routes = '''\n\n    @app.get('/api/smart-routing/plan')\n    def smart_routing_plan(p:Principal=Depends(owner)):\n        return build_stage7_plan(nodes.list(), engine.section('outbounds'), engine.section('routing'))\n\n    @app.post('/api/smart-routing/preview')\n    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):\n        try:\n            return build_stage7_patch(engine.section('outbounds'), engine.section('routing'),\n                                      warp_outbound_tags=body.warpOutboundTags,\n                                      enable_warp_ai=body.warpAi, enable_adblock=body.adblock)\n        except SmartRoutingError as ex:\n            raise HTTPException(400,str(ex))\n\n    @app.post('/api/smart-routing/warp-rank')\n    def smart_routing_warp_rank(body:SmartWarpRankBody,p:Principal=Depends(owner)):\n        return {'items': rank_warp_paths(body.observations), 'previewOnly': True}\n'''
+          if "@app.get('/api/smart-routing/plan')" not in text:
+              anchor = "    @app.get('/api/security-center')\n    def security_center(p:Principal=Depends(current)):return security_center_payload(p)\n"
+              if anchor not in text:
+                  raise SystemExit('security-center route anchor not found')
+              text = text.replace(anchor, routes + "\n" + anchor)
+
+          path.write_text(text)
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -q -r requirements.txt -r requirements-dev.txt httpx httpx2 uvicorn
+
+      - name: Run Stage 7 targeted tests
+        run: |
+          PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_web_contract.py tests/test_v06.py tests/test_release_snapshot.py
+          python3 tools/repo-check.py
+
+      - name: Refresh source checksums
+        run: |
+          python3 tools/release_snapshot.py --refresh-source-sums --json-only
+
+      - name: Commit generated Stage 7 sync
+        run: |
+          git status --short
+          if [ -n "$(git status --porcelain)" ]; then
+            git add backend/server.py SHA256SUMS
+            git commit -m "Wire Stage 7 smart routing preview API"
+            git push origin work/stage7-smart-routing
+          else
+            echo "No generated changes"
+          fi
