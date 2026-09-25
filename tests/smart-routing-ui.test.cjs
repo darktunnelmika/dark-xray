@@ -50,7 +50,7 @@ test('inbound Smart WARP scan and selection do not apply or restart',()=>{
 
 test('reviewed Smart Routing flow separates validation, apply and rollback',()=>{
   for(const endpoint of ['/api/smart-routing/validate','/api/smart-routing/review',
-    '/api/smart-routing/revisions','/api/smart-routing/activate','/api/smart-routing/rollback']){
+    '/api/smart-routing/revisions','/api/smart-routing/safety-check','/api/smart-routing/activate','/api/smart-routing/rollback']){
     assert.match(src,new RegExp(endpoint.replaceAll('/','\\/')));
   }
   const reviewStart=src.indexOf('async function showSmartRoutingReview');
@@ -72,4 +72,15 @@ test('Smart Routing review includes explicit per-node role assignment',()=>{
   assert.match(src,/Node role assignment/);
   assert.match(src,/USA\/Germany for WARP AI/);
   assert.match(src,/France\/UK for Adblock/);
+});
+
+
+test('Smart Routing Safety Gate locks apply until a live pass exists',()=>{
+  assert.match(src,/xv7smartsafety/);
+  assert.match(src,/async function runSmartSafety/);
+  assert.match(src,/maxLossPercent:20/);
+  assert.match(src,/maxLatencyMs:1200/);
+  assert.match(src,/maxJitterMs:350/);
+  assert.match(src,/Safety Gate/);
+  assert.match(src,/r\.safetyPassed\?button\(L\('Apply reviewed change'/);
 });

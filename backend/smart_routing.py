@@ -48,6 +48,8 @@ ADBLOCK_DOMAIN_MATCHERS = [
 STAGE7_RULE_TAGS = {"dark-smart-adblock", "dark-smart-warp-ai"}
 STAGE7_BALANCER_TAG = "dark-smart-warp-ai-balancer"
 DEFAULT_WARP_SCAN_TARGETS = ["1.1.1.1:443", "1.0.0.1:443", "www.gstatic.com:443"]
+DEFAULT_SAFETY_THRESHOLDS = {"maxLossPercent": 20.0, "maxLatencyMs": 1200.0, "maxJitterMs": 350.0}
+STAGE7_SAFETY_TTL_SECONDS = 300
 
 
 def _as_text(value: Any) -> str:
@@ -173,8 +175,11 @@ def build_stage7_patch(
     if not isinstance(outbounds, list) or not all(isinstance(o, dict) for o in outbounds):
         raise SmartRoutingError("outbounds must be a list of objects")
     known = _known_tags(outbounds)
-    if "block" not in known and enable_adblock:
-        raise SmartRoutingError("Adblock requires an existing blackhole outbound tagged 'block'")
+    by_tag = {str(o.get("tag")): o for o in outbounds if isinstance(o, dict) and o.get("tag")}
+    if enable_adblock:
+        block = by_tag.get("block")
+        if not block or str(block.get("protocol") or "").lower() != "blackhole":
+            raise SmartRoutingError("Adblock requires a blackhole outbound tagged 'block'")
 
     routing_patch = _clean_stage7_routing(routing)
     rules_to_prepend: list[dict[str, Any]] = []
@@ -308,6 +313,63 @@ def filter_stage7_routing_for_node(
             result["balancers"] = [b for b in balancers if not isinstance(b, dict) or
                                    b.get("tag") != STAGE7_BALANCER_TAG]
     return result
+
+
+def evaluate_stage7_node_readiness(nodes: list[dict[str, Any]], *, warp_node_ids: list[str], adblock_node_ids: list[str]) -> dict[str, Any]:
+    by_id = {str(n.get("id")): n for n in nodes if isinstance(n, dict) and n.get("id")}
+    roles = {"warp": _dedupe_tags(warp_node_ids), "adblock": _dedupe_tags(adblock_node_ids)}
+    checks: list[dict[str, Any]] = []
+    issues: list[str] = []
+    for role, node_ids in roles.items():
+        for node_id in node_ids:
+            node = by_id.get(node_id)
+            reasons: list[str] = []
+            if not node:
+                reasons.append("missing")
+            else:
+                if node.get("enabled") is False: reasons.append("disabled")
+                if not node.get("online"): reasons.append("offline")
+                desired = node.get("desired_state") if isinstance(node.get("desired_state"), dict) else {}
+                if desired.get("pending"): reasons.append("desired_state_pending")
+                if desired.get("last_error"): reasons.append("desired_state_error")
+                health = node.get("health") if isinstance(node.get("health"), dict) else {}
+                core = health.get("core") if isinstance(health.get("core"), dict) else {}
+                if core.get("state") and core.get("state") != "running": reasons.append("core_not_running")
+                if core.get("dirty") is True: reasons.append("runtime_dirty")
+                if core.get("last_error"): reasons.append("core_error")
+            ready = not reasons
+            checks.append({"nodeId": node_id, "role": role, "ready": ready, "reasons": reasons,
+                           "name": str((node or {}).get("name") or node_id)})
+            if not ready:
+                issues.append(f"{role} Node {node_id} is not ready: {', '.join(reasons)}")
+    return {"passed": not issues, "checks": checks, "issues": issues}
+
+
+def evaluate_warp_safety(ranked: list[dict[str, Any]], selected_tags: list[str], *,
+                         max_loss_percent: float = 20.0, max_latency_ms: float = 1200.0,
+                         max_jitter_ms: float = 350.0) -> dict[str, Any]:
+    tags = _dedupe_tags(selected_tags)
+    by_tag = {str(x.get("tag")): x for x in ranked if isinstance(x, dict) and x.get("tag")}
+    items: list[dict[str, Any]] = []
+    issues: list[str] = []
+    for tag in tags:
+        row = by_tag.get(tag, {})
+        reasons: list[str] = []
+        latency = row.get("latencyMs")
+        loss = float(row.get("lossPercent", 100.0)) if row else 100.0
+        jitter = float(row.get("jitterMs", 0.0)) if row else 0.0
+        if not row or not row.get("ok"): reasons.append("probe_failed")
+        if loss > max_loss_percent: reasons.append("loss_above_limit")
+        if latency is None or float(latency) > max_latency_ms: reasons.append("latency_above_limit")
+        if jitter > max_jitter_ms: reasons.append("jitter_above_limit")
+        ready = not reasons
+        items.append({"tag": tag, "ready": ready, "reasons": reasons, "latencyMs": latency,
+                      "lossPercent": loss, "jitterMs": jitter})
+        if not ready:
+            issues.append(f"WARP path {tag} is not ready: {', '.join(reasons)}")
+    return {"passed": bool(tags) and not issues, "items": items, "issues": issues,
+            "thresholds": {"maxLossPercent": float(max_loss_percent), "maxLatencyMs": float(max_latency_ms),
+                           "maxJitterMs": float(max_jitter_ms)}}
 
 
 def rank_warp_paths(observations: list[dict[str, Any]], *, max_results: int = 8) -> list[dict[str, Any]]:

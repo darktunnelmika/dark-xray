@@ -91,15 +91,31 @@ but the owner can override either role per Node before validation.
   either Smart Routing rule.
 - Role membership is hashed as a set, so checkbox ordering cannot make a valid
   revision look stale.
-- Applying or rolling back a revision refreshes Node desired-state payloads; an
-  offline Node remains pending and converges through the existing Node monitor
-  when it returns.
+- Applying or rolling back a revision refreshes Node desired-state payloads.
+
+### Pre-Apply Safety Gate
+
+A reviewed revision cannot be applied until the live Safety Gate passes. The
+check itself does not mutate traffic or restart production Xray.
+
+- Every selected WARP/Adblock Node must be enabled, online, free of pending
+  desired-state drift, and report no explicit core/runtime error.
+- Every selected WARP path is tested through the isolated temporary-Xray probe.
+- Default limits are: loss <= 20%, median latency <= 1200 ms, jitter <= 350 ms.
+- Adblock additionally requires the `block` outbound to be a real `blackhole`.
+- A Safety PASS is valid for 300 seconds only and is bound to the reviewed
+  candidate hash. Expired or failed checks keep Apply locked.
+- Immediately before Apply the selected Node readiness is checked again. If a
+  Node goes offline or becomes pending after the scan, Apply is refused.
+- Safety reports contain only health/metric data; WireGuard secret material is
+  never returned.
 
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`
 - `POST /api/smart-routing/review`
 - `GET /api/smart-routing/revisions`
+- `POST /api/smart-routing/safety-check`
 - `POST /api/smart-routing/activate`
 - `POST /api/smart-routing/rollback`
 

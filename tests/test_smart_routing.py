@@ -2,7 +2,8 @@ import copy
 import pytest
 
 from smart_routing import (SmartRoutingError,build_stage7_candidate_config,build_stage7_patch,build_stage7_plan,
-                           classify_nodes,filter_stage7_routing_for_node,rank_warp_paths,stage7_state_hash)
+                           classify_nodes,evaluate_stage7_node_readiness,evaluate_warp_safety,
+                           filter_stage7_routing_for_node,rank_warp_paths,stage7_state_hash)
 
 
 def base_outbounds():
@@ -130,3 +131,33 @@ def test_stage7_node_role_filter_keeps_only_role_specific_rules():
     assert any(b.get('tag')=='dark-smart-warp-ai-balancer' for b in warp.get('balancers',[]))
     assert not any(b.get('tag')=='dark-smart-warp-ai-balancer' for b in ads.get('balancers',[]))
     assert plain['rules'][-1]['domain']==['example.org']
+
+
+def test_stage7_adblock_requires_real_blackhole_outbound():
+    out=base_outbounds();out[1]={'tag':'block','protocol':'freedom','settings':{}}
+    with pytest.raises(SmartRoutingError,match='blackhole outbound'):
+        build_stage7_patch(out,{'rules':[]},enable_warp_ai=False,enable_adblock=True)
+
+
+def test_stage7_node_readiness_blocks_offline_pending_or_dirty_nodes():
+    nodes=[
+        {'id':'us','name':'US','enabled':True,'online':True,'desired_state':{'pending':False},'health':{'core':{'state':'running'}}},
+        {'id':'de','name':'DE','enabled':True,'online':False,'desired_state':{'pending':False},'health':{'core':{'state':'running'}}},
+        {'id':'fr','name':'FR','enabled':True,'online':True,'desired_state':{'pending':True},'health':{'core':{'state':'running'}}},
+    ]
+    gate=evaluate_stage7_node_readiness(nodes,warp_node_ids=['us','de'],adblock_node_ids=['fr'])
+    assert gate['passed'] is False
+    checks={(x['nodeId'],x['role']):x for x in gate['checks']}
+    assert checks[('us','warp')]['ready'] is True
+    assert 'offline' in checks[('de','warp')]['reasons']
+    assert 'desired_state_pending' in checks[('fr','adblock')]['reasons']
+
+
+def test_stage7_warp_safety_requires_every_selected_path_inside_thresholds():
+    gate=evaluate_warp_safety([
+        {'tag':'warp-us','ok':True,'latencyMs':80,'lossPercent':0,'jitterMs':8},
+        {'tag':'warp-de','ok':True,'latencyMs':1500,'lossPercent':0,'jitterMs':10},
+    ],['warp-us','warp-de'],max_loss_percent=20,max_latency_ms=1200,max_jitter_ms=350)
+    assert gate['passed'] is False
+    assert gate['items'][0]['ready'] is True
+    assert 'latency_above_limit' in gate['items'][1]['reasons']

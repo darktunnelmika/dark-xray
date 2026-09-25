@@ -1,5 +1,6 @@
 import shutil
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from auth import Auth
 from core import Config,CoreEngine
 from dark_policy import Actor,Store
 from manager import Manager
+import server as server_module
 from server import make_app
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -28,8 +30,19 @@ def warp_outbounds():
         {'tag':'warp-de','protocol':'wireguard','settings':{'secretKey':'secret-de',
          'peers':[{'publicKey':'pub-de','endpoint':'1.0.0.1:2408'}],'address':['172.16.0.3/32']}},
     ]
+
+
+def ready_nodes():
+    return [
+        {'id':'node-us','name':'USA','region':'USA','enabled':True,'online':True,'desired_state':{'pending':False},'health':{'core':{'state':'running'}}},
+        {'id':'node-de','name':'Germany','region':'Germany','enabled':True,'online':True,'desired_state':{'pending':False},'health':{'core':{'state':'running'}}},
+        {'id':'node-fr','name':'France','region':'France','enabled':True,'online':True,'desired_state':{'pending':False},'health':{'core':{'state':'running'}}},
+        {'id':'node-uk','name':'UK','region':'UK','enabled':True,'online':True,'desired_state':{'pending':False},'health':{'core':{'state':'running'}}},
+    ]
+
+
 @pytest.fixture
-def stage7_env(tmp_path):
+def stage7_env(tmp_path,monkeypatch):
     fake=tmp_path/'fake-xray'
     shutil.copy2(ROOT/'tests/fixtures/fake_xray.py',fake);fake.chmod(0o755)
     store=Store(tmp_path/'dark.sqlite3')
@@ -43,6 +56,12 @@ def stage7_env(tmp_path):
     engine.save_section('observatory',{'subjectSelector':['direct'],'probeURL':'https://example.test/204',
                                        'probeInterval':'30s','enableConcurrency':False})
     app=make_app(manager,auth,background=False)
+    monkeypatch.setattr(app.state.nodes,'list',lambda: ready_nodes())
+    monkeypatch.setattr(server_module,'scan_warp_outbounds',lambda binary,assets,outbounds,attempts=3,timeout=5.0:[
+        {'tag':str(o.get('tag')),'ok':True,'latenciesMs':[70.0,75.0,72.0][:attempts],
+         'lossPercent':0.0,'attempts':attempts,'successes':attempts,'failures':0,'error':'',
+         'source':'test','probeUrl':'https://example.test/204','productionTrafficMutation':False}
+        for o in outbounds])
     with TestClient(app,base_url=config.public_origin) as client:
         login=client.post('/api/auth/login',json={'username':'dark','password':'Test!OnlyPassword123'})
         assert login.status_code==200,login.text
@@ -53,7 +72,8 @@ def stage7_env(tmp_path):
 
 
 def request_body():
-    return {'warpAi':True,'adblock':True,'warpOutboundTags':['warp-us','warp-de']}
+    return {'warpAi':True,'adblock':True,'warpOutboundTags':['warp-us','warp-de'],
+            'warpNodeIds':['node-us','node-de'],'adblockNodeIds':['node-fr','node-uk']}
 
 
 def review(client):
@@ -64,6 +84,13 @@ def review(client):
                          'confirmation':'REVIEW SMART ROUTING'}
     response=client.post('/api/smart-routing/review',json=body)
     assert response.status_code==200,response.text
+    return response.json()
+
+
+def safety(client,revision_id):
+    response=client.post('/api/smart-routing/safety-check',json={'revisionId':revision_id})
+    assert response.status_code==200,response.text
+    assert response.json()['safetyPassed'] is True,response.text
     return response.json()
 def test_stage7_preview_redacts_wireguard_secrets_and_validate_does_not_mutate(stage7_env):
     _store,engine,client=stage7_env
@@ -86,6 +113,8 @@ def test_stage7_review_activate_and_rollback_round_trip(stage7_env):
     assert reviewed['state']=='reviewed' and reviewed['rollbackAvailable'] is False
     assert engine.section('routing')==before_routing
     assert engine.section('observatory')==before_obs
+    checked=safety(client,reviewed['revisionId'])
+    assert checked['safetyReport']['productionTrafficMutation'] is False
 
     activated=client.post('/api/smart-routing/activate',json={
         'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
@@ -163,6 +192,7 @@ def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env,monkeypatch)
     assert reviewed.status_code==200,reviewed.text
     revision=reviewed.json()
     assert revision['nodeRoles']==validated.json()['nodeRoles']
+    safety(client,revision['revisionId'])
 
     applied=client.post('/api/smart-routing/activate',json={
         'revisionId':revision['revisionId'],'confirmation':'APPLY SMART ROUTING'})
@@ -179,3 +209,35 @@ def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env,monkeypatch)
     with store.lock:
         assert store.db.execute('SELECT COUNT(*) FROM smart_routing_node_roles').fetchone()[0]==0
     assert engine.section('routing').get('rules',[])==[]
+
+
+def test_stage7_apply_is_locked_until_safety_gate_passes(stage7_env):
+    _store,_engine,client=stage7_env
+    reviewed=review(client)
+    denied=client.post('/api/smart-routing/activate',json={
+        'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
+    assert denied.status_code==409,denied.text
+    assert 'Safety Gate' in denied.text
+
+
+def test_stage7_safety_gate_blocks_offline_selected_node(stage7_env,monkeypatch):
+    _store,_engine,client=stage7_env
+    reviewed=review(client)
+    nodes=ready_nodes();nodes[1]['online']=False
+    monkeypatch.setattr(client.app.state.nodes,'list',lambda: nodes)
+    checked=client.post('/api/smart-routing/safety-check',json={'revisionId':reviewed['revisionId']})
+    assert checked.status_code==200,checked.text
+    doc=checked.json();assert doc['safetyPassed'] is False
+    assert any('node-de' in x and 'offline' in x for x in doc['safetyReport']['issues'])
+
+
+def test_stage7_safety_gate_expires_before_apply(stage7_env):
+    store,_engine,client=stage7_env
+    reviewed=review(client);safety(client,reviewed['revisionId'])
+    with store.transaction() as db:
+        db.execute('UPDATE smart_routing_revisions SET safety_checked_at=? WHERE id=?',
+                   (time.time()-301,reviewed['revisionId']))
+    denied=client.post('/api/smart-routing/activate',json={
+        'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
+    assert denied.status_code==409,denied.text
+    assert 'expired' in denied.text

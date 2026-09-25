@@ -161,6 +161,8 @@ class CoreEngine:
               after_routing TEXT NOT NULL,after_observatory TEXT NOT NULL,
               before_node_roles TEXT NOT NULL DEFAULT '{}',after_node_roles TEXT NOT NULL DEFAULT '{}',
               request_body TEXT NOT NULL,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',
+              safety_report TEXT NOT NULL DEFAULT '{}',safety_hash TEXT NOT NULL DEFAULT '',
+              safety_checked_at REAL NOT NULL DEFAULT 0,safety_passed INTEGER NOT NULL DEFAULT 0,
               applied_at REAL NOT NULL DEFAULT 0,rolled_back_at REAL NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS smart_routing_revisions_created
               ON smart_routing_revisions(created_at DESC);
@@ -173,6 +175,14 @@ class CoreEngine:
                 store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN before_node_roles TEXT NOT NULL DEFAULT '{}'")
             if 'after_node_roles' not in revision_cols:
                 store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN after_node_roles TEXT NOT NULL DEFAULT '{}'")
+            if 'safety_report' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_report TEXT NOT NULL DEFAULT '{}'")
+            if 'safety_hash' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_hash TEXT NOT NULL DEFAULT ''")
+            if 'safety_checked_at' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_checked_at REAL NOT NULL DEFAULT 0")
+            if 'safety_passed' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_passed INTEGER NOT NULL DEFAULT 0")
         self.validate_schema_only=True
 
     def _write(self):
