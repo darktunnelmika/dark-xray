@@ -2,7 +2,7 @@ import copy
 import pytest
 
 from smart_routing import (SmartRoutingError,build_stage7_candidate_config,build_stage7_patch,build_stage7_plan,
-                           classify_nodes,rank_warp_paths,stage7_state_hash)
+                           classify_nodes,filter_stage7_routing_for_node,rank_warp_paths,stage7_state_hash)
 
 
 def base_outbounds():
@@ -113,3 +113,20 @@ def test_stage7_state_hash_and_candidate_overlay_are_deterministic():
     cfg=build_stage7_candidate_config(base,patch)
     assert cfg['routing']['rules'][1]['ruleTag']=='dark-smart-warp-ai'
     assert 'observatory' not in cfg
+
+def test_stage7_node_role_filter_keeps_only_role_specific_rules():
+    routing=build_stage7_patch(base_outbounds(),{'rules':[{'type':'field','domain':['example.org'],
+        'outboundTag':'direct'}]},warp_outbound_tags=['warp-us','warp-de'])['routing']
+    warp=filter_stage7_routing_for_node(routing,warp_ai=True,adblock=False)
+    ads=filter_stage7_routing_for_node(routing,warp_ai=False,adblock=True)
+    plain=filter_stage7_routing_for_node(routing,warp_ai=False,adblock=False)
+    both=filter_stage7_routing_for_node(routing,warp_ai=True,adblock=True)
+
+    assert [r.get('ruleTag') for r in warp['rules'] if r.get('ruleTag')]==['dark-smart-warp-ai']
+    assert [r.get('ruleTag') for r in ads['rules'] if r.get('ruleTag')]==['dark-smart-adblock']
+    assert not [r for r in plain['rules'] if r.get('ruleTag') in {'dark-smart-warp-ai','dark-smart-adblock'}]
+    assert [r.get('ruleTag') for r in both['rules'] if r.get('ruleTag')]==[
+        'dark-smart-adblock','dark-smart-warp-ai']
+    assert any(b.get('tag')=='dark-smart-warp-ai-balancer' for b in warp.get('balancers',[]))
+    assert not any(b.get('tag')=='dark-smart-warp-ai-balancer' for b in ads.get('balancers',[]))
+    assert plain['rules'][-1]['domain']==['example.org']

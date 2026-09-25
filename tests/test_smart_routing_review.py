@@ -140,3 +140,42 @@ def test_stage7_apply_requires_csrf_confirmation_and_writes_enabled(stage7_env):
         assert reviewed['baselineHash']==client.get('/api/smart-routing/revisions').json()['items'][0]['baselineHash']
     finally:
         engine.config.writes_enabled=True
+
+def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env,monkeypatch):
+    store,engine,client=stage7_env
+    fake_nodes=[
+        {'id':'node-us','name':'USA','region':'USA','enabled':True,'online':True},
+        {'id':'node-de','name':'Germany','region':'Germany','enabled':True,'online':True},
+        {'id':'node-fr','name':'France','region':'France','enabled':True,'online':True},
+        {'id':'node-uk','name':'UK','region':'UK','enabled':True,'online':True},
+    ]
+    monkeypatch.setattr(client.app.state.nodes,'list',lambda: fake_nodes)
+    body=request_body()|{'warpNodeIds':['node-us','node-de'],
+                         'adblockNodeIds':['node-fr','node-uk']}
+    validated=client.post('/api/smart-routing/validate',json=body)
+    assert validated.status_code==200,validated.text
+    assert validated.json()['nodeRoles']=={
+        'warpNodeIds':['node-us','node-de'],'adblockNodeIds':['node-fr','node-uk']}
+    review_body=body|{'baselineHash':validated.json()['baselineHash'],
+                      'candidateHash':validated.json()['candidateHash'],
+                      'confirmation':'REVIEW SMART ROUTING'}
+    reviewed=client.post('/api/smart-routing/review',json=review_body)
+    assert reviewed.status_code==200,reviewed.text
+    revision=reviewed.json()
+    assert revision['nodeRoles']==validated.json()['nodeRoles']
+
+    applied=client.post('/api/smart-routing/activate',json={
+        'revisionId':revision['revisionId'],'confirmation':'APPLY SMART ROUTING'})
+    assert applied.status_code==200,applied.text
+    with store.lock:
+        roles=[tuple(r) for r in store.db.execute(
+            'SELECT node_id,warp_ai,adblock FROM smart_routing_node_roles ORDER BY node_id')]
+    assert roles==[
+        ('node-de',1,0),('node-fr',0,1),('node-uk',0,1),('node-us',1,0)]
+
+    rolled=client.post('/api/smart-routing/rollback',json={
+        'revisionId':revision['revisionId'],'confirmation':'ROLLBACK SMART ROUTING'})
+    assert rolled.status_code==200,rolled.text
+    with store.lock:
+        assert store.db.execute('SELECT COUNT(*) FROM smart_routing_node_roles').fetchone()[0]==0
+    assert engine.section('routing').get('rules',[])==[]

@@ -258,12 +258,19 @@ def stage7_state_hash(
     outbounds: list[dict[str, Any]],
     routing: dict[str, Any],
     observatory: dict[str, Any] | None,
+    node_roles: dict[str, Any] | None = None,
 ) -> str:
     """Stable hash used to fence reviewed Stage 7 changes against concurrent edits."""
+    roles = copy.deepcopy(node_roles) if isinstance(node_roles, dict) else {}
+    canonical_roles = {
+        "warpNodeIds": sorted({str(x) for x in roles.get("warpNodeIds", []) if str(x)}),
+        "adblockNodeIds": sorted({str(x) for x in roles.get("adblockNodeIds", []) if str(x)}),
+    } if roles else {}
     payload = {
         "outbounds": copy.deepcopy(outbounds),
         "routing": copy.deepcopy(routing),
         "observatory": copy.deepcopy(observatory) if isinstance(observatory, dict) else {},
+        "nodeRoles": canonical_roles,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     return hashlib.sha256(raw).hexdigest()
@@ -280,6 +287,28 @@ def build_stage7_candidate_config(base_config: dict[str, Any], patch: dict[str, 
     else:
         cfg.pop("observatory", None)
     return cfg
+
+
+def filter_stage7_routing_for_node(
+    routing: dict[str, Any], *, warp_ai: bool, adblock: bool,
+) -> dict[str, Any]:
+    """Return a Node-specific Routing view without changing non-Stage7 rules."""
+    result = copy.deepcopy(routing) if isinstance(routing, dict) else {"domainStrategy": "AsIs", "rules": []}
+    rules = result.get("rules", []) if isinstance(result.get("rules", []), list) else []
+    allowed = set()
+    if warp_ai:
+        allowed.add("dark-smart-warp-ai")
+    if adblock:
+        allowed.add("dark-smart-adblock")
+    result["rules"] = [r for r in rules if not isinstance(r, dict) or
+                       r.get("ruleTag") not in STAGE7_RULE_TAGS or r.get("ruleTag") in allowed]
+    if not warp_ai:
+        balancers = result.get("balancers", [])
+        if isinstance(balancers, list):
+            result["balancers"] = [b for b in balancers if not isinstance(b, dict) or
+                                   b.get("tag") != STAGE7_BALANCER_TAG]
+    return result
+
 
 def rank_warp_paths(observations: list[dict[str, Any]], *, max_results: int = 8) -> list[dict[str, Any]]:
     """Rank pre-collected WARP path observations by health, latency and loss."""
@@ -318,10 +347,16 @@ def build_stage7_plan(nodes: list[dict[str, Any]], outbounds: list[dict[str, Any
     warp_candidates = [_warp_candidate_meta(o) for o in outbounds
                        if isinstance(o, dict) and str(o.get("protocol") or "").lower() == "wireguard"]
     stage7_rules = [r for r in routing.get("rules", []) if isinstance(r, dict) and r.get("ruleTag") in STAGE7_RULE_TAGS]
+    node_candidates=[{
+        "id":str(n.get("id") or ""),"name":str(n.get("name") or n.get("id") or ""),
+        "online":bool(n.get("online")),"enabled":bool(n.get("enabled",True)),
+        "data_address":str(n.get("data_address") or n.get("dataAddress") or ""),
+    } for n in nodes if isinstance(n,dict) and n.get("id") and n.get("enabled",True)]
     return {
         "stage": "stage7-smart-routing",
         "safeDefault": "preview_only",
         "nodes": classify_nodes(nodes),
+        "nodeCandidates": node_candidates,
         "outboundTags": tags,
         "configuredWarpCandidates": [t for t in tags if t.startswith(("warp", "wg-warp", "dark-warp"))],
         "warpCandidates": warp_candidates,

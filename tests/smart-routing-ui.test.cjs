@@ -63,3 +63,13 @@ test('reviewed Smart Routing flow separates validation, apply and rollback',()=>
   assert.match(src,/xv7smartapply/);
   assert.match(src,/xv7smartrollback/);
 });
+
+test('Smart Routing review includes explicit per-node role assignment',()=>{
+  assert.match(src,/nodeCandidates/);
+  assert.match(src,/nodeRoles/);
+  assert.match(src,/name="warpNodeIds"/);
+  assert.match(src,/name="adblockNodeIds"/);
+  assert.match(src,/Node role assignment/);
+  assert.match(src,/USA\/Germany for WARP AI/);
+  assert.match(src,/France\/UK for Adblock/);
+});

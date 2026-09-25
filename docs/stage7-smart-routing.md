@@ -78,6 +78,23 @@ Existing Observatory values are preserved: Smart WARP adds its selectors and
 uses defaults only for Observatory fields that were previously absent.
 Only real `wireguard` outbound tags are accepted as Smart WARP paths.
 
+### Per-Node role policy
+
+Node roles are part of the same reviewed revision and rollback snapshot. The UI
+suggests USA/Germany Nodes for **WARP AI** and France/UK Nodes for **Adblock**,
+but the owner can override either role per Node before validation.
+
+- A WARP-role Node receives the `dark-smart-warp-ai` rule and its Stage 7
+  balancer; a non-WARP Node does not.
+- An Adblock-role Node receives `dark-smart-adblock`; a non-Adblock Node does not.
+- Nodes with neither role retain all non-Stage7 routing rules and do not receive
+  either Smart Routing rule.
+- Role membership is hashed as a set, so checkbox ordering cannot make a valid
+  revision look stale.
+- Applying or rolling back a revision refreshes Node desired-state payloads; an
+  offline Node remains pending and converges through the existing Node monitor
+  when it returns.
+
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`
