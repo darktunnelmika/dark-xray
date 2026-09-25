@@ -1,5 +1,14 @@
 # تغییرات DARK XRAY
 
+## 0.9.1-rc1 — Stage 8 integrated Release Candidate
+
+- شاخه Stage 7 Smart Routing با `main` فعلی شامل DARK Customer Bot V2 روی یک integration line ادغام شد؛ هیچ قابلیت main یا Stage7 حذف نشد.
+- Smart WARP / Smart Adblock اکنون Safety Gate، Canary rollout، Hub-last، automatic rollback، Pause/Resume/Abort، telemetry و rollout history دارند.
+- Stage 7.4 پذیرش واقعی Hub + چهار Node Agent مستقل با TLS/HTTPS واقعی را PASS کرده است.
+- Stage 7.5 پنجاه rollout ترکیبی را با 10 Hub restart، 10 Pause/Resume، 10 Abort، 10 WARP degradation و 10 Node process flap بدون state/thread leak یا SQLite corruption PASS کرده است.
+- Stage 8 migration gate ارتقا از Stable `v0.9.0` و Production-line `0.9.0` فعلی را با حفظ داده‌ها، backup/restore و Node compatibility بررسی می‌کند.
+- RC فقط بعد از exact-SHA release snapshot، fresh-install، update/rollback، backup/restore و Node Agent gates قابل انتشار است؛ Production به‌صورت خودکار به این RC منتقل نمی‌شود.
+
 ## Unreleased — بعد از 0.9.0-rc7
 
 - Stage 5 exact release-artifact rehearsal روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` PASS شد.

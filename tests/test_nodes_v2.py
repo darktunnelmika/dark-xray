@@ -662,3 +662,22 @@ def test_hub_observe_node_enforce_is_translated_only_for_agent_payload(env):
  remote_guard=state.json()['payload']['sections']['ipguard']
  assert remote_guard['mode']=='enforce' and 'node_mode' not in remote_guard
  assert eng.section('ipguard')['mode']=='observe'
+
+
+def test_smart_warp_probe_chunks_multi_path_requests_under_transport_timeout(env,monkeypatch):
+ _,_,app,c=env;token='dkn_'+('W'*60)
+ assert c.post('/api/nodes',json={'id':'warpchunk','name':'Warp chunk','origin':'https://node.example.com',
+                                  'token':token,'enabled':True}).status_code==200
+ calls=[]
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  assert path=='/node/api/v1/smart-warp/probe' and method=='POST'
+  calls.append((list(body['outboundTags']),timeout))
+  return {'service':'DARK XRAY NODE','items':[
+      {'tag':tag,'ok':True,'latencyMs':50.0,'lossPercent':0.0,'jitterMs':2.0}
+      for tag in body['outboundTags']]},7
+ monkeypatch.setattr(app.state.nodes,'_request',fake_request)
+ tags=[f'warp-{i}' for i in range(8)]
+ out=app.state.nodes.smart_warp_probe('warpchunk',tags,attempts=2,timeout_seconds=5)
+ assert out['batches']==4 and [x['tag'] for x in out['items']]==tags
+ assert [batch for batch,_ in calls]==[tags[0:2],tags[2:4],tags[4:6],tags[6:8]]
+ assert all(.2<=timeout<=30 for _,timeout in calls)

@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node')
 REPO='https://github.com/darktunnelmika/dark-xray.git'
 SHA_RE=re.compile(r'[0-9a-f]{40}')
-BACKEND=('node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','node_updated.py','update_bridge.py')
+BACKEND=('node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','smart_routing.py','smart_warp_probe.py','node_updated.py','update_bridge.py')
 TOOLS=('fetch-core.py','import-core.py','update_node.py')
 DEPLOY=('dark-xray-node.service','dark-xray-node-guard.service','dark-xray-node-update.service')
 ROOT_FILES=('requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md')
