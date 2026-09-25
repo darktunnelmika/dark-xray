@@ -520,8 +520,8 @@ class BotCommerce:
 
     def _order_email(self, owner_id: str, telegram_user_id: int, order_id: str) -> str:
         prefix = str(self.manager.profile(owner_id).get("prefix") or "")
-        clean = re.sub(r"[^A-Za-z0-9]", "", order_id)[:8]
-        value = (prefix + f"tg{telegram_user_id}_{clean}")[:128]
+        clean = re.sub(r"[^A-Za-z0-9]", "", order_id)[:8].lower()
+        value = (prefix + f"tg{telegram_user_id}_{clean}")[:128].lower()
         if not NAME_RE.fullmatch(value):
             raise PolicyError(
                 "Representative prefix cannot generate a valid client identity"
