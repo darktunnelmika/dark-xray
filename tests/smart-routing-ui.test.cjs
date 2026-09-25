@@ -21,5 +21,3 @@ test('smart routing preview function remains non-applying',()=>{
   assert.doesNotMatch(body,/\/api\/settings\/routing[^\n]*PUT/);
   assert.match(body,/Preview only/);
 });
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
