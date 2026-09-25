@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import secrets
 import threading
 import time
 from typing import Any
@@ -142,8 +143,9 @@ class BotWorker:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
-                ['💳 پرداخت دستی','📊 گزارش‌ها'],
-                ['💾 بکاپ','⚙️ تنظیمات ربات'],
+                ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
+                ['📊 گزارش‌ها','💾 بکاپ'],
+                ['⚙️ تنظیمات ربات'],
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 فروشگاه','📦 سرویس‌های من']]
@@ -219,6 +221,10 @@ class BotWorker:
         session=self.sessions.get(user_id,'')
         if session.startswith('pay_') and self.is_admin(user_id):
             self.handle_payment_setup_text(chat_id,user_id,text);return
+        if session.startswith('store_') and self.is_admin(user_id):
+            self.handle_store_text(chat_id,user_id,text);return
+        if session.startswith('service_') and self.is_admin(user_id):
+            self.handle_service_text(chat_id,user_id,text);return
         if session=='new_rep':
             self.create_representative_from_text(chat_id,user_id,text);return
         if low in ('/start','start'):self.send_home(chat_id,user_id);return
@@ -229,6 +235,7 @@ class BotWorker:
         if text in ('👥 کاربران','👥 مدیریت کاربران') and self.is_admin(user_id):self.admin_clients(chat_id);return
         if text=='📦 سرویس‌ها' and self.is_admin(user_id):self.admin_services(chat_id);return
         if text=='🧾 سفارش‌ها' and self.is_admin(user_id):self.admin_orders(chat_id);return
+        if text=='🛠 مدیریت فروشگاه' and self.is_admin(user_id):self.admin_store(chat_id);return
         if text=='💳 پرداخت دستی' and self.is_admin(user_id):self.admin_gateways(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
         if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
@@ -327,6 +334,73 @@ class BotWorker:
                 self.api.send(chat_id,card)
             else:self.api.send(chat_id,'این درگاه برای آپدیت آینده رزرو شده است؛ فعلاً پرداخت دستی را انتخاب کن.')
             return
+        if data=='stnew' and self.is_admin(user_id):
+            self.start_product_create(chat_id,user_id);return
+        if data=='stlist' and self.is_admin(user_id):
+            self.admin_store_products(chat_id);return
+        if data.startswith('stprod:') and self.is_admin(user_id):
+            self.admin_product_detail(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('sttype:') and self.is_admin(user_id):
+            self.store_choose_type(chat_id,user_id,data.split(':',1)[1]);return
+        if data.startswith('stedit:') and self.is_admin(user_id):
+            self.start_product_edit(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data.startswith('stpreview:') and self.is_admin(user_id):
+            self.preview_product(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('stdelete:') and self.is_admin(user_id):
+            rid=int(data.split(':',1)[1])
+            self.api.send(chat_id,'محصول حذف/آرشیو شود؟ اگر سابقه سفارش داشته باشد فقط از فروش خارج می‌شود.',
+                          {'inline_keyboard':[[{'text':'✅ تأیید','callback_data':'stdeletey:'+str(rid)},
+                                              {'text':'❌ لغو','callback_data':'noop'}]]});return
+        if data.startswith('stdeletey:') and self.is_admin(user_id):
+            self.delete_or_archive_product(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('stclone:') and self.is_admin(user_id):
+            self.clone_product(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('sttoggle:') and self.is_admin(user_id):
+            _,rid,field=data.split(':',2);self.toggle_product(chat_id,int(rid),field);return
+        if data.startswith('strenew:') and self.is_admin(user_id):
+            self.toggle_product(chat_id,int(data.split(':',1)[1]),'renewal_enabled');return
+        if data.startswith('staddvol:') and self.is_admin(user_id):
+            self.toggle_product(chat_id,int(data.split(':',1)[1]),'add_volume_enabled');return
+        if data.startswith('stpriceadd:') and self.is_admin(user_id):
+            self.start_price_create(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data.startswith('stprice:') and self.is_admin(user_id):
+            self.admin_price_detail(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('stptoggle:') and self.is_admin(user_id):
+            self.toggle_price(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('stpdel:') and self.is_admin(user_id):
+            rid=int(data.split(':',1)[1]);self.api.send(chat_id,'این Price Variant حذف شود؟',
+                {'inline_keyboard':[[{'text':'✅ حذف','callback_data':'stpdely:'+str(rid)},
+                                     {'text':'❌ لغو','callback_data':'noop'}]]});return
+        if data.startswith('stpdely:') and self.is_admin(user_id):
+            self.delete_price(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('stact:') and self.is_admin(user_id):
+            self.price_choose_activation(chat_id,user_id,data.split(':',1)[1]);return
+        if data.startswith('stdlv:') and self.is_admin(user_id):
+            self.price_choose_delivery(chat_id,user_id,data.split(':',1)[1]);return
+        if data.startswith('stinb:') and self.is_admin(user_id):
+            self.price_toggle_inbound(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='stinbdone' and self.is_admin(user_id):
+            self.price_inbounds_done(chat_id,user_id);return
+        if data.startswith('stprimary:') and self.is_admin(user_id):
+            self.price_choose_primary(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data.startswith('clrenew:') and self.is_admin(user_id):
+            self.client_renew_menu(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('clr:') and self.is_admin(user_id):
+            _,rid,days=data.split(':',2);self.renew_client(chat_id,int(rid),int(days));return
+        if data.startswith('clrcustom:') and self.is_admin(user_id):
+            self.start_service_input(chat_id,user_id,'renew',int(data.split(':',1)[1]),'تعداد روز تمدید را بفرست.');return
+        if data.startswith('clvol:') and self.is_admin(user_id):
+            self.start_service_input(chat_id,user_id,'volume',int(data.split(':',1)[1]),'چند GB به سرویس اضافه شود؟');return
+        if data.startswith('clip:') and self.is_admin(user_id):
+            self.start_service_input(chat_id,user_id,'ip',int(data.split(':',1)[1]),'IP Limit جدید را بفرست. صفر یعنی نامحدود.');return
+        if data.startswith('clhw:') and self.is_admin(user_id):
+            self.start_service_input(chat_id,user_id,'hwid',int(data.split(':',1)[1]),'HWID Limit جدید را بفرست. صفر یعنی نامحدود.');return
+        if data.startswith('clinb:') and self.is_admin(user_id):
+            self.start_client_inbounds(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data.startswith('clinbt:') and self.is_admin(user_id):
+            self.toggle_client_inbound(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='clinbdone' and self.is_admin(user_id):
+            self.finish_client_inbounds(chat_id,user_id);return
         if data=='forumrebind' and self.is_admin(user_id):
             try:
                 result=self.runtime.rebind_forum(self.owner)
@@ -357,6 +431,13 @@ class BotWorker:
                                               {'text':'❌ لغو','callback_data':'noop'}]]});return
         if data.startswith('clresetok:') and self.is_admin(user_id):
             self.client_action(chat_id,int(data.split(':',1)[1]),'reset');return
+        if data.startswith('cldel:') and self.is_admin(user_id):
+            rid=int(data.split(':',1)[1])
+            self.api.send(chat_id,'این سرویس کامل حذف شود؟ این عملیات قابل بازگشت نیست.',
+                          {'inline_keyboard':[[{'text':'✅ حذف قطعی','callback_data':'cldely:'+str(rid)},
+                                              {'text':'❌ لغو','callback_data':'noop'}]]});return
+        if data.startswith('cldely:') and self.is_admin(user_id):
+            self.client_action(chat_id,int(data.split(':',1)[1]),'delete');return
         if data.startswith('payok:') and self.is_admin(user_id):
             row_id=int(data.split(':',1)[1]);result=self.runtime.commerce.approve_payment(self.owner,row_id,self.runtime.manager)
             order=self.runtime.commerce.order(result['id'],self.owner)
@@ -453,7 +534,7 @@ class BotWorker:
                 reps=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM api_admins WHERE role='reseller' AND disabled=0").fetchone()[0])
         forum_state='متصل ✅' if forum.get('configured') else ('نیازمند Rebind ♻️' if forum.get('rebind_required') else 'متصل نیست ⛔')
         pay_state='فعال ✅' if gateway and gateway.get('enabled') else ('غیرفعال ⛔' if gateway else 'تنظیم نشده')
-        text=(f"🏠 DARK BOT ADMIN V2\n"
+        text=(f"🏠 DARK BOT ADMIN V3\n"
               f"👥 کاربران: {len(rows)} · فعال {active} · محدود/خاموش {disabled}\n"
               f"🛍 محصولات: {products}\n🧾 سفارش‌ها: {orders} · پیگیری {pending}\n"
               f"🖥 نودها: {online}/{nodes} آنلاین\n"
@@ -476,6 +557,386 @@ class BotWorker:
         lines += [f"✅ فعال: {active}",f"⛔ محدود/غیرفعال: {disabled}",f"⌛ منقضی: {expired}",
                   f"🔌 منتظر اولین اتصال: {waiting}",'','برای جستجوی سرویس: /user USERNAME']
         self.api.send(chat_id,'\n'.join(lines))
+
+    def inbound_catalog(self)->list[dict[str,Any]]:
+        profile=self.runtime.manager.profile(self.owner)
+        allowed={int(x) for x in (profile.get('allowed') or [])}
+        with self.runtime.store.lock:
+            rows=list(self.runtime.store.db.execute("SELECT id,body FROM core_inbounds ORDER BY id"))
+        out=[]
+        for row in rows:
+            inbound_id=int(row['id'])
+            if self.owner_role()!='owner' and inbound_id not in allowed:continue
+            try:body=json.loads(row['body'])
+            except Exception:body={}
+            out.append({'id':inbound_id,'name':str(body.get('remark') or body.get('tag') or ('Inbound '+str(inbound_id))),
+                        'port':int(body.get('port') or 0),'protocol':str(body.get('protocol') or '')})
+        return out
+
+    def admin_store(self,chat_id:int):
+        products=self.runtime.commerce.product_rows(self.owner)
+        active=sum(1 for p in products if p['active'] and p['visible'])
+        variants=sum(len(p.get('prices') or []) for p in products)
+        cats=sorted({str(p.get('category') or 'General') for p in products})
+        self.api.send(chat_id,
+            f"🛠 STORE MANAGER V3\nمحصولات: {len(products)} · قابل فروش: {active}\n"
+            f"Price Variant: {variants}\nدسته‌ها: {', '.join(cats) if cats else '—'}",
+            {'inline_keyboard':[
+                [{'text':'➕ ساخت محصول','callback_data':'stnew'},
+                 {'text':'📦 محصولات','callback_data':'stlist'}]
+            ]})
+
+    def admin_store_products(self,chat_id:int):
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute(
+                "SELECT rowid AS row_id,* FROM commerce_products WHERE owner=? ORDER BY updated_at DESC,id",(self.owner,))]
+        if not rows:
+            self.api.send(chat_id,'هنوز محصولی ساخته نشده است.',
+                          {'inline_keyboard':[[{'text':'➕ ساخت اولین محصول','callback_data':'stnew'}]]});return
+        kb=[]
+        for r in rows[:40]:
+            state='🟢' if r['active'] and r['visible'] else ('🟡' if r['active'] else '🔴')
+            kb.append([{'text':f"{state} {r['name']} · {r.get('category') or 'General'}"[:62],
+                        'callback_data':'stprod:'+str(r['row_id'])}])
+        self.api.send(chat_id,'📦 محصولات فروشگاه · یک محصول را باز کن:',{'inline_keyboard':kb})
+
+    def admin_product_row(self,row_id:int)->dict[str,Any]:
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute(
+                "SELECT rowid AS row_id,* FROM commerce_products WHERE rowid=? AND owner=?",(row_id,self.owner)).fetchone()
+        if not row:raise PolicyError('Product not found in this bot scope')
+        return dict(row)
+
+    def admin_price_row(self,row_id:int)->dict[str,Any]:
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute(
+                "SELECT rowid AS row_id,* FROM commerce_prices WHERE rowid=? AND owner=?",(row_id,self.owner)).fetchone()
+        if not row:raise PolicyError('Price variant not found in this bot scope')
+        out=dict(row)
+        try:out['inbound_ids']=json.loads(out.get('inbound_ids') or '[]')
+        except Exception:out['inbound_ids']=[]
+        return out
+
+    def admin_product_detail(self,chat_id:int,row_id:int):
+        p=self.admin_product_row(row_id)
+        with self.runtime.store.lock:
+            prices=[dict(r) for r in self.runtime.store.db.execute(
+                "SELECT rowid AS row_id,* FROM commerce_prices WHERE owner=? AND product_id=? ORDER BY price_minor,id",
+                (self.owner,p['id']))]
+            sold=int(self.runtime.store.db.execute(
+                "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND product_id=?",(self.owner,p['id'])).fetchone()[0])
+        text=(f"🛠 {p['name']}\nID: {p['id']}\nدسته: {p.get('category') or 'General'} · نوع: {p['kind']}\n"
+              f"فروش: {sold} · سقف هر کاربر: {p.get('sale_limit_per_user') or '∞'}\n"
+              f"Active: {'✅' if p['active'] else '⛔'} · Visible: {'✅' if p['visible'] else '⛔'}\n"
+              f"Renew: {'✅' if p.get('renewal_enabled') else '⛔'} · Add Volume: {'✅' if p.get('add_volume_enabled') else '⛔'}\n"
+              f"{p.get('description') or 'بدون توضیح'}")
+        kb=[
+            [{'text':'✏️ ویرایش','callback_data':'stedit:'+str(row_id)},
+             {'text':'📑 Clone','callback_data':'stclone:'+str(row_id)}],
+            [{'text':'👁 Preview مشتری','callback_data':'stpreview:'+str(row_id)},
+             {'text':'🗑 حذف/آرشیو','callback_data':'stdelete:'+str(row_id)}],
+            [{'text':('⛔ خاموش' if p['active'] else '✅ روشن'),'callback_data':f"sttoggle:{row_id}:active"},
+             {'text':('🙈 مخفی' if p['visible'] else '👁 نمایش'),'callback_data':f"sttoggle:{row_id}:visible"}],
+            [{'text':('🔁 تمدید ON' if p.get('renewal_enabled') else '🔁 تمدید OFF'),'callback_data':'strenew:'+str(row_id)},
+             {'text':('+GB ON' if p.get('add_volume_enabled') else '+GB OFF'),'callback_data':'staddvol:'+str(row_id)}],
+            [{'text':'➕ Price Variant','callback_data':'stpriceadd:'+str(row_id)}]
+        ]
+        for price in prices[:20]:
+            kb.append([{'text':f"{'🟢' if price['active'] else '🔴'} {price['label']} · {amount(price['price_minor'],price['currency'])}"[:62],
+                        'callback_data':'stprice:'+str(price['row_id'])}])
+        self.api.send(chat_id,text,{'inline_keyboard':kb})
+
+    def preview_product(self,chat_id:int,row_id:int):
+        p=self.admin_product_row(row_id)
+        with self.runtime.store.lock:
+            prices=[dict(r) for r in self.runtime.store.db.execute("""SELECT * FROM commerce_prices
+              WHERE owner=? AND product_id=? AND active=1 ORDER BY price_minor,id""",(self.owner,p['id']))]
+        lines=[f"👁 PREVIEW مشتری\n{p['name']}",p.get('description') or '']
+        for price in prices:
+            volume='نامحدود' if not int(price['volume_bytes'] or 0) else self.bytes(int(price['volume_bytes']))
+            lines.append(f"• {price['label']} · {volume} · {price['duration_days']} روز · {amount(price['price_minor'],price['currency'])}")
+        if not prices:lines.append('هیچ Price فعال ندارد.')
+        self.api.send(chat_id,'\n'.join(x for x in lines if x))
+
+    def delete_or_archive_product(self,chat_id:int,row_id:int):
+        p=self.admin_product_row(row_id)
+        with self.runtime.store.transaction() as db:
+            orders=int(db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND product_id=?",
+                                  (self.owner,p['id'])).fetchone()[0])
+            if orders:
+                db.execute("UPDATE commerce_products SET active=0,visible=0,updated_at=? WHERE rowid=? AND owner=?",
+                           (time.time(),row_id,self.owner))
+                db.execute("UPDATE commerce_prices SET active=0,updated_at=? WHERE owner=? AND product_id=?",
+                           (time.time(),self.owner,p['id']))
+                mode='آرشیو شد؛ تاریخچه سفارش حفظ شد'
+            else:
+                db.execute("DELETE FROM commerce_prices WHERE owner=? AND product_id=?",(self.owner,p['id']))
+                db.execute("DELETE FROM commerce_products WHERE rowid=? AND owner=?",(row_id,self.owner))
+                mode='کامل حذف شد'
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.product_bot_delete',p['id'],mode)
+        self.api.send(chat_id,'✅ '+mode)
+        self.admin_store_products(chat_id)
+
+    def start_product_create(self,chat_id:int,user_id:int):
+        self.sessions[user_id]='store_product_name';self.session_data[user_id]={}
+        self.api.send(chat_id,'➕ نام محصول را بفرست.\nبرای لغو: /cancel')
+
+    def start_product_edit(self,chat_id:int,user_id:int,row_id:int):
+        p=self.admin_product_row(row_id)
+        self.sessions[user_id]='store_edit_name';self.session_data[user_id]={'row_id':row_id}
+        self.api.send(chat_id,f"نام جدید را بفرست.\nفعلی: {p['name']}")
+
+    def handle_store_text(self,chat_id:int,user_id:int,text:str):
+        state=self.sessions.get(user_id,'');data=self.session_data.setdefault(user_id,{})
+        value=text.strip()
+        if state in ('store_product_name','store_edit_name'):
+            if not 1<=len(value)<=128:self.api.send(chat_id,'نام محصول نامعتبر است.');return
+            data['name']=value
+            self.sessions[user_id]='store_product_category' if state=='store_product_name' else 'store_edit_category'
+            self.api.send(chat_id,'دسته‌بندی را بفرست؛ مثال: Gaming / VIP / Economy');return
+        if state in ('store_product_category','store_edit_category'):
+            if not 1<=len(value)<=64:self.api.send(chat_id,'دسته‌بندی نامعتبر است.');return
+            data['category']=value
+            if state=='store_product_category':
+                self.sessions[user_id]='store_product_type_wait'
+                self.api.send(chat_id,'نوع محصول را انتخاب کن:',{'inline_keyboard':[[
+                    {'text':'📦 حجمی','callback_data':'sttype:volume'},
+                    {'text':'♾ نامحدود','callback_data':'sttype:unlimited'}],[
+                    {'text':'🌍 Multi-location','callback_data':'sttype:multi_location'},
+                    {'text':'🎮 Gaming','callback_data':'sttype:gaming'}]]});return
+            self.sessions[user_id]='store_edit_description'
+            self.api.send(chat_id,'توضیح جدید را بفرست؛ برای خالی گذاشتن - بفرست.');return
+        if state in ('store_product_description','store_edit_description'):
+            data['description']='' if value=='-' else value[:2000]
+            self.sessions[user_id]='store_product_limit' if state=='store_product_description' else 'store_edit_limit'
+            self.api.send(chat_id,'سقف خرید هر Telegram ID را بفرست. صفر = نامحدود');return
+        if state in ('store_product_limit','store_edit_limit'):
+            try:limit=int(value)
+            except ValueError:self.api.send(chat_id,'یک عدد صحیح بین 0 تا 100000 بفرست.');return
+            if not 0<=limit<=100000:self.api.send(chat_id,'عدد خارج از محدوده است.');return
+            data['sale_limit_per_user']=limit;now=time.time()
+            if state=='store_product_limit':
+                product_id='p_'+secrets.token_hex(5)
+                with self.runtime.store.transaction() as db:
+                    db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
+                      renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
+                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (product_id,self.owner,data['name'],data.get('description',''),data['category'],data['kind'],limit,
+                       1,1,1,1,now,now))
+                    row_id=int(db.execute("SELECT rowid FROM commerce_products WHERE owner=? AND id=?",(self.owner,product_id)).fetchone()[0])
+                self.runtime.manager.audit(self.actor(),self.owner,'commerce.product_bot_create',product_id,data['category'])
+            else:
+                row_id=int(data['row_id']);p=self.admin_product_row(row_id)
+                with self.runtime.store.transaction() as db:
+                    db.execute("""UPDATE commerce_products SET name=?,category=?,description=?,sale_limit_per_user=?,updated_at=?
+                      WHERE rowid=? AND owner=?""",(data['name'],data['category'],data.get('description',''),limit,now,row_id,self.owner))
+                self.runtime.manager.audit(self.actor(),self.owner,'commerce.product_bot_edit',p['id'],'name/category/description/limit')
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'✅ محصول ذخیره شد.')
+            self.admin_product_detail(chat_id,row_id);return
+        if state.startswith('store_price_'):
+            self.handle_price_text(chat_id,user_id,text);return
+        raise PolicyError('Unknown store wizard state')
+
+    def store_choose_type(self,chat_id:int,user_id:int,kind:str):
+        if self.sessions.get(user_id)!='store_product_type_wait':raise PolicyError('Product wizard is not waiting for type')
+        if kind not in ('volume','unlimited','multi_location','gaming'):raise PolicyError('Invalid product type')
+        self.session_data[user_id]['kind']=kind;self.sessions[user_id]='store_product_description'
+        self.api.send(chat_id,'توضیح محصول را بفرست؛ برای خالی گذاشتن - بفرست.')
+
+    def toggle_product(self,chat_id:int,row_id:int,field:str):
+        if field not in ('active','visible','renewal_enabled','add_volume_enabled'):raise PolicyError('Invalid product toggle')
+        p=self.admin_product_row(row_id);value=0 if bool(p.get(field)) else 1
+        with self.runtime.store.transaction() as db:
+            db.execute(f"UPDATE commerce_products SET {field}=?,updated_at=? WHERE rowid=? AND owner=?",
+                       (value,time.time(),row_id,self.owner))
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.product_bot_toggle',p['id'],field+'='+str(value))
+        self.admin_product_detail(chat_id,row_id)
+
+    def clone_product(self,chat_id:int,row_id:int):
+        p=self.admin_product_row(row_id);new_id='p_'+secrets.token_hex(5);now=time.time()
+        with self.runtime.store.transaction() as db:
+            db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
+              renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (new_id,self.owner,p['name']+' Copy',p.get('description',''),p.get('category','General'),p['kind'],
+               int(p.get('sale_limit_per_user') or 0),int(p.get('renewal_enabled') or 0),int(p.get('add_volume_enabled') or 0),
+               0,0,now,now))
+            prices=[dict(r) for r in db.execute("SELECT * FROM commerce_prices WHERE owner=? AND product_id=?",(self.owner,p['id']))]
+            for price in prices:
+                new_price='v_'+secrets.token_hex(5)
+                db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
+                  volume_bytes,unlimited_units,device_limit,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode,
+                  primary_inbound_id,show_qr,show_portal,active,created_at,updated_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (new_price,self.owner,new_id,price['label'],price['price_minor'],price['currency'],price['duration_days'],
+                   price['volume_bytes'],price['unlimited_units'],price['device_limit'],price['ip_limit'],price['hwid_limit'],
+                   price['inbound_ids'],price['activation_mode'],price['delivery_mode'],price['primary_inbound_id'],
+                   price['show_qr'],price['show_portal'],0,now,now))
+            new_row=int(db.execute("SELECT rowid FROM commerce_products WHERE owner=? AND id=?",(self.owner,new_id)).fetchone()[0])
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.product_bot_clone',new_id,'from='+p['id'])
+        self.api.send(chat_id,'✅ Clone ساخته شد و برای جلوگیری از فروش اشتباه، خاموش و مخفی است.')
+        self.admin_product_detail(chat_id,new_row)
+
+    def start_price_create(self,chat_id:int,user_id:int,product_row:int):
+        p=self.admin_product_row(product_row)
+        self.sessions[user_id]='store_price_label'
+        self.session_data[user_id]={'product_row':product_row,'product_id':p['id'],'product_kind':p['kind']}
+        self.api.send(chat_id,'عنوان Price Variant را بفرست؛ مثال: 50GB / 30 Days')
+
+    def handle_price_text(self,chat_id:int,user_id:int,text:str):
+        state=self.sessions.get(user_id,'');data=self.session_data.setdefault(user_id,{})
+        value=text.strip()
+        if state=='store_price_label':
+            if not 1<=len(value)<=128:self.api.send(chat_id,'عنوان نامعتبر است.');return
+            data['label']=value;self.sessions[user_id]='store_price_amount'
+            self.api.send(chat_id,'قیمت را به تومان بفرست؛ فقط عدد.');return
+        if state=='store_price_amount':
+            try:n=int(value.replace(',',''))
+            except ValueError:self.api.send(chat_id,'قیمت باید عدد صحیح باشد.');return
+            if not 0<=n<=10**12:self.api.send(chat_id,'قیمت خارج از محدوده است.');return
+            data['price_minor']=n;self.sessions[user_id]='store_price_duration'
+            self.api.send(chat_id,'مدت سرویس چند روز باشد؟');return
+        if state=='store_price_duration':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'مدت باید عدد صحیح باشد.');return
+            if not 1<=n<=3650:self.api.send(chat_id,'مدت باید بین 1 تا 3650 روز باشد.');return
+            data['duration_days']=n
+            if data['product_kind']=='unlimited':
+                data['volume_bytes']=0;data['unlimited_units']=1;self.sessions[user_id]='store_price_ip'
+                self.api.send(chat_id,'IP Limit را بفرست. صفر = نامحدود');return
+            self.sessions[user_id]='store_price_volume'
+            self.api.send(chat_id,'حجم سرویس را به GB بفرست.');return
+        if state=='store_price_volume':
+            try:n=float(value)
+            except ValueError:self.api.send(chat_id,'حجم باید عدد باشد.');return
+            if not 0<n<=1000000:self.api.send(chat_id,'حجم خارج از محدوده است.');return
+            data['volume_bytes']=int(n*1024**3);data['unlimited_units']=0;self.sessions[user_id]='store_price_ip'
+            self.api.send(chat_id,'IP Limit را بفرست. صفر = نامحدود');return
+        if state=='store_price_ip':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'IP Limit باید عدد صحیح باشد.');return
+            if not 0<=n<=1000:self.api.send(chat_id,'IP Limit خارج از محدوده است.');return
+            data['ip_limit']=n;self.sessions[user_id]='store_price_hwid'
+            self.api.send(chat_id,'HWID Limit را بفرست. صفر = نامحدود');return
+        if state=='store_price_hwid':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'HWID باید عدد صحیح باشد.');return
+            if not 0<=n<=1000:self.api.send(chat_id,'HWID خارج از محدوده است.');return
+            data['hwid_limit']=n;self.sessions[user_id]='store_price_activation_wait'
+            self.api.send(chat_id,'فعال‌سازی را انتخاب کن:',{'inline_keyboard':[[
+                {'text':'⚡ فوری','callback_data':'stact:immediate'},
+                {'text':'🔌 اولین اتصال','callback_data':'stact:first_connection'}]]});return
+        raise PolicyError('Price wizard is not waiting for text')
+
+    def price_choose_activation(self,chat_id:int,user_id:int,mode:str):
+        if self.sessions.get(user_id)!='store_price_activation_wait':raise PolicyError('Price wizard is not waiting for activation')
+        if mode not in ('immediate','first_connection'):raise PolicyError('Invalid activation mode')
+        self.session_data[user_id]['activation_mode']=mode;self.sessions[user_id]='store_price_delivery_wait'
+        self.api.send(chat_id,'نحوه تحویل را انتخاب کن:',{'inline_keyboard':[
+            [{'text':'🔗 Subscription','callback_data':'stdlv:subscription'},
+             {'text':'⚡ Main Config','callback_data':'stdlv:config'}],
+            [{'text':'🔗+⚡ هر دو','callback_data':'stdlv:both'},
+             {'text':'🌐 Portal','callback_data':'stdlv:portal'}]
+        ]})
+
+    def price_choose_delivery(self,chat_id:int,user_id:int,mode:str):
+        if self.sessions.get(user_id)!='store_price_delivery_wait':raise PolicyError('Price wizard is not waiting for delivery')
+        if mode not in ('subscription','config','both','portal'):raise PolicyError('Invalid delivery mode')
+        self.session_data[user_id]['delivery_mode']=mode
+        self.session_data[user_id]['selected_inbounds']=[]
+        self.sessions[user_id]='store_price_inbounds'
+        self.show_price_inbounds(chat_id,user_id)
+
+    def show_price_inbounds(self,chat_id:int,user_id:int):
+        catalog=self.inbound_catalog();selected=set(self.session_data.get(user_id,{}).get('selected_inbounds') or [])
+        if not catalog:self.api.send(chat_id,'هیچ Inbound مجازی برای این پنل وجود ندارد.');return
+        kb=[]
+        for x in catalog:
+            mark='✅' if x['id'] in selected else '⬜'
+            kb.append([{'text':f"{mark} {x['id']} · {x['name']} · :{x['port']}"[:62],
+                        'callback_data':'stinb:'+str(x['id'])}])
+        kb.append([{'text':'✅ پایان انتخاب Inbound','callback_data':'stinbdone'}])
+        self.api.send(chat_id,'Inboundهای این Price Variant را انتخاب کن:',{'inline_keyboard':kb})
+
+    def price_toggle_inbound(self,chat_id:int,user_id:int,inbound_id:int):
+        if self.sessions.get(user_id)!='store_price_inbounds':raise PolicyError('Price wizard is not selecting inbounds')
+        allowed={x['id'] for x in self.inbound_catalog()}
+        if inbound_id not in allowed:raise PolicyError('Inbound is outside this panel scope')
+        data=self.session_data[user_id];selected=set(data.get('selected_inbounds') or [])
+        if inbound_id in selected:selected.remove(inbound_id)
+        else:selected.add(inbound_id)
+        data['selected_inbounds']=sorted(selected);self.show_price_inbounds(chat_id,user_id)
+
+    def price_inbounds_done(self,chat_id:int,user_id:int):
+        if self.sessions.get(user_id)!='store_price_inbounds':raise PolicyError('Price wizard is not selecting inbounds')
+        data=self.session_data[user_id];selected=list(data.get('selected_inbounds') or [])
+        if not selected:self.api.send(chat_id,'حداقل یک Inbound انتخاب کن.');return
+        data['inbound_ids']=selected
+        if data.get('delivery_mode') in ('config','both'):
+            self.sessions[user_id]='store_price_primary_wait'
+            catalog={x['id']:x for x in self.inbound_catalog()}
+            kb=[[{'text':f"{i} · {catalog.get(i,{}).get('name','Inbound')}"[:62],
+                 'callback_data':'stprimary:'+str(i)}] for i in selected]
+            self.api.send(chat_id,'Main Config از کدام Inbound تحویل شود؟',{'inline_keyboard':kb});return
+        data['primary_inbound_id']=selected[0]
+        self.save_price_wizard(chat_id,user_id)
+
+    def price_choose_primary(self,chat_id:int,user_id:int,inbound_id:int):
+        if self.sessions.get(user_id)!='store_price_primary_wait':raise PolicyError('Price wizard is not waiting for primary inbound')
+        if inbound_id not in (self.session_data[user_id].get('inbound_ids') or []):raise PolicyError('Primary inbound was not selected')
+        self.session_data[user_id]['primary_inbound_id']=inbound_id;self.save_price_wizard(chat_id,user_id)
+
+    def save_price_wizard(self,chat_id:int,user_id:int):
+        data=self.session_data[user_id];price_id='v_'+secrets.token_hex(5);now=time.time()
+        with self.runtime.store.transaction() as db:
+            db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
+              volume_bytes,unlimited_units,device_limit,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode,
+              primary_inbound_id,show_qr,show_portal,active,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (price_id,self.owner,data['product_id'],data['label'],int(data['price_minor']),'IRT',int(data['duration_days']),
+               int(data['volume_bytes']),int(data['unlimited_units']),int(data['ip_limit']),int(data['ip_limit']),
+               int(data['hwid_limit']),json.dumps(data['inbound_ids']),data['activation_mode'],data['delivery_mode'],
+               int(data['primary_inbound_id']),1,1,1,now,now))
+            row_id=int(db.execute("SELECT rowid FROM commerce_prices WHERE owner=? AND id=?",(self.owner,price_id)).fetchone()[0])
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_create',price_id,
+                                   f"product={data['product_id']}; amount={data['price_minor']} IRT")
+        product_row=int(data['product_row']);self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,'✅ Price Variant ساخته شد.')
+        self.admin_price_detail(chat_id,row_id)
+        self.admin_product_detail(chat_id,product_row)
+
+    def admin_price_detail(self,chat_id:int,row_id:int):
+        p=self.admin_price_row(row_id);ids=p.get('inbound_ids') or []
+        text=(f"💵 {p['label']}\nID: {p['id']}\nقیمت: {amount(p['price_minor'],p['currency'])}\n"
+              f"مدت: {p['duration_days']} روز · حجم: {self.bytes(int(p['volume_bytes'])) if p['volume_bytes'] else 'نامحدود'}\n"
+              f"IP/HWID: {p['ip_limit']}/{p['hwid_limit']}\nActivation: {p['activation_mode']}\n"
+              f"Delivery: {p['delivery_mode']} · Primary: {p['primary_inbound_id']}\n"
+              f"Inbounds: {', '.join(map(str,ids))}\nوضعیت: {'فعال ✅' if p['active'] else 'خاموش ⛔'}")
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'⛔ خاموش' if p['active'] else '✅ فعال','callback_data':'stptoggle:'+str(row_id)},
+             {'text':'🗑 حذف','callback_data':'stpdel:'+str(row_id)}]
+        ]})
+
+    def toggle_price(self,chat_id:int,row_id:int):
+        p=self.admin_price_row(row_id);value=0 if p['active'] else 1
+        with self.runtime.store.transaction() as db:
+            db.execute("UPDATE commerce_prices SET active=?,updated_at=? WHERE rowid=? AND owner=?",
+                       (value,time.time(),row_id,self.owner))
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_toggle',p['id'],'active='+str(value))
+        self.admin_price_detail(chat_id,row_id)
+
+    def delete_price(self,chat_id:int,row_id:int):
+        p=self.admin_price_row(row_id)
+        with self.runtime.store.transaction() as db:
+            used=int(db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND price_id=?",(self.owner,p['id'])).fetchone()[0])
+            if used:
+                db.execute("UPDATE commerce_prices SET active=0,updated_at=? WHERE rowid=? AND owner=?",
+                           (time.time(),row_id,self.owner));mode='آرشیو شد چون سفارش تاریخی دارد'
+            else:
+                db.execute("DELETE FROM commerce_prices WHERE rowid=? AND owner=?",(row_id,self.owner));mode='حذف شد'
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_delete',p['id'],mode)
+        self.api.send(chat_id,'✅ '+mode)
 
     def admin_reports(self,chat_id:int):
         st=self.runtime.forum.status(self.owner)
@@ -547,7 +1008,13 @@ class BotWorker:
               f"آخرین فعالیت: {activity_text} · {detail.get('presence_source') or '—'}")
         kb=[[{'text':'⛔ غیرفعال' if enabled else '✅ فعال','callback_data':('cloff:' if enabled else 'clon:')+str(row_id)},
              {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}],
-            [{'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}]]
+            [{'text':'🗓 تمدید','callback_data':'clrenew:'+str(row_id)},
+             {'text':'➕ حجم','callback_data':'clvol:'+str(row_id)}],
+            [{'text':'🌐 IP Limit','callback_data':'clip:'+str(row_id)},
+             {'text':'🧬 HWID','callback_data':'clhw:'+str(row_id)}],
+            [{'text':'🌍 لوکیشن/Inbound','callback_data':'clinb:'+str(row_id)},
+             {'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}],
+            [{'text':'🗑 حذف سرویس','callback_data':'cldel:'+str(row_id)}]]
         self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def client_delivery(self,chat_id:int,row_id:int):
@@ -560,6 +1027,120 @@ class BotWorker:
     def client_action(self,chat_id:int,row_id:int,action:str):
         email=self.client_row(row_id);self.runtime.manager.action(self.actor(),email,action)
         self.api.send(chat_id,f'✅ عملیات {action} برای {email} ثبت شد.')
+
+    def client_renew_menu(self,chat_id:int,row_id:int):
+        email=self.client_row(row_id)
+        with self.runtime.store.lock:
+            waiting=self.runtime.store.db.execute("""SELECT 1 FROM commerce_orders
+              WHERE owner=? AND client_id=? AND status='provisioned_waiting_activation' LIMIT 1""",(self.owner,email)).fetchone()
+        if waiting:
+            self.api.send(chat_id,'این سرویس منتظر اولین اتصال است؛ قبل از شروع زمان، تمدید دستی انجام نمی‌شود.');return
+        self.api.send(chat_id,f"🗓 تمدید {email}",{'inline_keyboard':[
+            [{'text':'30 روز','callback_data':f'clr:{row_id}:30'},
+             {'text':'60 روز','callback_data':f'clr:{row_id}:60'},
+             {'text':'90 روز','callback_data':f'clr:{row_id}:90'}],
+            [{'text':'✍️ سفارشی','callback_data':'clrcustom:'+str(row_id)}]
+        ]})
+
+    def renew_client(self,chat_id:int,row_id:int,days:int):
+        if not 1<=days<=3650:raise PolicyError('Renewal days are outside the allowed range')
+        email=self.client_row(row_id)
+        detail=self.runtime.manager.detail(self.actor(),email,credentials=True)
+        with self.runtime.store.lock:
+            waiting=self.runtime.store.db.execute("""SELECT 1 FROM commerce_orders
+              WHERE owner=? AND client_id=? AND status='provisioned_waiting_activation' LIMIT 1""",(self.owner,email)).fetchone()
+        if waiting:raise PolicyError('Service is waiting for first connection activation')
+        current=int((detail.get('client') or {}).get('expiryTime') or 0)
+        base=max(int(time.time()*1000),current)
+        new_expiry=base+days*86400*1000
+        self.runtime.manager.update(self.actor(),email,{'expiryTime':new_expiry})
+        self.runtime.manager.audit(self.actor(),self.owner,'client.bot_renew',email,'days='+str(days))
+        self.api.send(chat_id,f"✅ {email} برای {days} روز تمدید شد.")
+        self.client_detail(chat_id,row_id)
+
+    def start_service_input(self,chat_id:int,user_id:int,kind:str,row_id:int,prompt:str):
+        if kind not in ('renew','volume','ip','hwid'):raise PolicyError('Unknown service input kind')
+        self.client_row(row_id)
+        self.sessions[user_id]='service_'+kind
+        self.session_data[user_id]={'row_id':row_id}
+        self.api.send(chat_id,prompt+'\nبرای لغو: /cancel')
+
+    def handle_service_text(self,chat_id:int,user_id:int,text:str):
+        state=self.sessions.get(user_id,'');data=self.session_data.get(user_id) or {}
+        row_id=int(data.get('row_id') or 0)
+        if not row_id:raise PolicyError('Service wizard lost its target')
+        email=self.client_row(row_id);value=text.strip()
+        if state=='service_renew':
+            try:days=int(value)
+            except ValueError:self.api.send(chat_id,'تعداد روز باید عدد صحیح باشد.');return
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.renew_client(chat_id,row_id,days);return
+        if state=='service_volume':
+            try:gb=float(value)
+            except ValueError:self.api.send(chat_id,'حجم باید عدد باشد.');return
+            if not 0<gb<=1000000:self.api.send(chat_id,'حجم خارج از محدوده است.');return
+            detail=self.runtime.manager.detail(self.actor(),email,credentials=True);client=detail.get('client') or {}
+            current=int(client.get('totalGB') or 0)
+            if current==0:self.api.send(chat_id,'این سرویس نامحدود است و افزایش حجم برای آن معنی ندارد.');return
+            add=int(gb*1024**3);self.runtime.manager.update(self.actor(),email,{'totalGB':current+add})
+            self.runtime.manager.audit(self.actor(),self.owner,'client.bot_add_volume',email,'bytes='+str(add))
+            msg=f"✅ {gb:g} GB به {email} اضافه شد."
+        elif state=='service_ip':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'IP Limit باید عدد صحیح باشد.');return
+            if not 0<=n<=1000:self.api.send(chat_id,'IP Limit خارج از محدوده است.');return
+            self.runtime.manager.update(self.actor(),email,{'limitIp':n})
+            self.runtime.manager.audit(self.actor(),self.owner,'client.bot_ip_limit',email,'limit='+str(n))
+            msg=f"✅ IP Limit روی {n} تنظیم شد."
+        elif state=='service_hwid':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'HWID باید عدد صحیح باشد.');return
+            if not 0<=n<=1000:self.api.send(chat_id,'HWID خارج از محدوده است.');return
+            self.runtime.manager.update(self.actor(),email,{'limitHwid':n})
+            self.runtime.manager.audit(self.actor(),self.owner,'client.bot_hwid_limit',email,'limit='+str(n))
+            msg=f"✅ HWID Limit روی {n} تنظیم شد."
+        else:raise PolicyError('Unknown service wizard state')
+        self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,msg);self.client_detail(chat_id,row_id)
+
+    def start_client_inbounds(self,chat_id:int,user_id:int,row_id:int):
+        email=self.client_row(row_id);detail=self.runtime.manager.detail(self.actor(),email,credentials=False)
+        self.sessions[user_id]='service_inbounds'
+        self.session_data[user_id]={'row_id':row_id,'selected_inbounds':[int(x) for x in detail.get('inboundIds') or []]}
+        self.show_client_inbounds(chat_id,user_id)
+
+    def show_client_inbounds(self,chat_id:int,user_id:int):
+        data=self.session_data.get(user_id) or {};selected=set(data.get('selected_inbounds') or [])
+        catalog=self.inbound_catalog()
+        if not catalog:self.api.send(chat_id,'Inbound مجازی برای این پنل وجود ندارد.');return
+        kb=[]
+        for x in catalog:
+            mark='✅' if x['id'] in selected else '⬜'
+            kb.append([{'text':f"{mark} {x['id']} · {x['name']} · :{x['port']}"[:62],
+                        'callback_data':'clinbt:'+str(x['id'])}])
+        kb.append([{'text':'✅ ذخیره Inboundها','callback_data':'clinbdone'}])
+        self.api.send(chat_id,'🌍 Inboundهای سرویس را انتخاب کن:',{'inline_keyboard':kb})
+
+    def toggle_client_inbound(self,chat_id:int,user_id:int,inbound_id:int):
+        if self.sessions.get(user_id)!='service_inbounds':raise PolicyError('Service is not selecting inbounds')
+        allowed={x['id'] for x in self.inbound_catalog()}
+        if inbound_id not in allowed:raise PolicyError('Inbound is outside this panel scope')
+        selected=set(self.session_data[user_id].get('selected_inbounds') or [])
+        if inbound_id in selected:selected.remove(inbound_id)
+        else:selected.add(inbound_id)
+        self.session_data[user_id]['selected_inbounds']=sorted(selected)
+        self.show_client_inbounds(chat_id,user_id)
+
+    def finish_client_inbounds(self,chat_id:int,user_id:int):
+        if self.sessions.get(user_id)!='service_inbounds':raise PolicyError('Service is not selecting inbounds')
+        data=self.session_data[user_id];selected=[int(x) for x in data.get('selected_inbounds') or []]
+        if not selected:self.api.send(chat_id,'حداقل یک Inbound باید انتخاب شود.');return
+        row_id=int(data['row_id']);email=self.client_row(row_id)
+        self.runtime.manager.update(self.actor(),email,{},ids=selected)
+        self.runtime.manager.audit(self.actor(),self.owner,'client.bot_inbounds',email,'ids='+','.join(map(str,selected)))
+        self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,'✅ Inboundهای سرویس بروزرسانی شدند.')
+        self.client_detail(chat_id,row_id)
 
     def admin_orders(self,chat_id:int):
         with self.runtime.store.lock:
