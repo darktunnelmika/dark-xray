@@ -708,14 +708,17 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             inbound_id=int(item.get('inboundId') or 0)
             for target in targets:
                 if inbound_id not in target['inbound_ids']:continue
-                explicit=any(int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True) and h.get('runtime')=='node:'+str(target['node_id'])
-                             for h in engine.section('hosts'))
-                if explicit:continue
+                explicit_direct=any(int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True)
+                                    and h.get('runtime')=='node:'+str(target['node_id'])
+                                    and (h.get('endpointType','direct') or 'direct')!='tunnel'
+                                    for h in engine.section('hosts'))
+                if explicit_direct:continue
                 remark=str(item['remark'])+' · '+str(target['name'])+' ['+str(target['node_id'])+']'
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
                 source_port=int(engine.inbound(inbound_id)['port'])
                 clone['uri']=rewrite_failover_uri(item['uri'],target['address'],remark,source_port)
+                clone['endpointType']='direct'
                 clone['failoverNode']=target['node_id'];clone['failoverPriority']=target['priority']
                 clone['failoverPort']=source_port
                 clone['failoverLatencyMs']=target['latency_ms'];out.append(clone)
@@ -1140,7 +1143,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         for inbound in inbounds:
             inbound_id=int(inbound['id'])
             configured=[h for h in hosts if int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True)]
-            primary=[{'address':h['address'],'port':int(h['port']),'remark':h.get('remark') or inbound.get('remark') or inbound.get('tag')}
+            primary=[{'address':h['address'],'port':int(h['port']),'remark':h.get('remark') or inbound.get('remark') or inbound.get('tag'),
+                      'endpoint_type':h.get('endpointType','direct') or 'direct','runtime':h.get('runtime','local') or 'local'}
                      for h in configured]
             if not primary:
                 primary=[{'address':config.public_address,'port':int(inbound['port']),'remark':inbound.get('remark') or inbound.get('tag')}]

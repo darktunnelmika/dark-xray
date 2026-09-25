@@ -502,6 +502,9 @@ class CoreEngine:
                 if not isinstance(runtime,str) or (runtime!='local' and not re.fullmatch(r'node:[A-Za-z0-9_.@+-]{1,128}',runtime)):
                     raise CoreError('Host runtime must be local or node:<id>')
                 host['runtime']=runtime
+                endpoint_type=host.get('endpointType','direct') or 'direct'
+                if endpoint_type not in ('direct','tunnel'):raise CoreError('Host endpointType must be direct or tunnel')
+                host['endpointType']=endpoint_type
                 for key in ('remark','sni','host','path','alpn','fingerprint','security','finalMask','mihomoIpVersion'):
                     if key in host and (not isinstance(host[key],str) or len(host[key])>8192):raise CoreError('Invalid host '+key)
                 security=host.get('security','same') or 'same'
@@ -1231,7 +1234,8 @@ class CoreEngine:
                 else:warnings.append('No subscription generator for '+proto);continue
                 meta={}
                 if host.get('mihomoIpVersion'):meta['mihomoIpVersion']=host['mihomoIpVersion']
-                links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta,'runtime':runtime})
+                links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta,'runtime':runtime,
+                              'endpointType':host.get('endpointType','direct') or 'direct'})
         return {'links':links,'warnings':warnings,'formats':['raw','base64','json','clash']}
 
     @staticmethod
