@@ -27,7 +27,6 @@ test('telegram page exposes bot token plus numeric admin id controls',()=>{
 test('store UI is backed only by DARK commerce APIs',()=>{
   for(const endpoint of [
     '/api/commerce/products',
-    '/api/commerce/gateways',
     '/api/commerce/orders'
   ])assert.ok(js.includes(endpoint),endpoint);
   assert.match(js,/tgconfirm/);
@@ -47,15 +46,17 @@ test('product v2 exposes activation delivery and security limits',()=>{
   assert.match(js,/Start on first connection/);
 });
 
-test('manual payment v1 exposes card fields and hides plugin setup from the user form',()=>{
-  assert.match(js,/card_number/);
-  assert.match(js,/card_holder/);
-  assert.match(js,/bank_name/);
-  assert.doesNotMatch(js,/Gateway plugin/);
+test('manual payment configuration is bot-only and absent from web panel',()=>{
+  assert.doesNotMatch(js,/card_number|card_holder|bank_name/);
+  assert.doesNotMatch(js,/\/api\/commerce\/gateways/);
+  assert.doesNotMatch(js,/tggatewaynew|gatewayDialog/);
+  assert.match(js,/BOT-ONLY PAYMENT/);
+  assert.match(js,/Manual Payment/);
 });
 
 test('forum report center exposes repair flow and setup guidance',()=>{
   assert.match(js,/REPORT CENTER/);
   assert.match(js,/\/api\/telegram\/forum\/repair/);
-  assert.match(js,/Forum Supergroup/);
+  assert.match(js,/NOT CONNECTED/);
+  assert.match(js,/Refresh status/);
 });
