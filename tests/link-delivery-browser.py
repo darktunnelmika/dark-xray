@@ -102,4 +102,4 @@ with tempfile.TemporaryDirectory(prefix='dark-link-center.') as d:
         if browser:
             try:browser.close()
             except Exception:pass
-        server.should_exit=True;thread.join(timeout=3);manager.stop();store.close()
+        server.should_exit=True;thread.join(timeout=3);manager.stop.set();store.close()
