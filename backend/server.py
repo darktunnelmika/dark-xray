@@ -254,13 +254,17 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return result
     @contextlib.asynccontextmanager
     async def lifespan(app):
+        bot_runtime=None
         if background:
             manager.start();nodes.start(interval=max(5.0,min(60.0,float(config.poll_seconds))),
                                       sync_provider=lambda node_id:build_node_bundles(node_id),
                                       desired_provider=lambda node_id:ensure_node_desired_state(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True),
                                       security_callback=apply_global_security)
+            bot_runtime=getattr(app.state,'telegram_runtime',None)
+            if bot_runtime:bot_runtime.start()
         yield
+        if bot_runtime:bot_runtime.close()
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.replacements=replacements
@@ -337,6 +341,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     from node_recovery import install_hub_recovery
     install_hub_recovery(app,nodes,owner,writable,manager.audit)
+
+    from telegram_commerce import install_telegram_commerce
+    install_telegram_commerce(app,store,auth,current,writable,manager.audit,manager)
 
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
@@ -1864,9 +1871,18 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase)
             raw=path.read_bytes()
         manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
-        stamp=time.strftime('%Y%m%d-%H%M%S')
+        stamp=time.strftime('%Y%m%d-%H%M%S');filename=f'DARK-XRAY-full-{stamp}.darkbackup'
+        runtime=getattr(app.state,'telegram_runtime',None)
+        if runtime:
+            try:
+                sha=hashlib.sha256(raw).hexdigest()
+                caption=f"DARK XRAY encrypted backup\nSchema: {manifest.get('schema',0)}\nBytes: {len(raw)}\nSHA256: {sha}"
+                if runtime.send_backup(p.actor.id,filename,raw,caption):
+                    manager.audit(p.actor,p.actor.id,'backup.telegram_sent','dark',filename+'; sha256='+sha)
+            except Exception as ex:
+                manager.audit(p.actor,p.actor.id,'backup.telegram_error','dark',type(ex).__name__+': '+str(ex)[:300])
         return Response(raw,media_type='application/octet-stream',
-                        headers={'Content-Disposition':f'attachment; filename="DARK-XRAY-full-{stamp}.darkbackup"',
+                        headers={'Content-Disposition':f'attachment; filename="{filename}"',
                                  'X-DARK-Backup-Schema':str(manifest.get('schema',0))})
 
     @app.get('/api/backup')

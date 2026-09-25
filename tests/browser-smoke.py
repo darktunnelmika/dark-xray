@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import traceback
 """Strict DARK XRAY browser QA against real local HTTP + SQLite.
 
 The browser and session are real. Xray itself is intentionally absent here; the
@@ -519,7 +520,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
 
             visit(page,'ipguard')
             page.locator('.ip4').wait_for(state='visible',timeout=10000)
-            assert page.locator('.ip4-arch-card').count()==4
+            assert page.locator('.ip4-arch-card').count()==5
             sec_text=page.locator('.ip4').inner_text()
             assert 'nftables' in sec_text.lower()
             assert 'fail2ban' not in sec_text.lower()
@@ -642,7 +643,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('no uncaught JavaScript runtime errors')
             report['status']='passed'
     except Exception as exc:
-        report.update(status='failed',error=f'{type(exc).__name__}: {exc}'[:3000])
+        report.update(status='failed',error=f'{type(exc).__name__}: {exc}'[:3000],traceback=traceback.format_exc()[-12000:])
     finally:
         if browser:
             try:browser.close()
