@@ -147,3 +147,46 @@ def test_gateway_method_is_modeled_but_cannot_fake_success_without_adapter(env):
     assert gateway["ready"] is False
     with pytest.raises(PolicyError,match="adapter"):
         commerce.create_order("seller",12345,plan["id"],gateway["id"])
+
+
+def test_primary_bot_can_create_scoped_representative_without_user_supplied_password(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    commerce=c.app.state.commerce
+    commerce.save_bot(OWNER,BOT_TOKEN,991100,True)
+    with store.lock:
+        cfg=store.db.execute(
+            "SELECT public_id,webhook_secret FROM telegram_bots WHERE owner_id='dark'"
+        ).fetchone()
+    denied=commerce.telegram_reply(
+        cfg["public_id"],cfg["webhook_secret"],
+        {"message":{"from":{"id":991101},"chat":{"id":991101},
+                    "text":f"/newrep agentbot 10 2 {inbound_id}"}},
+    )
+    assert "فقط" in denied["text"]
+    response=commerce.telegram_reply(
+        cfg["public_id"],cfg["webhook_secret"],
+        {"message":{"from":{"id":991100},"chat":{"id":991100},
+                    "text":f"/newrep agentbot 10 2 {inbound_id}"}},
+    )
+    assert "✅" in response["text"] and "Temporary password:" in response["text"]
+    with store.lock:
+        account=store.db.execute(
+            "SELECT role,disabled FROM api_admins WHERE id='agentbot'"
+        ).fetchone()
+        profile=store.db.execute(
+            "SELECT allowed,prefix FROM owner_profiles WHERE id='agentbot'"
+        ).fetchone()
+        owner=store.db.execute(
+            "SELECT volume_credit_bytes,unlimited_credit FROM owners WHERE id='agentbot'"
+        ).fetchone()
+        audit=[dict(x) for x in store.db.execute(
+            "SELECT action,detail FROM live_audit WHERE target='agentbot'"
+        )]
+    assert account["role"]=="reseller" and account["disabled"]==0
+    assert json.loads(profile["allowed"])==[inbound_id]
+    assert profile["prefix"]=="agentbot_"
+    assert owner["volume_credit_bytes"]==10*1024**3
+    assert owner["unlimited_credit"]==2
+    password=response["text"].split("Temporary password: ",1)[1].splitlines()[0]
+    assert password and all(password not in row["detail"] for row in audit)
