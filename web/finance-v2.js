@@ -53,7 +53,7 @@ financePage=async function(){
  const repChips=ownerMode()?[chip(L('All representatives','همه نماینده‌ها'),'representative','all',FV.representative),...reps().map(r=>chip(r.name||r.id,'representative',r.id,FV.representative))].join(''):'';
  const missing=L('Representative profile statistics are not available','آمار پروفایل نماینده در دسترس نیست');
  const repControl=ownerMode()?`<div><small>${L('Representative','نماینده')}</small><div class="fv2-chips">${reps().length?repChips:`<span class="fv2-muted">${L('No representatives yet','هنوز نماینده‌ای ساخته نشده')}</span>`}</div></div>`:'';
- return heading(L('Representative Credits & Ledger','اعتبار و دفتر نمایندگان'),L('Sellable Volume/Unlimited credits are separate from observed Xray traffic. No customer sale price is stored in DARK.','اعتبار قابل‌فروش حجمی/نامحدود از مصرف واقعی Xray جداست؛ قیمت فروش مشتری در DARK ذخیره نمی‌شود.'))+
+ return heading(L('Representative Credits & Ledger','اعتبار و دفتر نمایندگان'),L('Sellable Volume/Unlimited credits stay separate from observed Xray traffic and Telegram Commerce pricing.','اعتبار قابل‌فروش حجمی/نامحدود از مصرف واقعی Xray و قیمت‌های Telegram Commerce جداست.'))+
  `<div class="fv2-shell"><div class="fv2-summary">
  ${stat(L('Volume credit remaining','اعتبار حجمی باقی‌مانده'),volumeRemaining===null?'—':bytes(volumeRemaining),volumeRemaining===null?missing:L('Assignable limited-service capacity','ظرفیت قابل تخصیص سرویس حجمی'))}
  ${stat(L('Unlimited credit remaining','اعتبار نامحدود باقی‌مانده'),unlimitedRemaining===null?'—':fa(unlimitedRemaining),unlimitedRemaining===null?missing:L('Assignable unlimited-service slots','تعداد سرویس نامحدود قابل تخصیص'))}
