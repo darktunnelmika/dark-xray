@@ -39,7 +39,6 @@ from reality_scan import RealityScanError,scan_target,search_targets
 from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
-from smart_routing import SmartRoutingError,build_stage7_patch,build_stage7_plan,rank_warp_paths
 
 ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
