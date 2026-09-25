@@ -118,7 +118,9 @@ The default sequence is **Canary → Verify → Batch → Hub last**.
 - The first WARP-role Node and first Adblock-role Node are Canary targets.
 - Every changed Node receives a rollout-specific candidate desired state while all
   not-yet-rolled Nodes stay on the baseline configuration.
-- After each Node acknowledges the desired revision, DARK verifies Core health twice.
+- After each Node acknowledges the desired revision, DARK enters an observation window
+  (5 seconds by default, configurable from 1–30 seconds) and re-checks Core/desired-state
+  health throughout that window before proceeding.
 - WARP-role Nodes additionally run an isolated Node-local WARP probe after apply;
   the same Safety Gate loss/latency/jitter thresholds are enforced again.
 - If any Node fails delivery, convergence, health, or post-apply WARP verification,

@@ -214,6 +214,7 @@ class SmartRoutingSafetyCheck(Model):
 class SmartRoutingRolloutStart(Model):
     revisionId:str=Field(min_length=16,max_length=64,pattern=r'^[0-9a-f]+$')
     confirmation:str=Field(min_length=1,max_length=64)
+    observationSeconds:StrictInt=Field(default=5,ge=1,le=30)
 class SmartRoutingRolloutAction(Model):
     confirmation:str=Field(min_length=1,max_length=64)
 class SmartWarpRank(Model):
@@ -1847,7 +1848,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not row:raise HTTPException(404,'Smart Routing rollout not found')
         doc=dict(row);total=len(items);healthy=sum(1 for x in items if x['state'] in {'healthy','completed'})
         doc.update({'rolloutId':doc.pop('id'),'revisionId':doc.pop('revision_id'),'currentIndex':doc.pop('current_index'),
-                    'createdAt':doc.pop('created_at'),'startedAt':doc.pop('started_at'),'completedAt':doc.pop('completed_at'),
+                    'observationSeconds':doc.pop('observation_seconds',5),'createdAt':doc.pop('created_at'),
+                    'startedAt':doc.pop('started_at'),'completedAt':doc.pop('completed_at'),
                     'rolledBackAt':doc.pop('rolled_back_at'),'items':items,'totalNodes':total,'healthyNodes':healthy,
                     'progressPercent':100 if doc['state']=='completed' else int(100*healthy/max(1,total+1))})
         return doc
@@ -1935,8 +1937,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     nodes.sync_desired_state(node_id,desired,legacy_bundles=build_node_bundles(node_id))
                     _stage7_rollout_mark(rollout_id,node_id,'verifying','candidate delivered',desired)
                     check=_stage7_verify_rollout_node(node_id,desired)
-                    time.sleep(.25)
-                    check2=_stage7_verify_rollout_node(node_id,desired)
+                    observation=max(1.0,min(30.0,float(rollout['observation_seconds'] or 5)))
+                    deadline=time.monotonic()+observation;check2=check
+                    while True:
+                        remaining=deadline-time.monotonic()
+                        if remaining<=0:break
+                        time.sleep(min(1.0,remaining))
+                        check2=_stage7_verify_rollout_node(node_id,desired)
                     warp_note=''
                     if node_id in warp_nodes and warp_tags:
                         remote=nodes.smart_warp_probe(node_id,warp_tags,attempts=2,timeout_seconds=5)
@@ -1947,7 +1954,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                         if not gate['passed']:raise PolicyError('Post-apply WARP verification failed: '+'; '.join(gate['issues']))
                         warp_note='; WARP verified'
                     _stage7_rollout_mark(rollout_id,node_id,'healthy',
-                        'verified twice; '+str(check2.get('latencyMs',0))+'ms'+warp_note,desired)
+                        'observed '+str(int(observation))+'s; '+str(check2.get('latencyMs',0))+'ms'+warp_note,desired)
                 except Exception as ex:
                     _stage7_rollout_mark(rollout_id,node_id,'failed',str(ex))
                     _stage7_rollback_rollout_nodes(rollout_id,'Node '+node_id+' failed: '+str(ex))
@@ -2068,9 +2075,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if active:raise HTTPException(409,'Another Smart Routing rollout is already running')
         rollout_id=secrets.token_hex(16);now=time.time()
         with store.transaction() as db:
-            db.execute('''INSERT INTO smart_routing_rollouts(id,revision_id,actor,created_at,state,phase,current_index,detail,started_at)
-                          VALUES(?,?,?,?,?,?,?,?,?)''',
-                       (rollout_id,revision['id'],p.actor.id,now,'running','canary',0,'Canary rollout starting',now))
+            db.execute('''INSERT INTO smart_routing_rollouts(id,revision_id,actor,created_at,state,phase,current_index,
+                          observation_seconds,detail,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                       (rollout_id,revision['id'],p.actor.id,now,'running','canary',0,body.observationSeconds,
+                        'Canary rollout starting',now))
             for idx,(node_id,role) in enumerate(order):
                 db.execute('''INSERT INTO smart_routing_rollout_nodes(rollout_id,node_id,ord,role,state,updated_at)
                               VALUES(?,?,?,?,?,?)''',(rollout_id,node_id,idx,role,'pending',now))

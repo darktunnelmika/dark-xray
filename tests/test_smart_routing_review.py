@@ -125,8 +125,9 @@ def safety(client,revision_id):
 
 def start_rollout(client,revision_id):
     response=client.post('/api/smart-routing/rollout/start',json={
-        'revisionId':revision_id,'confirmation':'START STAGED ROLLOUT'})
+        'revisionId':revision_id,'confirmation':'START STAGED ROLLOUT','observationSeconds':1})
     assert response.status_code==202,response.text
+    assert response.json()['observationSeconds']==1
     rollout_id=response.json()['rolloutId']
     deadline=time.time()+8
     while time.time()<deadline:
@@ -283,8 +284,8 @@ def test_stage7_staged_rollout_auto_rolls_back_when_second_canary_fails(stage7_e
     counts={}
     def flaky_probe(node_id,timeout=8.0):
         counts[node_id]=counts.get(node_id,0)+1
-        if node_id=='node-fr' and counts[node_id]==2:
-            raise OSError('simulated canary verification failure')
+        if node_id=='node-fr' and counts[node_id]==3:
+            raise OSError('simulated failure inside observation window')
         return {'node':{'id':node_id},'latency_ms':12,
                 'health':{'service':'DARK XRAY NODE','core':{'state':'running','dirty':False,'last_error':''}}}
     monkeypatch.setattr(client.app.state.nodes,'probe',flaky_probe)

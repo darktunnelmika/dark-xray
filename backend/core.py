@@ -172,7 +172,8 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS smart_routing_rollouts(
               id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,actor TEXT NOT NULL,created_at REAL NOT NULL,
               state TEXT NOT NULL,phase TEXT NOT NULL DEFAULT 'nodes',current_index INTEGER NOT NULL DEFAULT 0,
-              detail TEXT NOT NULL DEFAULT '',started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
+              observation_seconds REAL NOT NULL DEFAULT 5,detail TEXT NOT NULL DEFAULT '',
+              started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
               rolled_back_at REAL NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS smart_routing_rollouts_created ON smart_routing_rollouts(created_at DESC);
             CREATE TABLE IF NOT EXISTS smart_routing_rollout_nodes(
@@ -196,6 +197,9 @@ class CoreEngine:
                 store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_checked_at REAL NOT NULL DEFAULT 0")
             if 'safety_passed' not in revision_cols:
                 store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_passed INTEGER NOT NULL DEFAULT 0")
+            rollout_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_rollouts)')}
+            if 'observation_seconds' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN observation_seconds REAL NOT NULL DEFAULT 5")
         self.validate_schema_only=True
 
     def _write(self):

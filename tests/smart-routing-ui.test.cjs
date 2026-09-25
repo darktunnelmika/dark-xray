@@ -93,5 +93,7 @@ test('Stage 7.1 staged rollout UI shows canary batch hub-last and automatic roll
   assert.match(src,/smartRollouts/);
   assert.match(src,/progressPercent/);
   assert.match(src,/healthyNodes/);
+  assert.match(src,/observationSeconds:5/);
+  assert.match(src,/Observation/);
   assert.match(src,/\/api\/smart-routing\/rollout\//);
 });
