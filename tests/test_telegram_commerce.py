@@ -296,3 +296,56 @@ def test_daily_forum_summary_uses_completed_day_and_topic(env):
     messages=[p for m,p in api.calls if m=='sendMessage' and p.get('message_thread_id')==daily]
     assert messages and 'سفارش‌ها: 1' in messages[-1]['text']
     assert '3000000 IRT' in messages[-1]['text'].replace(',','')
+
+def test_manual_payment_wizard_is_managed_inside_admin_bot(env):
+    store,_,_,_,c=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    admin_id=990001
+    assert c.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
+    worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'manual-payment-test')
+    sent=[]
+    worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
+    try:
+        menu=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
+        assert '💳 پرداخت دستی' in menu and '💳 درگاه‌ها' not in menu
+        worker.admin_gateways(admin_id)
+        assert sent[-1][2]['inline_keyboard'][0][0]['callback_data']=='paycfg'
+        worker.start_payment_setup(admin_id,admin_id)
+        assert worker.sessions[admin_id]=='pay_card'
+        worker.handle_payment_setup_text(admin_id,admin_id,'6037 9912 3456 7890')
+        worker.handle_payment_setup_text(admin_id,admin_id,'DARK VPN')
+        worker.handle_payment_setup_text(admin_id,admin_id,'Melli')
+        worker.handle_payment_setup_text(admin_id,admin_id,'بعد از پرداخت رسید را ارسال کنید')
+        row=worker.manual_gateway()
+        assert row is not None and row['enabled'] is True
+        assert row['card_number']=='6037991234567890'
+        assert row['card_holder']=='DARK VPN' and row['bank_name']=='Melli'
+        assert 'رسید' in row['instructions']
+        assert admin_id not in worker.sessions and admin_id not in worker.session_data
+        worker.toggle_manual_payment(admin_id,admin_id)
+        assert worker.manual_gateway()['enabled'] is False
+        worker.toggle_manual_payment(admin_id,admin_id)
+        assert worker.manual_gateway()['enabled'] is True
+    finally:
+        worker.api.close()
+    with store.lock:
+        audit=store.db.execute("""SELECT action FROM live_audit
+          WHERE owner='dark' AND action='commerce.manual_payment_bot_save'
+          ORDER BY id DESC LIMIT 1""").fetchone()
+    assert audit is not None
+
+
+def test_telegram_status_exposes_forum_connection_state(env):
+    _,_,_,_,c=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    assert c.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':990002}).status_code==200
+    before=c.get('/api/telegram/status').json()
+    assert before['forum']['configured'] is False
+    forum=c.app.state.telegram_runtime.forum
+    api=FakeTelegramAPI()
+    forum.setup(api,'dark',{'request_id':FORUM_REQUEST_ID,'chat_id':-100456},42)
+    after=c.get('/api/telegram/status').json()
+    assert after['forum']['configured'] is True
+    assert len(after['forum']['topics'])==len(TOPICS)
