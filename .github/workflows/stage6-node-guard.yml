@@ -34,7 +34,10 @@ jobs:
       - name: Fetch verified official Xray
         run: |
           python tools/fetch-core.py --version v26.3.27 --destination "$GITHUB_WORKSPACE/.test-core"
-          chmod 0755 "$DARK_REAL_XRAY_BINARY"
+          install -d -m 0755 /tmp/dark-stage6-core
+          install -m 0755 "$DARK_REAL_XRAY_BINARY" /tmp/dark-stage6-core/xray
+          install -m 0644 "$GITHUB_WORKSPACE/.test-core/DARK-CORE-PROVENANCE.json" /tmp/dark-stage6-core/DARK-CORE-PROVENANCE.json
+          echo "DARK_REAL_XRAY_BINARY=/tmp/dark-stage6-core/xray" >> "$GITHUB_ENV"
       - name: Real Node Guard packet path in isolated namespaces
         run: |
           export DARK_SECURITY_PARENT_NETNS="$(readlink /proc/self/ns/net)"
