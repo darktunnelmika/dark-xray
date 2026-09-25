@@ -773,20 +773,56 @@ class BotCommerce:
             return reply("\n".join(lines))
         if text.startswith("/buy "):
             plan_id = text.split(None, 1)[1].strip()
+            catalog = self.public_catalog(owner_id)
+            plan = next(
+                (x for product in catalog for x in product["plans"] if x["id"] == plan_id),
+                None
+            )
+            if not plan:
+                return reply("این پلن در حال حاضر قابل خرید نیست.")
             methods = self.payment_methods(
                 self._actor_for_owner(owner_id), enabled_only=True
             )
             ready = [m for m in methods if m["ready"]]
             if not ready:
                 return reply("روش پرداخت آماده‌ای برای فروشگاه فعال نشده است.")
-            order = self.create_order(owner_id, user_id, plan_id, ready[0]["id"])
-            method = ready[0]
+            quota = (
+                "نامحدود" if plan["service_type"] == "unlimited"
+                else str(round(plan["quota_bytes"] / 1024**3, 2)) + " GB"
+            )
+            lines = [
+                "🧾 خلاصه خرید",
+                plan["label"] + " — " + quota,
+                str(plan["duration_days"]) + " روز",
+                str(plan["price_amount"]) + " " + plan["currency"],
+                "",
+                "روش پرداخت را انتخاب کنید:"
+            ]
+            for method in ready:
+                lines.append(
+                    "• " + method["name"] + "\n/checkout " + plan_id + " " + method["id"]
+                )
+            return reply("\n".join(lines))
+        if text.startswith("/checkout "):
+            parts = text.split()
+            if len(parts) != 3:
+                return reply("فرمت پرداخت معتبر نیست؛ خرید را دوباره از فروشگاه شروع کنید.")
+            plan_id, method_id = parts[1], parts[2]
+            try:
+                order = self.create_order(owner_id, user_id, plan_id, method_id)
+                method = next(
+                    x for x in self.payment_methods(
+                        self._actor_for_owner(owner_id), enabled_only=True
+                    ) if x["id"] == method_id
+                )
+            except (PolicyError, PermissionDenied, StopIteration) as ex:
+                return reply("ایجاد سفارش انجام نشد: " + str(ex)[:300])
             return reply(
                 f"سفارش {order['id']} ساخته شد.\n"
                 f"مبلغ: {order['amount']} {order['currency']}\n"
                 "وضعیت: در انتظار پرداخت\n\n"
                 f"{method['instructions']}\n\n"
-                "پس از تأیید پرداخت توسط ادمین، سرویس خودکار ساخته می‌شود."
+                "پس از تأیید پرداخت توسط ادمین، سرویس خودکار ساخته و ارسال می‌شود."
             )
         if text in ("📦 سفارش‌های من", "/orders"):
             rows = self.customer_orders(owner_id, user_id)
