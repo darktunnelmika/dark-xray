@@ -82,6 +82,12 @@ class BotCommerce:
               reference TEXT NOT NULL DEFAULT '', at REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS shop_payment_events_order
               ON shop_payment_events(order_id,at);
+            CREATE TABLE IF NOT EXISTS telegram_updates(
+              owner_id TEXT NOT NULL, update_id INTEGER NOT NULL,
+              received_at REAL NOT NULL,
+              PRIMARY KEY(owner_id,update_id));
+            CREATE INDEX IF NOT EXISTS telegram_updates_received
+              ON telegram_updates(received_at);
             """)
 
     @staticmethod
@@ -756,6 +762,19 @@ class BotCommerce:
                        update: dict[str, Any]) -> dict:
         bot = self.verify_webhook(public_id, secret)
         owner_id = str(bot["owner_id"])
+        update_id = update.get("update_id") if isinstance(update, dict) else None
+        if type(update_id) is int and update_id >= 0:
+            with self.store.transaction() as db:
+                inserted = db.execute(
+                    "INSERT OR IGNORE INTO telegram_updates(owner_id,update_id,received_at) VALUES(?,?,?)",
+                    (owner_id, update_id, time.time())
+                ).rowcount
+                db.execute(
+                    "DELETE FROM telegram_updates WHERE received_at<?",
+                    (time.time() - 7 * 86400,)
+                )
+            if not inserted:
+                return {"ok": True}
         message = update.get("message") if isinstance(update, dict) else None
         if not isinstance(message, dict):
             return {"ok": True}
