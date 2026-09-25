@@ -17,10 +17,22 @@
     max-width:calc(100vw - 44px);
     height:100dvh;
     overscroll-behavior:contain;
-    box-shadow:-18px 0 55px rgba(0,0,0,.72)!important;
     will-change:transform
   }
-  .sidebar.open{transform:translateX(0)}
+  html[dir="ltr"] .sidebar{
+    left:0!important;
+    right:auto!important;
+    transform:translateX(-110%)!important;
+    box-shadow:18px 0 55px rgba(0,0,0,.72)!important
+  }
+  html[dir="rtl"] .sidebar{
+    right:0!important;
+    left:auto!important;
+    transform:translateX(110%)!important;
+    box-shadow:-18px 0 55px rgba(0,0,0,.72)!important
+  }
+  html[dir="ltr"] .sidebar.open,
+  html[dir="rtl"] .sidebar.open{transform:translateX(0)!important}
   .menu-backdrop{
     display:block;
     border:0;
