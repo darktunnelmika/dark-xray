@@ -83,7 +83,9 @@ jobs:
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q 'body class="skin-cyber-classic"' web/index.html
           grep -q 'assets/cyber-classic.css' web/index.html
-          grep -q -- '--classic-green:#19ff86' web/cyber-classic.css\n          grep -q 'DARK XRAY // SUBSCRIPTION PORTAL' web/sub-portal.html\n          grep -q '__DARK_SUB_STATE__' web/sub-portal.html
+          grep -q -- '--classic-green:#19ff86' web/cyber-classic.css
+          grep -q 'DARK XRAY // SUBSCRIPTION PORTAL' web/sub-portal.html
+          grep -q '__DARK_SUB_STATE__' web/sub-portal.html
           for asset in \
             cyber.css cyber-classic.css inbounds-v3.css settings-v2.css clients-v2.css finance-v2.css xray-v2.css xray-guided-v3.css hosts-v2.css ops-v2.css nodes-v2.css overview-v4.css \
             i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js finance-v2.js ui-stability.js xray-v2.js xray-guided-v3.js hosts-v2.js ops-v2.js nodes-v2.js overview-v4.js; do
