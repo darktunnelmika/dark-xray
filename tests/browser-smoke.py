@@ -642,7 +642,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('no uncaught JavaScript runtime errors')
             report['status']='passed'
     except Exception as exc:
-        report.update(status='failed',error=f'{type(exc).__name__}: {exc}'[:3000])
+        report.update(status='failed',error=f'{type(exc).__name__}: {exc}'[:3000],traceback=traceback.format_exc()[-12000:])
     finally:
         if browser:
             try:browser.close()
