@@ -18,7 +18,7 @@ async function load(){
  const out={};await Promise.all(pairs.map(async([k,u])=>{try{out[k]=await api(u);}catch(ex){out[k]={error:ex.message};}}));TC.data=out;return out;
 }
 function botCard(b){
- const online=b.runtime_state==='online',configured=!!b.configured,forum=b.forum||{},forumOk=!!forum.configured;
+ const online=b.runtime_state==='online',configured=!!b.configured,forum=b.forum||{},forumOk=!!forum.configured,forumRebind=!!forum.rebind_required;
  return `<article class="panel tg-card tg-bot">
  <div class="tg-head"><div><span class="code-caption">DARK BOT CORE</span><h2>${L('Telegram bot','ربات تلگرام')}</h2></div>${st(online?L('ONLINE','آنلاین'):b.enabled?L('STARTING / ERROR','در حال شروع / خطا'):L('DISABLED','خاموش'),online)}</div>
  <form data-tg-form="bot" class="tg-form-grid">
@@ -27,14 +27,17 @@ function botCard(b){
  <label class="tg-switch"><input name="enabled" type="checkbox" ${b.enabled?'checked':''}><span>${L('Enable this bot','فعال‌سازی این ربات')}</span></label>
  <div class="tg-actions"><button class="btn btn-primary" type="submit">${icon('check')}${L('Save bot','ذخیره ربات')}</button><button class="btn" type="button" data-act="tgbottest">${icon('activity')}${L('Test token','تست توکن')}</button></div>
  </form><div class="tg-meta"><span>@${esc(b.bot_username||'—')}</span><span>${L('Last contact','آخرین تماس')}: ${b.last_seen?date(b.last_seen):'—'}</span></div>
- <div class="notice ${forumOk?'':'warning'}"><b>${L('Forum connection','وضعیت اتصال انجمن')}:</b> ${forumOk?L('CONNECTED','متصل ✅'):L('NOT CONNECTED','متصل نیست ⛔')}</div>
+ <div class="notice ${forumOk?'':'warning'}"><b>${L('Forum connection','وضعیت اتصال انجمن')}:</b> ${forumOk?L('CONNECTED','متصل ✅'):forumRebind?L('REBIND REQUIRED','نیازمند اتصال مجدد ♻️'):L('NOT CONNECTED','متصل نیست ⛔')}</div>
  ${b.last_error?`<div class="notice error">${esc(b.last_error)}</div>`:''}</article>`;
 }
 function forumCard(f={}){
- const ok=!!f.configured;
- return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">REPORT CENTER</span><h2>${L('Forum report center','انجمن گزارش')}</h2></div>${st(ok?L('CONNECTED','متصل ✅'):L('NOT CONNECTED','متصل نیست ⛔'),ok)}</div>
- <div class="tg-list"><div class="tg-forum-status"><b>${L('Connection','اتصال')}: ${ok?L('Connected','متصل'):L('Not connected','متصل نیست')}</b><button class="btn mini" data-act="tgrefresh">${icon('refresh')}${L('Refresh status','بروزرسانی وضعیت')}</button></div>${ok?`<div class="tg-gateway"><div><b>${esc(f.title||L('Telegram Forum','انجمن تلگرام'))}</b><small>${(f.topics||[]).length} / 8 Topics</small></div><button class="btn mini" data-act="tgforumrepair">${icon('refresh')}${L('Repair topics','ترمیم Topicها')}</button></div>
- <div class="tg-topic-grid">${(f.topics||[]).map(t=>`<span>${esc(t.name)}</span>`).join('')}</div>`:`<div class="notice warning">${L('Not connected yet. Complete Forum selection inside the Telegram bot; this panel only displays connection health.','هنوز متصل نیست. انتخاب و اتصال انجمن را داخل خود ربات تلگرام انجام بده؛ پنل فقط وضعیت اتصال را نمایش می‌دهد.')}</div>`}</div></article>`;
+ const ok=!!f.configured,rebind=!!f.rebind_required,preserved=!!f.preserved;
+ const badge=ok?L('CONNECTED','متصل ✅'):rebind?L('REBIND REQUIRED','نیازمند اتصال مجدد ♻️'):L('NOT CONNECTED','متصل نیست ⛔');
+ return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">REPORT CENTER</span><h2>${L('Forum report center','انجمن گزارش')}</h2></div>${st(badge,ok)}</div>
+ <div class="tg-list"><div class="tg-forum-status"><b>${L('Connection','اتصال')}: ${esc(badge)}</b><button class="btn mini" data-act="tgrefresh">${icon('refresh')}${L('Refresh status','بروزرسانی وضعیت')}</button></div>
+ ${rebind?`<div class="notice warning"><b>${L('Disaster Recovery state preserved','وضعیت بازیابی حفظ شده')}</b><br>${L('Forum and topic IDs were restored. Enter a new Bot Token, make the new bot Admin of the previous forum with Manage Topics, then use the bot recovery action.','Forum و شناسه Topicها از بکاپ برگشته‌اند. Token جدید را وارد کن، Bot جدید را در انجمن قبلی Admin با Manage Topics کن و سپس از داخل ربات اتصال مجدد را بزن.')}</div>`:''}
+ ${ok?`<div class="tg-gateway"><div><b>${esc(f.title||L('Telegram Forum','انجمن تلگرام'))}</b><small>${(f.topics||[]).length} / 8 Topics</small></div><button class="btn mini" data-act="tgforumrepair">${icon('refresh')}${L('Repair topics','ترمیم Topicها')}</button></div>
+ <div class="tg-topic-grid">${(f.topics||[]).map(t=>`<span>${esc(t.name)}</span>`).join('')}</div>`:(!preserved?`<div class="notice warning">${L('Not connected yet. Complete Forum selection inside the Telegram bot; this panel only displays connection health.','هنوز متصل نیست. انتخاب و اتصال انجمن را داخل خود ربات تلگرام انجام بده؛ پنل فقط وضعیت اتصال را نمایش می‌دهد.')}</div>`:`<div class="tg-topic-grid">${(f.topics||[]).map(t=>`<span>${esc(t.name)}</span>`).join('')}</div>`)}</div></article>`;
 }
 function priceLine(p){
  const volume=Number(p.volume_bytes||0)>0?bytes(p.volume_bytes):L('Unlimited','نامحدود');
