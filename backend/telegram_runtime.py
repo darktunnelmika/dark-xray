@@ -12,6 +12,7 @@ from dark_policy import Actor, NAME_RE, PolicyError
 from telegram_forum import TelegramForumCenter
 from telegram_customer import CustomerCenter
 from telegram_customer_runtime import CustomerBotFeatures
+from representative_marketplace import RepresentativeMarketplace
 
 API_ROOT='https://api.telegram.org'
 
@@ -145,6 +146,8 @@ class BotWorker(CustomerBotFeatures):
             ['💰 کیف پول + شارژ','📦 سرویس‌های من'],
             ['👥 زیرمجموعه‌گیری','🎫 پشتیبانی'],
         ]
+        if self.owner_role()=='owner':
+            rows += [['🏪 خرید پنل نمایندگی']]
         if admin:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
@@ -249,6 +252,8 @@ class BotWorker(CustomerBotFeatures):
         if text=='💰 کیف پول + شارژ':self.customer_wallet_menu(chat_id,user_id);return
         if low=='/services' or text=='📦 سرویس‌های من':self.services(chat_id,user_id);return
         if text=='👥 زیرمجموعه‌گیری':self.customer_referral_menu(chat_id,user_id);return
+        if text=='🏪 خرید پنل نمایندگی' and self.owner_role()=='owner':
+            self.customer_representative_marketplace(chat_id,user_id);return
         if text=='🎫 پشتیبانی':
             if self.is_admin(user_id):self.admin_support(chat_id)
             else:self.customer_support_menu(chat_id,user_id)
@@ -1288,6 +1293,7 @@ class TelegramBotRuntime:
         self.commerce=commerce;self.store=commerce.store;self.manager=manager;self.auth=auth;self.audit=audit
         self.forum=TelegramForumCenter(self.store)
         self.customer=CustomerCenter(self.store,commerce,manager)
+        self.marketplace=RepresentativeMarketplace(self.store,manager,auth,self.customer,commerce)
         self.stop_event=threading.Event();self.wake_event=threading.Event();self.thread=None
         self.workers:dict[str,BotWorker]={};self.statuses:dict[str,dict[str,Any]]={};self.lock=threading.RLock()
 
@@ -1308,6 +1314,7 @@ class TelegramBotRuntime:
     def run(self):
         while not self.stop_event.is_set():
             try:
+                self.marketplace.sweep_expired()
                 self.sync_workers()
                 activated=self.commerce.activate_first_connections(self.manager)
                 self.notify_activations(activated)
