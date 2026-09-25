@@ -33,3 +33,11 @@ test('Overview and legacy operations actions route logs/history into Settings Op
   assert.doesNotMatch(overview,/if\(act==='ov4history'\)\{await go\('audit'\)/);
   assert.match(ops,/DarkSettingsV2\?\.open/);
 });
+
+
+test('Primary sidebar hides Outbounds and Routing and exposes Smart WARP instead',()=>{
+  const nav=live.slice(live.indexOf('function navItems()'),live.indexOf('function shell()'));
+  assert.doesNotMatch(nav,/\['outbounds','اوتباندها'/);
+  assert.doesNotMatch(nav,/\['routing','روتینگ'/);
+  assert.match(nav,/\['smart','وارپ هوشمند','activity'\]/);
+});
