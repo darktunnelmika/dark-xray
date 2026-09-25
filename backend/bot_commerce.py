@@ -12,6 +12,7 @@ from urllib.parse import urlsplit,urlunsplit
 from urllib.request import Request,urlopen
 
 from dark_policy import Actor, MAX_INT, NAME_RE, PermissionDenied, PolicyError
+from core import CoreError
 
 BOT_TOKEN_RE = re.compile(r"^[1-9][0-9]{4,15}:[A-Za-z0-9_-]{20,128}$")
 CURRENCY_RE = re.compile(r"^[A-Z0-9_]{2,12}$")
@@ -768,7 +769,7 @@ class BotCommerce:
         role = self._account_role(owner_id)
         keyboard = [["🛒 فروشگاه", "📦 سفارش‌های من"]]
         if is_admin:
-            keyboard.append(["🛠 مدیریت"])
+            keyboard.append(["👤 کاربران", "🛠 مدیریت"])
             if role == "owner":
                 keyboard.append(["👥 نمایندگان", "➕ ساخت نماینده"])
         reply_markup = {"keyboard": keyboard, "resize_keyboard": True}
@@ -864,6 +865,103 @@ class BotCommerce:
                 if row["status"] == "fulfilled" and row["subscription_url"]:
                     lines.append(row["subscription_url"])
             return reply("\n".join(lines))
+        if text in ("👤 کاربران", "/users"):
+            if not is_admin:
+                return reply("این بخش فقط برای ادمین عددی تنظیم‌شدهٔ ربات است.")
+            actor = self._actor_for_owner(owner_id)
+            rows = self.manager.list(actor)
+            rows = rows[-15:]
+            if not rows:
+                return reply("کاربری در محدوده دسترسی شما وجود ندارد.")
+            lines = ["👤 کاربران اخیر"]
+            for row in reversed(rows):
+                state = "BLOCKED" if row.get("block_reasons") else (
+                    "ON" if row.get("observed_enable") is not False else "OFF"
+                )
+                owner_note = (
+                    " · " + row["owner"] if role == "owner" and row["owner"] != owner_id else ""
+                )
+                lines.append(
+                    "• " + row["email"] + owner_note + " · " + state
+                    + "\n  /user " + row["email"]
+                )
+            return reply("\n".join(lines))
+        if text.startswith("/user "):
+            if not is_admin:
+                return reply("این دستور فقط برای ادمین مجاز است.")
+            email = text.split(None, 1)[1].strip().lower()
+            try:
+                row = self.manager.detail(self._actor_for_owner(owner_id), email)
+            except (PolicyError, PermissionDenied, CoreError) as ex:
+                return reply("کاربر قابل دسترسی نیست: " + str(ex)[:300])
+            client = row["client"]
+            quota = (
+                "نامحدود" if not client.get("totalGB")
+                else str(round(int(client["totalGB"]) / 1024**3, 2)) + " GB"
+            )
+            expiry = (
+                "بدون انقضا" if not client.get("expiryTime")
+                else time.strftime(
+                    "%Y-%m-%d",
+                    time.gmtime(int(client["expiryTime"]) / 1000)
+                )
+            )
+            body = (
+                "👤 " + row["email"] + "\n"
+                + "Owner: " + row["owner"] + "\n"
+                + "Quota: " + quota + "\n"
+                + "Used: " + str(round(int(row.get("used_bytes") or 0) / 1024**3, 2)) + " GB\n"
+                + "Expiry: " + expiry + "\n"
+                + "Enabled: " + str(client.get("enable") is not False) + "\n"
+                + "/enable " + row["email"] + "\n"
+                + "/disable " + row["email"] + "\n"
+                + "/reset " + row["email"]
+            )
+            if row.get("subscription_url"):
+                body += "\nSubscription:\n" + row["subscription_url"]
+            return reply(body)
+        if text.startswith("/enable ") or text.startswith("/disable "):
+            if not is_admin:
+                return reply("این دستور فقط برای ادمین مجاز است.")
+            enable = text.startswith("/enable ")
+            email = text.split(None, 1)[1].strip().lower()
+            try:
+                result = self.manager.action(
+                    self._actor_for_owner(owner_id), email,
+                    "enable" if enable else "disable"
+                )
+            except (PolicyError, PermissionDenied, CoreError) as ex:
+                return reply("عملیات انجام نشد: " + str(ex)[:300])
+            return reply(
+                ("✅ فعال شد: " if enable else "⛔ غیرفعال شد: ")
+                + email + "\nState: " + str(result.get("state") or "unknown")
+            )
+        if text.startswith("/reset "):
+            if not is_admin:
+                return reply("این دستور فقط برای ادمین مجاز است.")
+            email = text.split(None, 1)[1].strip().lower()
+            try:
+                self.manager.detail(self._actor_for_owner(owner_id), email)
+            except (PolicyError, PermissionDenied, CoreError) as ex:
+                return reply("کاربر قابل دسترسی نیست: " + str(ex)[:300])
+            return reply(
+                "⚠️ ریست ترافیک این کاربر نیاز به تأیید دوم دارد:\n"
+                "/confirmreset " + email
+            )
+        if text.startswith("/confirmreset "):
+            if not is_admin:
+                return reply("این دستور فقط برای ادمین مجاز است.")
+            email = text.split(None, 1)[1].strip().lower()
+            try:
+                result = self.manager.action(
+                    self._actor_for_owner(owner_id), email, "reset"
+                )
+            except (PolicyError, PermissionDenied, CoreError) as ex:
+                return reply("ریست انجام نشد: " + str(ex)[:300])
+            return reply(
+                "✅ ریست ترافیک ثبت شد: " + email
+                + "\nState: " + str(result.get("state") or "unknown")
+            )
         if text in ("🛠 مدیریت", "/admin"):
             if not is_admin:
                 return reply("این بخش فقط برای ادمین عددی تنظیم‌شدهٔ ربات است.")
