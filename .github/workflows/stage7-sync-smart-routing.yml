@@ -1,4 +1,4 @@
-name: Sync Stage 7 Smart Routing Server Patch
+name: Cleanup Stage 7 Temporary Workflows
 
 on:
   push:
@@ -10,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  sync:
-    if: ${{ !contains(github.event.head_commit.message, '[stage7-sync-done]') }}
+  cleanup:
+    if: ${{ !contains(github.event.head_commit.message, '[stage7-cleanup-done]') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout branch
@@ -25,62 +25,28 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Patch server API endpoints
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('backend/server.py')
-          text = path.read_text()
-          import_line = 'from smart_routing import SmartRoutingError,build_stage7_patch,build_stage7_plan,rank_warp_paths\n'
-          if import_line not in text:
-              anchor = 'from update_bridge import UpdateBrokerClient,UpdateBrokerError\n'
-              if anchor not in text:
-                  raise SystemExit('import anchor not found')
-              text = text.replace(anchor, anchor + import_line)
-          model_block = '''class SmartRoutingPreview(Model):\n    warpAi:bool=True\n    adblock:bool=True\n    warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)\nclass SmartWarpRank(Model):\n    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)\n\n'''
-          if 'class SmartRoutingPreview(Model):' not in text:
-              anchor = "    attrs:dict[str,str]=Field(default_factory=dict,max_length=64)\n"
-              if anchor not in text:
-                  raise SystemExit('model anchor not found')
-              text = text.replace(anchor, anchor + model_block)
-          endpoint_block = '''\n    @app.get('/api/smart-routing/plan')\n    def smart_routing_plan(p:Principal=Depends(owner)):\n        return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))\n\n    @app.post('/api/smart-routing/preview')\n    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):\n        try:\n            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),\n                                      warp_outbound_tags=body.warpOutboundTags,\n                                      enable_warp_ai=body.warpAi,enable_adblock=body.adblock)\n        except SmartRoutingError as ex:\n            raise HTTPException(400,str(ex))\n\n    @app.post('/api/smart-routing/warp-rank')\n    def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):\n        return {'items':rank_warp_paths(body.observations),'previewOnly':True}\n'''
-          if "@app.get('/api/smart-routing/plan')" not in text:
-              anchor = "    @app.get('/api/security-center')\n"
-              if anchor not in text:
-                  raise SystemExit('endpoint anchor not found')
-              text = text.replace(anchor, endpoint_block + '\n' + anchor)
-          path.write_text(text)
-          PY
-
-      - name: Install test dependencies
+      - name: Verify Stage 7 tests
         run: |
           python3 -m pip install -q --upgrade pip
           python3 -m pip install -q -r requirements.txt -r requirements-dev.txt httpx httpx2 uvicorn
-
-      - name: Test smart routing
-        run: |
           PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_web_contract.py tests/test_v06.py
           python3 tools/repo-check.py
 
-      - name: Commit server patch before checksum refresh
+      - name: Remove temporary Stage 7 workflows
         run: |
-          if git diff --quiet -- backend/server.py; then
-            echo 'No server.py changes needed.'
-          else
-            git add backend/server.py
-            git commit -m 'Sync Stage 7 smart routing API endpoints'
-          fi
+          rm -f .github/workflows/stage7-smart-routing-patch.yml
+          rm -f .github/workflows/stage7-smart-routing-sync.yml
+          rm -f .github/workflows/stage7-sync-smart-routing.yml
+          git add -A .github/workflows
+          git commit -m 'Remove Stage 7 temporary sync workflows' || true
 
-      - name: Refresh SHA256SUMS
+      - name: Refresh SHA256SUMS after cleanup
         run: |
           python3 tools/release_snapshot.py --refresh-source-sums --json-only
+          git add SHA256SUMS
+          git commit -m 'Refresh checksums after Stage 7 workflow cleanup [stage7-cleanup-done]' || true
 
-      - name: Commit checksum and push
+      - name: Rebase and push cleanup
         run: |
-          if git diff --quiet; then
-            echo 'No checksum changes needed.'
-          else
-            git add SHA256SUMS
-            git commit -m 'Refresh checksums for Stage 7 smart routing API [stage7-sync-done]'
-          fi
+          git pull --rebase origin work/stage7-smart-routing
           git push origin HEAD:work/stage7-smart-routing
