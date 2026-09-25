@@ -148,3 +148,38 @@ test('WARP lives inside Xray Outbounds with simple one-click controls',()=>{
   assert.match(tabs,/Routing/);
   assert.doesNotMatch(tabs,/Smart WARP/);
 });
+
+
+test('WARP Outbounds exposes compact Scan and Ping controls',()=>{
+  assert.match(src,/function warpSimpleCard/);
+  assert.match(src,/Scan WARP/);
+  assert.match(src,/Ping Test/);
+  assert.match(src,/warp-mode-compact/);
+  assert.match(src,/xv7warpscan/);
+  assert.match(src,/xvwarptest/);
+});
+
+test('Routing main view is compact and keeps smart rollout cards out of sight',()=>{
+  const start=src.indexOf('function routing(d)');
+  const end=src.indexOf('function balancers',start);
+  assert.ok(start>=0&&end>start);
+  const body=src.slice(start,end);
+  assert.match(body,/routing-compact/);
+  assert.match(body,/route-line/);
+  assert.match(body,/Add Rule/);
+  assert.match(body,/routing-advanced/);
+  assert.doesNotMatch(body,/smartRoutingCard\(d\)/);
+  assert.doesNotMatch(body,/smartRoutingRevisionCard\(d\)/);
+  assert.doesNotMatch(body,/smartRoutingRolloutCard\(d\)/);
+});
+
+test('Routing editor keeps common fields simple and advanced match collapsed',()=>{
+  const start=src.indexOf('async function editRule');
+  const end=src.indexOf('async function mutateRule',start);
+  const body=src.slice(start,end);
+  assert.match(body,/Domains \/ GeoSite/);
+  assert.match(body,/Send to/);
+  assert.match(body,/route-edit-advanced/);
+  assert.match(body,/Advanced match/);
+  assert.match(body,/\.\.\.r,type:'field'/);
+});
