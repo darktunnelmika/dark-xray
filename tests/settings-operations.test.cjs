@@ -35,14 +35,10 @@ test('Overview and legacy operations actions route logs/history into Settings Op
 });
 
 
-test('Primary sidebar hides Outbounds and Routing and exposes Smart WARP instead',()=>{
+test('Primary sidebar hides Outbounds, Routing and Smart WARP because they live under Xray',()=>{
   const nav=live.slice(live.indexOf('function navItems()'),live.indexOf('function shell()'));
   assert.doesNotMatch(nav,/\['outbounds','اوتباندها'/);
   assert.doesNotMatch(nav,/\['routing','روتینگ'/);
-  assert.match(nav,/\['smart','وارپ هوشمند','activity'\]/);
-});
-
-test('Smart WARP main-menu route is registered as an engine page',()=>{
-  assert.match(live,/enginePages=\{[^}]*smart:\['وارپ هوشمند'\]/);
-  assert.match(live,/if\(enginePages\[requestedPage\]\)html=await enginePage\(\)/);
+  assert.doesNotMatch(nav,/\['smart','وارپ هوشمند'/);
+  assert.doesNotMatch(live,/enginePages=\{[^}]*smart:/);
 });
