@@ -23,7 +23,7 @@ test('smart routing preview function remains non-applying',()=>{
   assert.doesNotMatch(body,/saveSection\(/);
   assert.doesNotMatch(body,/\/api\/core\/restart/);
   assert.doesNotMatch(body,/\/api\/settings\/routing[^\n]*PUT/);
-  assert.match(body,/does not save settings or restart Xray/);
+  assert.match(body,/does not change production traffic/);
 });
 
 test('inbound Smart WARP tab exposes ranked scan table and preview selection',()=>{
@@ -65,14 +65,14 @@ test('reviewed Smart Routing flow separates validation, staged rollout and rollb
   assert.match(src,/xv7smartrollback/);
 });
 
-test('Smart Routing review includes explicit per-node role assignment',()=>{
+test('Smart Network setup keeps explicit per-node role assignment but hides region jargon from the main flow',()=>{
   assert.match(src,/nodeCandidates/);
   assert.match(src,/nodeRoles/);
   assert.match(src,/name="warpNodeIds"/);
   assert.match(src,/name="adblockNodeIds"/);
-  assert.match(src,/Node role assignment/);
-  assert.match(src,/USA\/Germany for WARP AI/);
-  assert.match(src,/France\/UK for Adblock/);
+  assert.match(src,/Choose Nodes/);
+  assert.match(src,/Pick where each feature should run/);
+  assert.match(src,/Region suggestions are guidance/);
 });
 
 
@@ -125,4 +125,17 @@ test('Stage 7.3 live rollout modal keeps control and telemetry visible',()=>{
   assert.match(body,/xv7rolloutresume/);
   assert.match(body,/xv7rolloutabort/);
   assert.match(body,/timeline/);
+});
+
+
+test('Smart WARP is a standalone simple workspace while Xray keeps technical Outbounds and Routing tabs',()=>{
+  assert.match(src,/state\.page==='smart'/);
+  assert.match(src,/WARP and Adblock without Routing complexity/);
+  assert.match(src,/Four simple steps/);
+  assert.match(src,/xv7gotooutbounds/);
+  assert.match(src,/xv7warpscan/);
+  const tabs=src.slice(src.indexOf('function xtabs()'),src.indexOf('function xcard'));
+  assert.match(tabs,/Outbounds/);
+  assert.match(tabs,/Routing/);
+  assert.doesNotMatch(tabs,/Smart WARP/);
 });
