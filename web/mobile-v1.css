@@ -1,0 +1,239 @@
+/* DARK XRAY — mobile layout stabilization
+ * Loaded last so feature styles keep their desktop behavior.
+ * Scope: phones/tablets only; no business logic changes.
+ */
+
+@media (max-width: 760px){
+  html,body,#app,.main,.content,#content{
+    width:100%;
+    max-width:100%;
+    min-width:0;
+  }
+
+  html,body{overflow-x:hidden}
+  body.mobile-nav-open{overflow:hidden;touch-action:none}
+
+  .main{margin-inline:0!important;min-height:100dvh}
+  .content{
+    padding-left:max(12px,env(safe-area-inset-left));
+    padding-right:max(12px,env(safe-area-inset-right));
+    padding-bottom:max(22px,env(safe-area-inset-bottom));
+  }
+
+  .topbar{
+    position:sticky;
+    top:0;
+    z-index:45;
+    width:100%;
+    min-width:0;
+    padding-left:max(10px,env(safe-area-inset-left));
+    padding-right:max(10px,env(safe-area-inset-right));
+  }
+  .topbar>.mono{
+    max-width:92px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    direction:ltr;
+  }
+
+  .sidebar{
+    inset:0 0 0 auto!important;
+    width:min(86vw,320px)!important;
+    max-width:320px;
+    height:100dvh;
+    max-height:100dvh;
+    padding-bottom:max(16px,env(safe-area-inset-bottom));
+    z-index:70;
+    overscroll-behavior:contain;
+    box-shadow:-28px 0 70px #000a;
+  }
+  .sidebar nav{min-height:0}
+  .sidebar.open{transform:translateX(0)!important}
+
+  .mobile-nav-backdrop{
+    position:fixed;
+    inset:0;
+    display:none;
+    z-index:65;
+    border:0;
+    padding:0;
+    background:#0009;
+    backdrop-filter:blur(2px);
+  }
+  .sidebar.open + .mobile-nav-backdrop{display:block}
+
+  .page-heading{
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    gap:14px;
+    min-width:0;
+  }
+  .page-heading>div:first-child{min-width:0;width:100%}
+  .page-heading h1,.page-heading p{max-width:100%;overflow-wrap:anywhere}
+  .page-heading p{max-width:none}
+  .page-heading .heading-actions{
+    width:100%;
+    justify-content:flex-start;
+    align-items:stretch;
+    gap:8px;
+    flex-wrap:wrap;
+  }
+  .page-heading .heading-actions>.btn{
+    flex:1 1 145px;
+    min-width:0;
+    justify-content:center;
+  }
+
+  .panel,.card,.notice,.resource-card,.reseller-card,.node-card,
+  .system-overview,.integration-callout,.service-tile{
+    min-width:0;
+    max-width:100%;
+  }
+
+  .metrics-grid,.kpi-grid,.resource-cards,.reseller-grid,.nodes-grid,
+  .settings-grid,.service-grid,.permission-layout{
+    min-width:0;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  .table-wrap{
+    display:block;
+    width:100%;
+    max-width:100%;
+    overflow-x:auto!important;
+    overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior-inline:contain;
+  }
+  .table-wrap>table,.clients-table,.data-table{
+    width:max-content;
+    min-width:100%;
+    max-width:none;
+  }
+  .table-wrap th,.table-wrap td{white-space:nowrap}
+  .table-wrap .row-actions{min-width:max-content}
+
+  .table-toolbar,.table-controls,.chart-toolbar,.inbound-client-toolbar,
+  .engine-strip,.save-strip,.system-heading,.between{
+    min-width:0;
+    max-width:100%;
+    flex-wrap:wrap;
+  }
+  .table-toolbar>.field-input,.table-controls>.field-input,
+  .filter-search,.filter-select{
+    min-width:0!important;
+    max-width:100%!important;
+  }
+
+  .tabs{
+    width:100%;
+    max-width:100%;
+    overflow-x:auto;
+    overflow-y:hidden;
+    -webkit-overflow-scrolling:touch;
+    scroll-snap-type:x proximity;
+  }
+  .tabs>.tab{flex:0 0 auto;scroll-snap-align:start}
+
+  .form-grid,.check-list{
+    grid-template-columns:1fr!important;
+  }
+  .form-field.full,.span-2{grid-column:auto!important}
+  input,select,textarea,.field-input,.code-input{max-width:100%;min-width:0}
+
+  .overlay{
+    padding:0;
+    align-items:flex-end;
+  }
+  .dialog,.dialog.wide,.dialog.inbound-editor-dialog{
+    width:100%!important;
+    max-width:100%!important;
+    max-height:96dvh;
+    margin:0;
+    border-bottom-left-radius:0!important;
+    border-bottom-right-radius:0!important;
+  }
+  .dialog-head{
+    padding-top:max(14px,env(safe-area-inset-top));
+  }
+  .dialog-body{
+    min-width:0;
+    max-width:100%;
+    overflow-x:hidden;
+  }
+  .dialog-foot{
+    padding-bottom:max(14px,env(safe-area-inset-bottom));
+    flex-wrap:wrap;
+  }
+  .dialog-foot>.btn{flex:1 1 120px;justify-content:center}
+
+  .terminal,.json-box,.json-preview,.code-input,.url-preview{
+    width:100%;
+    max-width:100%;
+    overflow:auto;
+    overflow-wrap:anywhere;
+  }
+
+  .inbound-mainline,.inbound-row,.core-hero,.share-layout{
+    min-width:0;
+    max-width:100%;
+  }
+  .inbound-title,.inbound-main,.inbound-stat{min-width:0!important}
+  .inbound-tools{
+    width:100%;
+    max-width:100%;
+    overflow-x:auto;
+    justify-content:flex-start!important;
+    padding-bottom:2px;
+  }
+  .inbound-tools>.btn{flex:0 0 auto}
+
+  footer,.footer{
+    gap:8px;
+    flex-wrap:wrap;
+    max-width:100%;
+  }
+}
+
+@media (max-width: 480px){
+  .content{padding-top:15px}
+  .topbar{gap:7px}
+  .topbar>.tag{display:none}
+  .topbar>.mono{max-width:74px;font-size:9px}
+
+  .metrics-grid,.kpi-grid,.resource-cards,.reseller-grid,.nodes-grid,
+  .settings-grid,.service-grid,.permission-layout{
+    grid-template-columns:1fr!important;
+  }
+
+  .page-heading h1{font-size:19px}
+  .page-heading .heading-actions>.btn{flex-basis:100%}
+
+  .panel-head,.panel-body,.settings-content{padding-left:12px;padding-right:12px}
+  .dialog-head,.dialog-body,.dialog-foot{padding-left:13px;padding-right:13px}
+
+  .menu-actions{grid-template-columns:1fr!important}
+  .share-layout{grid-template-columns:1fr!important}
+  .qr-box{max-width:min(190px,100%)}
+
+  .inbound-mainline{align-items:flex-start}
+  .inbound-title{flex-basis:100%!important}
+  .inbound-stat{flex:1 1 120px!important}
+  .inbound-tools{flex-basis:100%!important}
+
+  .toast-wrap{
+    left:10px!important;
+    right:10px!important;
+    bottom:max(10px,env(safe-area-inset-bottom));
+    max-width:none!important;
+  }
+  .toast{width:100%}
+}
+
+/* Short landscape phones: keep controls reachable without growing the shell. */
+@media (max-width: 900px) and (max-height: 520px){
+  .sidebar{width:min(72vw,300px)!important}
+  .dialog,.dialog.wide,.dialog.inbound-editor-dialog{max-height:100dvh}
+}
