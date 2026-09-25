@@ -168,6 +168,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert mobile.get_attribute('aria-expanded')=='false'
             mobile.click()
             page.wait_for_function("()=>document.querySelector('.sidebar')?.classList.contains('open')&&document.querySelector('.menu-backdrop')")
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.left>=-1&&r.right<=window.innerWidth+1}")
             assert page.evaluate("document.body.classList.contains('mobile-nav-open')")
             side_box=page.locator('.sidebar').bounding_box()
             assert side_box and side_box['x']>=-1 and side_box['x']+side_box['width']<=page.evaluate('window.innerWidth')+1,side_box
