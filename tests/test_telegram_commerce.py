@@ -141,7 +141,7 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     try:
         seller_text=' '.join(x['text'] for row in seller_worker.main_keyboard(True)['keyboard'] for x in row)
         assert '➕ ساخت نماینده' not in seller_text and '🤝 نمایندگان' not in seller_text
-        assert '👥 مدیریت کاربران' in seller_text
+        assert '👥 کاربران' in seller_text
     finally:
         seller_worker.api.close()
 
@@ -349,3 +349,59 @@ def test_telegram_status_exposes_forum_connection_state(env):
     after=c.get('/api/telegram/status').json()
     assert after['forum']['configured'] is True
     assert len(after['forum']['topics'])==len(TOPICS)
+
+def test_recovered_forum_requires_and_completes_rebind(env):
+    store,_,_,_,c=env
+    forum=c.app.state.telegram_runtime.forum
+    api=FakeTelegramAPI()
+    forum.setup(api,'dark',{'request_id':FORUM_REQUEST_ID,'chat_id':-100777},42)
+    with store.transaction() as db:
+        db.execute("UPDATE telegram_forums SET rebind_required=1,rebind_reason='restored-backup' WHERE owner='dark'")
+    before=forum.status('dark')
+    assert before['preserved'] is True and before['configured'] is False
+    assert before['rebind_required'] is True and len(before['topics'])==len(TOPICS)
+    rebound=forum.rebind_existing(api,'dark',42)
+    assert rebound['configured'] is True and rebound['rebind_required'] is False
+    assert rebound['chat_id']==-100777 and len(rebound['topics'])==len(TOPICS)
+
+
+def test_admin_v2_keyboard_exposes_daily_management_centers(env):
+    _,_,_,_,c=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    admin_id=991100
+    assert c.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
+    worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'admin-v2-test')
+    try:
+        text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
+        for label in ('🏠 داشبورد','👥 کاربران','📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی',
+                      '📊 گزارش‌ها','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
+            assert label in text
+    finally:
+        worker.api.close()
+
+
+def test_admin_v2_centers_render_without_external_side_effects(env):
+    _,_,_,_,c=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    admin_id=991101
+    assert c.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
+    worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'admin-v2-centers')
+    sent=[]
+    worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
+    try:
+        worker.admin_dashboard(admin_id)
+        worker.admin_services(admin_id)
+        worker.admin_orders(admin_id)
+        worker.admin_reports(admin_id)
+        worker.admin_backup(admin_id)
+        worker.admin_settings(admin_id)
+    finally:
+        worker.api.close()
+    text='\n'.join(x[1] for x in sent)
+    assert 'DARK BOT ADMIN V2' in text
+    assert 'سرویس‌ها' in text
+    assert 'مرکز گزارش DARK' in text
+    assert 'DARK Full Backup' in text
+    assert 'تنظیمات DARK BOT' in text
