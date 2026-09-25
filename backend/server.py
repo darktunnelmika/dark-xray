@@ -254,13 +254,17 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return result
     @contextlib.asynccontextmanager
     async def lifespan(app):
+        bot_runtime=None
         if background:
             manager.start();nodes.start(interval=max(5.0,min(60.0,float(config.poll_seconds))),
                                       sync_provider=lambda node_id:build_node_bundles(node_id),
                                       desired_provider=lambda node_id:ensure_node_desired_state(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True),
                                       security_callback=apply_global_security)
+            bot_runtime=getattr(app.state,'telegram_runtime',None)
+            if bot_runtime:bot_runtime.start()
         yield
+        if bot_runtime:bot_runtime.close()
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.replacements=replacements
@@ -337,6 +341,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     from node_recovery import install_hub_recovery
     install_hub_recovery(app,nodes,owner,writable,manager.audit)
+
+    from telegram_commerce import install_telegram_commerce
+    install_telegram_commerce(app,store,auth,current,writable,manager.audit,manager)
 
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
