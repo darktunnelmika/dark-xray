@@ -4,9 +4,14 @@
 @media(max-width:760px){
   html,body,#app,.main,.content{max-width:100%;min-width:0}
   html,body{overflow-x:hidden}
-  body.mobile-nav-open{overflow:hidden;touch-action:none}
+  body.mobile-nav-open{overflow:hidden}
   .main{width:100%;overflow-x:clip}
-  .content{width:100%;padding-inline:max(12px,env(safe-area-inset-left));padding-bottom:max(22px,env(safe-area-inset-bottom))}
+  .content{
+    width:100%;
+    padding-inline-start:max(12px,env(safe-area-inset-left));
+    padding-inline-end:max(12px,env(safe-area-inset-right));
+    padding-bottom:max(22px,env(safe-area-inset-bottom))
+  }
   .sidebar{
     width:min(82vw,300px)!important;
     max-width:calc(100vw - 44px);
