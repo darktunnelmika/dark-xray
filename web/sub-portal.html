@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#020806">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>DARK XRAY | Subscription</title>
+<link rel="stylesheet" href="/assets/sub-portal.css">
+<script defer src="/assets/vendor-qr.js"></script>
+<script>window.__DARK_SUB__=__SUB_DATA__;</script>
+<script defer src="/assets/sub-portal.js"></script>
+</head>
+<body>
+<div class="gridfx" aria-hidden="true"></div><div class="scanline" aria-hidden="true"></div>
+<main class="shell">
+<header class="hero">
+<div class="brand"><span class="mark">X</span><div><b>DARK XRAY</b><small>SECURE SUBSCRIPTION PORTAL</small></div></div>
+<div class="status"><i></i><span id="serviceState">ONLINE</span></div>
+</header>
+<section class="identity card">
+<div><span class="eyebrow">IDENTITY</span><h1 id="profileTitle">DARK XRAY</h1><p id="clientId">—</p></div>
+<div class="shield">DX</div>
+</section>
+<section class="metrics">
+<article class="card metric"><span>USED TRAFFIC</span><strong id="usedTraffic">—</strong><small id="trafficHint">live subscription meter</small></article>
+<article class="card metric"><span>REMAINING</span><strong id="remainTraffic">—</strong><small id="quotaHint">service quota</small></article>
+<article class="card metric"><span>EXPIRY</span><strong id="expiry">—</strong><small id="expiryHint">service lifetime</small></article>
+</section>
+<section class="card quota"><div class="quota-head"><span>TRAFFIC CORE</span><b id="quotaPercent">0%</b></div><div class="rail"><i id="quotaBar"></i></div></section>
+<section class="card access">
+<div class="section-head"><div><span class="eyebrow">ACCESS NODE</span><h2>Subscription Link</h2></div><button class="ghost" id="copyBtn">COPY</button></div>
+<div class="linkbox"><code id="subUrl"></code></div>
+<div class="actions"><button class="primary" id="qrBtn">SHOW QR</button><a id="rawBtn" href="#">RAW</a><a id="clashBtn" href="#">CLASH</a><a id="jsonBtn" href="#">JSON</a></div>
+<div id="qrWrap" class="qr-wrap" hidden><div id="qr"></div><small>Scan only on a trusted device.</small></div>
+</section>
+<section class="card notice" id="announceWrap" hidden><span class="eyebrow">ANNOUNCEMENT</span><p id="announce"></p></section>
+<footer><span>DARK XRAY // ZERO-THIRD-PARTY PORTAL</span><span id="updateEvery">AUTO UPDATE</span></footer>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body></html>
