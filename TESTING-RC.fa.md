@@ -1,16 +1,18 @@
 # تست Snapshot فعلی DARK XRAY
 
-نسخهٔ سورس فعلی: **`0.9.0-rc7`**  
-Snapshot سبز برای تست VPS: **`88e9e5967c3577378f0cca03305b6d127f238176`**  
-CI روی `main`: **Run 761 — 8/8 Gate PASS**
+نسخهٔ سورس فعلی: **`0.9.0-rc7`**
+Stage 4 runtime head: **`94ae50548f105bea7e79b40a28f7f5ae3704056d`**
+Merged main baseline: **`37a640817fe64e8e5c066df7f691b624c6ed5707`**
+Tree هر دو: **`539d93abc8a6ce833f20d382797730bf3f09e47d`**
+Exact-head CI: **14/14 workflow PASS**
 
-> هنوز Tag به نام `v0.9.0-rc7` منتشر نشده است. برای اینکه تست VPS دقیقاً روی همان سورسی انجام شود که همهٔ Gateها را پاس کرده، فعلاً از Commit بالا استفاده کن. این Snapshot هنوز Stable/Production Ready اعلام نشده است.
+> Stage 5 exact-artifact rehearsal روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` PASS شده است: source/release checksum، build reproducible، disposable fresh install، successful update و automatic rollback. نسخه هنوز Stable نیست؛ provider fresh install، production certificate، enforcement boundaryهای باز و tag/GitHub Release نهایی باقی مانده‌اند.
 
-## نصب دقیق Snapshot تست‌شده
+## نصب دقیق baseline ادغام‌شده
 
 ```bash
-curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/88e9e5967c3577378f0cca03305b6d127f238176/install-online.sh -o /tmp/dark-xray-install.sh
-sudo DARK_XRAY_REF=88e9e5967c3577378f0cca03305b6d127f238176 bash /tmp/dark-xray-install.sh
+curl -fL --retry 3 https://raw.githubusercontent.com/darktunnelmika/dark-xray/37a640817fe64e8e5c066df7f691b624c6ed5707/install-online.sh -o /tmp/dark-xray-install.sh
+sudo DARK_XRAY_REF=37a640817fe64e8e5c066df7f691b624c6ed5707 bash /tmp/dark-xray-install.sh
 ```
 
 بعد از نصب:
@@ -21,32 +23,26 @@ sudo darkxray vps-verify
 sudo darkxray production-gate
 ```
 
-Gate خودکار Fresh Install همین مسیر را روی Ubuntu 24.04 یک‌بارمصرف اجرا می‌کند و نصب، Xray رسمی، systemd، Update Broker، readiness محلی، `vps-verify` و `production-gate` را پوشش می‌دهد. این evidence جای VPS/Provider واقعی مقصد را نمی‌گیرد.
+## Evidence واقعی Stage 4
 
-## تست reboot واقعی
+- `target_vps_gate_passed=true` بعد از reboot واقعی و boot-id جدید؛
+- source commit و config بعد reboot ثابت ماندند؛
+- HTTPS/HSTS و certificate verification PASS؛
+- دو Node واقعی healthy + failover-ready؛
+- Node انتخابی در همان run به‌ترتیب Ready → Down → Recovered مشاهده شد؛
+- source-IP واقعی و verified برای client آزمایشی روی Node ثبت شد؛
+- Let's Encrypt public staging HTTP-01 renewal rehearsal و deploy-hook restart PASS شد؛ certificate production جایگزین نشد؛
+- سه run مستقل 1000 Client / concurrency 12 همگی PASS؛ هر سه 100/100 PATCH داشتند؛
+- `bulk_adjust_500` در سه run به‌ترتیب 1.358s، 1.422s و 1.534s بود؛
+- SQLite در هر سه run `quick_check=ok` و WAL باقی ماند؛
+- failureهای تاریخی حذف یا با retry overwrite نشدند.
 
-```bash
-sudo reboot
-```
+## گیت‌های باز قبل از Stable
 
-بعد از اتصال مجدد:
+- Fresh install از exact ZIP/tar.gz/tag نهایی روی image/provider مقصد؛
+- issue و renewal واقعی production certificate روی DNS/provider نهایی؛
+- global multi-node enforcement کامل، مخصوصاً semantics نود آفلاین و packet-level enforcement host-local؛
+- capacity/SLA sizing فراتر از workload پذیرش Stage 4؛
+- انتشار tag/GitHub Release نهایی برای exact snapshot تأییدشده؛ هر source change نیازمند rehearsal مجدد است.
 
-```bash
-systemctl status dark-xray.service dark-xray-update.service --no-pager -l
-sudo darkxray vps-verify
-sudo darkxray production-gate
-```
-
-## چیزهایی که روی VPS هدف باید ثبت شوند
-
-- Fresh Install روی image/provider نهایی؛
-- ورود پنل، ساخت Inbound و Client و اتصال واقعی؛
-- Traffic Engine / Outbound / Routing با سناریوی واقعی همان سرور؛
-- reboot یا power-cycle و بازگشت Panel/Xray/SQLite؛
-- Domain/TLS واقعی، Secure Cookie/HSTS و renewal؛
-- IP Guard روی topology واقعی همان دیتاسنتر/تونل؛
-- Node دوم روی VPS مستقل، HTTPS معتبر، Traffic/Security Sync و Down → Recovery؛
-- Load/Capacity روی سخت‌افزار مقصد؛
-- Update/Rollback با exact artifact کاندید نهایی.
-
-اگر مرحله‌ای fail شد، log همان بخش را نگه دار؛ credential، password، token، private key و secret را ارسال نکن.
+اگر مرحله‌ای fail شد، log همان بخش را نگه دار؛ credential، password، token، private key و secret را منتشر نکن.

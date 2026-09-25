@@ -46,6 +46,7 @@ def test_security_center_aggregates_local_and_node_ip_device_state(env):
     assert doc['summary']['recent_violations']>=1
     assert doc['architecture']['local_enforcer']=='root-owned DARK nftables broker'
     assert doc['architecture']['global_remote_firewall_ban'] is False
+    assert set(doc['nodes'])>={'total','security_fresh','source_verified','guard_enforce','guard_ready','policy_pending','offline'}
     assert doc['bans'][0]['ip']=='9.9.9.9'
 
 
@@ -78,6 +79,8 @@ def test_security_center_frontend_uses_native_guard_and_hwid_controls():
     assert '/api/security-center' in ui
     assert 'Native nftables Guard' in ui
     assert 'global_ip_count' in ui and 'global_device_count' in ui
+    assert 'Authorization convergence' in ui and 'pending_nodes' in ui and 'offline_nodes' in ui
+    assert 'guard_ready' in ui and 'policy_pending' in ui
     assert "'limitHwid',c.limitHwid??0" in clients
     assert "limitHwid:Number(f.get('limitHwid')||0)" in clients
     assert 'کارگر Fail2ban' not in live

@@ -158,6 +158,11 @@ def test_node_install_contract_is_agent_only_and_hub_rebuildable():
     online=(root/'install-node.sh').read_text()
     agent=(root/'backend/node_agent.py').read_text()
     assert "needed_backend=['node_agent.py','node_runtime.py'" in provision
+    assert "'smart_routing.py','smart_warp_probe.py'" in provision
+    updater=(root/'tools/update_node.py').read_text()
+    inspector=(root/'backend/node_updated.py').read_text()
+    assert "'smart_routing.py','smart_warp_probe.py'" in updater
+    assert "'backend/smart_routing.py','backend/smart_warp_probe.py'" in inspector
     assert "copytree(ROOT/'web'" not in provision and "'server.py'" not in provision and "'auth.py'" not in provision
     assert 'dark-xray-node.service' in provision and 'dark-xray-node-guard.service' in provision and 'dark-xray-node-update.service' in provision
     assert 'DXN1.' in provision and 'PAIR CODE' in online

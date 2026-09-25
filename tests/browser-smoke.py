@@ -159,6 +159,71 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('legacy Access Control workspace is absent; representative management is unified')
             mark('Logs and Audit are absent from primary navigation')
 
+            # Mobile regression gate runs before deep data-plane scenarios so
+            # shell/layout failures are reported independently from later gates.
+            page.set_viewport_size({'width':390,'height':844})
+            mobile=page.locator('.mobile-menu')
+            mobile.wait_for(state='visible',timeout=10000)
+            assert mobile.get_attribute('aria-controls')=='dark-mobile-nav'
+            assert mobile.get_attribute('aria-expanded')=='false'
+            mobile.click()
+            page.wait_for_function("()=>document.querySelector('.sidebar')?.classList.contains('open')&&document.querySelector('.menu-backdrop')")
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.left>=-1&&r.right<=window.innerWidth+1}")
+            assert page.evaluate("document.body.classList.contains('mobile-nav-open')")
+            side_box=page.locator('.sidebar').bounding_box()
+            assert side_box and side_box['x']>=-1 and side_box['x']+side_box['width']<=page.evaluate('window.innerWidth')+1,side_box
+            assert mobile.get_attribute('aria-expanded')=='true'
+            page.keyboard.press('Escape')
+            page.wait_for_function("()=>!document.querySelector('.sidebar')?.classList.contains('open')&&!document.querySelector('.menu-backdrop')")
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.right<=1}")
+            assert not page.evaluate("document.body.classList.contains('mobile-nav-open')")
+            assert mobile.get_attribute('aria-expanded')=='false'
+            closed_box=page.locator('.sidebar').bounding_box()
+            assert closed_box and closed_box['x']+closed_box['width']<=1,closed_box
+
+            mobile.click()
+            page.locator('.nav-btn[data-page="clients"]').click()
+            page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='clients'&&!document.querySelector('.sidebar')?.classList.contains('open')")
+            assert page.locator('.menu-backdrop').count()==0
+            assert not page.evaluate("document.body.classList.contains('mobile-nav-open')")
+            mark('mobile menu opens inside viewport and closes on Escape or workspace navigation')
+
+            report['mobile_widths']={}
+            for name in pages:
+                page.evaluate("(p)=>go(p)",name)
+                page.wait_for_function("p=>document.querySelector('.nav-btn.active')?.dataset.page===p",arg=name,timeout=10000)
+                page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
+                page.wait_for_timeout(60)
+                dims=page.evaluate("()=>({scroll:document.documentElement.scrollWidth,inner:window.innerWidth})")
+                report['mobile_widths'][name]=dims
+                assert dims['scroll']<=dims['inner']+2,(name,dims)
+            mark('all primary owner workspaces stay within the 390px mobile document width')
+
+            page.set_viewport_size({'width':360,'height':740})
+            page.evaluate("go('dashboard')")
+            page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='dashboard'",timeout=10000)
+            page.wait_for_timeout(100)
+            narrow=page.evaluate("()=>({scroll:document.documentElement.scrollWidth,inner:window.innerWidth,topbar:document.querySelector('.topbar')?.getBoundingClientRect().width})")
+            assert narrow['scroll']<=narrow['inner']+2,narrow
+            assert narrow['topbar']<=narrow['inner']+1,narrow
+            narrow_side=page.locator('.sidebar').bounding_box()
+            assert narrow_side and narrow_side['x']+narrow_side['width']<=1,narrow_side
+            report['mobile_360']=narrow
+            mark('360px narrow mobile dashboard keeps shell, topbar and closed sidebar in bounds')
+            page.evaluate("document.documentElement.setAttribute('dir','rtl')")
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.left>=window.innerWidth-1}")
+            rtl_side=page.locator('.sidebar').bounding_box()
+            assert rtl_side and rtl_side['x']>=page.evaluate('window.innerWidth')-1,rtl_side
+            page.evaluate("document.documentElement.setAttribute('dir','ltr')")
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.right<=1}")
+            mark('closed mobile sidebar stays fully offscreen in RTL as well as LTR')
+            page.screenshot(path=str(OUT/'browser-mobile-en.png'),full_page=True)
+
+            page.set_viewport_size({'width':1440,'height':1000})
+            page.evaluate("go('dashboard')")
+            page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='dashboard'",timeout=10000)
+            page.wait_for_timeout(100)
+
             # Current Inbounds V3 editor -> real API -> real SQLite.
             visit(page,'inbounds')
             page.locator('[data-v3-action="new"]').click()

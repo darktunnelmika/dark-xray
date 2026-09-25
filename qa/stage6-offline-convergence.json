@@ -1,0 +1,130 @@
+{
+  "passed": true,
+  "email": "stage6offline",
+  "node_offline": "node-stage4-node-2-70a3ad",
+  "cleanup": true,
+  "created_email": "stage6offline",
+  "initial": {
+    "node-stage4-node-1-949db7": [
+      {
+        "sourceInboundId": 3,
+        "remoteInboundId": 3,
+        "clients": 2
+      }
+    ],
+    "node-stage4-node-2-70a3ad": [
+      {
+        "sourceInboundId": 3,
+        "remoteInboundId": 3,
+        "clients": 2
+      }
+    ]
+  },
+  "before_revisions": {
+    "node-stage4-node-1-949db7": 22,
+    "node-stage4-node-2-70a3ad": 24
+  },
+  "node1_sync": [
+    {
+      "sourceInboundId": 3,
+      "remoteInboundId": 3,
+      "clients": 2
+    }
+  ],
+  "node2_error": "PolicyError: Node connection failed: ConnectionRefusedError",
+  "pending": {
+    "global_ip_block": true,
+    "global_device_block": false,
+    "assigned_nodes": 2,
+    "authorization_converged": false,
+    "packet_guard_ready": true,
+    "pending_nodes": [
+      "node-stage4-node-2-70a3ad"
+    ],
+    "offline_nodes": [
+      "node-stage4-node-2-70a3ad"
+    ],
+    "items": [
+      {
+        "node_id": "node-stage4-node-1-949db7",
+        "name": "stage4-node-1",
+        "online": true,
+        "status": "converged",
+        "desired_revision": 22,
+        "applied_revision": 22,
+        "desired_matches_policy": true,
+        "authorization_applied": true,
+        "last_error": "",
+        "guard_mode": "enforce",
+        "guard_ready": true,
+        "guard_state": "applied",
+        "direct_source_verified": true
+      },
+      {
+        "node_id": "node-stage4-node-2-70a3ad",
+        "name": "stage4-node-2",
+        "online": false,
+        "status": "offline_pending",
+        "desired_revision": 24,
+        "applied_revision": 23,
+        "desired_matches_policy": true,
+        "authorization_applied": false,
+        "last_error": "",
+        "guard_mode": "enforce",
+        "guard_ready": true,
+        "guard_state": "applied",
+        "direct_source_verified": true
+      }
+    ],
+    "boundary": "authorization convergence only; nftables remains host-local"
+  },
+  "node2_sync": [
+    {
+      "sourceInboundId": 3,
+      "remoteInboundId": 3,
+      "clients": 2
+    }
+  ],
+  "settled": {
+    "global_ip_block": true,
+    "global_device_block": false,
+    "assigned_nodes": 2,
+    "authorization_converged": true,
+    "packet_guard_ready": true,
+    "pending_nodes": [],
+    "offline_nodes": [],
+    "items": [
+      {
+        "node_id": "node-stage4-node-1-949db7",
+        "name": "stage4-node-1",
+        "online": true,
+        "status": "converged",
+        "desired_revision": 22,
+        "applied_revision": 22,
+        "desired_matches_policy": true,
+        "authorization_applied": true,
+        "last_error": "",
+        "guard_mode": "enforce",
+        "guard_ready": true,
+        "guard_state": "applied",
+        "direct_source_verified": true
+      },
+      {
+        "node_id": "node-stage4-node-2-70a3ad",
+        "name": "stage4-node-2",
+        "online": true,
+        "status": "converged",
+        "desired_revision": 24,
+        "applied_revision": 24,
+        "desired_matches_policy": true,
+        "authorization_applied": true,
+        "last_error": "",
+        "guard_mode": "enforce",
+        "guard_ready": true,
+        "guard_state": "applied",
+        "direct_source_verified": true
+      }
+    ],
+    "boundary": "authorization convergence only; nftables remains host-local"
+  }
+}

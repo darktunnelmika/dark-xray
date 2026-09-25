@@ -36,6 +36,11 @@ from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT,NAME_RE
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
+from smart_routing import (DEFAULT_SAFETY_THRESHOLDS,STAGE7_SAFETY_TTL_SECONDS,SmartRoutingError,
+                           build_stage7_candidate_config,build_stage7_patch,build_stage7_plan,
+                           evaluate_stage7_node_readiness,evaluate_warp_safety,filter_stage7_routing_for_node,
+                           rank_warp_paths,stage7_state_hash)
+from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
@@ -186,6 +191,39 @@ class TrafficRoutePreview(Model):
     process:str=Field(default='',max_length=1024)
     vless_route:StrictInt=Field(default=0,ge=0,le=65535)
     attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
+class SmartRoutingPreview(Model):
+    warpAi:bool=True
+    adblock:bool=True
+    warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)
+    warpNodeIds:list[str]|None=Field(default=None,max_length=64)
+    adblockNodeIds:list[str]|None=Field(default=None,max_length=64)
+class SmartRoutingReview(SmartRoutingPreview):
+    baselineHash:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    candidateHash:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    confirmation:str=Field(min_length=1,max_length=64)
+class SmartRoutingRevisionAction(Model):
+    revisionId:str=Field(min_length=16,max_length=64,pattern=r'^[0-9a-f]+$')
+    confirmation:str=Field(min_length=1,max_length=64)
+class SmartRoutingSafetyCheck(Model):
+    revisionId:str=Field(min_length=16,max_length=64,pattern=r'^[0-9a-f]+$')
+    attempts:StrictInt=Field(default=3,ge=1,le=3)
+    timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
+    maxLossPercent:StrictInt=Field(default=int(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),ge=0,le=50)
+    maxLatencyMs:StrictInt=Field(default=int(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),ge=50,le=3000)
+    maxJitterMs:StrictInt=Field(default=int(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs']),ge=0,le=1500)
+class SmartRoutingRolloutStart(Model):
+    revisionId:str=Field(min_length=16,max_length=64,pattern=r'^[0-9a-f]+$')
+    confirmation:str=Field(min_length=1,max_length=64)
+    observationSeconds:StrictInt=Field(default=5,ge=1,le=30)
+class SmartRoutingRolloutAction(Model):
+    confirmation:str=Field(min_length=1,max_length=64)
+class SmartWarpRank(Model):
+    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
+class SmartWarpScan(Model):
+    outboundTags:list[str]=Field(min_length=1,max_length=8)
+    attempts:StrictInt=Field(default=3,ge=1,le=3)
+    timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
+
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
 class NodePair(Model):
@@ -231,10 +269,27 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     from node_replacement import NodeReplacement
     replacements=NodeReplacement(nodes)
     node_reset_lock=threading.RLock()
+    stage7_rollout_lock=threading.RLock();stage7_rollout_threads={}
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
     def apply_global_security(_node_id:str='',_result:dict|None=None):
         result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified))
-        if result.get('changed'):manager.tick(suppress=True)
+        changed=list(result.get('changed') or [])
+        if changed:
+            manager.tick(suppress=True)
+            # Persist the new policy into every affected Node desired state now.
+            # Delivery may still wait for an offline Node, but Hub state must never
+            # pretend the old global blocker is the current desired policy.
+            target_nodes=set()
+            for email in changed:target_nodes.update(nodes._assigned_node_ids(email))
+            refreshed=[];errors=[]
+            for node_id in sorted(target_nodes):
+                try:
+                    state=ensure_node_desired_state(node_id)
+                    refreshed.append({'node_id':node_id,'revision':state.get('revision',0),
+                                      'pending':bool(state.get('pending'))})
+                except (PolicyError,OSError,ValueError) as ex:
+                    errors.append({'node_id':node_id,'error':str(ex)[:300]})
+            result['desired_state_refresh']={'nodes':refreshed,'errors':errors}
         return result
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -244,6 +299,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                       desired_provider=lambda node_id:ensure_node_desired_state(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True),
                                       security_callback=apply_global_security)
+            with store.lock:pending_rollouts=[r[0] for r in store.db.execute(
+                "SELECT id FROM smart_routing_rollouts WHERE state='running' ORDER BY created_at").fetchall()]
+            for rollout_id in pending_rollouts:_stage7_start_worker(rollout_id)
         yield
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
@@ -834,6 +892,25 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if total>4*1024*1024:raise PolicyError('Managed Node TLS payload exceeds 4 MiB')
         return [files[k] for k in sorted(files)]
 
+    def stage7_node_roles()->dict:
+        with store.lock:rows=[dict(r) for r in store.db.execute(
+            'SELECT node_id,warp_ai,adblock FROM smart_routing_node_roles ORDER BY node_id').fetchall()]
+        return {'warpNodeIds':[r['node_id'] for r in rows if r['warp_ai']],
+                'adblockNodeIds':[r['node_id'] for r in rows if r['adblock']]}
+
+    def _stage7_rollout_override(node_id:str)->dict|None:
+        with store.lock:
+            row=store.db.execute('''SELECT n.state node_state,r.state rollout_state,r.revision_id,v.after_routing,
+                v.after_observatory,v.after_node_roles FROM smart_routing_rollout_nodes n
+                JOIN smart_routing_rollouts r ON r.id=n.rollout_id
+                JOIN smart_routing_revisions v ON v.id=r.revision_id
+                WHERE n.node_id=? AND r.state='running' ORDER BY r.created_at DESC LIMIT 1''',(node_id,)).fetchone()
+        if not row or row['node_state'] not in {'applying','verifying','healthy'}:return None
+        roles=json.loads(row['after_node_roles'] or '{}')
+        return {'routing':json.loads(row['after_routing']),'observatory':json.loads(row['after_observatory']),
+                'warp_ai':node_id in set(roles.get('warpNodeIds',[])),
+                'adblock':node_id in set(roles.get('adblockNodeIds',[]))}
+
     def build_node_desired_payload(node_id:str)->dict:
         bundles=build_node_bundles(node_id)
         managed_files=node_managed_files(bundles)
@@ -854,6 +931,22 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                              'globalIpBlocked':bool(row.get('global_ip_block')),
                              'globalDeviceBlocked':bool(row.get('global_device_block'))})
         sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
+        override=_stage7_rollout_override(node_id)
+        roles=stage7_node_roles();warp_nodes=set(roles['warpNodeIds']);adblock_nodes=set(roles['adblockNodeIds'])
+        if override:
+            sections['routing']=copy.deepcopy(override['routing'])
+            sections['observatory']=copy.deepcopy(override['observatory'])
+            warp_nodes={node_id} if override['warp_ai'] else set()
+            adblock_nodes={node_id} if override['adblock'] else set()
+        sections['routing']=filter_stage7_routing_for_node(
+            sections['routing'],warp_ai=node_id in warp_nodes,adblock=node_id in adblock_nodes)
+        # Local and Node packet-source trust are separate boundaries. A Central
+        # host behind Backhaul may have to remain Observe while direct-source
+        # Nodes enforce through their own root-owned broker. Never send the
+        # Central-only node_mode field to an Agent.
+        node_guard=copy.deepcopy(sections['ipguard'])
+        node_guard['mode']=node_guard.get('node_mode',node_guard.get('mode','observe'))
+        node_guard.pop('node_mode',None);sections['ipguard']=node_guard
         return {'schema':1,'nodeId':node_id,'desiredRunning':True,'sections':sections,
                 'assignments':bundles,'security':{'clients':policies},'files':managed_files}
 
@@ -1443,6 +1536,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         verified_nodes=sum(1 for n in node_rows if n.get('security',{}).get('source_verified') and
                            n.get('security',{}).get('last_sync') and now-float(n['security']['last_sync'])<180 and
                            not n['security'].get('last_error'))
+        node_guard_enforce=0;node_guard_ready=0;node_policy_pending=0;offline_nodes=0
+        for n in node_rows:
+            health=n.get('health') if isinstance(n.get('health'),dict) else {}
+            remote_guard=health.get('guard') if isinstance(health.get('guard'),dict) else {}
+            if remote_guard.get('requested_mode')=='enforce':node_guard_enforce+=1
+            if remote_guard.get('requested_mode')=='enforce' and remote_guard.get('state')=='applied' and remote_guard.get('applied') is True:
+                node_guard_ready+=1
+            if n.get('desired_state',{}).get('pending'):node_policy_pending+=1
+            if not n.get('online'):offline_nodes+=1
         guard=engine.ip_status()
         summary={'clients':len(client_rows),'ip_limited':sum(1 for x in client_rows if x['limit_ip']>0),
             'hwid_limited':sum(1 for x in client_rows if x['limit_hwid']>0),
@@ -1451,7 +1553,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'active_local_bans':len(active_bans),'recent_violations':sum(1 for x in events if x['kind']=='violation' and now-float(x['at'])<=window)}
         return {'source':'DARK Native Security Center','guard':guard,'settings':settings,'summary':summary,
             'clients':client_rows,'events':events,'bans':active_bans,
-            'nodes':{'total':len(node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes} if p.actor.role=='owner' else None,
+            'nodes':{'total':len(node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes,
+                     'guard_enforce':node_guard_enforce,'guard_ready':node_guard_ready,
+                     'policy_pending':node_policy_pending,'offline':offline_nodes} if p.actor.role=='owner' else None,
             'architecture':{'local_observer':'Xray access log source-IP observation',
                 'local_enforcer':'root-owned DARK nftables broker','local_firewall_scope':'this host data ports only',
                 'global_policy':'central Local + Node verified-source aggregation',
@@ -1664,6 +1768,526 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/traffic-engine/preview')
     def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
 
+    @app.get('/api/smart-routing/plan')
+    def smart_routing_plan(p:Principal=Depends(owner)):
+        plan=build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))
+        plan['nodeRoles']=stage7_node_roles()
+        return plan
+
+    def _stage7_material(body:SmartRoutingPreview):
+        outbounds=engine.section('outbounds');routing=engine.section('routing')
+        observatory=engine.section('observatory') or {};current_roles=stage7_node_roles()
+        node_rows=nodes.list();known_nodes={str(n.get('id')) for n in node_rows if n.get('id')}
+        def role_ids(raw,current,label):
+            values=current if raw is None else raw
+            clean=[]
+            for item in values:
+                node_id=str(item).strip()
+                if not node_id or node_id in clean:continue
+                if len(node_id)>128 or node_id not in known_nodes:
+                    raise HTTPException(400,'Unknown '+label+' Node: '+node_id)
+                clean.append(node_id)
+            return clean
+        after_roles={
+            'warpNodeIds':role_ids(body.warpNodeIds,current_roles.get('warpNodeIds',[]),'Smart WARP'),
+            'adblockNodeIds':role_ids(body.adblockNodeIds,current_roles.get('adblockNodeIds',[]),'Smart Adblock'),
+        }
+        if not body.warpAi:after_roles['warpNodeIds']=[]
+        if not body.adblock:after_roles['adblockNodeIds']=[]
+        try:
+            patch=build_stage7_patch(outbounds,routing,current_observatory=observatory,
+                                     warp_outbound_tags=body.warpOutboundTags,
+                                     enable_warp_ai=body.warpAi,enable_adblock=body.adblock)
+        except SmartRoutingError as ex:
+            raise HTTPException(400,str(ex))
+        if body.warpAi and not after_roles['warpNodeIds']:
+            patch.setdefault('warnings',[]).append('Smart WARP AI has no assigned Node role yet.')
+        if body.adblock and not after_roles['adblockNodeIds']:
+            patch.setdefault('warnings',[]).append('Smart Adblock has no assigned Node role yet.')
+        candidate=build_stage7_candidate_config(engine.build_config(),patch)
+        baseline_hash=stage7_state_hash(outbounds,routing,observatory,current_roles)
+        candidate_hash=stage7_state_hash(outbounds,patch['routing'],patch.get('observatory') or {},after_roles)
+        return outbounds,routing,observatory,current_roles,after_roles,patch,candidate,baseline_hash,candidate_hash
+
+    def _stage7_revision(revision_id:str)->dict:
+        with store.lock:row=store.db.execute('SELECT * FROM smart_routing_revisions WHERE id=?',(revision_id,)).fetchone()
+        if not row:raise HTTPException(404,'Smart Routing revision not found')
+        return dict(row)
+
+    def _stage7_public(row:dict)->dict:
+        request=json.loads(row['request_body']);roles=json.loads(row.get('after_node_roles') or '{}')
+        try:safety=json.loads(row.get('safety_report') or '{}')
+        except Exception:safety={}
+        checked=float(row.get('safety_checked_at') or 0);recorded=bool(row.get('safety_passed'))
+        fresh=bool(recorded and checked and time.time()-checked<=STAGE7_SAFETY_TTL_SECONDS
+                   and safety.get('candidateHash')==row['candidate_hash'])
+        return {'revisionId':row['id'],'actor':row['actor'],'createdAt':row['created_at'],
+                'baselineHash':row['baseline_hash'],'candidateHash':row['candidate_hash'],
+                'state':row['state'],'detail':row['detail'],'appliedAt':row['applied_at'],
+                'rolledBackAt':row['rolled_back_at'],'request':request,'nodeRoles':roles,
+                'safetyPassed':fresh,'safetyRecordedPassed':recorded,'safetyCheckedAt':checked,
+                'safetyExpiresAt':checked+STAGE7_SAFETY_TTL_SECONDS if checked else 0,
+                'safetyHash':row.get('safety_hash') or '','safetyReport':safety,
+                'rollbackAvailable':row['state']=='applied'}
+
+    def _stage7_write_sections(db,routing:dict,observatory:dict,node_roles:dict):
+        for name,value in (('routing',routing),('observatory',observatory)):
+            db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
+                       (name,json.dumps(value)))
+        db.execute('DELETE FROM smart_routing_node_roles')
+        warp=set(node_roles.get('warpNodeIds',[]));ads=set(node_roles.get('adblockNodeIds',[]));now=time.time()
+        for node_id in sorted(warp|ads):
+            db.execute('INSERT INTO smart_routing_node_roles(node_id,warp_ai,adblock,updated_at) VALUES(?,?,?,?)',
+                       (node_id,int(node_id in warp),int(node_id in ads),now))
+
+    def _stage7_rollout_public(rollout_id:str)->dict:
+        with store.lock:
+            row=store.db.execute('SELECT * FROM smart_routing_rollouts WHERE id=?',(rollout_id,)).fetchone()
+            items=[dict(x) for x in store.db.execute(
+                'SELECT * FROM smart_routing_rollout_nodes WHERE rollout_id=? ORDER BY ord,node_id',(rollout_id,)).fetchall()]
+        if not row:raise HTTPException(404,'Smart Routing rollout not found')
+        doc=dict(row);total=len(items);healthy=sum(1 for x in items if x['state'] in {'healthy','completed'})
+        doc.update({'rolloutId':doc.pop('id'),'revisionId':doc.pop('revision_id'),'currentIndex':doc.pop('current_index'),
+                    'observationSeconds':doc.pop('observation_seconds',5),'createdAt':doc.pop('created_at'),
+                    'startedAt':doc.pop('started_at'),'completedAt':doc.pop('completed_at'),
+                    'rolledBackAt':doc.pop('rolled_back_at'),'items':items,'totalNodes':total,'healthyNodes':healthy,
+                    'progressPercent':100 if doc['state']=='completed' else int(100*healthy/max(1,total+1))})
+        return doc
+
+    def _stage7_rollout_order(before_roles:dict,after_roles:dict)->list[tuple[str,str]]:
+        bw=[str(x) for x in before_roles.get('warpNodeIds',[])];ba=[str(x) for x in before_roles.get('adblockNodeIds',[])]
+        aw=[str(x) for x in after_roles.get('warpNodeIds',[])];aa=[str(x) for x in after_roles.get('adblockNodeIds',[])]
+        order=[];seen=set()
+        def add(node_id,role):
+            if node_id and node_id not in seen:order.append((node_id,role));seen.add(node_id)
+        if aw:add(aw[0],'canary-warp')
+        if aa:add(aa[0],'canary-adblock' if aa[0] not in seen else 'canary-warp+adblock')
+        for node_id in aw:add(node_id,'warp')
+        for node_id in aa:add(node_id,'adblock' if node_id not in set(aw) else 'warp+adblock')
+        for node_id in bw+ba:
+            if node_id not in set(aw+aa):add(node_id,'remove')
+        return order
+
+    def _stage7_rollout_mark(rollout_id:str,node_id:str,state_name:str,detail:str='',desired:dict|None=None):
+        now=time.time();revision=int((desired or {}).get('revision') or 0);digest=str((desired or {}).get('hash') or '')
+        with store.transaction() as db:
+            db.execute('''UPDATE smart_routing_rollout_nodes SET state=?,detail=?,desired_revision=?,desired_hash=?,
+                          verified_at=CASE WHEN ?='healthy' THEN ? ELSE verified_at END,updated_at=?
+                          WHERE rollout_id=? AND node_id=?''',
+                       (state_name,detail[:500],revision,digest,state_name,now,now,rollout_id,node_id))
+
+    def _stage7_verify_rollout_node(node_id:str,desired:dict)->dict:
+        probe=nodes.probe(node_id,timeout=8.0);state=nodes.desired_state(node_id,include_payload=False)
+        health=probe.get('health') if isinstance(probe.get('health'),dict) else {}
+        core=health.get('core') if isinstance(health.get('core'),dict) else {}
+        reasons=[]
+        if state.get('pending'):reasons.append('desired_state_pending')
+        if state.get('last_error'):reasons.append('desired_state_error')
+        if int(state.get('applied_revision') or 0)!=int(desired.get('revision') or 0):reasons.append('revision_not_applied')
+        if str(state.get('applied_hash') or '')!=str(desired.get('hash') or ''):reasons.append('hash_not_applied')
+        if core.get('state')!='running':reasons.append('core_not_running')
+        if core.get('dirty') is True:reasons.append('runtime_dirty')
+        if core.get('last_error'):reasons.append('core_error')
+        if reasons:raise PolicyError('Node verification failed: '+', '.join(reasons))
+        return {'latencyMs':probe.get('latency_ms',0),'appliedRevision':state.get('applied_revision'),
+                'appliedHash':state.get('applied_hash'),'coreState':core.get('state')}
+
+    def _stage7_rollback_rollout_nodes(rollout_id:str,reason:str)->bool:
+        with store.lock:rows=[dict(x) for x in store.db.execute(
+            "SELECT * FROM smart_routing_rollout_nodes WHERE rollout_id=? AND state IN ('applying','verifying','healthy','failed') ORDER BY ord DESC",
+            (rollout_id,)).fetchall()]
+        ok=True
+        for row in rows:
+            node_id=row['node_id'];_stage7_rollout_mark(rollout_id,node_id,'rolling_back',reason)
+            try:
+                desired=ensure_node_desired_state(node_id)
+                nodes.sync_desired_state(node_id,desired,legacy_bundles=build_node_bundles(node_id))
+                _stage7_verify_rollout_node(node_id,desired)
+                _stage7_rollout_mark(rollout_id,node_id,'rolled_back','baseline restored',desired)
+            except Exception as ex:
+                ok=False;_stage7_rollout_mark(rollout_id,node_id,'rollback_failed',str(ex))
+        with store.transaction() as db:
+            db.execute('UPDATE smart_routing_rollouts SET state=?,phase=?,detail=?,rolled_back_at=? WHERE id=?',
+                       ('rolled_back' if ok else 'failed','rollback',reason[:500],time.time(),rollout_id))
+        return ok
+
+    def _stage7_rollout_worker(rollout_id:str):
+        try:
+            with store.lock:
+                rollout=store.db.execute('SELECT * FROM smart_routing_rollouts WHERE id=?',(rollout_id,)).fetchone()
+                rows=[dict(x) for x in store.db.execute(
+                    'SELECT * FROM smart_routing_rollout_nodes WHERE rollout_id=? ORDER BY ord,node_id',(rollout_id,)).fetchall()]
+            if not rollout or rollout['state']!='running':return
+            revision=_stage7_revision(rollout['revision_id'])
+            request=json.loads(revision['request_body']);after_roles=json.loads(revision.get('after_node_roles') or '{}')
+            warp_nodes=set(after_roles.get('warpNodeIds',[]));warp_tags=[str(x) for x in request.get('warpOutboundTags',[]) if str(x)]
+            try:safety_report=json.loads(revision.get('safety_report') or '{}')
+            except Exception:safety_report={}
+            thresholds=(safety_report.get('warpSafety') or {}).get('thresholds') or DEFAULT_SAFETY_THRESHOLDS
+            for index,row in enumerate(rows):
+                if row['state'] in {'healthy','completed'}:continue
+                node_id=row['node_id']
+                with store.transaction() as db:
+                    db.execute('UPDATE smart_routing_rollouts SET current_index=?,phase=?,detail=? WHERE id=?',
+                               (index,'canary' if str(row['role']).startswith('canary') else 'batch','Applying '+node_id,rollout_id))
+                _stage7_rollout_mark(rollout_id,node_id,'applying','candidate desired state')
+                try:
+                    nodes.probe(node_id,timeout=8.0)
+                    desired=ensure_node_desired_state(node_id)
+                    nodes.sync_desired_state(node_id,desired,legacy_bundles=build_node_bundles(node_id))
+                    _stage7_rollout_mark(rollout_id,node_id,'verifying','candidate delivered',desired)
+                    check=_stage7_verify_rollout_node(node_id,desired)
+                    observation=max(1.0,min(30.0,float(rollout['observation_seconds'] or 5)))
+                    deadline=time.monotonic()+observation;check2=check
+                    while True:
+                        remaining=deadline-time.monotonic()
+                        if remaining<=0:break
+                        time.sleep(min(1.0,remaining))
+                        check2=_stage7_verify_rollout_node(node_id,desired)
+                    warp_note=''
+                    if node_id in warp_nodes and warp_tags:
+                        remote=nodes.smart_warp_probe(node_id,warp_tags,attempts=2,timeout_seconds=5)
+                        gate=evaluate_warp_safety(remote.get('items',[]),warp_tags,
+                            max_loss_percent=float(thresholds.get('maxLossPercent',20)),
+                            max_latency_ms=float(thresholds.get('maxLatencyMs',1200)),
+                            max_jitter_ms=float(thresholds.get('maxJitterMs',350)))
+                        if not gate['passed']:raise PolicyError('Post-apply WARP verification failed: '+'; '.join(gate['issues']))
+                        warp_note='; WARP verified'
+                    _stage7_rollout_mark(rollout_id,node_id,'healthy',
+                        'observed '+str(int(observation))+'s; '+str(check2.get('latencyMs',0))+'ms'+warp_note,desired)
+                except Exception as ex:
+                    _stage7_rollout_mark(rollout_id,node_id,'failed',str(ex))
+                    _stage7_rollback_rollout_nodes(rollout_id,'Node '+node_id+' failed: '+str(ex))
+                    return
+            with store.transaction() as db:
+                db.execute("UPDATE smart_routing_rollouts SET phase='hub',detail='All Nodes healthy; applying Hub last' WHERE id=?",(rollout_id,))
+            outbounds=engine.section('outbounds')
+            current=stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())
+            if current!=revision['baseline_hash']:
+                _stage7_rollback_rollout_nodes(rollout_id,'Hub baseline changed before final apply');return
+            after_routing=json.loads(revision['after_routing']);after_observatory=json.loads(revision['after_observatory'])
+            after_roles=json.loads(revision.get('after_node_roles') or '{}')
+            candidate=build_stage7_candidate_config(engine.build_config(),
+                {'outbounds':outbounds,'routing':after_routing,'observatory':after_observatory})
+            engine.validate(candidate)
+            def commit():
+                with store.transaction() as db:
+                    _stage7_write_sections(db,after_routing,after_observatory,after_roles)
+                    db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,applied_at=? WHERE id=? AND state=?',
+                               ('applied','Staged rollout completed; Hub applied last',time.time(),revision['id'],'reviewed'))
+                    db.execute("UPDATE smart_routing_rollout_nodes SET state='completed',updated_at=? WHERE rollout_id=? AND state='healthy'",
+                               (time.time(),rollout_id))
+                    db.execute("UPDATE smart_routing_rollouts SET state='completed',phase='complete',detail=?,completed_at=? WHERE id=?",
+                               ('Canary and batch verified; Hub applied last',time.time(),rollout_id))
+            engine.apply_config(candidate,force=True,after_success=commit)
+            try:manager.audit(Actor(rollout['actor'],'owner',{}),rollout['actor'],'smart.routing.rollout.complete',rollout_id,
+                              'all nodes verified; hub applied last')
+            except Exception:pass
+        except Exception as ex:
+            try:_stage7_rollback_rollout_nodes(rollout_id,'Rollout worker failed: '+str(ex))
+            except Exception:
+                with store.transaction() as db:
+                    db.execute("UPDATE smart_routing_rollouts SET state='failed',phase='rollback',detail=? WHERE id=?",
+                               (str(ex)[:500],rollout_id))
+        finally:
+            with stage7_rollout_lock:stage7_rollout_threads.pop(rollout_id,None)
+
+    def _stage7_start_worker(rollout_id:str):
+        with stage7_rollout_lock:
+            current=stage7_rollout_threads.get(rollout_id)
+            if current and current.is_alive():return False
+            thread=threading.Thread(target=_stage7_rollout_worker,args=(rollout_id,),
+                                    name='stage7-rollout-'+rollout_id[:8],daemon=True)
+            stage7_rollout_threads[rollout_id]=thread;thread.start();return True
+
+    @app.post('/api/smart-routing/preview')
+    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+        _o,_r,_obs,_before_roles,after_roles,patch,_candidate,baseline_hash,candidate_hash=_stage7_material(body)
+        return {k:v for k,v in patch.items() if k!='outbounds'}|{
+            'baselineHash':baseline_hash,'candidateHash':candidate_hash,'nodeRoles':after_roles}
+
+    @app.post('/api/smart-routing/validate')
+    def smart_routing_validate(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+        _o,_r,_obs,_before_roles,after_roles,patch,candidate,baseline_hash,candidate_hash=_stage7_material(body)
+        validated=engine.validate(candidate)
+        manager.audit(p.actor,p.actor.id,'smart.routing.validate',candidate_hash[:16],
+                      'candidate validated only; production traffic unchanged')
+        return {'validated':True,'baselineHash':baseline_hash,'candidateHash':candidate_hash,
+                'candidateConfigHash':validated['hash'],'warnings':patch.get('warnings',[]),'nodeRoles':after_roles,
+                'runtimeMutation':False,'saveMutation':False,'rollbackPrepared':False}
+
+    @app.post('/api/smart-routing/review')
+    def smart_routing_review(body:SmartRoutingReview,p:Principal=Depends(owner)):
+        writable()
+        _o,routing,observatory,before_roles,after_roles,patch,candidate,baseline_hash,candidate_hash=_stage7_material(body)
+        if body.confirmation!='REVIEW SMART ROUTING':raise HTTPException(400,'Review confirmation text is invalid')
+        if body.baselineHash!=baseline_hash:raise HTTPException(409,'Smart Routing baseline changed; validate again')
+        if body.candidateHash!=candidate_hash:raise HTTPException(409,'Smart Routing candidate changed; validate again')
+        engine.validate(candidate)
+        revision_id=secrets.token_hex(16);now=time.time()
+        request={'warpAi':body.warpAi,'adblock':body.adblock,'warpOutboundTags':body.warpOutboundTags,
+                 'warpNodeIds':after_roles['warpNodeIds'],'adblockNodeIds':after_roles['adblockNodeIds']}
+        with store.transaction() as db:
+            db.execute('''INSERT INTO smart_routing_revisions(
+                id,actor,created_at,baseline_hash,candidate_hash,before_routing,before_observatory,
+                after_routing,after_observatory,before_node_roles,after_node_roles,request_body,state,detail)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (revision_id,p.actor.id,now,baseline_hash,candidate_hash,json.dumps(routing),json.dumps(observatory),
+                 json.dumps(patch['routing']),json.dumps(patch.get('observatory') or {}),json.dumps(before_roles),
+                 json.dumps(after_roles),json.dumps(request),'reviewed',
+                 'Validated and reviewed; no settings or runtime mutation'))
+        manager.audit(p.actor,p.actor.id,'smart.routing.review',revision_id,'rollback snapshot prepared; not applied')
+        return _stage7_public(_stage7_revision(revision_id))|{'runtimeMutation':False,'saveMutation':False}
+
+    @app.get('/api/smart-routing/revisions')
+    def smart_routing_revisions(p:Principal=Depends(owner)):
+        with store.lock:rows=[dict(x) for x in store.db.execute(
+            'SELECT * FROM smart_routing_revisions ORDER BY created_at DESC LIMIT 30').fetchall()]
+        return {'items':[_stage7_public(x) for x in rows]}
+
+    @app.get('/api/smart-routing/rollouts')
+    def smart_routing_rollouts(p:Principal=Depends(owner)):
+        with store.lock:ids=[r[0] for r in store.db.execute(
+            'SELECT id FROM smart_routing_rollouts ORDER BY created_at DESC LIMIT 20').fetchall()]
+        return {'items':[_stage7_rollout_public(x) for x in ids]}
+
+    @app.get('/api/smart-routing/rollout/{rollout_id}')
+    def smart_routing_rollout_get(rollout_id:str,p:Principal=Depends(owner)):
+        return _stage7_rollout_public(rollout_id)
+
+    @app.post('/api/smart-routing/rollout/start',status_code=202)
+    def smart_routing_rollout_start(body:SmartRoutingRolloutStart,p:Principal=Depends(owner)):
+        writable()
+        if body.confirmation!='START STAGED ROLLOUT':raise HTTPException(400,'Staged rollout confirmation text is invalid')
+        revision=_stage7_revision(body.revisionId)
+        if revision['state']!='reviewed':raise HTTPException(409,'Only a reviewed Smart Routing revision can start rollout')
+        public=_stage7_public(revision)
+        if not public['safetyPassed']:raise HTTPException(409,'Fresh Safety PASS is required before staged rollout')
+        outbounds=engine.section('outbounds')
+        if stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())!=revision['baseline_hash']:
+            raise HTTPException(409,'Smart Routing baseline changed after Safety Gate; create a new review')
+        before_roles=json.loads(revision.get('before_node_roles') or '{}');after_roles=json.loads(revision.get('after_node_roles') or '{}')
+        order=_stage7_rollout_order(before_roles,after_roles);target_ids=[x[0] for x in order]
+        readiness=evaluate_stage7_node_readiness(nodes.list(),warp_node_ids=target_ids,adblock_node_ids=[])
+        if not readiness['passed']:
+            raise HTTPException(409,'Staged rollout target is not ready: '+'; '.join(readiness['issues'])[:600])
+        with store.lock:active=store.db.execute("SELECT id FROM smart_routing_rollouts WHERE state='running' LIMIT 1").fetchone()
+        if active:raise HTTPException(409,'Another Smart Routing rollout is already running')
+        rollout_id=secrets.token_hex(16);now=time.time()
+        with store.transaction() as db:
+            db.execute('''INSERT INTO smart_routing_rollouts(id,revision_id,actor,created_at,state,phase,current_index,
+                          observation_seconds,detail,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                       (rollout_id,revision['id'],p.actor.id,now,'running','canary',0,body.observationSeconds,
+                        'Canary rollout starting',now))
+            for idx,(node_id,role) in enumerate(order):
+                db.execute('''INSERT INTO smart_routing_rollout_nodes(rollout_id,node_id,ord,role,state,updated_at)
+                              VALUES(?,?,?,?,?,?)''',(rollout_id,node_id,idx,role,'pending',now))
+        _stage7_start_worker(rollout_id)
+        manager.audit(p.actor,p.actor.id,'smart.routing.rollout.start',rollout_id,
+                      'nodes='+str(len(order))+'; hub last')
+        return _stage7_rollout_public(rollout_id)
+
+    @app.post('/api/smart-routing/rollout/{rollout_id}/resume',status_code=202)
+    def smart_routing_rollout_resume(rollout_id:str,body:SmartRoutingRolloutAction,p:Principal=Depends(owner)):
+        writable()
+        if body.confirmation!='RESUME STAGED ROLLOUT':raise HTTPException(400,'Resume confirmation text is invalid')
+        doc=_stage7_rollout_public(rollout_id)
+        if doc['state']!='running':raise HTTPException(409,'Only a running rollout can be resumed')
+        _stage7_start_worker(rollout_id);return _stage7_rollout_public(rollout_id)
+
+    @app.post('/api/smart-routing/safety-check')
+    def smart_routing_safety_check(body:SmartRoutingSafetyCheck,p:Principal=Depends(owner)):
+        writable();row=_stage7_revision(body.revisionId)
+        if row['state']!='reviewed':raise HTTPException(409,'Safety Gate requires a reviewed Smart Routing revision')
+        request=json.loads(row['request_body']);roles=json.loads(row.get('after_node_roles') or '{}')
+        outbounds=engine.section('outbounds');routing=engine.section('routing');observatory=engine.section('observatory') or {}
+        current_hash=stage7_state_hash(outbounds,routing,observatory,stage7_node_roles())
+        if current_hash!=row['baseline_hash']:
+            raise HTTPException(409,'Smart Routing baseline changed; create a new review before Safety Gate')
+        issues=[];observations=[];ranked=[]
+        if request.get('warpAi') and not roles.get('warpNodeIds'):
+            issues.append('Smart WARP AI requires at least one assigned Node')
+        if request.get('adblock') and not roles.get('adblockNodeIds'):
+            issues.append('Smart Adblock requires at least one assigned Node')
+        by_tag={str(o.get('tag','')):o for o in outbounds if isinstance(o,dict)}
+        if request.get('adblock'):
+            block=by_tag.get('block')
+            if not block or str(block.get('protocol','')).lower()!='blackhole':
+                issues.append("Smart Adblock requires blackhole outbound 'block'")
+        warp_gate={'passed':True,'items':[],'issues':[],'thresholds':{
+            'maxLossPercent':body.maxLossPercent,'maxLatencyMs':body.maxLatencyMs,'maxJitterMs':body.maxJitterMs}}
+        warp_tags=[str(x) for x in request.get('warpOutboundTags',[]) if str(x)]
+        if request.get('warpAi'):
+            selected=[]
+            for tag in warp_tags:
+                outbound=by_tag.get(tag)
+                if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
+                    issues.append('Smart WARP path unavailable or not WireGuard: '+tag);continue
+                selected.append(outbound)
+            if not selected:
+                issues.append('Smart WARP AI requires at least one valid WireGuard path')
+            else:
+                try:
+                    observations=scan_warp_outbounds(engine._binary(),config.xray_assets,selected,
+                        attempts=body.attempts,timeout=float(body.timeoutSeconds))
+                except SmartWarpProbeError as ex:
+                    observations=[];issues.append('WARP probe failed: '+str(ex))
+                ranked=rank_warp_paths(observations,max_results=len(selected)) if observations else []
+                warp_gate=evaluate_warp_safety(ranked,[str(x.get('tag')) for x in selected],
+                    max_loss_percent=body.maxLossPercent,max_latency_ms=body.maxLatencyMs,
+                    max_jitter_ms=body.maxJitterMs)
+                issues.extend(warp_gate['issues'])
+        node_gate=evaluate_stage7_node_readiness(nodes.list(),
+            warp_node_ids=roles.get('warpNodeIds',[]) if request.get('warpAi') else [],
+            adblock_node_ids=roles.get('adblockNodeIds',[]) if request.get('adblock') else [])
+        issues.extend(node_gate['issues'])
+        latest_hash=stage7_state_hash(engine.section('outbounds'),engine.section('routing'),
+            engine.section('observatory') or {},stage7_node_roles())
+        if latest_hash!=row['baseline_hash']:
+            raise HTTPException(409,'Smart Routing baseline changed during Safety Gate; run review again')
+        checked=time.time();passed=not issues
+        report={'safetyPassed':passed,'candidateHash':row['candidate_hash'],'checkedAt':checked,
+                'expiresAt':checked+STAGE7_SAFETY_TTL_SECONDS,'ttlSeconds':STAGE7_SAFETY_TTL_SECONDS,
+                'nodeReadiness':node_gate,'warpSafety':warp_gate,'observations':observations,
+                'issues':issues,'productionTrafficMutation':False,'applyMutation':False}
+        raw=json.dumps(report,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+        safety_hash=hashlib.sha256(raw.encode()).hexdigest()
+        with store.transaction() as db:
+            live=db.execute('SELECT state,candidate_hash FROM smart_routing_revisions WHERE id=?',(body.revisionId,)).fetchone()
+            if not live or live['state']!='reviewed' or live['candidate_hash']!=row['candidate_hash']:
+                raise CoreError('Smart Routing revision changed during Safety Gate',status=409)
+            db.execute('UPDATE smart_routing_revisions SET safety_report=?,safety_hash=?,safety_checked_at=?,safety_passed=? WHERE id=?',
+                       (raw,safety_hash,checked,int(passed),body.revisionId))
+        manager.audit(p.actor,p.actor.id,'smart.routing.safety',body.revisionId,
+                      'PASS' if passed else 'BLOCKED: '+('; '.join(issues)[:500]))
+        return _stage7_public(_stage7_revision(body.revisionId))
+
+    @app.post('/api/smart-routing/activate')
+    def smart_routing_activate(body:SmartRoutingRevisionAction,p:Principal=Depends(owner)):
+        writable()
+        if body.confirmation!='APPLY SMART ROUTING':raise HTTPException(400,'Apply confirmation text is invalid')
+        row=_stage7_revision(body.revisionId)
+        if row['state']!='reviewed':raise HTTPException(409,'Only a reviewed Smart Routing revision can be applied')
+        before_routing=json.loads(row['before_routing']);before_observatory=json.loads(row['before_observatory'])
+        after_routing=json.loads(row['after_routing']);after_observatory=json.loads(row['after_observatory'])
+        before_roles=json.loads(row.get('before_node_roles') or '{}');after_roles=json.loads(row.get('after_node_roles') or '{}')
+        if set(before_roles.get('warpNodeIds',[])+before_roles.get('adblockNodeIds',[])+after_roles.get('warpNodeIds',[])+after_roles.get('adblockNodeIds',[])):
+            raise HTTPException(409,'Node-targeted Smart Routing must use staged rollout; direct apply is disabled')
+        outbounds=engine.section('outbounds')
+        if stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())!=row['baseline_hash']:
+            raise HTTPException(409,'Smart Routing baseline changed after review; create a new review')
+        safety=_stage7_public(row)
+        if not safety['safetyPassed']:
+            raise HTTPException(409,'Smart Routing Safety Gate is missing, blocked, or expired; run Safety Gate again')
+        request=json.loads(row['request_body'])
+        if request.get('warpAi') and not after_roles.get('warpNodeIds'):
+            raise HTTPException(409,'Smart WARP AI has no assigned Node; Safety Gate refused apply')
+        if request.get('adblock') and not after_roles.get('adblockNodeIds'):
+            raise HTTPException(409,'Smart Adblock has no assigned Node; Safety Gate refused apply')
+        live_nodes=evaluate_stage7_node_readiness(nodes.list(),
+            warp_node_ids=after_roles.get('warpNodeIds',[]) if request.get('warpAi') else [],
+            adblock_node_ids=after_roles.get('adblockNodeIds',[]) if request.get('adblock') else [])
+        if not live_nodes['passed']:
+            raise HTTPException(409,'Smart Routing Node readiness changed after Safety Gate: '+'; '.join(live_nodes['issues'])[:600])
+        patch={'outbounds':outbounds,'routing':after_routing,'observatory':after_observatory}
+        candidate=build_stage7_candidate_config(engine.build_config(),patch)
+        engine.validate(candidate)
+        def commit():
+            with store.transaction() as db:
+                current=stage7_state_hash(engine.section('outbounds'),engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())
+                live=db.execute('SELECT state FROM smart_routing_revisions WHERE id=?',(body.revisionId,)).fetchone()
+                if not live or live['state']!='reviewed' or current!=row['baseline_hash']:
+                    raise CoreError('Smart Routing review became stale during apply',status=409)
+                _stage7_write_sections(db,after_routing,after_observatory,after_roles)
+                db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,applied_at=? WHERE id=?',
+                           ('applied','Runtime accepted candidate and reviewed settings committed',time.time(),body.revisionId))
+        runtime=engine.apply_config(candidate,force=True,after_success=commit)
+        desired=[]
+        for node in nodes.list():
+            node_id=str(node.get('id') or '')
+            if not node_id:continue
+            try:
+                state=ensure_node_desired_state(node_id);desired.append({'nodeId':node_id,'pending':bool(state.get('pending'))})
+            except (PolicyError,OSError,ValueError) as ex:
+                desired.append({'nodeId':node_id,'pending':True,'error':str(ex)[:200]})
+        manager.audit(p.actor,p.actor.id,'smart.routing.apply',body.revisionId,'reviewed candidate applied with rollback snapshot')
+        return _stage7_public(_stage7_revision(body.revisionId))|{'runtime':runtime,'applied':True,'nodeDesired':desired}
+
+    @app.post('/api/smart-routing/rollback')
+    def smart_routing_rollback(body:SmartRoutingRevisionAction,p:Principal=Depends(owner)):
+        writable();row=_stage7_revision(body.revisionId)
+        if body.confirmation!='ROLLBACK SMART ROUTING':raise HTTPException(400,'Rollback confirmation text is invalid')
+        if row['state']=='reviewed':
+            with store.transaction() as db:
+                db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,rolled_back_at=? WHERE id=? AND state=?',
+                           ('discarded','Reviewed revision discarded before apply',time.time(),body.revisionId,'reviewed'))
+            manager.audit(p.actor,p.actor.id,'smart.routing.discard',body.revisionId,'reviewed change discarded; runtime unchanged')
+            return _stage7_public(_stage7_revision(body.revisionId))|{'runtimeMutation':False}
+        if row['state']!='applied':raise HTTPException(409,'Only an applied or reviewed Smart Routing revision can be rolled back')
+        before_routing=json.loads(row['before_routing']);before_observatory=json.loads(row['before_observatory'])
+        before_roles=json.loads(row.get('before_node_roles') or '{}')
+        outbounds=engine.section('outbounds')
+        current_hash=stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())
+        if current_hash!=row['candidate_hash']:raise HTTPException(409,'Routing or Node roles changed after this revision; automatic rollback refused')
+        previous=build_stage7_candidate_config(engine.build_config(),
+            {'outbounds':outbounds,'routing':before_routing,'observatory':before_observatory})
+        engine.validate(previous)
+        def commit():
+            with store.transaction() as db:
+                current=stage7_state_hash(engine.section('outbounds'),engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())
+                live=db.execute('SELECT state FROM smart_routing_revisions WHERE id=?',(body.revisionId,)).fetchone()
+                if not live or live['state']!='applied' or current!=row['candidate_hash']:
+                    raise CoreError('Smart Routing revision changed during rollback',status=409)
+                _stage7_write_sections(db,before_routing,before_observatory,before_roles)
+                db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,rolled_back_at=? WHERE id=?',
+                           ('rolled_back','Previous routing, Observatory and Node roles restored after runtime validation',time.time(),body.revisionId))
+        runtime=engine.apply_config(previous,force=True,after_success=commit)
+        desired=[]
+        for node in nodes.list():
+            node_id=str(node.get('id') or '')
+            if not node_id:continue
+            try:
+                state=ensure_node_desired_state(node_id);desired.append({'nodeId':node_id,'pending':bool(state.get('pending'))})
+            except (PolicyError,OSError,ValueError) as ex:
+                desired.append({'nodeId':node_id,'pending':True,'error':str(ex)[:200]})
+        manager.audit(p.actor,p.actor.id,'smart.routing.rollback',body.revisionId,'previous reviewed snapshot restored')
+        return _stage7_public(_stage7_revision(body.revisionId))|{'runtime':runtime,'rolledBack':True,'nodeDesired':desired}
+
+    @app.post('/api/smart-routing/warp-rank')
+    def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):
+        return {'items':rank_warp_paths(body.observations),'previewOnly':True}
+
+    @app.post('/api/smart-routing/warp-scan')
+    def smart_routing_warp_scan(body:SmartWarpScan,p:Principal=Depends(owner)):
+        outbounds=engine.section('outbounds')
+        by_tag={str(o.get('tag','')):o for o in outbounds if isinstance(o,dict)}
+        tags=[]
+        for raw in body.outboundTags:
+            tag=str(raw).strip()
+            if not tag or tag in tags:continue
+            if tag not in by_tag:raise HTTPException(400,'Unknown WARP outbound tag: '+tag)
+            if str(by_tag[tag].get('protocol','')).lower()!='wireguard':
+                raise HTTPException(400,'WARP scan requires WireGuard outbound: '+tag)
+            tags.append(tag)
+        if not tags:raise HTTPException(400,'Select at least one WARP outbound')
+        try:
+            observations=scan_warp_outbounds(engine._binary(),config.xray_assets,
+                [by_tag[tag] for tag in tags],attempts=body.attempts,timeout=float(body.timeoutSeconds))
+        except SmartWarpProbeError as ex:
+            raise HTTPException(400,str(ex))
+        ranked=rank_warp_paths(observations,max_results=len(tags))
+        meta={x.get('tag'):x for x in build_stage7_plan([],outbounds,{}).get('warpCandidates',[])
+              if isinstance(x,dict) and x.get('tag')}
+        for row in ranked:
+            info=meta.get(row.get('tag'),{})
+            row['node']=info.get('node') or row.get('tag') or '—'
+            row['region']=info.get('region') or '—'
+        manager.audit(p.actor,p.actor.id,'smart.warp.scan',str(len(tags)),
+                      'isolated temporary Xray probes; production traffic unchanged')
+        return {'items':ranked,'observations':observations,'previewOnly':True,
+                'productionTrafficMutation':False,'selectedTags':tags,
+                'scanMode':'isolated-temporary-xray'}
+
     @app.get('/api/security-center')
     def security_center(p:Principal=Depends(current)):return security_center_payload(p)
 
@@ -1673,7 +2297,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'limit_unit':'recent distinct verified source IPs',
             'global_multi_node_limit':False,
             'global_account_policy':True,
-            'global_policy_note':'Central can block a client from verified Local + Node observations; nftables bans remain local to the host where they are applied.',
+            'global_policy_note':'Central can block a client from verified Local + remote Node observations; nftables bans remain local to the host where they are applied.',
             'packet_test_performed_here':False}
     def sync_status_doc(p:Principal):
         now=time.time()

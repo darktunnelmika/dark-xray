@@ -37,6 +37,8 @@ def _status(state:str,phase:str,percent:int,message:str,**extra):
     current.update({'state':state,'phase':phase,'percent':max(0,min(100,int(percent))),'message':message,
                     'job_id':JOB_ID or current.get('job_id',''),'updated_at':time.time()})
     current.update(extra)
+    if state in {'success','rolled_back'}:
+        current.pop('error',None)
     STATUS_FILE.parent.mkdir(parents=True,exist_ok=True)
     tmp=STATUS_FILE.with_name('.'+STATUS_FILE.name+'.tmp-'+uuid.uuid4().hex)
     tmp.write_text(json.dumps(current,ensure_ascii=False,indent=2)+'\n',encoding='utf-8');os.chmod(tmp,0o640)
@@ -315,6 +317,34 @@ def activate():
     require_live_panel(12.0)
 
 
+def _service_state()->str:
+    cp=subprocess.run(['systemctl','is-active','dark-xray.service'],capture_output=True,text=True,check=False)
+    return (cp.stdout or '').strip() or 'unknown'
+
+
+def _force_start_panel():
+    quiet(['systemctl','kill','--kill-who=all','dark-xray.service'])
+    quiet(['systemctl','stop','--no-block','dark-xray.service'])
+    quiet(['systemctl','reset-failed','dark-xray.service'])
+    quiet(['systemctl','start','--no-block','dark-xray.service'])
+
+
+def reactivate_previous_panel(timeout:float=120.0):
+    last='rollback reactivation not checked'
+    _force_start_panel()
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        try:
+            require_live_panel(4.0)
+            return
+        except Exception as ex:
+            last=type(ex).__name__+': '+str(ex)[:220]
+        if _service_state() not in {'active','activating'}:
+            _force_start_panel()
+        time.sleep(.75)
+    raise RuntimeError('Rollback panel reactivation failed after retries: '+last)
+
+
 def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
     _status('rolling_back','rollback',88,'Activation failed; restoring previous DARK XRAY source and database')
     print('Update activation failed; restoring previous DARK XRAY source + database...',file=sys.stderr)
@@ -328,7 +358,7 @@ def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
             tf.extractall(APP,filter='data')
         normalize_source_permissions(APP)
         restore_database(db_backup)
-        install_runtime_files();activate()
+        install_runtime_files();reactivate_previous_panel()
         if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
         _status('rolled_back','rollback',100,'Update failed; previous DARK XRAY source and database were restored successfully',finished_at=time.time(),rollback_ok=True)
         print('Previous DARK XRAY source and database restored; panel route is healthy.',file=sys.stderr);return True

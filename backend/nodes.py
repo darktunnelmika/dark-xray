@@ -869,7 +869,61 @@ class NodeRegistry:
         for row in remote_devices:
             row['device_id']='node:'+row['node_id']+':'+row.pop('digest')[:16]
         return {**item,'local_ips':local_ips,'remote_ips':remote_ips,
-                'local_devices':local_devices,'remote_devices':remote_devices}
+                'local_devices':local_devices,'remote_devices':remote_devices,
+                'convergence':self.policy_convergence(client_id)}
+
+    def policy_convergence(self,client_id:str)->dict:
+        """Report whether each assigned Node applied the current client policy.
+
+        This is authorization convergence, not a distributed-firewall claim.
+        A Node can be offline with a newer desired policy safely persisted on the
+        Hub while its last applied runtime remains stale until it reconnects.
+        """
+        assigned=self._assigned_node_ids(client_id)
+        with self.store.lock:
+            row=self.store.db.execute(
+                'SELECT global_ip_block,global_device_block FROM clients WHERE id=?',(client_id,)).fetchone()
+        if not row:raise PolicyError('Managed client not found')
+        expected_ip=bool(row['global_ip_block']);expected_device=bool(row['global_device_block'])
+        listed={str(n['id']):n for n in self.list() if str(n['id']) in assigned}
+        items=[]
+        for node_id in assigned:
+            node=listed.get(node_id,{})
+            try:state=self.desired_state(node_id,include_payload=True)
+            except PolicyError:
+                state={'revision':0,'applied_revision':0,'hash':'','applied_hash':'','pending':True,
+                       'last_error':'desired state unavailable','payload':{}}
+            payload=state.get('payload') if isinstance(state.get('payload'),dict) else {}
+            security=payload.get('security') if isinstance(payload.get('security'),dict) else {}
+            policies=security.get('clients') if isinstance(security.get('clients'),list) else []
+            policy=next((x for x in policies if isinstance(x,dict) and str(x.get('sourceEmail',''))==client_id),None)
+            desired_matches=bool(policy is not None
+                and bool(policy.get('globalIpBlocked'))==expected_ip
+                and bool(policy.get('globalDeviceBlocked'))==expected_device)
+            pending=bool(state.get('pending') or state.get('last_error') or not desired_matches)
+            applied=bool(desired_matches and not pending)
+            online=bool(node.get('online'))
+            health=node.get('health') if isinstance(node.get('health'),dict) else {}
+            guard=health.get('guard') if isinstance(health.get('guard'),dict) else {}
+            ipguard=payload.get('sections',{}).get('ipguard',{}) if isinstance(payload.get('sections'),dict) else {}
+            guard_mode=str(ipguard.get('mode','observe')) if isinstance(ipguard,dict) else 'observe'
+            guard_required=guard_mode=='enforce'
+            guard_ready=bool(not guard_required or (guard.get('applied') is True and guard.get('state')=='applied'
+                                                     and guard.get('source_verified') is True))
+            status='converged' if applied else ('offline_pending' if not online else ('error' if state.get('last_error') else 'pending'))
+            items.append({'node_id':node_id,'name':node.get('name',node_id),'online':online,'status':status,
+                          'desired_revision':int(state.get('revision') or 0),'applied_revision':int(state.get('applied_revision') or 0),
+                          'desired_matches_policy':desired_matches,'authorization_applied':applied,
+                          'last_error':str(state.get('last_error') or '')[:300],
+                          'guard_mode':guard_mode,'guard_ready':guard_ready,'guard_state':str(guard.get('state') or 'unknown'),
+                          'direct_source_verified':bool(health.get('direct_source_verified'))})
+        pending_nodes=[x['node_id'] for x in items if not x['authorization_applied']]
+        offline_nodes=[x['node_id'] for x in items if not x['online']]
+        return {'global_ip_block':expected_ip,'global_device_block':expected_device,'assigned_nodes':len(items),
+                'authorization_converged':all(x['authorization_applied'] for x in items),
+                'packet_guard_ready':all(x['guard_ready'] for x in items),
+                'pending_nodes':pending_nodes,'offline_nodes':offline_nodes,'items':items,
+                'boundary':'authorization convergence only; nftables remains host-local'}
 
     def failover_targets(self,client_id:str)->list[dict]:
         inbound_ids=set(self._client_inbounds(client_id))
@@ -1088,6 +1142,22 @@ class NodeRegistry:
         if not isinstance(doc,list):
             self._request_failed(node_id,'Invalid node inbound response');raise PolicyError('Invalid node inbound response')
         return {'latency_ms':ms,'items':doc}
+
+    @installation_operation
+    def smart_warp_probe(self,node_id:str,tags:list[str],*,attempts:int=2,timeout_seconds:int=5)->dict:
+        if not isinstance(tags,list) or not 1<=len(tags)<=8 or any(not isinstance(x,str) or not x for x in tags):
+            raise PolicyError('Invalid Smart WARP probe tags')
+        doc,ms=self._request(node_id,'/node/api/v1/smart-warp/probe','POST',
+                             {'outboundTags':tags,'attempts':attempts,'timeoutSeconds':timeout_seconds},
+                             float(timeout_seconds*max(1,attempts)*len(tags)+12))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
+            raise PolicyError('Invalid Node Smart WARP probe response')
+        for item in doc['items']:
+            if not isinstance(item,dict) or not isinstance(item.get('tag'),str):
+                raise PolicyError('Invalid Node Smart WARP probe item')
+            if any(k in item for k in ('secretKey','privateKey','settings','peers')):
+                raise PolicyError('Node Smart WARP probe leaked secret material')
+        return {'node_id':node_id,'latency_ms':ms,'items':doc['items'],'productionTrafficMutation':False}
 
     @installation_operation
     def deploy_inbound(self,node_id:str,payload:dict)->dict:

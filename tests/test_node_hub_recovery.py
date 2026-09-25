@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import nodes as nodes_module
+import node_agent as node_agent_module
 from auth import Auth
 from backup import create_backup,restore_backup
 from core import Config,CoreEngine
@@ -333,3 +334,24 @@ def test_node_update_success_preserves_source_reader_permissions(tmp_path,monkey
     assert after.st_mode&0o777==0o640
     assert (app/'.venv/bin/python').read_text()=='new-interpreter'
     assert (app/'.venv/bin/python').stat().st_mode&0o111
+
+
+def test_node_agent_smart_warp_probe_returns_metrics_without_secrets(tmp_path,monkeypatch):
+    with agent(tmp_path/'smart-warp-agent') as (_store,engine,_runtime,client):
+        engine.save_section('outbounds',[
+            {'tag':'direct','protocol':'freedom','settings':{}},
+            {'tag':'warp-us','protocol':'wireguard','settings':{
+                'secretKey':'node-secret','peers':[{'publicKey':'peer-public','endpoint':'1.1.1.1:2408'}],
+                'address':['172.16.0.2/32']}},
+        ])
+        monkeypatch.setattr(node_agent_module,'scan_warp_outbounds',lambda binary,assets,outbounds,attempts=2,timeout=5.0:[
+            {'tag':'warp-us','ok':True,'latenciesMs':[44.0,48.0],'lossPercent':0.0,
+             'attempts':2,'successes':2,'failures':0,'error':'','source':'test','probeUrl':'https://example.test',
+             'productionTrafficMutation':False}])
+        response=client.post('/node/api/v1/smart-warp/probe',json={
+            'outboundTags':['warp-us'],'attempts':2,'timeoutSeconds':5})
+        assert response.status_code==200,response.text
+        doc=response.json();assert doc['service']=='DARK XRAY NODE'
+        assert doc['items'][0]['tag']=='warp-us' and doc['items'][0]['latencyMs']==46.0
+        assert doc['items'][0]['lossPercent']==0.0
+        assert 'node-secret' not in response.text and 'secretKey' not in response.text and 'peers' not in response.text

@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "stage": 5,
+  "name": "release preparation exact-artifact rehearsal",
+  "passed": true,
+  "release": {
+    "version": "0.9.0-rc7",
+    "commit": "c196207881bdb38e5a40e5f2d0e265061c24dce7",
+    "tree": "fba10c929ce313e5c32cc35151a865f27455fbae",
+    "stage4_accepted_commit": "94ae50548f105bea7e79b40a28f7f5ae3704056d"
+  },
+  "artifacts": {
+    "tar_gz": {
+      "name": "dark-xray-0.9.0-rc7-c196207881bd.tar.gz",
+      "sha256": "e13c357a6de59ba64af05275d156baf2a5dec23a03caf3192ccb477943d8c8ba",
+      "bytes": 884012
+    },
+    "zip": {
+      "name": "dark-xray-0.9.0-rc7-c196207881bd.zip",
+      "sha256": "be5392b7121646f8718d3e7bed47d387eda8dde9a8196b59cb28fd8f0781e185",
+      "bytes": 1088427
+    },
+    "manifest_sha256": "a5b13665880dc7907ed786a1523c0eff3cf438e3c317b2a5137f79b1b7ee11ed",
+    "release_sha256sums_sha256": "5c9fde1d179b43fb86cd4a594997d51ce5e613fc615d780afd296c0da65705e2"
+  },
+  "source": {
+    "sha256sums_sha256": "9fab3d472a181e5a5305bc6b9f6c2b2c7a213d6c656fe01d41d376eb020d4ce6",
+    "verified_files": 307,
+    "runtime_equivalent_to_stage4": true
+  },
+  "reproducibility": {
+    "builds": 2,
+    "identical_release_sha256sums": true
+  },
+  "environment": {
+    "kind": "disposable systemd-nspawn container",
+    "host_role": "existing Node VPS; production Node services untouched",
+    "os": "Ubuntu 24.04.3 LTS",
+    "private_network_namespace": true,
+    "offline_python_wheels": 20,
+    "xray_version": "v26.3.27",
+    "xray_archive_sha256": "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+  },
+  "acceptance": {
+    "artifact_verify": true,
+    "fresh_install": true,
+    "fresh_identity_exact": true,
+    "fresh_services_active_enabled": true,
+    "darkxray_check_after_fresh": true,
+    "successful_update": true,
+    "update_identity_exact": true,
+    "rollback_failure_injected_after_source_snapshot": true,
+    "rollback_source_restored": true,
+    "rollback_database_restored": true,
+    "rollback_marker_restored": true,
+    "rollback_identity_preserved": true,
+    "rollback_services_active": true,
+    "sqlite_quick_check_after_rollback": "ok"
+  },
+  "discarded_attempt": {
+    "count": 1,
+    "reason": "fault injector stamp was placed in non-writable /run for the non-root service; source/database rollback restored but automatic service reactivation remained intentionally blocked",
+    "accepted_as_evidence": false
+  },
+  "limitations": [
+    "not a fresh install on the final provider image",
+    "does not issue or renew the production certificate",
+    "does not publish a Git tag or GitHub Release",
+    "does not close global multi-node enforcement boundaries"
+  ]
+}

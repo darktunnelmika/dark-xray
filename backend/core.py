@@ -154,7 +154,52 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_client_tombstones(
               email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL,down INTEGER NOT NULL,deleted_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS smart_routing_revisions(
+              id TEXT PRIMARY KEY,actor TEXT NOT NULL,created_at REAL NOT NULL,
+              baseline_hash TEXT NOT NULL,candidate_hash TEXT NOT NULL,
+              before_routing TEXT NOT NULL,before_observatory TEXT NOT NULL,
+              after_routing TEXT NOT NULL,after_observatory TEXT NOT NULL,
+              before_node_roles TEXT NOT NULL DEFAULT '{}',after_node_roles TEXT NOT NULL DEFAULT '{}',
+              request_body TEXT NOT NULL,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',
+              safety_report TEXT NOT NULL DEFAULT '{}',safety_hash TEXT NOT NULL DEFAULT '',
+              safety_checked_at REAL NOT NULL DEFAULT 0,safety_passed INTEGER NOT NULL DEFAULT 0,
+              applied_at REAL NOT NULL DEFAULT 0,rolled_back_at REAL NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS smart_routing_revisions_created
+              ON smart_routing_revisions(created_at DESC);
+            CREATE TABLE IF NOT EXISTS smart_routing_node_roles(
+              node_id TEXT PRIMARY KEY,warp_ai INTEGER NOT NULL DEFAULT 0,
+              adblock INTEGER NOT NULL DEFAULT 0,updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollouts(
+              id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,actor TEXT NOT NULL,created_at REAL NOT NULL,
+              state TEXT NOT NULL,phase TEXT NOT NULL DEFAULT 'nodes',current_index INTEGER NOT NULL DEFAULT 0,
+              observation_seconds REAL NOT NULL DEFAULT 5,detail TEXT NOT NULL DEFAULT '',
+              started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
+              rolled_back_at REAL NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS smart_routing_rollouts_created ON smart_routing_rollouts(created_at DESC);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollout_nodes(
+              rollout_id TEXT NOT NULL,node_id TEXT NOT NULL,ord INTEGER NOT NULL,role TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'pending',detail TEXT NOT NULL DEFAULT '',
+              desired_revision INTEGER NOT NULL DEFAULT 0,desired_hash TEXT NOT NULL DEFAULT '',
+              verified_at REAL NOT NULL DEFAULT 0,updated_at REAL NOT NULL DEFAULT 0,
+              PRIMARY KEY(rollout_id,node_id));
+            CREATE INDEX IF NOT EXISTS smart_routing_rollout_nodes_order ON smart_routing_rollout_nodes(rollout_id,ord);
             ''')
+            revision_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_revisions)')}
+            if 'before_node_roles' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN before_node_roles TEXT NOT NULL DEFAULT '{}'")
+            if 'after_node_roles' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN after_node_roles TEXT NOT NULL DEFAULT '{}'")
+            if 'safety_report' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_report TEXT NOT NULL DEFAULT '{}'")
+            if 'safety_hash' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_hash TEXT NOT NULL DEFAULT ''")
+            if 'safety_checked_at' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_checked_at REAL NOT NULL DEFAULT 0")
+            if 'safety_passed' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_passed INTEGER NOT NULL DEFAULT 0")
+            rollout_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_rollouts)')}
+            if 'observation_seconds' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN observation_seconds REAL NOT NULL DEFAULT 5")
         self.validate_schema_only=True
 
     def _write(self):
@@ -185,13 +230,18 @@ class CoreEngine:
                   'subscription':{'enabled':True,'default_format':'base64','auto_detect':True,'profile_update_interval_hours':6,
                                   'remark_template':'{remark} | {email}','support_url':'','profile_title':'DARK XRAY',
                                   'profile_url':'','announce':'','path':'/sub'},
-                  'ipguard':{'mode':'observe','window_seconds':self.config.ip_window_seconds,
+                  'ipguard':{'mode':'observe','node_mode':'observe','window_seconds':self.config.ip_window_seconds,
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
         if not r:return copy.deepcopy(defaults[name])
         saved=json.loads(r[0])
         if name in {'panel','runtime','subscription','ipguard'} and isinstance(saved,dict):
-            base=copy.deepcopy(defaults[name]);base.update(saved);return base
+            base=copy.deepcopy(defaults[name])
+            # Preserve pre-node_mode behavior for existing saved policies: before
+            # this field existed, one mode was propagated to Local and Nodes.
+            if name=='ipguard' and 'node_mode' not in saved:
+                base['node_mode']=saved.get('mode',base['node_mode'])
+            base.update(saved);return base
         return saved
 
     @serialized
@@ -275,8 +325,9 @@ class CoreEngine:
             if not isinstance(value['announce'],str) or len(value['announce'])>2000:raise CoreError('Invalid subscription announcement')
             if any(ch in value['announce'] for ch in ('\r','\n')) and len(value['announce'].splitlines())>100:raise CoreError('Subscription announcement has too many lines')
         if name=='ipguard':
-            if set(value)-{'mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
+            if set(value)-{'mode','node_mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
             if value.get('mode') not in ('observe','enforce'): raise CoreError('Invalid IP Guard mode')
+            if value.get('node_mode',value.get('mode')) not in ('observe','enforce'): raise CoreError('Invalid Node IP Guard mode')
             for key,low,high in [('window_seconds',10,3600),('ban_seconds',10,86400)]:
                 if type(value.get(key))is not int or not low<=value[key]<=high: raise CoreError('Invalid '+key)
             exempt=value.get('exempt_ips',[])
@@ -855,43 +906,58 @@ class CoreEngine:
         self.process=None
         if self.log_handle:self.log_handle.close();self.log_handle=None
 
+    def _apply_config_locked(self,cfg:dict,*,start:bool=False,force:bool=False,after_success=None)->dict:
+        newhash=self.config_hash(cfg)
+        if not force and self.running and newhash==self.applied_hash:
+            if after_success:after_success()
+            return self.runtime_state()
+        self.validate(cfg)
+        old=(self.runtime/'active.json').read_text() if (self.runtime/'active.json').exists() else None
+        oldhash=self.applied_hash;was=self.running
+        self.collect_stats(force=True,strict=was)
+        if was:self._stop_child()
+        else:
+            # Avoid attaching to an unrelated process on the control API port.
+            s=socket.socket()
+            try:
+                # A closed API connection may retain TIME_WAIT after a crash.
+                # Reuse that address, not a live listener; never use SO_REUSEPORT.
+                s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                s.bind(('127.0.0.1',self.config.xray_api_port))
+            except OSError:raise CoreError('Core API port already occupied by another process',status=409)
+            finally:s.close()
+        if old:self._atomic(self.runtime/'previous.json',old)
+        self._atomic(self.runtime/'active.json',json.dumps(cfg,indent=2))
+        try:
+            if start or was or self.wants_running:self._spawn()
+            if after_success:after_success()
+        except Exception as e:
+            self._stop_child()
+            rollback='no previous running generation'
+            if old:
+                self._atomic(self.runtime/'active.json',old)
+                if was:
+                    try:self._spawn();rollback='previous process configuration restored'
+                    except Exception:rollback='previous configuration written, restart failed'
+            self.applied_hash=oldhash if self.running else '';self.last_error=str(e)+'; '+rollback
+            status=e.status if isinstance(e,CoreError) else 503
+            uncertain=e.uncertain if isinstance(e,CoreError) else False
+            raise CoreError(self.last_error,status=status,uncertain=uncertain)
+        self.applied_hash=newhash if self.running else ''
+        self.last_apply=time.time();self.last_error='';self.wants_running=self.running
+        return self.runtime_state()
+
+    def apply_config(self,cfg:dict,*,start:bool=False,force:bool=False,after_success=None)->dict:
+        """Apply an already-built config and commit reviewed state under the same engine lock."""
+        self._write()
+        if not isinstance(cfg,dict):raise CoreError('Candidate configuration must be an object')
+        with self.lock:
+            return self._apply_config_locked(copy.deepcopy(cfg),start=start,force=force,after_success=after_success)
+
     def apply(self,*,start:bool=False,force:bool=False)->dict:
         self._write()
         with self.lock:
-            cfg=self.build_config();newhash=self.config_hash(cfg)
-            if not force and self.running and newhash==self.applied_hash:return self.runtime_state()
-            self.validate(cfg)
-            old=(self.runtime/'active.json').read_text() if (self.runtime/'active.json').exists() else None
-            oldhash=self.applied_hash;was=self.running
-            self.collect_stats(force=True,strict=was)
-            if was:self._stop_child()
-            else:
-                # Avoid attaching to an unrelated process on the control API port.
-                s=socket.socket()
-                try:
-                    # A closed API connection may retain TIME_WAIT after a crash.
-                    # Reuse that address, not a live listener; never use SO_REUSEPORT.
-                    s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-                    s.bind(('127.0.0.1',self.config.xray_api_port))
-                except OSError:raise CoreError('Core API port already occupied by another process',status=409)
-                finally:s.close()
-            if old:self._atomic(self.runtime/'previous.json',old)
-            self._atomic(self.runtime/'active.json',json.dumps(cfg,indent=2))
-            try:
-                if start or was or self.wants_running:self._spawn()
-            except Exception as e:
-                self._stop_child()
-                rollback='no previous running generation'
-                if old:
-                    self._atomic(self.runtime/'active.json',old)
-                    if was:
-                        try:self._spawn();rollback='previous process configuration restored'
-                        except Exception:rollback='previous configuration written, restart failed'
-                self.applied_hash=oldhash if self.running else '';self.last_error=str(e)+'; '+rollback
-                raise CoreError(self.last_error,status=503)
-            self.applied_hash=newhash if self.running else ''
-            self.last_apply=time.time();self.last_error='';self.wants_running=self.running
-            return self.runtime_state()
+            return self._apply_config_locked(self.build_config(),start=start,force=force)
 
     def command(self,action:str)->dict:
         self._write()
@@ -1045,14 +1111,30 @@ class CoreEngine:
         if policy.enforce:
             try:
                 executor=BrokerExecutor(policy,BrokerClient(self.config.guard_socket));info=executor.check()
-                # The broker resets only its own temporary sets on restart. Never
-                # claim that old SQLite ban records are still enforced afterward.
+                # The broker's nftables set is volatile. SQLite is the durable
+                # source for not-yet-expired bans, so a broker restart or lost
+                # lease must replay active bans instead of leaving a false
+                # `applied` row with no packet-level element.
                 with self.store.transaction() as db:
                     db.execute("CREATE TABLE IF NOT EXISTS core_guard_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-                    old=db.execute("SELECT value FROM core_guard_meta WHERE key='boot_id'").fetchone()
-                    if not old or old[0]!=info['boot_id']:
-                        db.execute("UPDATE bans SET state='released',expires_at=? WHERE state='applied'",(time.time(),))
                     db.execute("INSERT INTO core_guard_meta VALUES('boot_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(info['boot_id'],))
+                restored=0;released=0;now=time.time()
+                with self.store.lock:
+                    active=[dict(r) for r in self.store.db.execute(
+                        "SELECT jail,ip,expires_at FROM bans WHERE state='applied' AND expires_at>?",(now,))]
+                for ban in active:
+                    remaining=max(1,int(float(ban['expires_at'])-now))
+                    try:
+                        executor.ban(str(ban['jail']),str(ban['ip']),seconds=remaining);restored+=1
+                    except PolicyError as ex:
+                        if 'Unmanaged data-port group' not in str(ex):raise
+                        with self.store.transaction() as db:
+                            db.execute("UPDATE bans SET state='released',expires_at=? WHERE jail=? AND ip=?",
+                                       (now,ban['jail'],ban['ip']))
+                        released+=1
+                if restored:
+                    info=executor.client.status()
+                info={**info,'restored_active_bans':restored,'released_unmanaged_bans':released}
                 self._guard_executor=executor;status.update(state='applied',applied=True,broker=info)
             except (PolicyError,OSError) as exc:
                 status.update(state='error',error=str(exc)[:500],loaded_policy_hash='')

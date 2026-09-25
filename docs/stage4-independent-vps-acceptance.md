@@ -20,6 +20,12 @@ Renewal عمومی با staging، گواهی production را جایگزین نم
 با `--run-deploy-hooks` اجرا می‌کند و بنابراین DARK restart می‌شود. این بخش فقط
 روی VPS دورریختنی/آزمایشی اجرا شود.
 
+## وضعیت اجرای 0.9.0-rc7 — PASS
+
+این profile روی exact head `94ae50548f105bea7e79b40a28f7f5ae3704056d` اجرا و PASS شد. merge commit `37a640817fe64e8e5c066df7f691b624c6ed5707` همان tree `539d93abc8a6ce833f20d382797730bf3f09e47d` را دارد. شواهد ثبت‌شده شامل reboot واقعی، HTTPS/HSTS، دو Node واقعی، source-IP verified، Ready → Down → Recovered، public ACME staging rehearsal با deploy-hook restart و سه run مستقل 1000-client / 12-worker است.
+
+این PASS یک acceptance profile است و به‌تنهایی Stable/Production SLA اعلام نمی‌کند. release artifact نهایی هنوز باید ساخته و update/rollback آن به‌صورت exact-artifact rehearsal آزمایش شود.
+
 ## مرحله 1 — baseline پیش از reboot
 
 روی VPS مستقلِ نصب‌شده از commit نامزد:
@@ -139,5 +145,4 @@ PASS نهایی باید هم‌زمان این‌ها را داشته باشد:
 - `load_acceptance.passed=true`
 - سه report مستقل load با `passed=true`
 
-تا زمانی که این اجرای واقعی روی VPS مستقل انجام نشده، Stage 4 فقط **آمادهٔ اجرا**
-است و نباید به‌عنوان production-ready یا release-approved توصیف شود.
+برای candidateهای بعدی، تا وقتی همین profile واقعی روی VPS مستقل PASS نشده باشد Stage 4 فقط **آمادهٔ اجرا** است. برای `0.9.0-rc7` این profile PASS شده، اما نتیجه همچنان به‌تنهایی production-ready یا SLA نامحدود نیست.

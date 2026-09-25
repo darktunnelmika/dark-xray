@@ -1,0 +1,27 @@
+{
+  "node_id": "node-stage4-node-1-949db7",
+  "node_name": "stage4-node-1",
+  "node_public_ip": "212.74.39.3",
+  "commit": "9d348dbc344adcbc0ea8b8885e6015f8ecee1773",
+  "patched_runtime": true,
+  "fixture": {
+    "email": "stage6provn1",
+    "inbound_id": 10,
+    "port": 19091,
+    "uuid": "be4e1309-55ef-4054-b9f3-2cc79aba82c5"
+  },
+  "sources": {
+    "allowed_source": "82.47.63.242",
+    "blocked_source": "82.47.63.165"
+  },
+  "observed": {
+    "first_allowed_request_from_hub_rc": 0,
+    "first_request_from_node2_before_drop_rc": 0,
+    "nft_element": "82.47.63.165 . 19091 timeout active",
+    "node2_fresh_after_policy_rc": 28,
+    "node2_result": "SSL connection timeout / packet drop",
+    "hub_after_policy_rc": 0,
+    "hub_after_policy_egress": "212.74.39.3"
+  },
+  "passed": true
+}
