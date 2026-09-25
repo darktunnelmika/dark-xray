@@ -62,16 +62,25 @@ jobs:
           PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_web_contract.py tests/test_v06.py
           python3 tools/repo-check.py
 
+      - name: Commit server patch before checksum refresh
+        run: |
+          if git diff --quiet -- backend/server.py; then
+            echo 'No server.py changes needed.'
+          else
+            git add backend/server.py
+            git commit -m 'Sync Stage 7 smart routing API endpoints'
+          fi
+
       - name: Refresh SHA256SUMS
         run: |
           python3 tools/release_snapshot.py --refresh-source-sums --json-only
 
-      - name: Commit synced server patch
+      - name: Commit checksum and push
         run: |
           if git diff --quiet; then
-            echo 'No Stage 7 sync changes needed.'
-            exit 0
+            echo 'No checksum changes needed.'
+          else
+            git add SHA256SUMS
+            git commit -m 'Refresh checksums for Stage 7 smart routing API [stage7-sync-done]'
           fi
-          git add backend/server.py SHA256SUMS
-          git commit -m 'Sync Stage 7 smart routing API endpoints [stage7-sync-done]'
           git push origin HEAD:work/stage7-smart-routing
