@@ -154,19 +154,40 @@ async function copyDelivery(text){
  catch(_){const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();}
  toast(L('Copied.','کپی شد.'));
 }
+function deliveryLabel(kind,index=0){
+ const d=state.cv4.delivery;if(!d)return'';
+ if(kind==='sub')return L('Subscription · ','اشتراک · ')+String(d.format||'auto').toUpperCase();
+ if(kind==='failover')return d.failover[Number(index)]?.remark||L('Failover config','پیکربندی فیل‌اور');
+ return d.direct[Number(index)]?.remark||L('Primary config','پیکربندی اصلی');
+}
+function syncDeliverySelection(kind,index,payload){
+ const d=state.cv4.delivery;if(!d)return;
+ const n=Number(index)||0,label=deliveryLabel(kind,n);
+ document.querySelectorAll('[data-cv4d-qr-kind]').forEach(x=>x.classList.toggle('selected',x.dataset.cv4dQrKind===kind&&Number(x.dataset.index||0)===n));
+ const kindNode=document.querySelector('#cv4d-selected-kind'),labelNode=document.querySelector('#cv4d-qr-label'),payloadNode=document.querySelector('#cv4d-selected-payload'),portal=document.querySelector('[data-act="cv4dopenportal"]');
+ if(kindNode)kindNode.textContent=kind==='sub'?L('SUBSCRIPTION','اشتراک'):kind==='failover'?L('FAILOVER','فیل‌اور'):L('PRIMARY CONFIG','کانفیگ اصلی');
+ if(labelNode)labelNode.textContent=label;
+ if(payloadNode){payloadNode.textContent=payload||'—';payloadNode.title=payload||'';}
+ if(portal)portal.hidden=kind!=='sub'||!d.result.subscription_url;
+}
 function renderDeliveryQr(kind='sub',index=0){
- const d=state.cv4.delivery,box=document.querySelector('#cv4d-qr');if(!d||!box)return;
- d.selected={kind,index:Number(index)||0};
- const payload=deliveryPayload(kind,index),label=document.querySelector('#cv4d-qr-label');
- if(!payload){box.innerHTML=`<div class="cv4d-qr-error">${L('No QR payload.','داده‌ای برای QR نیست.')}</div>`;return;}
+ const d=state.cv4.delivery,box=document.querySelector('#cv4d-qr'),stage=document.querySelector('#cv4d-qr-stage');if(!d||!box)return;
+ const n=Number(index)||0;d.selected={kind,index:n};
+ const payload=deliveryPayload(kind,n);syncDeliverySelection(kind,n,payload);
+ if(stage){stage.classList.remove('ready','error');stage.classList.add('loading');}
+ if(!payload){box.innerHTML=`<div class="cv4d-qr-error">${L('No QR payload.','داده‌ای برای QR نیست.')}</div>`;stage?.classList.remove('loading');stage?.classList.add('error');return;}
  try{
-  const q=qrcode(0,'L');q.addData(payload);q.make();box.innerHTML=q.createSvgTag();
-  if(label){
-   if(kind==='sub')label.textContent=L('Subscription · ','اشتراک · ')+String(d.format||'auto').toUpperCase();
-   else if(kind==='failover')label.textContent=d.failover[Number(index)]?.remark||L('Failover config','پیکربندی فیل‌اور');
-   else label.textContent=d.direct[Number(index)]?.remark||L('Primary config','پیکربندی اصلی');
-  }
- }catch(ex){box.innerHTML=`<div class="cv4d-qr-error">${e(L('QR generation failed: ','ساخت QR ناموفق: ')+ex.message)}</div>`;}
+  if(typeof qrcode!=='function')throw Error(L('QR engine is unavailable','موتور QR در دسترس نیست'));
+  const q=qrcode(0,'L');q.addData(payload);q.make();
+  box.innerHTML=q.createSvgTag();
+  const svg=box.querySelector('svg');if(!svg)throw Error(L('QR SVG was not created','SVG کد QR ساخته نشد'));
+  svg.setAttribute('width','240');svg.setAttribute('height','240');svg.setAttribute('preserveAspectRatio','xMidYMid meet');svg.setAttribute('focusable','false');
+  svg.style.width='100%';svg.style.height='100%';svg.style.display='block';
+  box.dataset.ready='true';stage?.classList.remove('loading','error');stage?.classList.add('ready');
+ }catch(ex){
+  box.removeAttribute('data-ready');box.innerHTML=`<div class="cv4d-qr-error"><b>${L('QR unavailable','QR در دسترس نیست')}</b><small>${e(ex.message||String(ex))}</small></div>`;
+  stage?.classList.remove('loading');stage?.classList.add('error');
+ }
 }
 function updateDeliveryFormat(format){
  const d=state.cv4.delivery;if(!d)return;d.format=format;
@@ -177,24 +198,38 @@ function updateDeliveryFormat(format){
 }
 function downloadDeliveryQr(){
  const svg=document.querySelector('#cv4d-qr svg');if(!svg)return toast(L('No QR to download.','QR برای ذخیره وجود ندارد.'),true);
- const blob=new Blob([svg.outerHTML],{type:'image/svg+xml'}),url=URL.createObjectURL(blob),a=document.createElement('a');
- a.href=url;a.download='dark-xray-'+(state.cv4.delivery?.id||'client')+'.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),500);
+ const blob=new Blob([svg.outerHTML],{type:'image/svg+xml;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=url;a.download='dark-xray-'+(state.cv4.delivery?.id||'client')+'.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),700);
+}
+async function downloadDeliveryQrPng(){
+ const svg=document.querySelector('#cv4d-qr svg');if(!svg)return toast(L('No QR to download.','QR برای ذخیره وجود ندارد.'),true);
+ try{
+  const xml=new XMLSerializer().serializeToString(svg),blob=new Blob([xml],{type:'image/svg+xml;charset=utf-8'}),url=URL.createObjectURL(blob),img=new Image();
+  await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url;});
+  const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=1024;const ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,1024,1024);ctx.drawImage(img,0,0,1024,1024);URL.revokeObjectURL(url);
+  const a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='dark-xray-'+(state.cv4.delivery?.id||'client')+'.png';a.click();
+ }catch(_){toast(L('PNG export failed.','ذخیره PNG ناموفق بود.'),true);}
+}
+function openDeliveryPortal(){
+ const url=state.cv4.delivery?.result?.subscription_url;if(!url)return toast(L('No subscription URL.','لینک اشتراک وجود ندارد.'),true);
+ window.open(url,'_blank','noopener,noreferrer');
 }
 function deliveryConfigCard(row,index,kind){
  const fail=kind==='failover';
  const meta=fail?`<span class="cv4d-node">${L('Node','نود')} ${e(row.failoverNode||'—')}</span><span>P${fa(row.failoverPriority??'—')}</span><span>${row.failoverLatencyMs==null?'—':fa(row.failoverLatencyMs)+' ms'}</span>`:`<span>#${e(row.inboundId)}</span><span>${L('Primary','اصلی')}</span>`;
- return `<article class="cv4d-config ${fail?'failover':'primary'}"><header><div><small>${meta}</small><b>${e(row.remark||L('Config','کانفیگ'))}</b></div><span class="cv4d-route">${fail?L('FAILOVER','فیل‌اور'):L('DIRECT','مستقیم')}</span></header><code>${e(row.uri||'')}</code><footer><button type="button" data-act="cv4dcopy" data-kind="${kind}" data-index="${index}">${icon('copy')}${L('Copy','کپی')}</button><button type="button" data-act="cv4dqr" data-kind="${kind}" data-index="${index}">QR</button></footer></article>`;
+ return `<article class="cv4d-config ${fail?'failover':'primary'}" data-cv4d-qr-kind="${kind}" data-index="${index}"><header><div><small>${meta}</small><b>${e(row.remark||L('Config','کانفیگ'))}</b></div><span class="cv4d-route">${fail?L('FAILOVER','فیل‌اور'):L('DIRECT','مستقیم')}</span></header><code>${e(row.uri||'')}</code><footer><button type="button" data-act="cv4dcopy" data-kind="${kind}" data-index="${index}">${icon('copy')}${L('Copy','کپی')}</button><button type="button" class="cv4d-qrpick" data-act="cv4dqr" data-kind="${kind}" data-index="${index}">${L('SHOW QR','نمایش QR')}</button></footer></article>`;
 }
 async function deliveryV4(id){
  const result=await api('/api/clients/'+enc(id)+'/links'),direct=result.engine?.links||[],failover=result.engine?.failover||[],warnings=result.engine?.warnings||[];
  state.cv4.delivery={id,result,direct,failover,format:'auto',selected:{kind:result.subscription_url?'sub':direct.length?'direct':'failover',index:0}};
  const formats=[['auto',L('Auto','خودکار')],['base64','Base64'],['raw','Raw'],['clash','Clash / Mihomo'],['json','DARK JSON']];
  const formatChips=formats.map(([v,l])=>`<button type="button" class="${v==='auto'?'active':''}" data-act="cv4dformat" data-format="${v}">${l}</button>`).join('');
- const sub=result.subscription_url?`<section class="cv4d-sub"><div class="cv4d-title"><div><small>01 · ${L('SUBSCRIPTION','اشتراک')}</small><b>${L('Recommended customer delivery','روش پیشنهادی تحویل به مشتری')}</b></div><span>${L('Auto-update','آپدیت خودکار')}</span></div><code id="cv4d-sub-url">${e(result.subscription_url)}</code><div class="cv4d-formats">${formatChips}</div><div class="cv4d-actions"><button type="button" data-act="cv4dcopy" data-kind="sub">${icon('copy')}${L('Copy subscription','کپی اشتراک')}</button><button type="button" data-act="cv4dqr" data-kind="sub">QR</button></div></section>`:'';
+ const sub=result.subscription_url?`<section class="cv4d-sub" data-cv4d-qr-kind="sub" data-index="0"><div class="cv4d-title"><div><small>01 · ${L('SUBSCRIPTION','اشتراک')}</small><b>${L('Recommended customer delivery','روش پیشنهادی تحویل به مشتری')}</b></div><span>${L('Auto-update','آپدیت خودکار')}</span></div><div class="cv4d-linkline"><code id="cv4d-sub-url">${e(result.subscription_url)}</code><button type="button" data-act="cv4dcopy" data-kind="sub" title="${L('Copy subscription','کپی اشتراک')}">${icon('copy')}</button></div><div class="cv4d-formats">${formatChips}</div><div class="cv4d-actions"><button type="button" class="cv4d-primary-action" data-act="cv4dqr" data-kind="sub">${L('SHOW SUBSCRIPTION QR','نمایش QR اشتراک')}</button><button type="button" data-act="cv4dopenportal">${L('Open customer portal','بازکردن پورتال مشتری')}</button></div></section>`:'';
  const directHtml=direct.length?`<section class="cv4d-group"><div class="cv4d-title"><div><small>02 · ${L('PRIMARY CONFIGS','کانفیگ‌های اصلی')}</small><b>${fa(direct.length)} ${L('generated endpoints','نقطه اتصال ساخته‌شده')}</b></div></div><div class="cv4d-configs">${direct.map((x,i)=>deliveryConfigCard(x,i,'direct')).join('')}</div></section>`:'';
  const failHtml=failover.length?`<section class="cv4d-group"><div class="cv4d-title"><div><small>03 · ${L('NODE FAILOVER','فیل‌اور نودها')}</small><b>${fa(failover.length)} ${L('healthy failover routes','مسیر فیل‌اور سالم')}</b></div><span class="cv4d-good">${L('Generated from deployed nodes','ساخته‌شده از نودهای مستقرشده')}</span></div><div class="cv4d-configs">${failover.map((x,i)=>deliveryConfigCard(x,i,'failover')).join('')}</div></section>`:`<section class="cv4d-empty"><b>${L('No failover route is currently available.','فعلاً مسیر فیل‌اور در دسترس نیست.')}</b><small>${L('Assign this inbound to a healthy node with failover enabled to populate this section.','برای نمایش این بخش، اینباند را به یک نود سالم با فیل‌اور فعال اختصاص بده.')}</small></section>`;
  const warningHtml=warnings.map(x=>`<div class="notice warning">${e(x)}</div>`).join('');
- dialog(L('Delivery Center','مرکز تحویل')+' · '+id,`<div class="cv4-delivery"><div class="cv4d-main">${sub}${directHtml}${failHtml}${warningHtml}</div><aside class="cv4d-qr"><div><span class="cv4d-scanline"></span><div id="cv4d-qr"></div></div><b id="cv4d-qr-label"></b><button type="button" class="btn" data-act="cv4ddownload">${L('Save QR SVG','ذخیره QR')}</button><small>${L('QR always contains the exact selected subscription or config route.','QR همیشه دقیقاً مسیر اشتراک یا کانفیگ انتخاب‌شده را دارد.')}</small></aside></div>`);
+ const hero=`<section class="cv4d-hero"><div><span>DARK XRAY / LINK DELIVERY</span><h3>${e(id)}</h3><p>${L('Secure customer delivery, QR export and exact route selection in one place.','تحویل امن به مشتری، خروجی QR و انتخاب دقیق مسیر در یک بخش.')}</p></div><div class="cv4d-kpis"><span><b>${fa(direct.length)}</b><small>${L('PRIMARY','اصلی')}</small></span><span><b>${fa(failover.length)}</b><small>${L('FAILOVER','فیل‌اور')}</small></span><span><b>${fa(formats.length)}</b><small>${L('FORMATS','فرمت')}</small></span></div></section>`;
+ dialog(L('Delivery Center','مرکز تحویل')+' · '+id,`<div class="cv4d-shell">${hero}<div class="cv4-delivery"><div class="cv4d-main">${sub}${directHtml}${failHtml}${warningHtml}</div><aside class="cv4d-qr"><header><span>${L('LIVE QR','QR زنده')}</span><b>${L('SCAN TO IMPORT','اسکن برای اتصال')}</b><i>READY</i></header><div class="cv4d-qr-stage" id="cv4d-qr-stage"><span class="cv4d-corner tl"></span><span class="cv4d-corner tr"></span><span class="cv4d-corner bl"></span><span class="cv4d-corner br"></span><span class="cv4d-scanline"></span><div id="cv4d-qr"></div></div><div class="cv4d-selected"><span id="cv4d-selected-kind">${L('SELECTED LINK','لینک انتخابی')}</span><b id="cv4d-qr-label">—</b><code id="cv4d-selected-payload">—</code></div><div class="cv4d-qr-tools"><button type="button" data-act="cv4dcopyselected">${icon('copy')}${L('Copy selected','کپی انتخابی')}</button><button type="button" data-act="cv4ddownload">SVG</button><button type="button" data-act="cv4ddownloadpng">PNG</button></div><button type="button" class="cv4d-open-portal" data-act="cv4dopenportal">${L('OPEN CUSTOMER PORTAL','بازکردن پورتال مشتری')}</button><small>${L('QR is rendered locally and contains only the exact selected subscription or config route.','QR داخل خود پنل ساخته می‌شود و فقط همان لینک اشتراک یا کانفیگ انتخاب‌شده را دارد.')}</small></aside></div></div>`);
  document.querySelector('#overlay .dialog')?.classList.add('cv4-delivery-dialog');
  renderDeliveryQr(state.cv4.delivery.selected.kind,state.cv4.delivery.selected.index);
 }
@@ -212,9 +247,12 @@ runAction=async function(act,el){
  if(act==='cv4detail')return detail(id);
  if(act==='cv4delivery')return deliveryV4(id);
  if(act==='cv4dcopy')return copyDelivery(deliveryPayload(el.dataset.kind,Number(el.dataset.index||0)));
+ if(act==='cv4dcopyselected')return copyDelivery(deliveryPayload(state.cv4.delivery?.selected?.kind||'sub',state.cv4.delivery?.selected?.index||0));
  if(act==='cv4dqr')return renderDeliveryQr(el.dataset.kind,Number(el.dataset.index||0));
  if(act==='cv4dformat'){updateDeliveryFormat(el.dataset.format);return;}
  if(act==='cv4ddownload')return downloadDeliveryQr();
+ if(act==='cv4ddownloadpng')return downloadDeliveryQrPng();
+ if(act==='cv4dopenportal')return openDeliveryPortal();
  if(act==='cv4bulk')return bulkCreate();
  if(act==='cv4edit'){closeDialog();return clientFormV4(id);}
  return baseRunAction(act,el);
