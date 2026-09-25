@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from server import make_app
 from telegram_runtime import BotWorker
 from telegram_forum import FORUM_REQUEST_ID,TOPICS
-from test_standalone import env
+from test_standalone import env,create
 from test_representatives_v2 import create_inbound
 
 def product_payload(product_id='turbo',**overrides):
@@ -400,8 +400,165 @@ def test_admin_v2_centers_render_without_external_side_effects(env):
     finally:
         worker.api.close()
     text='\n'.join(x[1] for x in sent)
-    assert 'DARK BOT ADMIN V2' in text
+    assert 'DARK BOT ADMIN V3' in text
     assert 'سرویس‌ها' in text
     assert 'مرکز گزارش DARK' in text
     assert 'DARK Full Backup' in text
     assert 'تنظیمات DARK BOT' in text
+
+def _bot_worker(c,admin_id=992001):
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    assert c.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
+    worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'v3-test')
+    sent=[]
+    worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
+    return worker,sent
+
+
+def test_store_manager_v3_builds_product_and_price_with_inbound_picker(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    worker,sent=_bot_worker(c,992101)
+    try:
+        worker.start_product_create(992101,992101)
+        worker.handle_store_text(992101,992101,'DARK GAMER')
+        worker.handle_store_text(992101,992101,'Gaming')
+        worker.store_choose_type(992101,992101,'volume')
+        worker.handle_store_text(992101,992101,'Low latency gaming plan')
+        worker.handle_store_text(992101,992101,'2')
+        with store.lock:
+            product=dict(store.db.execute("SELECT rowid AS row_id,* FROM commerce_products WHERE owner='dark'").fetchone())
+        assert product['name']=='DARK GAMER' and product['category']=='Gaming' and product['sale_limit_per_user']==2
+        worker.start_price_create(992101,992101,int(product['row_id']))
+        worker.handle_store_text(992101,992101,'50GB / 30 Days')
+        worker.handle_store_text(992101,992101,'250000')
+        worker.handle_store_text(992101,992101,'30')
+        worker.handle_store_text(992101,992101,'50')
+        worker.handle_store_text(992101,992101,'2')
+        worker.handle_store_text(992101,992101,'1')
+        worker.price_choose_activation(992101,992101,'first_connection')
+        worker.price_choose_delivery(992101,992101,'subscription')
+        worker.price_toggle_inbound(992101,992101,inbound_id)
+        worker.price_inbounds_done(992101,992101)
+        with store.lock:
+            price=dict(store.db.execute("SELECT * FROM commerce_prices WHERE owner='dark' AND product_id=?",(product['id'],)).fetchone())
+        assert price['label']=='50GB / 30 Days'
+        assert price['price_minor']==250000 and price['currency']=='IRT'
+        assert price['volume_bytes']==50*1024**3 and price['duration_days']==30
+        assert price['ip_limit']==2 and price['hwid_limit']==1
+        assert price['activation_mode']=='first_connection' and price['delivery_mode']=='subscription'
+        assert json.loads(price['inbound_ids'])==[inbound_id]
+        assert price['primary_inbound_id']==inbound_id
+    finally:
+        worker.api.close()
+
+
+def test_store_manager_v3_clone_is_safe_and_price_toggle_works(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(inbound_id)).status_code==200
+    worker,_=_bot_worker(c,992102)
+    try:
+        with store.lock:
+            prow=int(store.db.execute("SELECT rowid FROM commerce_products WHERE owner='dark' AND id='turbo'").fetchone()[0])
+            price_row=int(store.db.execute("SELECT rowid FROM commerce_prices WHERE owner='dark' AND id='turbo-30'").fetchone()[0])
+        worker.clone_product(992102,prow)
+        with store.lock:
+            products=[dict(r) for r in store.db.execute("SELECT * FROM commerce_products WHERE owner='dark' ORDER BY created_at")]
+            clones=[r for r in products if r['id']!='turbo']
+        assert len(clones)==1 and clones[0]['active']==0 and clones[0]['visible']==0
+        worker.toggle_price(992102,price_row)
+        with store.lock:
+            assert store.db.execute("SELECT active FROM commerce_prices WHERE rowid=?",(price_row,)).fetchone()[0]==0
+    finally:
+        worker.api.close()
+
+
+def test_service_manager_v3_renew_volume_limits_and_inbounds_use_manager_core(env):
+    store,_,manager,_,c=env
+    first=create_inbound(c)
+    expiry=int((__import__('time').time()+86400)*1000)
+    create(c,email='svc-v3',extra={'totalGB':20*1024**3,'expiryTime':expiry,'limitIp':1,'limitHwid':0})
+    from test_representatives_v2 import inbound_payload
+    second_body=inbound_payload();second_body['port']+=1;second_body['remark']='Second';second_body['tag']='second'
+    r=c.post('/api/inbounds',json=second_body);assert r.status_code==200,r.text
+    second=r.json()['id']
+    worker,_=_bot_worker(c,992103)
+    try:
+        with store.lock:
+            row_id=int(store.db.execute("SELECT rowid FROM clients WHERE id='svc-v3'").fetchone()[0])
+        before=manager.detail(worker.actor(),'svc-v3',credentials=True)['client']
+        worker.renew_client(992103,row_id,30)
+        after=manager.detail(worker.actor(),'svc-v3',credentials=True)['client']
+        assert int(after['expiryTime'])>=int(before['expiryTime'])+30*86400*1000-1000
+
+        worker.start_service_input(992103,992103,'volume',row_id,'volume')
+        worker.handle_service_text(992103,992103,'10')
+        after=manager.detail(worker.actor(),'svc-v3',credentials=True)['client']
+        assert after['totalGB']==30*1024**3
+
+        worker.start_service_input(992103,992103,'ip',row_id,'ip')
+        worker.handle_service_text(992103,992103,'3')
+        worker.start_service_input(992103,992103,'hwid',row_id,'hwid')
+        worker.handle_service_text(992103,992103,'2')
+        after=manager.detail(worker.actor(),'svc-v3',credentials=True)['client']
+        assert after['limitIp']==3 and after['limitHwid']==2
+
+        worker.start_client_inbounds(992103,992103,row_id)
+        worker.toggle_client_inbound(992103,992103,second)
+        worker.finish_client_inbounds(992103,992103)
+        after=manager.detail(worker.actor(),'svc-v3',credentials=True)
+        assert set(after['inboundIds'])=={first,second}
+    finally:
+        worker.api.close()
+
+
+def test_service_manager_v3_refuses_volume_add_to_unlimited(env):
+    store,_,manager,_,c=env
+    create_inbound(c);create(c,email='unlimited-v3',extra={'totalGB':0})
+    worker,sent=_bot_worker(c,992104)
+    try:
+        with store.lock:
+            row_id=int(store.db.execute("SELECT rowid FROM clients WHERE id='unlimited-v3'").fetchone()[0])
+        worker.start_service_input(992104,992104,'volume',row_id,'volume')
+        worker.handle_service_text(992104,992104,'10')
+        assert manager.detail(worker.actor(),'unlimited-v3',credentials=True)['client']['totalGB']==0
+        assert any('نامحدود' in x[1] for x in sent)
+    finally:
+        worker.api.close()
+
+
+def test_admin_v3_keyboard_exposes_store_manager(env):
+    _,_,_,_,c=env
+    worker,_=_bot_worker(c,992105)
+    try:
+        text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
+        assert '🛠 مدیریت فروشگاه' in text
+        worker.admin_dashboard(992105)
+    finally:
+        worker.api.close()
+
+
+def test_store_manager_v3_archives_product_with_order_history(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(inbound_id)).status_code==200
+    order=c.post('/api/commerce/orders',json={
+        'product_id':'turbo','price_id':'turbo-30','buyer_telegram_id':999991,'buyer_username':'archive'}).json()
+    worker,sent=_bot_worker(c,992106)
+    try:
+        with store.lock:
+            row_id=int(store.db.execute("SELECT rowid FROM commerce_products WHERE owner='dark' AND id='turbo'").fetchone()[0])
+        worker.preview_product(992106,row_id)
+        assert any('PREVIEW' in x[1] and '30 GB' in x[1] for x in sent)
+        worker.delete_or_archive_product(992106,row_id)
+        with store.lock:
+            p=store.db.execute("SELECT active,visible FROM commerce_products WHERE owner='dark' AND id='turbo'").fetchone()
+            pr=store.db.execute("SELECT active FROM commerce_prices WHERE owner='dark' AND id='turbo-30'").fetchone()
+        assert tuple(p)==(0,0) and pr[0]==0
+        assert c.get('/api/commerce/orders').json()[0]['id']==order['id']
+    finally:
+        worker.api.close()
