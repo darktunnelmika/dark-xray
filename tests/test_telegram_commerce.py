@@ -272,3 +272,27 @@ def test_forum_audit_router_scopes_and_routes_events(env):
     assert any(x['message_thread_id']==topics['payments'] and 'commerce.payment_confirm' in x['text'] for x in routed)
     assert any(x['message_thread_id']==topics['backups'] and 'backup.full' in x['text'] for x in routed)
     assert any(x['message_thread_id']==topics['services'] and 'client.create' in x['text'] for x in routed)
+
+
+def test_daily_forum_summary_uses_completed_day_and_topic(env):
+    import time as _time
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(inbound_id)).status_code==200
+    order=c.post('/api/commerce/orders',json={
+        'product_id':'turbo','price_id':'turbo-30','buyer_telegram_id':90100,'buyer_username':''}).json()
+    forum=c.app.state.telegram_runtime.forum
+    api=FakeTelegramAPI()
+    forum.setup(api,'dark',{'request_id':FORUM_REQUEST_ID,'chat_id':-100777},42)
+    with store.transaction() as db:
+        db.execute("UPDATE commerce_orders SET created_at=?,updated_at=? WHERE id=?",
+                   (_time.time()-86400,_time.time()-86400,order['id']))
+        db.execute("UPDATE telegram_forums SET last_daily_key='2000-01-01' WHERE owner='dark'")
+    assert forum.maybe_daily_summary(api,'dark','owner','UTC') is True
+    with store.lock:
+        daily=store.db.execute(
+            "SELECT thread_id FROM telegram_forum_topics WHERE owner='dark' AND kind='daily'").fetchone()['thread_id']
+    messages=[p for m,p in api.calls if m=='sendMessage' and p.get('message_thread_id')==daily]
+    assert messages and 'سفارش‌ها: 1' in messages[-1]['text']
+    assert '3000000 IRT' in messages[-1]['text'].replace(',','')
