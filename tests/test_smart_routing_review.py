@@ -307,3 +307,41 @@ def test_stage7_direct_apply_is_disabled_for_node_targeted_revision(stage7_env):
         'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
     assert denied.status_code==409,denied.text
     assert 'staged rollout' in denied.text
+
+
+def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
+    _store,engine,client=stage7_env
+    def fake_register(*,tag='warp'):
+        return {'registered':True,'deviceId':'device-test','outbound':{
+            'tag':tag,'protocol':'wireguard','settings':{
+                'secretKey':'private-do-not-return','address':['172.16.50.2/32'],
+                'reserved':[1,2,3],'peers':[{'publicKey':'peer-test','endpoint':'162.159.192.1:2408',
+                                             'allowedIPs':['0.0.0.0/0','::/0'],'keepAlive':30}]},
+            'streamSettings':{'sockopt':{}}}}
+    monkeypatch.setattr(server_module,'register_cloudflare_warp',fake_register)
+
+    created=client.post('/api/warp/create',json={'tag':'warp'})
+    assert created.status_code==200,created.text
+    doc=created.json()
+    assert doc['registered'] is True and doc['created'] is True and doc['runtimeMutation'] is False
+    assert doc['secretExposed'] is False and 'private-do-not-return' not in created.text
+
+    status=client.get('/api/warp/status').json()
+    assert status['mode']=='off' and status['endpoint']=='162.159.192.1:2408'
+
+    ai=client.post('/api/warp/mode',json={'tag':'warp','mode':'ai','adblock':False})
+    assert ai.status_code==200,ai.text
+    assert ai.json()['mode']=='ai' and ai.json()['applied'] is True
+    rules=engine.section('routing')['rules']
+    assert rules[0]['ruleTag']=='dark-warp-ai' and rules[0]['outboundTag']=='warp'
+
+    all_=client.post('/api/warp/mode',json={'tag':'warp','mode':'all','adblock':True})
+    assert all_.status_code==200,all_.text
+    assert all_.json()['mode']=='all' and all_.json()['adblock'] is True
+    rules=engine.section('routing')['rules']
+    assert [r['ruleTag'] for r in rules[:2]]==['dark-smart-adblock','dark-warp-all']
+
+    off=client.post('/api/warp/mode',json={'tag':'warp','mode':'off','adblock':False})
+    assert off.status_code==200,off.text
+    assert off.json()['mode']=='off'
+    assert not [r for r in engine.section('routing')['rules'] if r.get('ruleTag') in {'dark-warp-ai','dark-warp-all'}]
