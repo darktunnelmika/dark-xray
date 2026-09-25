@@ -94,6 +94,8 @@ class BotWorker:
                 if not updates:
                     self.runtime.touch(self.owner)
                     self.runtime.forum.poll_audits(self.api,self.owner,self.owner_role())
+                    timezone_name=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
+                    self.runtime.forum.maybe_daily_summary(self.api,self.owner,self.owner_role(),timezone_name)
                     continue
                 for update in updates:
                     uid=int(update.get('update_id') or 0)
@@ -107,6 +109,8 @@ class BotWorker:
                                 db.execute("UPDATE telegram_bots SET update_offset=?,last_seen=? WHERE owner=?",
                                            (uid+1,time.time(),self.owner))
                 self.runtime.forum.poll_audits(self.api,self.owner,self.owner_role())
+                timezone_name=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
+                self.runtime.forum.maybe_daily_summary(self.api,self.owner,self.owner_role(),timezone_name)
                 self.status('online')
             except Exception as ex:
                 msg=str(ex);self.runtime.persist_error(self.owner,msg);self.status('error',msg)
