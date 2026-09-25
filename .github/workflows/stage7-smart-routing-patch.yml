@@ -68,3 +68,5 @@ jobs:
             git pull --rebase origin work/stage7-smart-routing
             git push origin HEAD:work/stage7-smart-routing
           fi
+      - name: Stage 7 cleanup note
+        run: echo "stage7-smart-routing obsolete workflows removed; rerun after cleanup"
