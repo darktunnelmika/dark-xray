@@ -29,9 +29,15 @@ Adblock routing easy to review before any apply step.
   outbound tags, WARP candidates and active Stage 7 rules.
 - `POST /api/smart-routing/preview` accepts selected WARP outbound tags and
   returns a reviewed routing/observatory preview. It does not save settings.
-- The Xray Routing page now shows a **Smart WARP + Smart Adblock** preview card.
-  Its **Build preview** action calls the preview API and shows only the proposed
-  Stage 7 rules/balancer/Observatory plan; it does not save or restart Xray.
+- `POST /api/smart-routing/warp-rank` ranks supplied observations by health,
+  packet loss, median latency and jitter without applying anything.
+- `POST /api/smart-routing/warp-scan` runs the isolated temporary-Xray path probe
+  for up to 8 reviewed WireGuard/WARP outbounds.
+- The Outbound page exposes a dedicated **Smart WARP AI** preview control for
+  choosing WARP outbound/node paths.
+- The Routing page exposes separate **Smart WARP AI** and **Smart Adblock**
+  preview cards. Their actions show only the proposed rules/balancer/Observatory
+  plan; they do not save settings or restart Xray.
 
 Example body:
 
@@ -50,3 +56,20 @@ Example body:
 3. Save settings only after explicit owner confirmation.
 4. Restart/reload Xray through the existing manager path.
 5. Keep rollback evidence if apply fails.
+
+## Real WARP path scan (Inbound)
+
+- The Inbounds toolbar keeps a global **WARP Scan** action for owner users.
+- Every Inbound editor also exposes a **Smart WARP** tab. The tab lists reviewed
+  WireGuard/WARP candidates and renders scan results as:
+  **Node / Region / Ping / Loss / Jitter / Status / Select**.
+- Selecting a result is local preview state only; it is not written into the
+  inbound, Routing, or Outbound settings in this stage.
+- The scan accepts existing WireGuard/WARP outbound tags only.
+- Each path starts a short-lived Xray child on `127.0.0.1` with a temporary HTTP
+  proxy inbound and routes only that probe through the selected WireGuard outbound.
+- The production Xray child is not restarted and DARK settings are not saved.
+- Results are ranked by health, packet loss, median HTTPS latency and jitter.
+- Scans are serialized globally and limited to 8 candidates / 3 attempts to avoid
+  load spikes on the validated 1-vCPU small-production profile.
+- WireGuard private keys and peer configuration are never returned by the scan API.
