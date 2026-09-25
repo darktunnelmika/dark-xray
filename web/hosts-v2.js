@@ -11,10 +11,12 @@ function inboundFor(id){return state.inbounds.find(x=>Number(x.id)===Number(id))
 function inboundMeta(i){const st=i?.streamSettings||{};return {protocol:i?.protocol||'',network:i?.network||st.network||'tcp',security:i?.security||st.security||'none',port:Number(i?.port||0),stream:st};}
 function endpointMode(h,ib){
  const m=inboundMeta(ib);
+ if(h?.endpointType==='tunnel')return'tunnel';
  if((h.security&&h.security!=='same')||h.allowInsecure||h.alpn||h.finalMask||h.mihomoIpVersion||(h.excludeFromSubTypes||[]).length||h.overrideSniFromAddress||h.keepSniBlank)return'advanced';
  if(h.sni||h.host||h.path||(h.port&&Number(h.port)!==m.port))return'tunnel';
  return'direct';
 }
+function nodeForRuntime(runtime){const id=String(runtime||'').startsWith('node:')?String(runtime).slice(5):'';return state.hv2.nodes.find(n=>String(n.id)===id)||null;}
 function sniMode(h){if(h.keepSniBlank)return'blank';if(h.overrideSniFromAddress)return'address';if(h.sni)return'manual';return'inherit';}
 function baseSni(ib){const m=inboundMeta(ib),st=m.stream;if(m.security==='reality')return st.realitySettings?.serverName||st.realitySettings?.serverNames?.[0]||'';if(m.security==='tls')return st.tlsSettings?.serverName||'';return'';}
 function transportDefaults(ib){
@@ -26,12 +28,12 @@ function transportDefaults(ib){
 }
 function normalizeEndpoint(raw,ib){
  if(!ib)throw Error(L('Choose an inbound.','یک اینباند انتخاب کن.'));
- const m=inboundMeta(ib),mode=raw.mode||'direct',requestedSecurity=mode==='advanced'&&['same','tls','none'].includes(raw.security)?raw.security:'same',effectiveSecurity=requestedSecurity==='same'?m.security:requestedSecurity;
+ const m=inboundMeta(ib),mode=raw.mode||'direct',endpointTypeValue=mode==='tunnel'?'tunnel':'direct',requestedSecurity=mode==='advanced'&&['same','tls','none'].includes(raw.security)?raw.security:'same',effectiveSecurity=requestedSecurity==='same'?m.security:requestedSecurity;
  const address=String(raw.address||'').trim(),port=Number(raw.port),runtime=String(raw.runtime||'local');
  if(runtime!=='local'&&!/^node:[A-Za-z0-9_.@+-]{1,128}$/.test(runtime))throw Error(L('Choose a valid runtime.','یک Runtime معتبر انتخاب کن.'));
  if(!address||address.length>253||/[\s\/?#@]/.test(address))throw Error(L('Endpoint address must be a plain IP or domain.','آدرس نقطه اتصال باید یک IP یا دامنهٔ ساده باشد.'));
  if(!Number.isInteger(port)||port<1||port>65535)throw Error(L('Endpoint port must be 1..65535.','پورت نقطه اتصال باید بین ۱ تا ۶۵۵۳۵ باشد.'));
- let out={inboundId:Number(ib.id),runtime,address,port,remark:String(raw.remark||'').trim(),security:'same',sni:'',overrideSniFromAddress:false,keepSniBlank:false,host:'',path:'',alpn:'',fingerprint:'',allowInsecure:false,finalMask:'',mihomoIpVersion:'',excludeFromSubTypes:[],enable:raw.enable!==false};
+ let out={inboundId:Number(ib.id),runtime,endpointType:endpointTypeValue,address,port,remark:String(raw.remark||'').trim(),security:'same',sni:'',overrideSniFromAddress:false,keepSniBlank:false,host:'',path:'',alpn:'',fingerprint:'',allowInsecure:false,finalMask:'',mihomoIpVersion:'',excludeFromSubTypes:[],enable:raw.enable!==false};
  if(mode==='tunnel'||mode==='advanced'){
    const sd=String(raw.sniMode||'inherit');
    if(sd==='manual'){out.sni=String(raw.sni||'').trim();if(!out.sni&&effectiveSecurity!=='none')throw Error(L('Manual SNI needs a value.','برای SNI دستی باید مقدار وارد شود.'));}
@@ -82,7 +84,7 @@ async function hostsPage(){
  const hosts=(await api('/api/settings/hosts')).value||[],q=(state.hv2.search||'').toLowerCase();
  const rows=hosts.map((h,i)=>({...h,_index:i})).filter(h=>(state.hv2.inbound==='all'||String(h.inboundId)===String(state.hv2.inbound))&&(!q||JSON.stringify(h).toLowerCase().includes(q)));
  return heading(L('Public Endpoints','آدرس‌های عمومی'),L('Define exactly what address, port and client-facing transport DARK publishes in customer links.','دقیقاً مشخص کن DARK چه آدرس، پورت و تنظیمات سمت مشتری را در لینک‌ها منتشر کند.'),button(L('New endpoint','نقطه اتصال جدید'),'hv2new','plus','',true))+
- `<div class="hv2"><div class="notice">${L('Inbound = what Xray listens on. Public Endpoint = what the customer connects to. They can be the same for direct service or different for tunnels/CDNs.','اینباند چیزی است که Xray روی آن گوش می‌دهد؛ نقطه اتصال عمومی چیزی است که مشتری به آن وصل می‌شود. در اتصال مستقیم می‌توانند یکی باشند و در تانل/CDN متفاوت.')}</div><article class="panel hv3-toolbar"><div class="hv2-toolbar"><input id="hv2search" class="field-input" type="search" placeholder="${L('Search endpoint / address / SNI','جستجوی نقطه اتصال / آدرس / SNI')}" value="${e(state.hv2.search)}"><div class="hv2-filter"><button class="${state.hv2.inbound==='all'?'active':''}" data-act="hv2filter" data-id="all">${L('All','همه')}</button>${state.inbounds.map(i=>`<button class="${String(state.hv2.inbound)===String(i.id)?'active':''}" data-act="hv2filter" data-id="${i.id}">${e(i.remark||i.tag)}</button>`).join('')}</div><div class="spacer"></div><span class="tag">${rows.length}</span></div></article><div class="hv2-grid">${rows.length?rows.map(h=>pageCard(h,h._index)).join(''):empty(L('No public endpoints yet. Without one, DARK falls back to the configured server public address.','هنوز نقطه اتصال عمومی نساخته‌ای. بدون آن، DARK از آدرس عمومی تنظیم‌شده سرور استفاده می‌کند.'))}</div></div>`;
+ `<div class="hv2"><div class="notice">${L('Inbound = what Xray listens on. Public Endpoint = what the customer connects to. They can be the same for direct service or different for tunnels/CDNs. A Tunnel/CDN endpoint targeting a Node automatically keeps a Direct sibling for that Node in the same subscription.','اینباند چیزی است که Xray روی آن گوش می‌دهد؛ نقطه اتصال عمومی چیزی است که مشتری به آن وصل می‌شود. در اتصال مستقیم می‌توانند یکی باشند و در تانل/CDN متفاوت. اگر Tunnel/CDN را روی یک Node بسازی، مسیر Direct همان Node هم خودکار در همان ساب نگه داشته می‌شود.')}</div><article class="panel hv3-toolbar"><div class="hv2-toolbar"><input id="hv2search" class="field-input" type="search" placeholder="${L('Search endpoint / address / SNI','جستجوی نقطه اتصال / آدرس / SNI')}" value="${e(state.hv2.search)}"><div class="hv2-filter"><button class="${state.hv2.inbound==='all'?'active':''}" data-act="hv2filter" data-id="all">${L('All','همه')}</button>${state.inbounds.map(i=>`<button class="${String(state.hv2.inbound)===String(i.id)?'active':''}" data-act="hv2filter" data-id="${i.id}">${e(i.remark||i.tag)}</button>`).join('')}</div><div class="spacer"></div><span class="tag">${rows.length}</span></div></article><div class="hv2-grid">${rows.length?rows.map(h=>pageCard(h,h._index)).join(''):empty(L('No public endpoints yet. Without one, DARK falls back to the configured server public address.','هنوز نقطه اتصال عمومی نساخته‌ای. بدون آن، DARK از آدرس عمومی تنظیم‌شده سرور استفاده می‌کند.'))}</div></div>`;
 }
 enginePage=async function(){if(state.page==='hosts')return hostsPage();return baseEnginePage();};
 function editorHTML(h,ib,mode,excluded){
@@ -121,7 +123,15 @@ async function editHost(index=null,cloneMode=false){
  const mode=endpointMode(h,ib0),excluded=new Set(h.excludeFromSubTypes||[]);
  dialog(index==null?L('New public endpoint','نقطه اتصال عمومی جدید'):L('Edit public endpoint','ویرایش نقطه اتصال عمومی'),editorHTML(h,ib0,mode,excluded),async form=>{
    const ib=inboundFor(form.get('inboundId')),raw={mode:String(form.get('mode')||'direct'),runtime:String(form.get('runtime')||'local'),address:form.get('address'),port:form.get('port'),remark:form.get('remark'),enable:form.get('enable')==='true',sniMode:form.get('sniMode'),sni:form.get('sni'),host:form.get('host'),path:form.get('path'),security:form.get('security'),alpn:form.get('alpn'),fingerprint:form.get('fingerprint'),allowInsecure:form.get('allowInsecure')==='true',finalMask:form.get('finalMask'),mihomoIpVersion:form.get('mihomoIpVersion'),excludeFromSubTypes:form.getAll('excludeFormat')};
-   const v=normalizeEndpoint(raw,ib);if(index==null||cloneMode)list.push(v);else list[index]=v;
+   const v=normalizeEndpoint(raw,ib),node=nodeForRuntime(v.runtime);
+   if(v.endpointType==='tunnel'&&!v.remark)v.remark=(node?.name||ib?.remark||L('Endpoint','Endpoint'))+' · '+L('Tunnel','تانل');
+   if(index==null||cloneMode)list.push(v);else list[index]=v;
+   if(v.endpointType==='tunnel'&&String(v.runtime).startsWith('node:')){
+     if(!node?.data_address)throw Error(L('This Node has no client-facing Data Address.','برای این نود Data Address سمت مشتری تعریف نشده است.'));
+     const editedIndex=(index!=null&&!cloneMode)?index:-1;
+     const directExists=list.some((x,j)=>j!==editedIndex&&Number(x.inboundId)===Number(ib.id)&&String(x.runtime||'local')===v.runtime&&(x.endpointType||endpointMode(x,ib))!=='tunnel');
+     if(!directExists)list.push(normalizeEndpoint({mode:'direct',runtime:v.runtime,address:node.data_address,port:Number(ib.port),remark:(node.name||node.id)+' · '+L('Direct','مستقیم'),enable:true},ib));
+   }
    await api('/api/settings/hosts','PUT',{value:list});closeDialog();toast(L('Public endpoint saved. Customer links now use this endpoint.','نقطه اتصال عمومی ذخیره شد؛ لینک مشتری از همین نقطه اتصال استفاده می‌کند.'));await refresh();
  });
  const form=document.querySelector('#dialog-form');document.querySelector('#overlay .dialog')?.classList.add('hv3-dialog');
@@ -140,5 +150,5 @@ runAction=async function(act,el){
  return baseRunAction(act,el);
 };
 let ht;document.addEventListener('input',ev=>{if(ev.target.id==='hv2search'){state.hv2.search=ev.target.value;clearTimeout(ht);ht=setTimeout(async()=>{await renderPage();document.querySelector('#hv2search')?.focus();},180);}});
-globalThis.DarkHostV3={inboundMeta,endpointMode,sniMode,normalizeEndpoint,previewModel,transportDefaults};
+globalThis.DarkHostV3={inboundMeta,endpointMode,sniMode,normalizeEndpoint,previewModel,transportDefaults,nodeForRuntime};
 })();
