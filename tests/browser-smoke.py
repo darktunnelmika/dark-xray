@@ -174,6 +174,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert mobile.get_attribute('aria-expanded')=='true'
             page.keyboard.press('Escape')
             page.wait_for_function("()=>!document.querySelector('.sidebar')?.classList.contains('open')&&!document.querySelector('.menu-backdrop')")
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.right<=1}")
             assert not page.evaluate("document.body.classList.contains('mobile-nav-open')")
             assert mobile.get_attribute('aria-expanded')=='false'
             closed_box=page.locator('.sidebar').bounding_box()
@@ -209,11 +210,11 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             report['mobile_360']=narrow
             mark('360px narrow mobile dashboard keeps shell, topbar and closed sidebar in bounds')
             page.evaluate("document.documentElement.setAttribute('dir','rtl')")
-            page.wait_for_timeout(60)
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.left>=window.innerWidth-1}")
             rtl_side=page.locator('.sidebar').bounding_box()
             assert rtl_side and rtl_side['x']>=page.evaluate('window.innerWidth')-1,rtl_side
             page.evaluate("document.documentElement.setAttribute('dir','ltr')")
-            page.wait_for_timeout(60)
+            page.wait_for_function("()=>{const r=document.querySelector('.sidebar')?.getBoundingClientRect();return !!r&&r.right<=1}")
             mark('closed mobile sidebar stays fully offscreen in RTL as well as LTR')
             page.screenshot(path=str(OUT/'browser-mobile-en.png'),full_page=True)
 
