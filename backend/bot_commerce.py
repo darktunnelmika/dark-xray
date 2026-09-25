@@ -617,6 +617,32 @@ class BotCommerce:
             )
         return value
 
+    def _notify_fulfilled_order(self, actor: Actor, order: dict) -> None:
+        with self.store.lock:
+            bot = self.store.db.execute(
+                "SELECT enabled,token_enc,bot_username FROM telegram_bots WHERE owner_id=?",
+                (order["owner_id"],)
+            ).fetchone()
+        if not bot or not bot["enabled"] or not bot["bot_username"]:
+            return
+        token = self.auth.cipher.decrypt(bot["token_enc"].encode()).decode()
+        text = (
+            "✅ سرویس شما آماده شد.\n"
+            + order["product_name"] + " — " + order["plan_label"] + "\n"
+            + "Subscription:\n" + order["subscription_url"]
+        )
+        try:
+            self._telegram_call(token, "sendMessage", {
+                "chat_id": order["telegram_user_id"],
+                "text": text[:3900],
+                "disable_web_page_preview": True
+            })
+        except PolicyError as ex:
+            self.manager.audit(
+                actor, order["owner_id"], "telegram_bot.delivery_failed",
+                order["id"], str(ex)[:200]
+            )
+
     def fulfill(self, actor: Actor, order_id: str) -> dict:
         owner_id = self._panel_owner(actor)
         order = self.order(owner_id, order_id)
@@ -665,7 +691,9 @@ class BotCommerce:
         self.manager.audit(
             actor, owner_id, "shop.fulfillment.success", order_id, email
         )
-        return self.order(owner_id, order_id)
+        completed = self.order(owner_id, order_id)
+        self._notify_fulfilled_order(actor, completed)
+        return completed
 
     def create_representative(self, actor: Actor, representative_id: str,
                               volume_gib: int, unlimited_credit: int,
