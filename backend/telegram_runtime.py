@@ -52,7 +52,7 @@ class BotWorker:
     def __init__(self,runtime,owner:str,token:str,token_mark:str):
         self.runtime=runtime;self.owner=owner;self.token=token;self.token_mark=token_mark
         self.stop_event=threading.Event();self.thread=None;self.api=TelegramAPI(token)
-        self.sessions:dict[int,str]={};self.bot_id=0
+        self.sessions:dict[int,str]={};self.session_data:dict[int,dict[str,str]]={};self.bot_id=0
 
     def start(self):
         self.thread=threading.Thread(target=self.run,name='dark-telegram-'+self.owner,daemon=True)
@@ -112,6 +112,9 @@ class BotWorker:
                 timezone_name=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
                 self.runtime.forum.maybe_daily_summary(self.api,self.owner,self.owner_role(),timezone_name)
                 self.status('online')
+            except httpx.ReadTimeout:
+                self.runtime.touch(self.owner);self.status('online')
+                continue
             except Exception as ex:
                 msg=str(ex);self.runtime.persist_error(self.owner,msg);self.status('error',msg)
                 try:self.runtime.forum.report(self.api,self.owner,'errors','🚨 Telegram runtime error\n'+msg[:1200])
@@ -136,7 +139,7 @@ class BotWorker:
     def main_keyboard(self,admin:bool)->dict:
         rows=[['🛍 فروشگاه','📦 سرویس‌های من']]
         if admin:
-            rows += [['👥 مدیریت کاربران','🧾 سفارش‌ها'],['📊 وضعیت ربات','💳 درگاه‌ها']]
+            rows += [['👥 مدیریت کاربران','🧾 سفارش‌ها'],['📊 وضعیت ربات','💳 پرداخت دستی']]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
         return {'keyboard':[[{'text':x} for x in row] for row in rows],
                 'resize_keyboard':True,'is_persistent':True}
@@ -190,16 +193,22 @@ class BotWorker:
             if self.handle_receipt(chat_id,user_id,msg):return
         text=str(msg.get('text') or '').strip()
         if not text:return
-        if self.sessions.get(user_id)=='new_rep':
-            self.create_representative_from_text(chat_id,user_id,text);return
         low=text.lower()
+        if low in ('/cancel','cancel','لغو'):
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'عملیات لغو شد.',self.main_keyboard(self.is_admin(user_id)));return
+        session=self.sessions.get(user_id,'')
+        if session.startswith('pay_') and self.is_admin(user_id):
+            self.handle_payment_setup_text(chat_id,user_id,text);return
+        if session=='new_rep':
+            self.create_representative_from_text(chat_id,user_id,text);return
         if low in ('/start','start'):self.send_home(chat_id,user_id);return
         if low=='/shop' or text=='🛍 فروشگاه':self.shop(chat_id);return
         if low=='/services' or text=='📦 سرویس‌های من':self.services(chat_id,user_id);return
         if low=='/status' or text=='📊 وضعیت ربات':self.status_menu(chat_id,user_id);return
         if text=='👥 مدیریت کاربران' and self.is_admin(user_id):self.admin_clients(chat_id);return
         if text=='🧾 سفارش‌ها' and self.is_admin(user_id):self.admin_orders(chat_id);return
-        if text=='💳 درگاه‌ها' and self.is_admin(user_id):self.admin_gateways(chat_id);return
+        if text=='💳 پرداخت دستی' and self.is_admin(user_id):self.admin_gateways(chat_id);return
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representatives(chat_id);return
         if text=='➕ ساخت نماینده' and self.is_admin(user_id) and self.owner_role()=='owner':
@@ -294,6 +303,10 @@ class BotWorker:
                 self.api.send(chat_id,card)
             else:self.api.send(chat_id,'این درگاه برای آپدیت آینده رزرو شده است؛ فعلاً پرداخت دستی را انتخاب کن.')
             return
+        if data=='paycfg' and self.is_admin(user_id):
+            self.start_payment_setup(chat_id,user_id);return
+        if data=='paytoggle' and self.is_admin(user_id):
+            self.toggle_manual_payment(chat_id,user_id);return
         if data.startswith('cl:') and self.is_admin(user_id):
             self.client_detail(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('clon:') and self.is_admin(user_id):
@@ -380,7 +393,10 @@ class BotWorker:
         with self.runtime.store.lock:
             orders=self.runtime.store.db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=?",(self.owner,)).fetchone()[0]
             pending=self.runtime.store.db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND status IN ('awaiting_payment','payment_review','paid')",(self.owner,)).fetchone()[0]
-        self.api.send(chat_id,f"📊 وضعیت DARK BOT\nکاربران: {clients}\nمحصولات: {products}\nسفارش‌ها: {orders}\nنیازمند پیگیری: {pending}")
+        forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
+        forum_state='متصل ✅' if forum.get('configured') else 'متصل نیست ⛔'
+        pay_state='فعال ✅' if gateway and gateway.get('enabled') else ('غیرفعال ⛔' if gateway else 'تنظیم نشده')
+        self.api.send(chat_id,f"📊 وضعیت DARK BOT\nForum: {forum_state}\nپرداخت دستی: {pay_state}\nکاربران: {clients}\nمحصولات: {products}\nسفارش‌ها: {orders}\nنیازمند پیگیری: {pending}")
 
     def client_row(self,row_id:int)->str:
         with self.runtime.store.lock:
@@ -427,10 +443,73 @@ class BotWorker:
         for r in rows:lines.append(f"• {r['id']} · {amount(r['amount_minor'],r['currency'])} · {r['status']}")
         self.api.send(chat_id,'\n'.join(lines))
 
+    def manual_gateway(self)->dict[str,Any]|None:
+        return next((r for r in self.runtime.commerce.gateway_rows(self.owner)
+                     if r.get('id')=='card' and r.get('kind')=='manual'),None)
+
     def admin_gateways(self,chat_id:int):
-        rows=self.runtime.commerce.gateway_rows(self.owner)
-        if not rows:self.api.send(chat_id,'هیچ درگاه/روش پرداختی تعریف نشده است. از پنل وب اضافه کن.');return
-        self.api.send(chat_id,'💳 روش‌های پرداخت\n'+'\n'.join(f"• {r['label']} · {r['kind']} · {'فعال' if r['enabled'] else 'خاموش'}" for r in rows))
+        row=self.manual_gateway()
+        if not row:
+            self.api.send(chat_id,'💳 پرداخت دستی هنوز تنظیم نشده است.\nتنظیمات کارت فقط از داخل همین ربات انجام می‌شود.',
+                          {'inline_keyboard':[[{'text':'➕ تنظیم کارت بانکی','callback_data':'paycfg'}]]});return
+        state='فعال ✅' if row['enabled'] else 'غیرفعال ⛔'
+        text=('💳 پرداخت دستی\n'
+              f"وضعیت: {state}\n"
+              f"شماره کارت: {row.get('card_number') or '—'}\n"
+              f"صاحب کارت: {row.get('card_holder') or '—'}\n"
+              f"بانک: {row.get('bank_name') or '—'}")
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'✏️ تغییر اطلاعات کارت','callback_data':'paycfg'}],
+            [{'text':'⛔ غیرفعال' if row['enabled'] else '✅ فعال','callback_data':'paytoggle'}]
+        ]})
+
+    def start_payment_setup(self,chat_id:int,user_id:int):
+        self.sessions[user_id]='pay_card';self.session_data[user_id]={}
+        self.api.send(chat_id,'💳 شماره کارت ۱۶ رقمی را بفرست.\nبرای لغو: /cancel')
+
+    def handle_payment_setup_text(self,chat_id:int,user_id:int,text:str):
+        state=self.sessions.get(user_id,'');data=self.session_data.setdefault(user_id,{})
+        if state=='pay_card':
+            digits=''.join(str(int(ch)) for ch in text if ch.isdigit())
+            if len(digits)!=16:
+                self.api.send(chat_id,'شماره کارت باید دقیقاً ۱۶ رقم باشد. دوباره بفرست.');return
+            data['card_number']=digits;self.sessions[user_id]='pay_holder'
+            self.api.send(chat_id,'نام صاحب کارت را بفرست.');return
+        if state=='pay_holder':
+            value=text.strip()
+            if not 2<=len(value)<=128:self.api.send(chat_id,'نام صاحب کارت نامعتبر است.');return
+            data['card_holder']=value;self.sessions[user_id]='pay_bank'
+            self.api.send(chat_id,'نام بانک را بفرست.');return
+        if state=='pay_bank':
+            value=text.strip()
+            if not 2<=len(value)<=128:self.api.send(chat_id,'نام بانک نامعتبر است.');return
+            data['bank_name']=value;self.sessions[user_id]='pay_instructions'
+            self.api.send(chat_id,'متن راهنمای پرداخت را بفرست. اگر توضیح اضافه نمی‌خواهی فقط - بفرست.');return
+        if state!='pay_instructions':raise PolicyError('Unknown payment setup state')
+        data['instructions']='' if text.strip()=='-' else text.strip()[:4000]
+        now=time.time()
+        with self.runtime.store.transaction() as db:
+            db.execute("""INSERT INTO commerce_gateways(id,owner,label,kind,enabled,card_number,card_holder,bank_name,
+              instructions,plugin,secret_enc,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+              ON CONFLICT(owner,id) DO UPDATE SET label=excluded.label,kind='manual',enabled=1,
+              card_number=excluded.card_number,card_holder=excluded.card_holder,bank_name=excluded.bank_name,
+              instructions=excluded.instructions,plugin='',secret_enc='',updated_at=excluded.updated_at""",
+              ('card',self.owner,'کارت به کارت','manual',1,data['card_number'],data['card_holder'],data['bank_name'],
+               data['instructions'],'','',now))
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.manual_payment_bot_save','card','configured from Telegram admin')
+        self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,'✅ اطلاعات پرداخت دستی ذخیره و فعال شد.')
+        self.admin_gateways(chat_id)
+
+    def toggle_manual_payment(self,chat_id:int,user_id:int):
+        row=self.manual_gateway()
+        if not row:self.start_payment_setup(chat_id,user_id);return
+        enabled=not bool(row['enabled'])
+        with self.runtime.store.transaction() as db:
+            db.execute('UPDATE commerce_gateways SET enabled=?,updated_at=? WHERE owner=? AND id=?',
+                       (int(enabled),time.time(),self.owner,'card'))
+        self.runtime.manager.audit(self.actor(),self.owner,'commerce.manual_payment_toggle','card','enabled='+str(enabled))
+        self.admin_gateways(chat_id)
 
     def representatives(self,chat_id:int):
         with self.runtime.store.lock:
@@ -546,7 +625,7 @@ class TelegramBotRuntime:
             db.execute("UPDATE telegram_bots SET last_error=?,last_seen=? WHERE owner=?",(str(error)[:1000],time.time(),owner))
 
     def touch(self,owner:str):
-        with self.store.transaction() as db:db.execute("UPDATE telegram_bots SET last_seen=? WHERE owner=?",(time.time(),owner))
+        with self.store.transaction() as db:db.execute("UPDATE telegram_bots SET last_seen=?,last_error='' WHERE owner=?",(time.time(),owner))
 
     def repair_forum(self,owner:str)->dict[str,Any]:
         with self.lock:worker=self.workers.get(owner)
