@@ -124,3 +124,48 @@ def test_full_backup_restores_telegram_business_state_but_resets_bot_identity(tm
         assert db.execute("SELECT name FROM commerce_products WHERE owner='dark' AND id='vip'").fetchone()[0]=='VIP'
         assert db.execute("SELECT card_number FROM commerce_gateways WHERE owner='dark' AND id='card'").fetchone()[0]=='6037991234567890'
         assert db.execute("SELECT status FROM commerce_orders WHERE id='ord1'").fetchone()[0]=='provisioned'
+
+def test_full_backup_preserves_customer_wallet_referral_and_support_state(tmp_path):
+    data,config=minimal_source(tmp_path)
+    with sqlite3.connect(data/'dark.sqlite3') as db:
+        db.executescript("""
+        CREATE TABLE customer_wallets(
+          owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,currency TEXT NOT NULL,
+          balance_minor INTEGER NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,telegram_id));
+        CREATE TABLE customer_wallet_ledger(
+          id TEXT PRIMARY KEY,owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,
+          delta_minor INTEGER NOT NULL,currency TEXT NOT NULL,kind TEXT NOT NULL,
+          reference TEXT NOT NULL,detail TEXT NOT NULL,created_at REAL NOT NULL);
+        CREATE TABLE customer_referrals(
+          owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,code TEXT NOT NULL,
+          referrer_telegram_id INTEGER NOT NULL,referred_at REAL NOT NULL,
+          qualified_at REAL NOT NULL,reward_minor INTEGER NOT NULL,PRIMARY KEY(owner,telegram_id));
+        CREATE TABLE customer_support_tickets(
+          id TEXT PRIMARY KEY,owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,
+          username TEXT NOT NULL,subject TEXT NOT NULL,status TEXT NOT NULL,
+          created_at REAL NOT NULL,updated_at REAL NOT NULL);
+        CREATE TABLE customer_support_messages(
+          id TEXT PRIMARY KEY,ticket_id TEXT NOT NULL,owner TEXT NOT NULL,
+          sender_type TEXT NOT NULL,sender_telegram_id INTEGER NOT NULL,
+          text TEXT NOT NULL,file_kind TEXT NOT NULL,file_id TEXT NOT NULL,created_at REAL NOT NULL);
+        """)
+        db.execute("INSERT INTO customer_wallets VALUES(?,?,?,?,?)",('dark',55,'IRT',700000,1.0))
+        db.execute("INSERT INTO customer_wallet_ledger VALUES(?,?,?,?,?,?,?,?,?)",
+                   ('w1','dark',55,700000,'IRT','topup','top1','approved',1.0))
+        db.execute("INSERT INTO customer_referrals VALUES(?,?,?,?,?,?,?)",
+                   ('dark',55,'REFCODE',0,0,0,0))
+        db.execute("INSERT INTO customer_support_tickets VALUES(?,?,?,?,?,?,?,?)",
+                   ('t1','dark',55,'user55','Need help','open',1.0,2.0))
+        db.execute("INSERT INTO customer_support_messages VALUES(?,?,?,?,?,?,?,?,?)",
+                   ('m1','t1','dark','customer',55,'hello','','',2.0))
+        db.commit()
+    archive=tmp_path/'customer-state.darkbackup'
+    create_backup(data,config,archive,PASS)
+    restored=tmp_path/'customer-restored'
+    restore_backup(archive,restored,PASS)
+    with sqlite3.connect(restored/'data/dark.sqlite3') as db:
+        assert db.execute("SELECT balance_minor FROM customer_wallets WHERE owner='dark' AND telegram_id=55").fetchone()[0]==700000
+        assert db.execute("SELECT COUNT(*) FROM customer_wallet_ledger WHERE owner='dark' AND telegram_id=55").fetchone()[0]==1
+        assert db.execute("SELECT code FROM customer_referrals WHERE owner='dark' AND telegram_id=55").fetchone()[0]=='REFCODE'
+        assert db.execute("SELECT status FROM customer_support_tickets WHERE id='t1'").fetchone()[0]=='open'
+        assert db.execute("SELECT text FROM customer_support_messages WHERE id='m1'").fetchone()[0]=='hello'
