@@ -36,11 +36,12 @@ from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT,NAME_RE
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
-from smart_routing import (DEFAULT_SAFETY_THRESHOLDS,STAGE7_SAFETY_TTL_SECONDS,SmartRoutingError,
+from smart_routing import (AI_DOMAIN_MATCHERS,DEFAULT_SAFETY_THRESHOLDS,STAGE7_SAFETY_TTL_SECONDS,SmartRoutingError,
                            build_stage7_candidate_config,build_stage7_patch,build_stage7_plan,
                            evaluate_stage7_node_readiness,evaluate_warp_safety,filter_stage7_routing_for_node,
                            rank_warp_paths,stage7_state_hash)
 from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
+from warp_cloudflare import WarpRegistrationError,register_cloudflare_warp
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
@@ -223,6 +224,12 @@ class SmartWarpScan(Model):
     outboundTags:list[str]=Field(min_length=1,max_length=8)
     attempts:StrictInt=Field(default=3,ge=1,le=3)
     timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
+class WarpCreate(Model):
+    tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
+class WarpMode(Model):
+    tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
+    mode:Literal['off','ai','all']='ai'
+    adblock:bool=False
 
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
@@ -1778,6 +1785,111 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/traffic-engine/preview')
     def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
+
+    def _warp_outbound(tag:str)->dict|None:
+        for item in engine.section('outbounds'):
+            if isinstance(item,dict) and str(item.get('tag') or '')==tag:
+                return item
+        return None
+
+    def _warp_status(tag:str='warp')->dict:
+        outbound=_warp_outbound(tag)
+        routing=engine.section('routing');rules=routing.get('rules',[]) if isinstance(routing,dict) else []
+        mode='off';adblock=False
+        for rule in rules if isinstance(rules,list) else []:
+            if not isinstance(rule,dict):continue
+            rt=str(rule.get('ruleTag') or '')
+            if rt=='dark-warp-all' and rule.get('outboundTag')==tag:mode='all'
+            elif rt in {'dark-warp-ai','dark-smart-warp-ai'} and rule.get('outboundTag')==tag and mode!='all':mode='ai'
+            if rt=='dark-smart-adblock' and rule.get('outboundTag')=='block':adblock=True
+        settings=outbound.get('settings',{}) if isinstance(outbound,dict) and isinstance(outbound.get('settings'),dict) else {}
+        peer=(settings.get('peers') or [{}])[0] if isinstance(settings.get('peers'),list) else {}
+        return {'registered':bool(outbound and str(outbound.get('protocol','')).lower()=='wireguard'),
+                'tag':tag,'mode':mode,'adblock':adblock,'endpoint':str(peer.get('endpoint') or '') if isinstance(peer,dict) else '',
+                'addresses':[str(x) for x in settings.get('address',[]) if isinstance(x,str)],
+                'runtimeDirty':bool(engine.runtime_state().get('dirty')),'secretExposed':False}
+
+    def _warp_register_saved(tag:str)->dict:
+        outbounds=engine.section('outbounds');existing=next((x for x in outbounds if isinstance(x,dict) and x.get('tag')==tag),None)
+        if existing and str(existing.get('protocol','')).lower()!='wireguard':
+            raise HTTPException(409,'The selected WARP tag is already used by a non-WireGuard outbound')
+        try:registered=register_cloudflare_warp(tag=tag)
+        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
+        replacement=registered['outbound'];updated=[];replaced=False
+        for item in outbounds:
+            if isinstance(item,dict) and item.get('tag')==tag:
+                updated.append(replacement);replaced=True
+            else:updated.append(item)
+        if not replaced:updated.append(replacement)
+        candidate=engine.build_config();candidate['outbounds']=copy.deepcopy(updated);engine.validate(candidate)
+        engine.save_section('outbounds',updated)
+        return registered
+
+    @app.get('/api/warp/status')
+    def warp_status(tag:str='warp',p:Principal=Depends(owner)):
+        if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',tag):raise HTTPException(400,'Invalid WARP tag')
+        return _warp_status(tag)
+
+    @app.post('/api/warp/create')
+    def warp_create(body:WarpCreate,p:Principal=Depends(owner)):
+        writable();before=bool(_warp_outbound(body.tag));result=_warp_register_saved(body.tag)
+        manager.audit(p.actor,p.actor.id,'warp.rotate' if before else 'warp.create',body.tag,
+                      'Cloudflare WARP WireGuard profile saved; runtime unchanged until activation')
+        return _warp_status(body.tag)|{'created':not before,'rotated':before,'deviceId':result['deviceId'],
+                                       'runtimeMutation':False,'activationRequired':True}
+
+    @app.post('/api/warp/rotate')
+    def warp_rotate(body:WarpCreate,p:Principal=Depends(owner)):
+        writable()
+        if not _warp_outbound(body.tag):raise HTTPException(404,'WARP outbound not found')
+        result=_warp_register_saved(body.tag)
+        manager.audit(p.actor,p.actor.id,'warp.rotate',body.tag,'New Cloudflare WARP profile saved; activation required')
+        return _warp_status(body.tag)|{'rotated':True,'deviceId':result['deviceId'],
+                                       'runtimeMutation':False,'activationRequired':True}
+
+    @app.post('/api/warp/mode')
+    def warp_mode(body:WarpMode,p:Principal=Depends(owner)):
+        writable();outbound=_warp_outbound(body.tag)
+        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
+            raise HTTPException(409,'Create the WARP outbound first')
+        with store.lock:
+            active=store.db.execute("SELECT id FROM smart_routing_rollouts WHERE state='running' LIMIT 1").fetchone()
+        if active:raise HTTPException(409,'A Smart Routing rollout is running; finish or abort it first')
+        safety=None
+        if body.mode!='off':
+            try:
+                observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=2,timeout=5.0)
+            except SmartWarpProbeError as ex:raise HTTPException(409,'WARP safety scan failed: '+str(ex))
+            ranked=rank_warp_paths(observations,max_results=1)
+            safety=evaluate_warp_safety(ranked,[body.tag],
+                max_loss_percent=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),
+                max_latency_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),
+                max_jitter_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs']))
+            if not safety['passed']:raise HTTPException(409,'WARP safety scan blocked activation: '+'; '.join(safety['issues']))
+        routing=copy.deepcopy(engine.section('routing'));rules=routing.get('rules',[])
+        if not isinstance(rules,list):rules=[]
+        managed={'dark-warp-ai','dark-warp-all','dark-smart-warp-ai','dark-smart-adblock'}
+        base=[r for r in rules if not (isinstance(r,dict) and r.get('ruleTag') in managed)]
+        prepend=[]
+        if body.adblock:
+            block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
+            if not block or str(block.get('protocol','')).lower()!='blackhole':
+                raise HTTPException(409,"Smart Adblock requires blackhole outbound 'block'")
+            from smart_routing import ADBLOCK_DOMAIN_MATCHERS
+            prepend.append({'type':'field','ruleTag':'dark-smart-adblock','domain':ADBLOCK_DOMAIN_MATCHERS[:],'outboundTag':'block'})
+        if body.mode=='ai':
+            prepend.append({'type':'field','ruleTag':'dark-warp-ai','domain':AI_DOMAIN_MATCHERS[:],'outboundTag':body.tag})
+        elif body.mode=='all':
+            prepend.append({'type':'field','ruleTag':'dark-warp-all','network':'tcp,udp','outboundTag':body.tag})
+        routing['rules']=prepend+base
+        candidate=engine.build_config();candidate['routing']=routing;engine.validate(candidate)
+        def commit():
+            with store.transaction() as db:
+                db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
+                           ('routing',json.dumps(routing)))
+        runtime=engine.apply_config(candidate,start=True,force=True,after_success=commit)
+        manager.audit(p.actor,p.actor.id,'warp.mode',body.tag,'mode='+body.mode+'; adblock='+str(body.adblock))
+        return _warp_status(body.tag)|{'applied':True,'safety':safety,'runtime':runtime}
 
     @app.get('/api/smart-routing/plan')
     def smart_routing_plan(p:Principal=Depends(owner)):
