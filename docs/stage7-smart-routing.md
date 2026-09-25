@@ -73,3 +73,5 @@ Example body:
 - Scans are serialized globally and limited to 8 candidates / 3 attempts to avoid
   load spikes on the validated 1-vCPU small-production profile.
 - WireGuard private keys and peer configuration are never returned by the scan API.
+
+
