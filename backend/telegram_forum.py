@@ -1,5 +1,7 @@
 from __future__ import annotations
 import time
+from datetime import datetime,timedelta,time as dt_time
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from dark_policy import PolicyError
@@ -115,10 +117,12 @@ class TelegramForumCenter:
             topic=api.call('createForumTopic',{'chat_id':chat_id,'name':name})
             created[kind]=int(topic['message_thread_id'])
         with self.store.transaction() as db:
-            db.execute("""INSERT INTO telegram_forums(owner,chat_id,title,enabled,configured_at,updated_at,last_audit_id)
-              VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET chat_id=excluded.chat_id,title=excluded.title,
-              enabled=1,updated_at=excluded.updated_at,last_audit_id=excluded.last_audit_id""",
-              (owner,chat_id,str(chat.get('title') or chat_shared.get('title') or ''),1,now,now,max_audit))
+            db.execute("""INSERT INTO telegram_forums(owner,chat_id,title,enabled,configured_at,updated_at,last_audit_id,last_daily_key)
+              VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET chat_id=excluded.chat_id,title=excluded.title,
+              enabled=1,updated_at=excluded.updated_at,last_audit_id=excluded.last_audit_id,
+              last_daily_key=excluded.last_daily_key""",
+              (owner,chat_id,str(chat.get('title') or chat_shared.get('title') or ''),1,now,now,max_audit,
+               time.strftime('%Y-%m-%d',time.localtime(now))))
             if not old or int(old['chat_id'])!=chat_id:
                 db.execute('DELETE FROM telegram_forum_topics WHERE owner=?',(owner,))
             for kind,name in TOPICS.items():
@@ -189,6 +193,35 @@ class TelegramForumCenter:
         if 'error' in a or 'fail' in a:return 'errors'
         if a.startswith('node.') or a.startswith('system.'):return 'system'
         return 'system'
+
+    def maybe_daily_summary(self,api,owner:str,role:str,timezone_name:str='UTC')->bool:
+        try:tz=ZoneInfo(str(timezone_name or 'UTC'))
+        except Exception:tz=ZoneInfo('UTC')
+        now=datetime.now(tz);current_key=now.strftime('%Y-%m-%d')
+        with self.store.lock:
+            forum=self.store.db.execute('SELECT last_daily_key FROM telegram_forums WHERE owner=? AND enabled=1',(owner,)).fetchone()
+        if not forum or str(forum['last_daily_key'] or '')==current_key:return False
+        day=now.date()-timedelta(days=1)
+        start=datetime.combine(day,dt_time.min,tzinfo=tz).timestamp()
+        end=datetime.combine(now.date(),dt_time.min,tzinfo=tz).timestamp()
+        where='created_at>=? AND created_at<?';args:list[Any]=[start,end]
+        if role!='owner':where+=' AND owner=?';args.append(owner)
+        with self.store.lock:
+            rows=[dict(r) for r in self.store.db.execute(
+                f"SELECT currency,COUNT(*) orders,COALESCE(SUM(amount_minor),0) amount FROM commerce_orders WHERE {where} GROUP BY currency ORDER BY currency",tuple(args))]
+            status=[dict(r) for r in self.store.db.execute(
+                f"SELECT status,COUNT(*) count FROM commerce_orders WHERE {where} GROUP BY status ORDER BY status",tuple(args))]
+        total=sum(int(x['orders']) for x in rows)
+        money=' · '.join(f"{x['amount']:,} {x['currency']}" for x in rows) or '0'
+        states=' · '.join(f"{x['status']}: {x['count']}" for x in status) or 'بدون سفارش'
+        text=(f"📊 گزارش روزانه DARK · {day.isoformat()}\n"
+              f"سفارش‌ها: {total}\nمبلغ ثبت‌شده: {money}\nوضعیت‌ها: {states}")
+        sent=self.report(api,owner,'daily',text)
+        if sent:
+            with self.store.transaction() as db:
+                db.execute('UPDATE telegram_forums SET last_daily_key=?,updated_at=? WHERE owner=?',
+                           (current_key,time.time(),owner))
+        return sent
 
     def poll_audits(self,api,owner:str,role:str,limit:int=40)->int:
         with self.store.lock:
