@@ -74,4 +74,3 @@ Example body:
   load spikes on the validated 1-vCPU small-production profile.
 - WireGuard private keys and peer configuration are never returned by the scan API.
 
-
