@@ -204,8 +204,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             narrow=page.evaluate("()=>({scroll:document.documentElement.scrollWidth,inner:window.innerWidth,topbar:document.querySelector('.topbar')?.getBoundingClientRect().width})")
             assert narrow['scroll']<=narrow['inner']+2,narrow
             assert narrow['topbar']<=narrow['inner']+1,narrow
+            narrow_side=page.locator('.sidebar').bounding_box()
+            assert narrow_side and narrow_side['x']+narrow_side['width']<=1,narrow_side
             report['mobile_360']=narrow
-            mark('360px narrow mobile dashboard keeps shell and topbar inside viewport')
+            mark('360px narrow mobile dashboard keeps shell, topbar and closed sidebar in bounds')
             page.screenshot(path=str(OUT/'browser-mobile-en.png'),full_page=True)
 
             page.set_viewport_size({'width':1440,'height':1000})
