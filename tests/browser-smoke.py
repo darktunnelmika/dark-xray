@@ -486,6 +486,19 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('.sv3-subscription button[type="submit"]').click()
             page.locator('.sv3-subscription').wait_for(state='visible',timeout=10000)
 
+            sub_page=context.new_page()
+            sub_page.goto(delivery_client['subscription_url'],wait_until='networkidle',timeout=20000)
+            sub_page.locator('#dark-sub-app').wait_for(state='visible',timeout=10000)
+            assert sub_page.locator('#service-status').inner_text().strip()=='ACTIVE'
+            assert sub_page.locator('#profile-title').inner_text().strip()=='DARK Browser Policy'
+            assert sub_page.locator('#qr-code svg').count()==1
+            assert sub_page.locator('#format-tabs button').count()==4
+            assert sub_page.locator('#subscription-url').inner_text().strip().endswith('?format=raw')
+            assert sub_page.evaluate("document.documentElement.lang")=='en'
+            sub_page.screenshot(path=str(OUT/'browser-subscription-portal.png'),full_page=True)
+            sub_page.close()
+            mark('Cyber Subscription Portal renders status, QR, formats and English-first responsive UI')
+
             raw_sub=page.evaluate("""async url=>{
                 const r=await fetch(url);return {
                   status:r.status,text:await r.text(),title:r.headers.get('profile-title'),
