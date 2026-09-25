@@ -38,6 +38,7 @@ from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
+from bot_commerce import BotCommerce
 
 ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
@@ -160,6 +161,39 @@ class Password(Model):
     old_password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
     new_password:str=Field(min_length=PASSWORD_MIN_LENGTH,max_length=PASSWORD_MAX_LENGTH)
 
+class TelegramBotSettingsBody(Model):
+    token:str|None=Field(default=None,max_length=256)
+    admin_telegram_id:StrictInt=Field(ge=1,le=MAX_INT)
+    enabled:bool=True
+class ShopProductBody(Model):
+    name:str=Field(min_length=1,max_length=128)
+    description:str=Field(default='',max_length=2000)
+    active:bool=True
+    sort_order:StrictInt=Field(default=100,ge=0,le=100000)
+class ShopPlanBody(Model):
+    product_id:str=Field(min_length=8,max_length=40)
+    label:str=Field(min_length=1,max_length=128)
+    service_type:Literal['limited','unlimited']
+    quota_bytes:StrictInt=Field(ge=0,le=MAX_INT)
+    duration_days:StrictInt=Field(ge=1,le=3650)
+    inbound_ids:list[StrictInt]=Field(min_length=1,max_length=256)
+    limit_ip:StrictInt=Field(default=1,ge=0,le=1000)
+    limit_hwid:StrictInt=Field(default=0,ge=0,le=1000)
+    price_amount:StrictInt=Field(ge=0,le=MAX_INT)
+    currency:str=Field(default='IRT',min_length=2,max_length=12)
+    active:bool=True
+    sort_order:StrictInt=Field(default=100,ge=0,le=100000)
+class ShopPaymentMethodBody(Model):
+    kind:Literal['manual','gateway']='manual'
+    provider:str=Field(default='manual',max_length=64)
+    name:str=Field(min_length=1,max_length=128)
+    instructions:str=Field(default='',max_length=4000)
+    enabled:bool=True
+    sort_order:StrictInt=Field(default=100,ge=0,le=100000)
+class ManualPaymentConfirm(Model):
+    event_id:str=Field(min_length=12,max_length=128)
+    reference:str=Field(default='',max_length=256)
+
 
 class UpdateCheck(Model):
     channel:Literal['main','stable','rc','exact']='main'
@@ -228,6 +262,7 @@ class NodeTokenCreate(Model):
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
+    commerce=BotCommerce(store,manager,auth)
     from node_replacement import NodeReplacement
     replacements=NodeReplacement(nodes)
     node_reset_lock=threading.RLock()
@@ -265,6 +300,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.replacements=replacements
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
+    app.state.commerce=commerce
     public=urlsplit(config.public_origin);panel_path=config.panel_path
 
     @app.middleware('http')
@@ -273,9 +309,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         try:subscription_path=str(engine.section('subscription').get('path','/sub'))
         except Exception:subscription_path='/sub'
         subscription_request=raw_path.startswith(subscription_path+'/')
+        telegram_request=raw_path.startswith('/telegram/')
         if subscription_path!='/sub' and raw_path.startswith('/sub/'):
             return JSONResponse({'detail':'Not Found'},404)
-        stable_public=(raw_path=='/health' or subscription_request or raw_path.startswith('/node/api/'))
+        stable_public=(raw_path=='/health' or subscription_request or telegram_request or raw_path.startswith('/node/api/'))
         if subscription_request and subscription_path!='/sub':
             request.scope['path']='/sub'+raw_path[len(subscription_path):]
         if panel_path!='/' and not stable_public:
@@ -331,6 +368,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return p
     def owner(p:Principal=Depends(current))->Principal:
         if p.actor.role!='owner' or p.key_id:raise HTTPException(403,'Interactive owner access required')
+        return p
+    def commerce_admin(p:Principal=Depends(interactive))->Principal:
+        if p.actor.role not in ('owner','reseller'):
+            raise HTTPException(403,'Owner or representative access required')
         return p
     def writable():
         if not config.writes_enabled:raise HTTPException(409,'Local writes disabled by administrator')
@@ -389,6 +430,82 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'totp_enabled':bool(mfa and mfa[0]),'version':VERSION,'writes_enabled':config.writes_enabled,
             'poll_seconds':config.poll_seconds,'engine_version':engine.version,'independent':True,'test_engine':config.test_engine,'panel_path':panel_path,
             'ui':engine.section('panel')}
+    @app.get('/api/bot/settings')
+    def telegram_bot_settings(p:Principal=Depends(commerce_admin)):
+        return commerce.bot_settings(p.actor)
+
+    @app.put('/api/bot/settings')
+    def telegram_bot_settings_put(body:TelegramBotSettingsBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_bot(p.actor,body.token,body.admin_telegram_id,body.enabled)
+
+    @app.get('/api/shop/products')
+    def shop_products(p:Principal=Depends(commerce_admin)):
+        return commerce.products(p.actor)
+
+    @app.post('/api/shop/products')
+    def shop_product_create(body:ShopProductBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_product(p.actor,None,body.name,body.description,body.active,body.sort_order)
+
+    @app.put('/api/shop/products/{product_id}')
+    def shop_product_update(product_id:str,body:ShopProductBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_product(p.actor,product_id,body.name,body.description,body.active,body.sort_order)
+
+    @app.post('/api/shop/plans')
+    def shop_plan_create(body:ShopPlanBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_plan(p.actor,None,body.product_id,body.label,body.service_type,
+            body.quota_bytes,body.duration_days,body.inbound_ids,body.limit_ip,body.limit_hwid,
+            body.price_amount,body.currency,body.active,body.sort_order)
+
+    @app.put('/api/shop/plans/{plan_id}')
+    def shop_plan_update(plan_id:str,body:ShopPlanBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_plan(p.actor,plan_id,body.product_id,body.label,body.service_type,
+            body.quota_bytes,body.duration_days,body.inbound_ids,body.limit_ip,body.limit_hwid,
+            body.price_amount,body.currency,body.active,body.sort_order)
+
+    @app.get('/api/shop/payment-methods')
+    def shop_payment_methods(p:Principal=Depends(commerce_admin)):
+        return commerce.payment_methods(p.actor)
+
+    @app.post('/api/shop/payment-methods')
+    def shop_payment_method_create(body:ShopPaymentMethodBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_payment_method(p.actor,None,body.kind,body.provider,body.name,
+            body.instructions,body.enabled,body.sort_order)
+
+    @app.put('/api/shop/payment-methods/{method_id}')
+    def shop_payment_method_update(method_id:str,body:ShopPaymentMethodBody,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.save_payment_method(p.actor,method_id,body.kind,body.provider,body.name,
+            body.instructions,body.enabled,body.sort_order)
+
+    @app.get('/api/shop/orders')
+    def shop_orders(p:Principal=Depends(commerce_admin)):
+        return commerce.orders(p.actor)
+
+    @app.post('/api/shop/orders/{order_id}/confirm-manual')
+    def shop_confirm_manual(order_id:str,body:ManualPaymentConfirm,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.confirm_manual(p.actor,order_id,body.event_id,body.reference)
+
+    @app.post('/api/shop/orders/{order_id}/retry-fulfillment')
+    def shop_retry_fulfillment(order_id:str,p:Principal=Depends(commerce_admin)):
+        writable()
+        return commerce.fulfill(p.actor,order_id)
+
+    @app.post('/telegram/{public_id}')
+    async def telegram_webhook(public_id:str,request:Request):
+        raw=await request.body()
+        if len(raw)>1024*1024:raise HTTPException(413,'Telegram update too large')
+        try:update=json.loads(raw or b'{}')
+        except (ValueError,TypeError):raise HTTPException(400,'Invalid Telegram update')
+        secret=request.headers.get('x-telegram-bot-api-secret-token','')
+        return commerce.telegram_reply(public_id,secret,update)
+
     @app.post('/api/auth/logout')
     def logout(p:Principal=Depends(current)):
         with store.transaction() as db:db.execute('DELETE FROM live_sessions WHERE digest=?',(p.session_id,))
