@@ -412,8 +412,12 @@ class BotCommerce:
         order_id, now = secrets.token_urlsafe(12), time.time()
         with self.store.transaction() as db:
             db.execute(
-                """INSERT INTO shop_orders VALUES(
-                   ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO shop_orders(
+                   id,owner_id,telegram_user_id,product_id,plan_id,product_name,
+                   plan_label,service_type,quota_bytes,duration_days,inbound_ids,
+                   limit_ip,limit_hwid,amount,currency,payment_method_id,status,
+                   client_email,subscription_url,error,created_at,paid_at,fulfilled_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (order_id, owner_id, telegram_user_id, product["id"], plan["id"],
                  product["name"], plan["label"], plan["service_type"],
                  plan["quota_bytes"], plan["duration_days"],
