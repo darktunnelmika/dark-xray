@@ -27,5 +27,10 @@ test('owner controls every technical representative plan field',()=>{
 
 test('customer customization is explicitly absent from owner marketplace page',()=>{
   assert.match(js,/buyer cannot customize/i);
-  assert.doesNotMatch(js,/buyer_telegram_id|customer.*volume_credit_bytes/i);
+  assert.doesNotMatch(js,/name="buyer_telegram_id"|name="customer.*volume_credit_bytes"/i);
+});
+test('owner page shows representative subscriptions and expiry state',()=>{
+  assert.match(js,/representative-marketplace\/subscriptions/);
+  assert.match(js,/Representative subscriptions/);
+  assert.match(js,/expires_at/);
 });
