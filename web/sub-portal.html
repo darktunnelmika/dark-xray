@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#000604">
+  <title>DARK XRAY — Subscription</title>
+  <link rel="stylesheet" href="__DARK_PORTAL_CSS__">
+  <script defer src="__DARK_QR_JS__"></script>
+  <script defer src="__DARK_PORTAL_JS__"></script>
+</head>
+<body>
+  <div id="dark-sub-app" class="dx-shell" data-state="__DARK_SUB_STATE__" aria-busy="true">
+    <div class="dx-grid" aria-hidden="true"></div>
+    <div class="dx-scanlines" aria-hidden="true"></div>
+
+    <header class="dx-topbar">
+      <a class="dx-brand" href="#" aria-label="DARK XRAY">
+        <span class="dx-brand-mark">DX</span>
+        <span class="dx-brand-copy">
+          <strong>DARK XRAY</strong>
+          <small data-i18n="controlCenter">SECURE SUBSCRIPTION NODE</small>
+        </span>
+      </a>
+      <div class="dx-top-actions">
+        <span class="dx-live"><i></i><span data-i18n="encrypted">ENCRYPTED CHANNEL</span></span>
+        <button class="dx-ghost" type="button" data-action="lang" aria-label="Change language">FA</button>
+      </div>
+    </header>
+
+    <main class="dx-main">
+      <section class="dx-hero dx-panel">
+        <div class="dx-corner tl"></div><div class="dx-corner tr"></div>
+        <div class="dx-corner bl"></div><div class="dx-corner br"></div>
+
+        <div class="dx-hero-copy">
+          <div class="dx-kicker"><span>01</span><b data-i18n="privateAccess">PRIVATE ACCESS // LIVE PROFILE</b></div>
+          <div class="dx-status-row">
+            <span id="service-status" class="dx-status"><i></i><span>CHECKING</span></span>
+            <span id="service-id" class="dx-service-id">ID: ----</span>
+          </div>
+          <h1 id="profile-title">DARK XRAY</h1>
+          <p id="announce" class="dx-announce" hidden></p>
+
+          <div class="dx-hero-actions">
+            <button class="dx-primary" type="button" data-action="copy">
+              <span class="dx-action-icon">⧉</span><span data-i18n="copySubscription">COPY SUBSCRIPTION</span>
+            </button>
+            <button class="dx-button" type="button" data-action="share">
+              <span class="dx-action-icon">↗</span><span data-i18n="share">SHARE</span>
+            </button>
+            <a id="support-link" class="dx-button" target="_blank" rel="noopener noreferrer" hidden>
+              <span class="dx-action-icon">?</span><span data-i18n="support">SUPPORT</span>
+            </a>
+          </div>
+        </div>
+
+        <aside class="dx-radar">
+          <div class="dx-radar-head">
+            <span data-i18n="scanToImport">SCAN TO IMPORT</span>
+            <b id="qr-format">BASE64</b>
+          </div>
+          <div class="dx-qr-frame">
+            <div class="dx-reticle" aria-hidden="true"></div>
+            <div id="qr-code" class="dx-qr" aria-label="Subscription QR code"></div>
+          </div>
+          <div class="dx-radar-foot">
+            <span class="dx-pulse"></span>
+            <span data-i18n="clientReady">CLIENT READY</span>
+          </div>
+        </aside>
+      </section>
+
+      <section class="dx-metrics" aria-label="Subscription metrics">
+        <article class="dx-metric dx-panel">
+          <small data-i18n="trafficUsed">TRAFFIC USED</small>
+          <strong id="traffic-used">—</strong>
+          <span id="traffic-total">—</span>
+          <div class="dx-meter"><i id="traffic-meter"></i></div>
+        </article>
+        <article class="dx-metric dx-panel">
+          <small data-i18n="remaining">REMAINING</small>
+          <strong id="traffic-remaining">—</strong>
+          <span id="traffic-mode">—</span>
+        </article>
+        <article class="dx-metric dx-panel">
+          <small data-i18n="expires">EXPIRES</small>
+          <strong id="expiry-main">—</strong>
+          <span id="expiry-sub">—</span>
+        </article>
+        <article class="dx-metric dx-panel">
+          <small data-i18n="activeRoutes">ACTIVE ROUTES</small>
+          <strong id="route-count">—</strong>
+          <span id="route-detail">—</span>
+        </article>
+      </section>
+
+      <section class="dx-workspace">
+        <article class="dx-delivery dx-panel">
+          <header class="dx-section-head">
+            <div><span>02</span><div><small data-i18n="delivery">DELIVERY</small><b data-i18n="subscriptionLink">Subscription link</b></div></div>
+            <span id="update-interval" class="dx-tag">AUTO UPDATE</span>
+          </header>
+
+          <div class="dx-linkbox">
+            <div>
+              <small data-i18n="selectedFormat">SELECTED FORMAT</small>
+              <code id="subscription-url">—</code>
+            </div>
+            <button type="button" data-action="copy" data-i18n="copy">COPY</button>
+          </div>
+
+          <div id="format-tabs" class="dx-formats" role="tablist" aria-label="Subscription formats">
+            <button type="button" data-format="base64">BASE64</button>
+            <button type="button" data-format="raw">RAW</button>
+            <button type="button" data-format="clash">CLASH</button>
+            <button type="button" data-format="json">DARK JSON</button>
+          </div>
+
+          <div class="dx-import-grid">
+            <button id="import-hiddify" class="dx-import" type="button" data-action="hiddify">
+              <span class="dx-app-icon">H</span>
+              <span><small>QUICK IMPORT</small><b>Hiddify</b></span>
+              <em>↗</em>
+            </button>
+            <button id="import-v2rayng" class="dx-import" type="button" data-action="v2rayng">
+              <span class="dx-app-icon">V</span>
+              <span><small>ANDROID</small><b>v2rayNG</b></span>
+              <em>↗</em>
+            </button>
+          </div>
+
+          <p id="delivery-note" class="dx-note" data-i18n="deliveryNote">
+            Keep this link private. Anyone with it may be able to import your profile.
+          </p>
+        </article>
+
+        <article class="dx-guide dx-panel">
+          <header class="dx-section-head">
+            <div><span>03</span><div><small data-i18n="quickSetup">QUICK SETUP</small><b data-i18n="connectDevice">Connect this device</b></div></div>
+            <span class="dx-tag" data-i18n="threeSteps">3 STEPS</span>
+          </header>
+
+          <div class="dx-platforms" role="tablist" aria-label="Platform">
+            <button class="active" type="button" data-platform="android">ANDROID</button>
+            <button type="button" data-platform="ios">IOS</button>
+            <button type="button" data-platform="desktop">DESKTOP</button>
+          </div>
+
+          <ol id="guide-steps" class="dx-steps"></ol>
+
+          <div class="dx-command">
+            <span>&gt;_</span>
+            <code data-i18n="readyCommand">PROFILE CHANNEL READY // WAITING FOR CLIENT</code>
+          </div>
+        </article>
+      </section>
+
+      <section class="dx-lower">
+        <article class="dx-panel dx-intel">
+          <header class="dx-section-head">
+            <div><span>04</span><div><small data-i18n="serviceIntel">SERVICE INTEL</small><b data-i18n="livePolicy">Live subscription policy</b></div></div>
+          </header>
+          <div class="dx-intel-grid">
+            <div><small data-i18n="serviceState">SERVICE STATE</small><b id="intel-state">—</b></div>
+            <div><small data-i18n="defaultFormat">DEFAULT FORMAT</small><b id="intel-format">—</b></div>
+            <div><small data-i18n="updateEvery">UPDATE EVERY</small><b id="intel-update">—</b></div>
+            <div><small data-i18n="generated">GENERATED</small><b id="intel-generated">—</b></div>
+          </div>
+          <div id="reason-box" class="dx-reason" hidden></div>
+        </article>
+
+        <article class="dx-panel dx-security">
+          <span class="dx-shield">◆</span>
+          <div>
+            <small data-i18n="securityNotice">SECURITY NOTICE</small>
+            <b data-i18n="securityTitle">Private subscription credential</b>
+            <p data-i18n="securityBody">Do not publish this URL or QR code. If it is exposed, ask support to rotate the subscription.</p>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <footer class="dx-footer">
+      <span>DARK XRAY // SUBSCRIPTION PORTAL</span>
+      <span id="footer-clock">--:--:--</span>
+      <span>ZERO EXTERNAL ASSETS</span>
+    </footer>
+
+    <div id="toast" class="dx-toast" role="status" aria-live="polite"></div>
+  </div>
+</body>
+</html>
