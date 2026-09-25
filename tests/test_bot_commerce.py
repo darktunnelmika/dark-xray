@@ -190,3 +190,41 @@ def test_primary_bot_can_create_scoped_representative_without_user_supplied_pass
     assert owner["unlimited_credit"]==2
     password=response["text"].split("Temporary password: ",1)[1].splitlines()[0]
     assert password and all(password not in row["detail"] for row in audit)
+
+
+def test_representative_bot_management_is_numeric_admin_only_and_owner_scoped(env):
+    store,_,manager,_,c=env
+    inbound_id,actor=_seller(env,volume_gib=20,unlimited=2)
+    other=rep_body(
+        inbound_id,volume_credit_bytes=20*1024**3,unlimited_credit=2,
+        max_clients=20,prefix="o_",max_client_ips=2,max_client_hwid=2,
+    )
+    assert c.put("/api/resellers/other",json=other).status_code==200
+    manager.create(actor,"seller",{"email":"s_alpha","totalGB":1024**3},[inbound_id])
+    manager.create(OWNER,"other",{"email":"o_alpha","totalGB":1024**3},[inbound_id])
+    commerce=c.app.state.commerce
+    commerce.save_bot(actor,BOT_TOKEN,880001,True)
+    with store.lock:
+        cfg=store.db.execute(
+            "SELECT public_id,webhook_secret FROM telegram_bots WHERE owner_id='seller'"
+        ).fetchone()
+    denied=commerce.telegram_reply(
+        cfg["public_id"],cfg["webhook_secret"],
+        {"message":{"from":{"id":880002},"chat":{"id":880002},
+                    "text":"/disable s_alpha"}},
+    )
+    assert "فقط برای ادمین" in denied["text"]
+    assert manager.detail(actor,"s_alpha")["client"]["enable"] is True
+    own=commerce.telegram_reply(
+        cfg["public_id"],cfg["webhook_secret"],
+        {"message":{"from":{"id":880001},"chat":{"id":880001},
+                    "text":"/disable s_alpha"}},
+    )
+    assert "غیرفعال" in own["text"]
+    assert manager.detail(actor,"s_alpha")["client"]["enable"] is False
+    cross=commerce.telegram_reply(
+        cfg["public_id"],cfg["webhook_secret"],
+        {"message":{"from":{"id":880001},"chat":{"id":880001},
+                    "text":"/user o_alpha"}},
+    )
+    assert "قابل دسترسی نیست" in cross["text"]
