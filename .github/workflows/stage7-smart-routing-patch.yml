@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - work/stage7-smart-routing
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,10 +19,12 @@ jobs:
         with:
           ref: work/stage7-smart-routing
           fetch-depth: 0
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Patch server API endpoints
         run: |
           python3 - <<'PY'
@@ -41,32 +44,49 @@ jobs:
                   raise SystemExit('server.py model anchor not found')
               text=text.replace(model_marker,models+model_marker)
           route_marker="    @app.get('/api/security-center')\n"
-          routes='''    @app.get('/api/smart-routing/plan')\n    def smart_routing_plan(p:Principal=Depends(owner)):\n        return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))\n\n    @app.post('/api/smart-routing/preview')\n    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):\n        try:\n            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),\n                warp_outbound_tags=body.warpOutboundTags,enable_warp_ai=body.warpAi,enable_adblock=body.adblock)\n        except SmartRoutingError as ex:\n            raise HTTPException(400,str(ex))\n\n    @app.post('/api/smart-routing/warp-rank')\n    def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):\n        return {'previewOnly':True,'items':rank_warp_paths(body.observations,max_results=body.maxResults)}\n\n'''
+          routes='''    @app.get('/api/smart-routing/plan')\n    def smart_routing_plan(p:Principal=Depends(owner)):\n        return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))\n\n    @app.post('/api/smart-routing/preview')\n    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):\n        try:\n            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),\n                warp_outbound_tags=body.warpOutboundTags,enable_warp_ai=body.warpAi,enable_adblock=body.adblock)\n        except SmartRoutingError as ex:\n            raise HTTPException(400,str(ex)) from ex\n\n    @app.post('/api/smart-routing/warp-rank')\n    def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):\n        return {'previewOnly':True,'items':rank_warp_paths(body.observations,max_results=body.maxResults)}\n\n'''
           if "/api/smart-routing/plan" not in text:
               if route_marker not in text:
                   raise SystemExit('server.py route anchor not found')
               text=text.replace(route_marker,routes+route_marker)
           p.write_text(text)
           PY
+          git diff -- backend/server.py
+
+      - name: Commit server API patch
+        run: |
+          git add backend/server.py
+          if git diff --cached --quiet; then
+            echo "No server.py change needed"
+          else
+            git commit -m "[stage7-bot] Expose smart routing preview API"
+          fi
+
       - name: Install test dependencies
         run: |
-          python3 -m pip install -q --disable-pip-version-check -r requirements.txt pytest httpx httpx2 uvicorn
+          python3 -m pip install -q --disable-pip-version-check -r requirements.txt -r requirements-dev.txt pytest httpx httpx2 uvicorn
+
       - name: Run Stage 7 tests
         run: |
-          PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_v06.py tests/test_web_contract.py
+          PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_v06.py tests/test_web_contract.py tests/test_core_api_time_wait.py
           python3 tools/repo-check.py
+
       - name: Refresh SHA256SUMS
         run: |
-          python3 tools/release_snapshot.py --refresh-source-sums --json-only
-      - name: Commit Stage 7 patch
-        run: |
-          git add backend/server.py backend/smart_routing.py docs/stage7-smart-routing.md tests/test_smart_routing.py SHA256SUMS
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "[stage7-bot] Wire smart routing preview API"
-            git pull --rebase origin work/stage7-smart-routing
-            git push origin HEAD:work/stage7-smart-routing
+          if ! git diff --quiet; then
+            echo "Unexpected dirty tree before checksum refresh"
+            git status --short
+            exit 1
           fi
-      - name: Stage 7 cleanup note
-        run: echo "stage7-smart-routing obsolete workflows removed; rerun after cleanup"
+          python3 tools/release_snapshot.py --refresh-source-sums --json-only
+          git add SHA256SUMS
+          if git diff --cached --quiet; then
+            echo "No checksum refresh needed"
+          else
+            git commit -m "[stage7-bot] Refresh checksums for smart routing API"
+          fi
+
+      - name: Push Stage 7 branch
+        run: |
+          git pull --rebase origin work/stage7-smart-routing
+          git push origin HEAD:work/stage7-smart-routing
