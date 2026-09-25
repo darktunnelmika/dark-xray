@@ -41,3 +41,8 @@ test('Primary sidebar hides Outbounds and Routing and exposes Smart WARP instead
   assert.doesNotMatch(nav,/\['routing','روتینگ'/);
   assert.match(nav,/\['smart','وارپ هوشمند','activity'\]/);
 });
+
+test('Smart WARP main-menu route is registered as an engine page',()=>{
+  assert.match(live,/enginePages=\{[^}]*smart:\['وارپ هوشمند'\]/);
+  assert.match(live,/if\(enginePages\[requestedPage\]\)html=await enginePage\(\)/);
+});
