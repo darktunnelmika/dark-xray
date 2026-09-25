@@ -65,3 +65,23 @@ def test_build_stage7_plan_is_preview_only_and_lists_candidates():
     assert plan['safeDefault']=='preview_only'
     assert plan['capabilities']['automaticApply'] is False
     assert plan['configuredWarpCandidates']==['warp-de','warp-us']
+
+def test_stage7_plan_exposes_sanitized_wireguard_candidate_metadata_only():
+    out=base_outbounds()
+    out[2]['panelMeta']={'region':'USA','nodeName':'us-ai-node','smartWarp':True}
+    plan=build_stage7_plan([],out,{'rules':[]})
+    row=next(x for x in plan['warpCandidates'] if x['tag']=='warp-us')
+    assert row['region']=='USA'
+    assert row['node']=='us-ai-node'
+    assert row['likelyWarp'] is True
+    assert 'settings' not in row
+    assert 'secretKey' not in row
+    assert 'secret-do-not-return' not in str(row)
+
+def test_stage7_plan_infers_common_warp_regions_without_exposing_settings():
+    plan=build_stage7_plan([],base_outbounds(),{'rules':[]})
+    rows={x['tag']:x for x in plan['warpCandidates']}
+    assert rows['warp-us']['region']=='USA'
+    assert rows['warp-de']['region']=='Germany'
+    assert rows['warp-us']['node']=='warp-us'
+    assert all('settings' not in row for row in rows.values())
