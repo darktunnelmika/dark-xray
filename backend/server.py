@@ -1878,6 +1878,65 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.audit(p.actor,p.actor.id,'backup.database','dark','MFA encryption key, certificates, runtime files and config must be backed up separately')
         return Response(stream.getvalue(),media_type='application/zip',headers={'Content-Disposition':'attachment; filename="DARK-standalone-backup.zip"'})
 
+    def subscription_portal_request(request:Request)->bool:
+        if request.query_params.get('format') or request.query_params.get('raw') in {'1','true','yes'}:return False
+        accept=request.headers.get('accept','').lower();ua=request.headers.get('user-agent','').lower()
+        browser=any(x in ua for x in ('mozilla/','applewebkit/','chrome/','safari/','firefox/','edg/'))
+        return browser and 'text/html' in accept
+
+    def subscription_portal(public_token:str,row,sub:dict)->Response:
+        email=str(row['email']);reasons=store.client_reasons(email)
+        if row['external_disabled']:reasons.append('runtime_disabled')
+        with store.lock:
+            account=store.db.execute('SELECT quota_bytes,used_bytes,expires_at FROM clients WHERE id=?',(email,)).fetchone()
+        quota=int(account['quota_bytes']) if account else 0
+        used=int(account['used_bytes']) if account else 0
+        expiry=int(account['expires_at']) if account else 0
+        status='provisioning' if row['state']!='applied' else ('suspended' if reasons else 'active')
+        primary=failover=0
+        if row['state']=='applied':
+            try:
+                primary=len(engine.links(email,'raw',runtime_ready=runtime_ready_map(email)).get('links',[]))
+                failover=len(failover_links(email))
+            except (CoreError,PolicyError,KeyError,TypeError,ValueError):
+                primary=failover=0
+        sub_path=str(sub.get('path','/sub')).rstrip('/')
+        url=config.public_origin.rstrip('/')+sub_path+'/'+public_token
+        state={'schema':1,'title':sub.get('profile_title','DARK XRAY'),'announce':sub.get('announce',''),
+               'support_url':sub.get('support_url',''),'profile_url':sub.get('profile_url',''),
+               'subscription_url':url,'default_format':sub.get('default_format','base64'),
+               'formats':{fmt:url+'?format='+fmt for fmt in ('base64','raw','clash','json')},
+               'status':status,'reasons':list(dict.fromkeys(reasons)),
+               'traffic':{'used':used,'total':quota},'expiry':expiry,
+               'routes':{'primary':primary,'failover':failover},
+               'update_interval_hours':int(sub.get('profile_update_interval_hours',6)),
+               'generated_at':int(time.time()),
+               'service_id':hashlib.sha256(public_token.encode()).hexdigest()[:8]}
+        packed=base64.urlsafe_b64encode(json.dumps(state,separators=(',',':'),ensure_ascii=False).encode()).decode().rstrip('=')
+        asset_base=sub_path+'/'+public_token
+        page=(ROOT/'web'/'sub-portal.html').read_text(encoding='utf-8')
+        page=page.replace('__DARK_SUB_STATE__',packed)
+        page=page.replace('__DARK_PORTAL_CSS__',asset_base+'/portal.css')
+        page=page.replace('__DARK_QR_JS__',asset_base+'/vendor-qr.js')
+        page=page.replace('__DARK_PORTAL_JS__',asset_base+'/portal.js')
+        return Response(page,media_type='text/html; charset=utf-8')
+
+    def subscription_portal_asset(public_token:str,filename:str,media_type:str):
+        if not SUB_RE.fullmatch(public_token):raise HTTPException(404)
+        return FileResponse(ROOT/'web'/filename,media_type=media_type)
+
+    @app.get('/sub/{public_token}/portal.css')
+    def subscription_portal_css(public_token:str):
+        return subscription_portal_asset(public_token,'sub-portal.css','text/css; charset=utf-8')
+
+    @app.get('/sub/{public_token}/portal.js')
+    def subscription_portal_js(public_token:str):
+        return subscription_portal_asset(public_token,'sub-portal.js','application/javascript; charset=utf-8')
+
+    @app.get('/sub/{public_token}/vendor-qr.js')
+    def subscription_portal_qr(public_token:str):
+        return subscription_portal_asset(public_token,'vendor-qr.js','application/javascript; charset=utf-8')
+
     @app.get('/sub/{public_token}')
     def subscription(public_token:str,request:Request):
         if not SUB_RE.fullmatch(public_token):raise HTTPException(404)
@@ -1886,6 +1945,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:
             row=store.db.execute("SELECT * FROM managed_clients WHERE public_token=? AND state!='deleted'",(public_token,)).fetchone()
         if not row:raise HTTPException(404)
+        if subscription_portal_request(request):return subscription_portal(public_token,row,sub)
         if store.client_reasons(row['email']) or row['external_disabled']:raise HTTPException(403,'Subscription suspended')
         if row['state']!='applied':raise HTTPException(503,'Customer configuration has not been saved to the runtime')
         engine.check_device(row['email'],request.headers.get('x-hwid',''),request.headers.get('x-device-os',''),request.headers.get('x-device-model',''))
