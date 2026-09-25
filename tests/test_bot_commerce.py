@@ -4,7 +4,7 @@ import pytest
 
 from bot_commerce import BotCommerce
 from dark_policy import Actor,PolicyError
-from test_representatives_v2 import OWNER,create_inbound,rep_body
+from test_representatives_v2 import OWNER,create_inbound,env,rep_body
 
 
 BOT_TOKEN="123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_1234567890"
