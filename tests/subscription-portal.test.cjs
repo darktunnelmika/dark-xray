@@ -55,3 +55,8 @@ test('mobile connect controls and reduced-motion safety are permanent',()=>{
   assert.ok(css.includes('.app-card.launching'));
   assert.ok(html.includes('<span>CONNECT</span><i>↗</i>'));
 });
+
+test('launcher collection iteration never uses single-element selector',()=>{
+  for(const bad of ["$('[data-app-icon]').forEach","$('.app-copy').forEach","$('.app-import').forEach"])assert.ok(!js.includes(bad),bad);
+  for(const good of ["$$('[data-app-icon]').forEach","$$('.app-copy').forEach","$$('.app-import').forEach"])assert.ok(js.includes(good),good);
+});
