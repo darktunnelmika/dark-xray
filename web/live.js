@@ -183,9 +183,8 @@ async function adoptForm(){let rows=await api('/api/unmanaged');dialog('تخصی
 async function confirmAction(id,action){if(!confirm(`${{delete:'حذف مشتری (دفتر مصرف حفظ می‌شود)',reset:'ریست مصرف مشتری (مصرف نماینده کم نمی‌شود)',enable:'فعال‌کردن مشتری با حفظ سایر محدودیت‌ها',disable:'قطع دستی مشتری'}[action]}\n${id}\nتأیید می‌کنی؟`))return;const result=await api('/api/clients/'+enc(id)+'/action','POST',{action});toast('نتیجه: '+(labelState[result.state]||result.state));await refresh();}
 function setMobileMenu(open){
  const side=$('.sidebar');
- if(!side)return;
- const next=!!open;
- side.classList.toggle('open',next);
+ const next=!!open&&!!side;
+ side?.classList.toggle('open',next);
  document.body.classList.toggle('mobile-nav-open',next);
  let back=document.querySelector('.menu-backdrop');
  if(next&&!back){
