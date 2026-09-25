@@ -38,9 +38,11 @@ jobs:
     timeout-minutes: 12
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      DARK_STAGE7_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -62,13 +64,17 @@ jobs:
           export DARK_STAGE7_REHEARSAL_RC="$rc"
           python - <<'PY'
           import json, os, subprocess, time
-          commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          checkout=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          expected=os.environ['DARK_STAGE7_SOURCE_SHA'].strip()
+          if checkout!=expected:
+              raise SystemExit(f'candidate checkout mismatch: {checkout} != {expected}')
           rc=int(os.environ['DARK_STAGE7_REHEARSAL_RC'])
           evidence={
               'schema':1,
               'stage':'7.2',
               'name':'Smart Routing failure rehearsal',
-              'commit':commit,
+              'commit':expected,
+              'checkoutCommit':checkout,
               'passed':rc==0,
               'productionMutation':False,
               'productionPathsTouched':[],
@@ -91,7 +97,8 @@ jobs:
       - name: Preserve bounded source evidence
         if: always()
         run: |
-          git rev-parse HEAD > qa/stage7-smart-routing/source-commit.txt
+          test "$(git rev-parse HEAD)" = "$DARK_STAGE7_SOURCE_SHA"
+          printf '%s\n' "$DARK_STAGE7_SOURCE_SHA" > qa/stage7-smart-routing/source-commit.txt
           sha256sum             backend/core.py backend/server.py backend/nodes.py backend/node_agent.py             backend/smart_routing.py backend/smart_warp_probe.py web/xray-v2.js             tests/test_smart_routing_review.py tests/test_stage7_rollout_rehearsal.py             tests/smart-routing-ui.test.cjs             > qa/stage7-smart-routing/source-sha256.txt
       - name: Upload Stage 7.2 rehearsal evidence
         if: always()
