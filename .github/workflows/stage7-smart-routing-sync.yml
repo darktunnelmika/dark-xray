@@ -70,17 +70,24 @@ jobs:
           PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_web_contract.py tests/test_v06.py tests/test_release_snapshot.py
           python3 tools/repo-check.py
 
+      - name: Commit server API patch before checksum refresh
+        run: |
+          if [ -n "$(git status --porcelain -- backend/server.py)" ]; then
+            git add backend/server.py
+            git commit -m "Wire Stage 7 smart routing preview API"
+          else
+            echo "server.py already synced"
+          fi
+
       - name: Refresh source checksums
         run: |
           python3 tools/release_snapshot.py --refresh-source-sums --json-only
 
-      - name: Commit generated Stage 7 sync
+      - name: Commit checksums and push
         run: |
           git status --short
           if [ -n "$(git status --porcelain)" ]; then
-            git add backend/server.py SHA256SUMS
-            git commit -m "Wire Stage 7 smart routing preview API"
-            git push origin work/stage7-smart-routing
-          else
-            echo "No generated changes"
+            git add SHA256SUMS
+            git commit -m "Refresh checksums for Stage 7 smart routing API"
           fi
+          git push origin work/stage7-smart-routing
