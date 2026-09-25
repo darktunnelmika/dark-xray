@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#020806">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>DARK XRAY | Subscription</title>
+<link rel="stylesheet" href="/assets/sub-portal.css">
+<script defer src="/assets/vendor-qr.js"></script>
+<script defer src="/assets/sub-icons.js"></script>
+<script>window.__DARK_SUB__=__SUB_DATA__;</script>
+<script defer src="/assets/sub-portal.js"></script>
+</head>
+<body>
+<div class="gridfx" aria-hidden="true"></div><div class="scanline" aria-hidden="true"></div>
+<main class="shell">
+<header class="hero">
+<div class="brand"><span class="mark">X</span><div><b>DARK XRAY</b><small>SECURE SUBSCRIPTION PORTAL</small></div></div>
+<div class="status"><i></i><span id="serviceState">ONLINE</span></div>
+</header>
+<section class="identity card">
+<div><span class="eyebrow">IDENTITY</span><h1 id="profileTitle">DARK XRAY</h1><p id="clientId">—</p></div>
+<div class="shield">DX</div>
+</section>
+<section class="metrics">
+<article class="card metric"><span>USED TRAFFIC</span><strong id="usedTraffic">—</strong><small id="trafficHint">live subscription meter</small></article>
+<article class="card metric"><span>REMAINING</span><strong id="remainTraffic">—</strong><small id="quotaHint">service quota</small></article>
+<article class="card metric"><span>EXPIRY</span><strong id="expiry">—</strong><small id="expiryHint">service lifetime</small></article>
+</section>
+<section class="card quota"><div class="quota-head"><span>TRAFFIC CORE</span><b id="quotaPercent">0%</b></div><div class="rail"><i id="quotaBar"></i></div></section>
+<section class="card access">
+<div class="section-head"><div><span class="eyebrow">ACCESS NODE</span><h2>Subscription Link</h2></div><button class="ghost" id="copyBtn">COPY</button></div>
+<div class="linkbox"><code id="subUrl"></code></div>
+<div class="actions"><button class="primary" id="qrBtn">SHOW QR</button><a id="rawBtn" href="#">RAW</a><a id="clashBtn" href="#">CLASH</a><a id="jsonBtn" href="#">JSON</a></div>
+<div id="qrWrap" class="qr-wrap" hidden><div id="qr"></div><small>Scan only on a trusted device.</small></div>
+</section>
+
+<section class="card app-center">
+<div class="section-head app-head"><div><span class="eyebrow">QUICK CONNECT</span><h2>Open in your app</h2></div><span class="detected" id="detectedPlatform">AUTO</span></div>
+<div class="platform-tabs" role="tablist" aria-label="Platform">
+<button type="button" data-platform-tab="android">ANDROID</button>
+<button type="button" data-platform-tab="ios">IPHONE</button>
+<button type="button" data-platform-tab="windows">WINDOWS</button>
+</div>
+
+<div class="app-grid" data-platform-panel="android">
+<article class="app-card"><div class="app-icon" data-app-icon="v2box" aria-hidden="true"></div><div class="app-info"><b>V2Box</b><small>Android · VLESS / Reality</small></div><div class="app-tools"><button type="button" class="app-import" data-app="v2box"><span>CONNECT</span><i>↗</i></button><a href="https://play.google.com/store/apps/details?id=dev.hexasoftware.v2box" target="_blank" rel="noopener noreferrer">GET APP</a></div></article>
+<article class="app-card"><div class="app-icon" data-app-icon="happ" aria-hidden="true"></div><div class="app-info"><b>HAPP</b><small>Android · Xray client</small></div><div class="app-tools"><button type="button" class="app-import" data-app="happ"><span>CONNECT</span><i>↗</i></button><a href="https://play.google.com/store/apps/details?id=com.happproxy" target="_blank" rel="noopener noreferrer">GET APP</a></div></article>
+<article class="app-card"><div class="app-icon" data-app-icon="streisand" aria-hidden="true"></div><div class="app-info"><b>Streisand</b><small>Import shortcut · copy fallback</small></div><div class="app-tools"><button type="button" class="app-import" data-app="streisand"><span>CONNECT</span><i>↗</i></button><button type="button" class="app-copy">COPY LINK</button></div></article>
+</div>
+
+<div class="app-grid" data-platform-panel="ios">
+<article class="app-card"><div class="app-icon" data-app-icon="v2box" aria-hidden="true"></div><div class="app-info"><b>V2Box</b><small>iPhone / iPad · VLESS / Reality</small></div><div class="app-tools"><button type="button" class="app-import" data-app="v2box"><span>CONNECT</span><i>↗</i></button><a href="https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690" target="_blank" rel="noopener noreferrer">APP STORE</a></div></article>
+<article class="app-card"><div class="app-icon" data-app-icon="happ" aria-hidden="true"></div><div class="app-info"><b>HAPP</b><small>iPhone / iPad · Xray client</small></div><div class="app-tools"><button type="button" class="app-import" data-app="happ"><span>CONNECT</span><i>↗</i></button><a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" rel="noopener noreferrer">APP STORE</a></div></article>
+<article class="app-card"><div class="app-icon" data-app-icon="streisand" aria-hidden="true"></div><div class="app-info"><b>Streisand</b><small>iPhone / iPad · Flexible Proxy</small></div><div class="app-tools"><button type="button" class="app-import" data-app="streisand"><span>CONNECT</span><i>↗</i></button><a href="https://apps.apple.com/us/app/streisand/id6450534064" target="_blank" rel="noopener noreferrer">APP STORE</a></div></article>
+</div>
+
+<div class="app-grid" data-platform-panel="windows">
+<article class="app-card"><div class="app-icon" data-app-icon="hiddify" aria-hidden="true"></div><div class="app-info"><b>Hiddify</b><small>Windows · one-click subscription</small></div><div class="app-tools"><button type="button" class="app-import" data-app="hiddify"><span>CONNECT</span><i>↗</i></button><a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" rel="noopener noreferrer">DOWNLOAD</a></div></article>
+<article class="app-card"><div class="app-icon" data-app-icon="v2rayn" aria-hidden="true"></div><div class="app-info"><b>v2rayN</b><small>Windows · Xray / sing-box</small></div><div class="app-tools"><button type="button" class="app-import" data-app="v2rayn"><span>CONNECT</span><i>↗</i></button><a href="https://github.com/2dust/v2rayN/releases/latest" target="_blank" rel="noopener noreferrer">DOWNLOAD</a></div></article>
+</div>
+<p class="app-help" id="appHelp">Choose an app and import your DARK subscription.</p>
+</section>
+
+<section class="card notice" id="announceWrap" hidden><span class="eyebrow">ANNOUNCEMENT</span><p id="announce"></p></section>
+<footer><span>DARK XRAY // ZERO-THIRD-PARTY PORTAL</span><span id="updateEvery">AUTO UPDATE</span></footer>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body></html>
