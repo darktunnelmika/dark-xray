@@ -58,7 +58,7 @@ class CustomerBotFeatures:
         rows=self.runtime.customer.ledger(self.owner,user_id,20)
         if not rows:self.api.send(chat_id,'هنوز تراکنشی در کیف پول ثبت نشده است.');return
         lines=['📜 تراکنش‌های کیف پول']
-        labels={'topup':'شارژ','purchase':'خرید','renewal':'تمدید','referral':'پاداش زیرمجموعه'}
+        labels={'topup':'شارژ','purchase':'خرید','renewal':'تمدید','referral':'پاداش زیرمجموعه','rep_purchase':'خرید نمایندگی','rep_renewal':'تمدید نمایندگی','rep_refund':'بازگشت وجه نمایندگی'}
         for r in rows:
             sign='+' if int(r['delta_minor'])>=0 else ''
             when=time.strftime('%m/%d %H:%M',time.localtime(float(r['created_at'])))
@@ -164,6 +164,69 @@ class CustomerBotFeatures:
             f"پاداش هر اولین خرید موفق: {money(stats['reward_minor'])}",
             {'inline_keyboard':[[{'text':'🔄 بروزرسانی','callback_data':'uref'}]]})
 
+    def customer_representative_marketplace(self,chat_id:int,user_id:int):
+        if self.owner_role()!='owner':
+            self.api.send(chat_id,'فروش پنل نمایندگی فقط توسط Owner اصلی ارائه می‌شود.');return
+        sub=self.runtime.marketplace.subscription(self.owner,user_id)
+        if sub:
+            expires=time.strftime('%Y-%m-%d %H:%M',time.localtime(float(sub['expires_at'])))
+            status='فعال ✅' if sub['status']=='active' else 'تعلیق‌شده ⛔'
+            plans=self.runtime.marketplace.plan_rows(self.owner,public=True,renewal=True)
+            kb=[[{'text':f"🔄 {p['name']} · {money(p['price_minor'],p['currency'])}"[:62],
+                  'callback_data':'rmrenew:'+str(p['row_id'])}] for p in plans]
+            self.api.send(chat_id,
+                f"🏪 نمایندگی من\nشناسه: {sub['representative_id']}\nوضعیت: {status}\nانقضا: {expires}\n"
+                f"تمدید فقط از پلن‌های منتشرشده توسط Owner انجام می‌شود.",
+                {'inline_keyboard':kb} if kb else None);return
+        plans=self.runtime.marketplace.plan_rows(self.owner,public=True)
+        if not plans:self.api.send(chat_id,'فعلاً پلن نمایندگی برای فروش منتشر نشده است.');return
+        kb=[[{'text':f"🏪 {p['name']} · {money(p['price_minor'],p['currency'])}"[:62],
+              'callback_data':'rmplan:'+str(p['row_id'])}] for p in plans]
+        self.api.send(chat_id,'🏪 خرید پنل نمایندگی\nپلن‌ها توسط Owner پنل تعریف شده‌اند؛ فقط یکی را انتخاب کن.',
+                      {'inline_keyboard':kb})
+
+    def customer_representative_plan_detail(self,chat_id:int,user_id:int,row_id:int,renewal:bool=False):
+        plan=self.runtime.marketplace.plan_by_rowid(self.owner,row_id,public=True)
+        if renewal and not plan['renewal_enabled']:raise PolicyError('This plan is not available for renewal')
+        inbounds=', '.join(map(str,plan['allowed_inbounds']))
+        text=(f"🏪 {plan['name']}\n{plan['description']}\n\n"
+              f"قیمت: {money(plan['price_minor'],plan['currency'])}\nمدت: {plan['duration_days']} روز\n"
+              f"اعتبار حجمی: {self.bytes(int(plan['volume_credit_bytes']))}\n"
+              f"اعتبار نامحدود: {plan['unlimited_credit']}\nحداکثر Client: {plan['max_clients'] or 'نامحدود'}\n"
+              f"IP/HWID Cap: {plan['max_client_ips']}/{plan['max_client_hwid']}\n"
+              f"Inbounds: {inbounds}\nBot مستقل: {'✅' if plan['bot_allowed'] else '⛔'}")
+        action='rmrenewbuy:' if renewal else 'rmbuy:'
+        label='✅ انتخاب پلن تمدید' if renewal else '✅ خرید این پلن'
+        self.api.send(chat_id,text,{'inline_keyboard':[[{'text':label,'callback_data':action+str(row_id)}]]})
+
+    def customer_representative_checkout(self,chat_id:int,user_id:int,username:str,row_id:int,kind:str):
+        order=self.runtime.marketplace.create_order(self.owner,user_id,username,row_id,kind)
+        wallet=self.runtime.customer.wallet(self.owner,user_id)
+        enough=int(wallet['balance_minor'])>=int(order['amount_minor'])
+        kb=[]
+        if enough:kb.append([{'text':'✅ پرداخت از کیف پول','callback_data':'rmpay:'+order['id']}])
+        kb.append([{'text':'💰 شارژ کیف پول','callback_data':'wmenu'}])
+        title='خرید نمایندگی' if kind=='purchase' else 'تمدید نمایندگی'
+        self.api.send(chat_id,f"🏪 {title}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
+                      f"موجودی کیف پول: {money(wallet['balance_minor'])}\n"
+                      "مشخصات فنی این سفارش از پلن Owner Snapshot شده و قابل تغییر نیست.",
+                      {'inline_keyboard':kb})
+
+    def customer_representative_pay(self,chat_id:int,user_id:int,order_id:str):
+        try:
+            result=self.runtime.marketplace.pay_order(self.owner,order_id,user_id)
+        except Exception as ex:
+            self.api.send(chat_id,'خرید/تمدید نمایندگی انجام نشد: '+str(ex)[:700]);return
+        sub=result.get('subscription') or {}
+        expires=time.strftime('%Y-%m-%d %H:%M',time.localtime(float(sub.get('expires_at') or 0)))
+        if result.get('password'):
+            self.api.send(chat_id,
+                f"✅ پنل نمایندگی ساخته شد.\n\nUsername: {result['username']}\nPassword: {result['password']}\n"
+                f"انقضا: {expires}\n\nاین رمز را همین حالا ذخیره کن. مشخصات پلن توسط Owner تعیین شده است.")
+            self.runtime.marketplace.mark_credentials_delivered(self.owner,order_id)
+        else:
+            self.api.send(chat_id,f"✅ نمایندگی تمدید شد.\nشناسه: {result['representative_id']}\nانقضای جدید: {expires}")
+
     def customer_support_menu(self,chat_id:int,user_id:int):
         rows=self.runtime.customer.tickets_for_customer(self.owner,user_id,20)
         kb=[[{'text':'➕ تیکت جدید','callback_data':'supnew'}]]
@@ -211,6 +274,16 @@ class CustomerBotFeatures:
         self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb} if kb else None)
 
     def handle_customer_callback(self,data:str,chat_id:int,user_id:int,sender:dict[str,Any])->bool:
+        if data.startswith('rmplan:'):
+            self.customer_representative_plan_detail(chat_id,user_id,int(data.split(':',1)[1]),False);return True
+        if data.startswith('rmbuy:'):
+            self.customer_representative_checkout(chat_id,user_id,str(sender.get('username') or ''),int(data.split(':',1)[1]),'purchase');return True
+        if data.startswith('rmrenew:'):
+            self.customer_representative_plan_detail(chat_id,user_id,int(data.split(':',1)[1]),True);return True
+        if data.startswith('rmrenewbuy:'):
+            self.customer_representative_checkout(chat_id,user_id,str(sender.get('username') or ''),int(data.split(':',1)[1]),'renewal');return True
+        if data.startswith('rmpay:'):
+            self.customer_representative_pay(chat_id,user_id,data.split(':',1)[1]);return True
         if data.startswith('p:'):
             p=self.product_by_rowid(int(data.split(':',1)[1]))
             prices=[x for x in self.runtime.commerce.product_rows(self.owner,public=True) if x['id']==p['id']][0]['prices']
