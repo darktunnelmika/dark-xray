@@ -130,6 +130,29 @@ The default sequence is **Canary → Verify → Batch → Hub last**.
 - Running rollouts are persisted and automatically resume after Hub process restart.
 - Node-targeted revisions cannot use the direct apply endpoint; staged rollout is mandatory.
 
+### Stage 7.2 Failure-Injection Rehearsal
+
+Stage 7.2 adds a disposable QA gate for the rollout state machine. It never targets
+`/opt/dark-xray`, `/opt/dark-xray-node`, or the production database. The rehearsal
+uses temporary SQLite/runtime directories and fake Xray processes, while exercising
+real FastAPI lifecycle, persisted rollout rows, worker threads and Node desired-state
+acknowledgements.
+
+The dedicated suite proves four failure/ordering cases:
+
+1. A Canary Node disconnects inside the observation window: the changed Canary is
+   restored to baseline and the Hub remains unchanged.
+2. A WARP path becomes unhealthy only after candidate apply: the Node-local probe
+   exceeds Safety thresholds and triggers automatic rollback before Batch proceeds.
+3. A successful rollout records every Node delivery before the final Hub apply,
+   proving the **Hub last** invariant.
+4. A running rollout persisted before a simulated Hub restart is reopened from the
+   same SQLite database and automatically resumes to completion on the new app lifecycle.
+
+GitHub workflow `Stage 7.2 Smart Routing failure rehearsal` stores bounded evidence:
+`rehearsal.json`, JUnit XML, the exact source commit and SHA256 hashes of the rollout
+implementation/tests. The evidence explicitly records `productionMutation=false`.
+
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`
