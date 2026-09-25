@@ -176,6 +176,38 @@ Hub-last safety invariant.
 - The rollout list endpoint stays lightweight; full timeline data is returned only for
   an individual rollout or its timeline endpoint.
 
+### Stage 7.4 Real Multi-Node Acceptance
+
+Stage 7.4 runs the rollout against a disposable **five-process fleet**: one real Hub
+process and four real Node Agent processes representing USA, Germany, France and UK.
+Every service uses an independent SQLite/runtime directory, a real HTTPS socket and a
+certificate signed by a disposable test CA. No `/opt/dark-xray`, `/opt/dark-xray-node`
+or production database path is used.
+
+The acceptance proves:
+
+1. **Pause → real Hub process restart → Resume** keeps the persisted rollout paused
+   across a different Hub PID, then continues Canary/Batch and applies Hub last.
+2. A WARP Node whose post-apply probe degrades beyond loss/latency thresholds is
+   automatically restored to baseline and the Hub routing remains unchanged.
+3. Owner **Abort** during a real Node observation window restores every changed Node
+   and closes the rollout as `aborted` without mutating Hub routing.
+4. Killing the real Canary Node Agent process during observation makes the rollout
+   fail closed. After that Agent process is restarted with the same identity/state,
+   a normal Hub probe + desired-state sync restores it to the baseline Core state.
+
+The network/process path is real; only two test adapters exist: Node origins are mapped
+from allowlisted fixture DNS names to loopback because production SSRF policy correctly
+refuses non-global Node addresses, and WARP path health is fixture-controlled because the
+explicit fake Xray binary never proxies Internet/WireGuard traffic.
+
+Stage 7.4 also hardened multi-path WARP probing. Hub-to-Node WARP checks now split tags
+into bounded batches so every pinned HTTPS request stays within the Node transport's
+30-second hard timeout, then merges results in the original requested order.
+
+GitHub workflow `Stage 7.4 Real multi-Node acceptance` pins checkout to the exact candidate
+SHA and stores acceptance JSON, exact source commit and SHA256 source evidence.
+
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`

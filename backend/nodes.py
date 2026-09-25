@@ -1147,17 +1147,30 @@ class NodeRegistry:
     def smart_warp_probe(self,node_id:str,tags:list[str],*,attempts:int=2,timeout_seconds:int=5)->dict:
         if not isinstance(tags,list) or not 1<=len(tags)<=8 or any(not isinstance(x,str) or not x for x in tags):
             raise PolicyError('Invalid Smart WARP probe tags')
-        doc,ms=self._request(node_id,'/node/api/v1/smart-warp/probe','POST',
-                             {'outboundTags':tags,'attempts':attempts,'timeoutSeconds':timeout_seconds},
-                             float(timeout_seconds*max(1,attempts)*len(tags)+12))
-        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
-            raise PolicyError('Invalid Node Smart WARP probe response')
-        for item in doc['items']:
-            if not isinstance(item,dict) or not isinstance(item.get('tag'),str):
-                raise PolicyError('Invalid Node Smart WARP probe item')
-            if any(k in item for k in ('secretKey','privateKey','settings','peers')):
-                raise PolicyError('Node Smart WARP probe leaked secret material')
-        return {'node_id':node_id,'latency_ms':ms,'items':doc['items'],'productionTrafficMutation':False}
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout_seconds)is not int or not 1<=timeout_seconds<=10:
+            raise PolicyError('Invalid Smart WARP probe limits')
+        unique=list(dict.fromkeys(tags));per_path=max(1,attempts)*timeout_seconds
+        chunk_size=max(1,min(len(unique),24//max(1,per_path)))
+        items=[];latencies=[]
+        for start in range(0,len(unique),chunk_size):
+            batch=unique[start:start+chunk_size]
+            request_timeout=min(30.0,float(per_path*len(batch)+5))
+            doc,ms=self._request(node_id,'/node/api/v1/smart-warp/probe','POST',
+                                 {'outboundTags':batch,'attempts':attempts,'timeoutSeconds':timeout_seconds},
+                                 request_timeout)
+            if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
+                raise PolicyError('Invalid Node Smart WARP probe response')
+            for item in doc['items']:
+                if not isinstance(item,dict) or not isinstance(item.get('tag'),str):
+                    raise PolicyError('Invalid Node Smart WARP probe item')
+                if any(k in item for k in ('secretKey','privateKey','settings','peers')):
+                    raise PolicyError('Node Smart WARP probe leaked secret material')
+                items.append(item)
+            latencies.append(ms)
+        by_tag={str(x.get('tag')):x for x in items}
+        if any(tag not in by_tag for tag in unique):raise PolicyError('Node Smart WARP probe omitted a requested path')
+        return {'node_id':node_id,'latency_ms':sum(latencies),'items':[by_tag[tag] for tag in unique],
+                'productionTrafficMutation':False,'batches':len(latencies)}
 
     @installation_operation
     def deploy_inbound(self,node_id:str,payload:dict)->dict:
