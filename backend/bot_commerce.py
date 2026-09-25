@@ -667,6 +667,62 @@ class BotCommerce:
         )
         return self.order(owner_id, order_id)
 
+    def create_representative(self, actor: Actor, representative_id: str,
+                              volume_gib: int, unlimited_credit: int,
+                              inbound_ids: list[int]) -> dict:
+        if actor.role != "owner":
+            raise PermissionDenied("Only the primary owner bot can create representatives")
+        representative_id = representative_id.strip().lower()
+        if not NAME_RE.fullmatch(representative_id):
+            raise PolicyError("Invalid representative ID")
+        if type(volume_gib) is not int or not 0 <= volume_gib <= 8388607:
+            raise PolicyError("Volume credit GiB is out of range")
+        if type(unlimited_credit) is not int or not 0 <= unlimited_credit <= 1000000:
+            raise PolicyError("Unlimited credit is out of range")
+        if not inbound_ids or any(type(x) is not int or x < 1 for x in inbound_ids):
+            raise PolicyError("At least one valid inbound is required")
+        with self.store.lock:
+            if self.store.db.execute(
+                "SELECT 1 FROM api_admins WHERE id=?", (representative_id,)
+            ).fetchone():
+                raise PolicyError("Representative account already exists")
+        password = secrets.token_urlsafe(18)
+        try:
+            self.manager.owner_put(
+                actor, representative_id, name=representative_id,
+                allowed=inbound_ids, volume_credit_bytes=volume_gib * 1024**3,
+                unlimited_credit=unlimited_credit, max_clients=0, manual=False,
+                prefix=representative_id + "_", max_client_ips=0, max_client_hwid=0
+            )
+            self.auth.admin_create(
+                actor, representative_id, password, "reseller", None
+            )
+        except Exception:
+            with self.store.transaction() as db:
+                if not db.execute(
+                    "SELECT 1 FROM api_admins WHERE id=?", (representative_id,)
+                ).fetchone():
+                    db.execute(
+                        "DELETE FROM owner_profiles WHERE id=?", (representative_id,)
+                    )
+                    db.execute(
+                        "DELETE FROM owners WHERE id=? AND NOT EXISTS("
+                        "SELECT 1 FROM clients WHERE owner=?)",
+                        (representative_id, representative_id)
+                    )
+            raise
+        self.manager.audit(
+            actor, representative_id, "representative.create_from_telegram",
+            representative_id,
+            f"volume_gib={volume_gib}; unlimited={unlimited_credit}; "
+            f"inbounds={len(inbound_ids)}"
+        )
+        return {
+            "id": representative_id, "password": password,
+            "volume_credit_bytes": volume_gib * 1024**3,
+            "unlimited_credit": unlimited_credit, "allowed": inbound_ids
+        }
+
     def telegram_reply(self, public_id: str, secret: str,
                        update: dict[str, Any]) -> dict:
         bot = self.verify_webhook(public_id, secret)
@@ -686,7 +742,7 @@ class BotCommerce:
         if is_admin:
             keyboard.append(["🛠 مدیریت"])
             if role == "owner":
-                keyboard.append(["👥 نمایندگان"])
+                keyboard.append(["👥 نمایندگان", "➕ ساخت نماینده"])
         reply_markup = {"keyboard": keyboard, "resize_keyboard": True}
 
         def reply(body: str) -> dict:
@@ -774,5 +830,42 @@ class BotCommerce:
                 "• " + r["name"] + " — " + r["id"] for r in reps
             ) if reps else "هنوز نماینده‌ای ساخته نشده است."
             return reply("👥 نمایندگان\n" + body)
+        if text in ("➕ ساخت نماینده", "/newrep"):
+            if not is_admin or role != "owner":
+                return reply("ساخت نماینده فقط برای ادمین ربات مالک اصلی مجاز است.")
+            return reply(
+                "ساخت نماینده:\n"
+                "/newrep ID VOLUME_GIB UNLIMITED INBOUNDS\n\n"
+                "مثال:\n/newrep agent01 500 10 1,2,3\n\n"
+                "برای تمام اینباندهای فعلی به‌جای لیست بنویس all.\n"
+                "رمز اولیه امن توسط DARK ساخته و فقط یک‌بار در پاسخ نمایش داده می‌شود."
+            )
+        if text.startswith("/newrep "):
+            if not is_admin or role != "owner":
+                return reply("ساخت نماینده فقط برای ادمین ربات مالک اصلی مجاز است.")
+            parts = text.split()
+            if len(parts) != 5:
+                return reply("فرمت: /newrep ID VOLUME_GIB UNLIMITED INBOUNDS")
+            try:
+                volume_gib = int(parts[2])
+                unlimited = int(parts[3])
+                if parts[4].lower() == "all":
+                    inbound_ids = [int(x["id"]) for x in self.manager.engine.inbounds()]
+                else:
+                    inbound_ids = [int(x) for x in parts[4].split(",") if x]
+                result = self.create_representative(
+                    self._actor_for_owner(owner_id), parts[1],
+                    volume_gib, unlimited, inbound_ids
+                )
+            except (ValueError, PolicyError, PermissionDenied) as ex:
+                return reply("ساخت نماینده انجام نشد: " + str(ex)[:300])
+            panel_url = str(self.manager.engine.config.public_origin)
+            return reply(
+                "✅ نماینده ساخته شد.\n"
+                "ID: " + result["id"] + "\n"
+                "Temporary password: " + result["password"] + "\n"
+                "Panel: " + panel_url + "\n\n"
+                "این رمز را امن تحویل بده و بعد از اولین ورود تغییر بده."
+            )
         return reply("از منوی ربات استفاده کنید یا /store و /orders را بزنید.")
 
