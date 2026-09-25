@@ -21,7 +21,12 @@ printf 'No Web UI / Owner / Finance / Reseller database will be installed.\n\n'
 DOMAIN="$(ask 'Node HTTPS domain (DNS must point to this VPS)')"
 EMAIL="$(ask 'ACME email')"
 NAME="$(ask 'Node display name' "$(hostname -s)")"
-DATA_ADDRESS="$(ask 'Client-facing node address' "$DOMAIN")"
+DATA_DEFAULT="$DOMAIN"
+if command -v getent >/dev/null 2>&1; then
+  RESOLVED_IP="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1;exit}' || true)"
+  [[ -n "$RESOLVED_IP" ]] && DATA_DEFAULT="$RESOLVED_IP"
+fi
+DATA_ADDRESS="$(ask 'Client-facing node address (public IP recommended; HTTPS control domain stays separate)' "$DATA_DEFAULT")"
 NODE_PORT="$(ask 'Node Agent HTTPS port' "$NODE_PORT")"
 VERIFY_SOURCE=0
 if yesno 'Does Xray on this Node see the real client packet source IP directly? Enable packet-level IP enforcement only if verified'; then VERIFY_SOURCE=1; fi
