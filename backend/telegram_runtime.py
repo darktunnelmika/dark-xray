@@ -139,27 +139,46 @@ class BotWorker:
     def main_keyboard(self,admin:bool)->dict:
         rows=[['🛍 فروشگاه','📦 سرویس‌های من']]
         if admin:
-            rows += [['👥 مدیریت کاربران','🧾 سفارش‌ها'],['📊 وضعیت ربات','💳 پرداخت دستی']]
+            rows=[
+                ['🏠 داشبورد','👥 کاربران'],
+                ['📦 سرویس‌ها','🧾 سفارش‌ها'],
+                ['💳 پرداخت دستی','📊 گزارش‌ها'],
+                ['💾 بکاپ','⚙️ تنظیمات ربات'],
+            ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
+            rows += [['🛍 فروشگاه','📦 سرویس‌های من']]
         return {'keyboard':[[{'text':x} for x in row] for row in rows],
                 'resize_keyboard':True,'is_persistent':True}
 
     def send_home(self,chat_id:int,user_id:int):
         admin=self.is_admin(user_id)
-        if admin and not self.runtime.forum.status(self.owner).get('configured'):
+        forum=self.runtime.forum.status(self.owner)
+        if admin and forum.get('rebind_required'):
+            self.api.send(chat_id,'♻️ بکاپ DARK بازیابی شده است. اطلاعات فروشگاه و انجمن حفظ شده‌اند.\n'
+                          'Bot جدید را در انجمن قبلی Admin کن و دسترسی Manage Topics بده، سپس اتصال مجدد را بزن.',
+                          {'inline_keyboard':[[{'text':'♻️ اتصال مجدد انجمن بکاپ','callback_data':'forumrebind'}]]})
+            self.api.send(chat_id,'اگر انجمن قبلی دیگر وجود ندارد، یک انجمن جدید انتخاب کن.',
+                          self.runtime.forum.request_keyboard());return
+        if admin and not forum.get('configured'):
             self.api.send(chat_id,'مرحله اول: انجمن گزارش DARK را انتخاب کن. ربات باید Admin انجمن باشد و مجوز مدیریت Topicها را داشته باشد.',
                           self.runtime.forum.request_keyboard());return
         role='مدیریت + فروش' if admin else 'فروشگاه'
         self.api.send(chat_id,f'DARK XRAY BOT\nحالت: {role}\nیکی از گزینه‌ها را انتخاب کن.',self.main_keyboard(admin))
 
     def maybe_forum_prompt(self,force:bool=False):
-        if self.runtime.forum.status(self.owner).get('configured'):return False
+        forum=self.runtime.forum.status(self.owner)
+        if forum.get('configured'):return False
         row=self.bot_config();now=time.time();last=float(row.get('forum_prompted_at') or 0)
         if not force and now-last<86400:return False
         admin=int(row['admin_telegram_id'])
         try:
-            self.api.send(admin,'برای فعال‌شدن مرکز گزارش DARK، یک گروه انجمن (Forum Supergroup) را انتخاب کن و دسترسی مدیریت Topicها را به ربات بده.',
-                          self.runtime.forum.request_keyboard())
+            if forum.get('rebind_required'):
+                self.api.send(admin,'♻️ Disaster Recovery: اطلاعات انجمن قبلی حفظ شده است. Bot جدید را در همان انجمن Admin کن و سپس اتصال مجدد را بزن.',
+                              {'inline_keyboard':[[{'text':'♻️ اتصال مجدد انجمن بکاپ','callback_data':'forumrebind'}]]})
+                self.api.send(admin,'اگر انجمن قبلی در دسترس نیست، انجمن جدید را انتخاب کن.',self.runtime.forum.request_keyboard())
+            else:
+                self.api.send(admin,'برای فعال‌شدن مرکز گزارش DARK، یک گروه انجمن (Forum Supergroup) را انتخاب کن و دسترسی مدیریت Topicها را به ربات بده.',
+                              self.runtime.forum.request_keyboard())
             with self.runtime.store.transaction() as db:
                 db.execute('UPDATE telegram_bots SET forum_prompted_at=? WHERE owner=?',(now,self.owner))
             return True
@@ -206,9 +225,14 @@ class BotWorker:
         if low=='/shop' or text=='🛍 فروشگاه':self.shop(chat_id);return
         if low=='/services' or text=='📦 سرویس‌های من':self.services(chat_id,user_id);return
         if low=='/status' or text=='📊 وضعیت ربات':self.status_menu(chat_id,user_id);return
-        if text=='👥 مدیریت کاربران' and self.is_admin(user_id):self.admin_clients(chat_id);return
+        if text=='🏠 داشبورد' and self.is_admin(user_id):self.admin_dashboard(chat_id);return
+        if text in ('👥 کاربران','👥 مدیریت کاربران') and self.is_admin(user_id):self.admin_clients(chat_id);return
+        if text=='📦 سرویس‌ها' and self.is_admin(user_id):self.admin_services(chat_id);return
         if text=='🧾 سفارش‌ها' and self.is_admin(user_id):self.admin_orders(chat_id);return
         if text=='💳 پرداخت دستی' and self.is_admin(user_id):self.admin_gateways(chat_id);return
+        if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
+        if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
+        if text=='⚙️ تنظیمات ربات' and self.is_admin(user_id):self.admin_settings(chat_id);return
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representatives(chat_id);return
         if text=='➕ ساخت نماینده' and self.is_admin(user_id) and self.owner_role()=='owner':
@@ -303,10 +327,23 @@ class BotWorker:
                 self.api.send(chat_id,card)
             else:self.api.send(chat_id,'این درگاه برای آپدیت آینده رزرو شده است؛ فعلاً پرداخت دستی را انتخاب کن.')
             return
+        if data=='forumrebind' and self.is_admin(user_id):
+            try:
+                result=self.runtime.rebind_forum(self.owner)
+                self.runtime.manager.audit(self.actor(),self.owner,'telegram.forum_rebind',str(result.get('chat_id') or ''),
+                                           'topics='+str(len(result.get('topics') or [])))
+                self.api.send(chat_id,'✅ انجمن بکاپ با Bot جدید دوباره متصل شد.',self.main_keyboard(True))
+            except Exception as ex:
+                self.api.send(chat_id,'اتصال مجدد انجام نشد: '+str(ex)[:700])
+            return
         if data=='paycfg' and self.is_admin(user_id):
             self.start_payment_setup(chat_id,user_id);return
         if data=='paytoggle' and self.is_admin(user_id):
             self.toggle_manual_payment(chat_id,user_id);return
+        if data.startswith('cllink:') and self.is_admin(user_id):
+            self.client_delivery(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('ord:') and self.is_admin(user_id):
+            self.order_detail(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('cl:') and self.is_admin(user_id):
             self.client_detail(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('clon:') and self.is_admin(user_id):
@@ -398,6 +435,77 @@ class BotWorker:
         pay_state='فعال ✅' if gateway and gateway.get('enabled') else ('غیرفعال ⛔' if gateway else 'تنظیم نشده')
         self.api.send(chat_id,f"📊 وضعیت DARK BOT\nForum: {forum_state}\nپرداخت دستی: {pay_state}\nکاربران: {clients}\nمحصولات: {products}\nسفارش‌ها: {orders}\nنیازمند پیگیری: {pending}")
 
+    def admin_dashboard(self,chat_id:int):
+        rows=self.runtime.manager.list(self.actor())
+        active=sum(1 for r in rows if not r.get('block_reasons'))
+        disabled=max(0,len(rows)-active)
+        products=len(self.runtime.commerce.product_rows(self.owner))
+        forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
+        with self.runtime.store.lock:
+            orders=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=?",(self.owner,)).fetchone()[0])
+            pending=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM commerce_orders WHERE owner=?
+              AND status IN ('pending','awaiting_payment','payment_review','paid')""",(self.owner,)).fetchone()[0])
+            nodes=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM remote_nodes WHERE enabled=1").fetchone()[0])
+            online=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM remote_nodes WHERE enabled=1 AND last_error='' AND last_seen>?",
+                                                     (time.time()-180,)).fetchone()[0])
+            reps=0
+            if self.owner_role()=='owner':
+                reps=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM api_admins WHERE role='reseller' AND disabled=0").fetchone()[0])
+        forum_state='متصل ✅' if forum.get('configured') else ('نیازمند Rebind ♻️' if forum.get('rebind_required') else 'متصل نیست ⛔')
+        pay_state='فعال ✅' if gateway and gateway.get('enabled') else ('غیرفعال ⛔' if gateway else 'تنظیم نشده')
+        text=(f"🏠 DARK BOT ADMIN V2\n"
+              f"👥 کاربران: {len(rows)} · فعال {active} · محدود/خاموش {disabled}\n"
+              f"🛍 محصولات: {products}\n🧾 سفارش‌ها: {orders} · پیگیری {pending}\n"
+              f"🖥 نودها: {online}/{nodes} آنلاین\n"
+              f"💳 پرداخت: {pay_state}\n📊 Forum: {forum_state}")
+        if self.owner_role()=='owner':text+=f"\n🤝 نمایندگان فعال: {reps}"
+        self.api.send(chat_id,text)
+
+    def admin_services(self,chat_id:int):
+        rows=self.runtime.manager.list(self.actor())
+        now_ms=int(time.time()*1000);active=expired=disabled=0
+        lines=['📦 سرویس‌ها']
+        for r in rows:
+            c=r.get('client') or {};expiry=int(c.get('expiryTime') or 0)
+            if c.get('enable') is False or r.get('block_reasons'):disabled+=1
+            elif expiry and expiry<=now_ms:expired+=1
+            else:active+=1
+        with self.runtime.store.lock:
+            waiting=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM commerce_orders
+              WHERE owner=? AND status='provisioned_waiting_activation'""",(self.owner,)).fetchone()[0])
+        lines += [f"✅ فعال: {active}",f"⛔ محدود/غیرفعال: {disabled}",f"⌛ منقضی: {expired}",
+                  f"🔌 منتظر اولین اتصال: {waiting}",'','برای جستجوی سرویس: /user USERNAME']
+        self.api.send(chat_id,'\n'.join(lines))
+
+    def admin_reports(self,chat_id:int):
+        st=self.runtime.forum.status(self.owner)
+        if st.get('rebind_required'):
+            state='♻️ نیازمند اتصال مجدد بعد از Restore'
+        else:state='✅ متصل' if st.get('configured') else '⛔ متصل نیست'
+        topics=len(st.get('topics') or [])
+        self.api.send(chat_id,f"📊 مرکز گزارش DARK\nوضعیت: {state}\nTopicها: {topics}/8\n"
+                      "فروش · پرداخت · سرویس · خطا · سیستم · بکاپ · امنیت · گزارش روزانه",
+                      {'inline_keyboard':[[{'text':'♻️ اتصال مجدد بکاپ','callback_data':'forumrebind'}]]}
+                      if st.get('rebind_required') else None)
+
+    def admin_backup(self,chat_id:int):
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute("""SELECT at,action,detail FROM live_audit
+              WHERE action IN ('backup.full','backup.telegram_sent') ORDER BY id DESC LIMIT 1""").fetchone()
+        last='هنوز بکاپی ثبت نشده' if not row else f"{row['action']} · {time.strftime('%Y-%m-%d %H:%M',time.localtime(float(row['at'])))}"
+        self.api.send(chat_id,"💾 DARK Full Backup\n"
+                      "بکاپ ربات جدا نیست؛ همان Full Backup پنل شامل Users/Products/Orders/Card/Forum/Topics/Representatives است.\n"
+                      "بعد Restore، Bot Token عمداً حذف می‌شود و Token جدید + Rebind لازم است.\n"
+                      f"آخرین وضعیت: {last}")
+
+    def admin_settings(self,chat_id:int):
+        cfg=self.bot_config();forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
+        forum_state='متصل' if forum.get('configured') else ('Rebind Required' if forum.get('rebind_required') else 'متصل نیست')
+        self.api.send(chat_id,f"⚙️ تنظیمات DARK BOT\n"
+                      f"Bot: @{cfg.get('bot_username') or '—'}\nAdmin ID: {cfg.get('admin_telegram_id')}\n"
+                      f"Forum: {forum_state}\nPayment: {'فعال' if gateway and gateway.get('enabled') else 'غیرفعال/تنظیم نشده'}\n"
+                      "Token از پنل وب تغییر می‌کند؛ پرداخت دستی از همین Bot مدیریت می‌شود.")
+
     def client_row(self,row_id:int)->str:
         with self.runtime.store.lock:
             row=self.runtime.store.db.execute("SELECT rowid,id,owner FROM clients WHERE rowid=?",(row_id,)).fetchone()
@@ -416,19 +524,38 @@ class BotWorker:
 
     def admin_user_search(self,chat_id:int,email:str):
         try:
-            detail=self.runtime.manager.detail(self.actor(),email,credentials=False)
+            detail=self.runtime.manager.detail(self.actor(),email,credentials=True)
         except Exception as ex:self.api.send(chat_id,'کاربر پیدا نشد: '+str(ex));return
         with self.runtime.store.lock:row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(email,self.owner)).fetchone()
         if not row:self.api.send(chat_id,'کاربر در محدوده این پنل نیست.');return
         self.client_detail(chat_id,int(row['rowid']),detail)
 
     def client_detail(self,chat_id:int,row_id:int,detail:dict|None=None):
-        email=self.client_row(row_id);detail=detail or self.runtime.manager.detail(self.actor(),email,credentials=False)
+        email=self.client_row(row_id);detail=detail or self.runtime.manager.detail(self.actor(),email,credentials=True)
         c=detail.get('client') or {};enabled=c.get('enable') is not False
-        text=f"👤 {email}\nمصرف: {self.bytes(int(detail.get('used_bytes') or 0))}\nسهمیه: {self.bytes(int(c.get('totalGB') or 0)) if c.get('totalGB') else 'نامحدود'}\nوضعیت: {'فعال' if enabled else 'غیرفعال'}"
+        expiry=int(c.get('expiryTime') or 0)
+        expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+        activity=float(detail.get('activity_at') or 0)
+        activity_text='—' if activity<=0 else time.strftime('%Y-%m-%d %H:%M',time.localtime(activity))
+        inbounds=detail.get('inboundIds') or []
+        quota=int(c.get('totalGB') or 0)
+        text=(f"👤 {email}\n"
+              f"وضعیت: {'فعال ✅' if enabled and not detail.get('block_reasons') else 'محدود/خاموش ⛔'}\n"
+              f"مصرف: {self.bytes(int(detail.get('used_bytes') or 0))} / {self.bytes(quota) if quota else 'نامحدود'}\n"
+              f"انقضا: {expiry_text}\nIP Limit: {int(c.get('limitIp') or 0)} · HWID: {int(c.get('limitHwid') or 0)}\n"
+              f"Telegram: {c.get('tgId') or '—'}\nInboundها: {', '.join(map(str,inbounds)) or '—'}\n"
+              f"آخرین فعالیت: {activity_text} · {detail.get('presence_source') or '—'}")
         kb=[[{'text':'⛔ غیرفعال' if enabled else '✅ فعال','callback_data':('cloff:' if enabled else 'clon:')+str(row_id)},
-             {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}]]
+             {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}],
+            [{'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}]]
         self.api.send(chat_id,text,{'inline_keyboard':kb})
+
+    def client_delivery(self,chat_id:int,row_id:int):
+        email=self.client_row(row_id)
+        detail=self.runtime.manager.detail(self.actor(),email,credentials=True)
+        sub=str(detail.get('subscription_url') or '')
+        if not sub:self.api.send(chat_id,'برای این سرویس لینک Subscription موجود نیست.');return
+        self.api.send(chat_id,f"🔗 {email}\n{sub}")
 
     def client_action(self,chat_id:int,row_id:int,action:str):
         email=self.client_row(row_id);self.runtime.manager.action(self.actor(),email,action)
@@ -437,11 +564,28 @@ class BotWorker:
     def admin_orders(self,chat_id:int):
         with self.runtime.store.lock:
             rows=[dict(r) for r in self.runtime.store.db.execute(
-                "SELECT * FROM commerce_orders WHERE owner=? ORDER BY created_at DESC LIMIT 15",(self.owner,))]
+                "SELECT rowid AS row_id,* FROM commerce_orders WHERE owner=? ORDER BY created_at DESC LIMIT 15",(self.owner,))]
         if not rows:self.api.send(chat_id,'هنوز سفارشی وجود ندارد.');return
-        lines=['🧾 آخرین سفارش‌ها']
-        for r in rows:lines.append(f"• {r['id']} · {amount(r['amount_minor'],r['currency'])} · {r['status']}")
-        self.api.send(chat_id,'\n'.join(lines))
+        buttons=[]
+        for r in rows:
+            label=f"{r['status']} · {amount(r['amount_minor'],r['currency'])} · {r['buyer_telegram_id']}"
+            buttons.append([{'text':label[:60],'callback_data':'ord:'+str(r['row_id'])}])
+        self.api.send(chat_id,'🧾 آخرین سفارش‌ها · برای جزئیات انتخاب کن:',{'inline_keyboard':buttons})
+
+    def order_detail(self,chat_id:int,row_id:int):
+        with self.runtime.store.lock:
+            r=self.runtime.store.db.execute("SELECT rowid AS row_id,* FROM commerce_orders WHERE rowid=? AND owner=?",
+                                            (row_id,self.owner)).fetchone()
+        if not r:raise PolicyError('Order not found in this bot scope')
+        r=dict(r);created=time.strftime('%Y-%m-%d %H:%M',time.localtime(float(r.get('created_at') or 0)))
+        text=(f"🧾 سفارش {r['id']}\n"
+              f"وضعیت: {r['status']}\nمشتری: {r['buyer_telegram_id']} @{r.get('buyer_username') or '—'}\n"
+              f"محصول: {r['product_id']} / {r['price_id']}\nمبلغ: {amount(r['amount_minor'],r['currency'])}\n"
+              f"درگاه: {r.get('gateway_id') or '—'}\nسرویس: {r.get('client_id') or '—'}\n"
+              f"فعال‌سازی: {r.get('activation_mode') or '—'} · تحویل: {r.get('delivery_mode') or '—'}\n"
+              f"IP/HWID: {r.get('ip_limit') or 0}/{r.get('hwid_limit') or 0}\nزمان: {created}")
+        if r.get('fulfillment_error'):text+='\n⚠️ '+str(r['fulfillment_error'])[:600]
+        self.api.send(chat_id,text)
 
     def manual_gateway(self)->dict[str,Any]|None:
         return next((r for r in self.runtime.commerce.gateway_rows(self.owner)
@@ -626,6 +770,18 @@ class TelegramBotRuntime:
 
     def touch(self,owner:str):
         with self.store.transaction() as db:db.execute("UPDATE telegram_bots SET last_seen=?,last_error='' WHERE owner=?",(time.time(),owner))
+
+    def rebind_forum(self,owner:str)->dict[str,Any]:
+        with self.lock:worker=self.workers.get(owner)
+        if worker and worker.bot_id:
+            return self.forum.rebind_existing(worker.api,owner,worker.bot_id)
+        row=self.commerce.bot_row(owner,secret=True)
+        if not row or not row.get('bot_token'):raise PolicyError('New Bot Token is required before forum rebind')
+        api=TelegramAPI(row['bot_token'])
+        try:
+            me=api.call('getMe')
+            return self.forum.rebind_existing(api,owner,int(me.get('id') or 0))
+        finally:api.close()
 
     def repair_forum(self,owner:str)->dict[str,Any]:
         with self.lock:worker=self.workers.get(owner)

@@ -60,3 +60,8 @@ test('forum report center exposes repair flow and setup guidance',()=>{
   assert.match(js,/NOT CONNECTED/);
   assert.match(js,/Refresh status/);
 });
+test('recovery UI exposes rebind-required state',()=>{
+  assert.match(js,/REBIND REQUIRED/);
+  assert.match(js,/rebind_required/);
+  assert.match(js,/Disaster Recovery state preserved/);
+});
