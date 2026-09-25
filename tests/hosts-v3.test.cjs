@@ -143,3 +143,20 @@ test('Public Endpoint editor exposes Main Server and Node runtime selector',()=>
   assert.match(src,/node:'\+n\.id/);
   assert.match(src,/h\.runtime/);
 });
+
+test('Tunnel mode persists an explicit tunnel endpoint role',()=>{
+  const ctx=context(),M=ctx.DarkHostV3;
+  const tunnel=M.normalizeEndpoint({mode:'tunnel',runtime:'node:tr-1',address:'iran.example.test',port:20001,remark:'TR TUNNEL',enable:true},inbound);
+  const direct=M.normalizeEndpoint({mode:'direct',runtime:'node:tr-1',address:'tr.example.test',port:443,remark:'TR DIRECT',enable:true},inbound);
+  assert.equal(tunnel.endpointType,'tunnel');
+  assert.equal(direct.endpointType,'direct');
+  assert.equal(M.endpointMode(tunnel,inbound),'tunnel');
+});
+
+test('Node tunnel editor keeps a direct sibling contract in source',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','hosts-v2.js'),'utf8');
+  assert.match(src,/nodeForRuntime/);
+  assert.match(src,/node\.data_address/);
+  assert.match(src,/endpointType==='tunnel'/);
+  assert.match(src,/Direct sibling/);
+});
