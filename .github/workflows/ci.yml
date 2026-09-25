@@ -79,11 +79,11 @@ jobs:
           for js in \
             web/i18n-en.js web/form-models.js web/inbounds-models.js web/inbounds-v3.js \
             web/settings-v2.js web/clients-v2.js web/finance-v2.js web/ui-stability.js web/xray-v2.js web/hosts-v2.js \
-            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/xray-guided-v3.js web/traffic-engine-v4.js; do node --check "$js"; done
+            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/xray-guided-v3.js web/traffic-engine-v4.js web/sub-portal.js; do node --check "$js"; done
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q 'body class="skin-cyber-classic"' web/index.html
           grep -q 'assets/cyber-classic.css' web/index.html
-          grep -q -- '--classic-green:#19ff86' web/cyber-classic.css
+          grep -q -- '--classic-green:#19ff86' web/cyber-classic.css\n          grep -q 'DARK XRAY // SUBSCRIPTION PORTAL' web/sub-portal.html\n          grep -q '__DARK_SUB_STATE__' web/sub-portal.html
           for asset in \
             cyber.css cyber-classic.css inbounds-v3.css settings-v2.css clients-v2.css finance-v2.css xray-v2.css xray-guided-v3.css hosts-v2.css ops-v2.css nodes-v2.css overview-v4.css \
             i18n-en.js inbounds-models.js inbounds-v3.js settings-v2.js clients-v2.js finance-v2.js ui-stability.js xray-v2.js xray-guided-v3.js hosts-v2.js ops-v2.js nodes-v2.js overview-v4.js; do
