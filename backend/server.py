@@ -37,6 +37,7 @@ from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
 from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths
+from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
@@ -193,6 +194,10 @@ class SmartRoutingPreview(Model):
     warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)
 class SmartWarpRank(Model):
     observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
+class SmartWarpScan(Model):
+    outboundTags:list[str]=Field(min_length=1,max_length=8)
+    attempts:StrictInt=Field(default=3,ge=1,le=3)
+    timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
 
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
@@ -1722,6 +1727,37 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/smart-routing/warp-rank')
     def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):
         return {'items':rank_warp_paths(body.observations),'previewOnly':True}
+
+    @app.post('/api/smart-routing/warp-scan')
+    def smart_routing_warp_scan(body:SmartWarpScan,p:Principal=Depends(owner)):
+        outbounds=engine.section('outbounds')
+        by_tag={str(o.get('tag','')):o for o in outbounds if isinstance(o,dict)}
+        tags=[]
+        for raw in body.outboundTags:
+            tag=str(raw).strip()
+            if not tag or tag in tags:continue
+            if tag not in by_tag:raise HTTPException(400,'Unknown WARP outbound tag: '+tag)
+            if str(by_tag[tag].get('protocol','')).lower()!='wireguard':
+                raise HTTPException(400,'WARP scan requires WireGuard outbound: '+tag)
+            tags.append(tag)
+        if not tags:raise HTTPException(400,'Select at least one WARP outbound')
+        try:
+            observations=scan_warp_outbounds(engine._binary(),config.xray_assets,
+                [by_tag[tag] for tag in tags],attempts=body.attempts,timeout=float(body.timeoutSeconds))
+        except SmartWarpProbeError as ex:
+            raise HTTPException(400,str(ex))
+        ranked=rank_warp_paths(observations,max_results=len(tags))
+        meta={x.get('tag'):x for x in build_stage7_plan([],outbounds,{}).get('warpCandidates',[])
+              if isinstance(x,dict) and x.get('tag')}
+        for row in ranked:
+            info=meta.get(row.get('tag'),{})
+            row['node']=info.get('node') or row.get('tag') or '—'
+            row['region']=info.get('region') or '—'
+        manager.audit(p.actor,p.actor.id,'smart.warp.scan',str(len(tags)),
+                      'isolated temporary Xray probes; production traffic unchanged')
+        return {'items':ranked,'observations':observations,'previewOnly':True,
+                'productionTrafficMutation':False,'selectedTags':tags,
+                'scanMode':'isolated-temporary-xray'}
 
     @app.get('/api/security-center')
     def security_center(p:Principal=Depends(current)):return security_center_payload(p)
