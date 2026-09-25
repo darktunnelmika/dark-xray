@@ -172,8 +172,9 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS smart_routing_rollouts(
               id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,actor TEXT NOT NULL,created_at REAL NOT NULL,
               state TEXT NOT NULL,phase TEXT NOT NULL DEFAULT 'nodes',current_index INTEGER NOT NULL DEFAULT 0,
-              observation_seconds REAL NOT NULL DEFAULT 5,detail TEXT NOT NULL DEFAULT '',
-              started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
+              observation_seconds REAL NOT NULL DEFAULT 5,control_state TEXT NOT NULL DEFAULT 'run',
+              detail TEXT NOT NULL DEFAULT '',started_at REAL NOT NULL DEFAULT 0,paused_at REAL NOT NULL DEFAULT 0,
+              resumed_at REAL NOT NULL DEFAULT 0,aborted_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
               rolled_back_at REAL NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS smart_routing_rollouts_created ON smart_routing_rollouts(created_at DESC);
             CREATE TABLE IF NOT EXISTS smart_routing_rollout_nodes(
@@ -183,6 +184,11 @@ class CoreEngine:
               verified_at REAL NOT NULL DEFAULT 0,updated_at REAL NOT NULL DEFAULT 0,
               PRIMARY KEY(rollout_id,node_id));
             CREATE INDEX IF NOT EXISTS smart_routing_rollout_nodes_order ON smart_routing_rollout_nodes(rollout_id,ord);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollout_events(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,rollout_id TEXT NOT NULL,node_id TEXT NOT NULL DEFAULT '',
+              phase TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',
+              metrics TEXT NOT NULL DEFAULT '{}',at REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS smart_routing_rollout_events_rollout ON smart_routing_rollout_events(rollout_id,id);
             ''')
             revision_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_revisions)')}
             if 'before_node_roles' not in revision_cols:
@@ -200,6 +206,14 @@ class CoreEngine:
             rollout_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_rollouts)')}
             if 'observation_seconds' not in rollout_cols:
                 store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN observation_seconds REAL NOT NULL DEFAULT 5")
+            if 'control_state' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN control_state TEXT NOT NULL DEFAULT 'run'")
+            if 'paused_at' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN paused_at REAL NOT NULL DEFAULT 0")
+            if 'resumed_at' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN resumed_at REAL NOT NULL DEFAULT 0")
+            if 'aborted_at' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN aborted_at REAL NOT NULL DEFAULT 0")
         self.validate_schema_only=True
 
     def _write(self):

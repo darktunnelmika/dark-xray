@@ -97,3 +97,32 @@ test('Stage 7.1 staged rollout UI shows canary batch hub-last and automatic roll
   assert.match(src,/Observation/);
   assert.match(src,/\/api\/smart-routing\/rollout\//);
 });
+
+
+test('Stage 7.3 rollout controls expose pause resume abort timeline and history',()=>{
+  for(const action of ['xv7rolloutpause','xv7rolloutresume','xv7rolloutabort','xv7rollouttimeline']){
+    assert.match(src,new RegExp(action));
+  }
+  assert.match(src,/async function controlSmartRollout/);
+  assert.match(src,/\/api\/smart-routing\/rollout\/.*\+action/);
+  assert.match(src,/\/api\/smart-routing\/rollout\/.*timeline/);
+  assert.match(src,/PAUSE STAGED ROLLOUT/);
+  assert.match(src,/RESUME STAGED ROLLOUT/);
+  assert.match(src,/ABORT STAGED ROLLOUT/);
+  assert.match(src,/Rollout history/);
+  assert.match(src,/Rollout timeline & telemetry/);
+  assert.match(src,/health_sample/);
+  assert.match(src,/warp_probe/);
+  assert.match(src,/controlState/);
+});
+
+test('Stage 7.3 live rollout modal keeps control and telemetry visible',()=>{
+  const start=src.indexOf('function rolloutLiveHTML');
+  const end=src.indexOf('function rolloutEventText',start);
+  assert.ok(start>=0 && end>start);
+  const body=src.slice(start,end);
+  assert.match(body,/xv7rolloutpause/);
+  assert.match(body,/xv7rolloutresume/);
+  assert.match(body,/xv7rolloutabort/);
+  assert.match(body,/timeline/);
+});

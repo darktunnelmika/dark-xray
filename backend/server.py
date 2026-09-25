@@ -1840,19 +1840,33 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             db.execute('INSERT INTO smart_routing_node_roles(node_id,warp_ai,adblock,updated_at) VALUES(?,?,?,?)',
                        (node_id,int(node_id in warp),int(node_id in ads),now))
 
-    def _stage7_rollout_public(rollout_id:str)->dict:
+    def _stage7_rollout_public(rollout_id:str,*,include_timeline:bool=True)->dict:
         with store.lock:
             row=store.db.execute('SELECT * FROM smart_routing_rollouts WHERE id=?',(rollout_id,)).fetchone()
             items=[dict(x) for x in store.db.execute(
                 'SELECT * FROM smart_routing_rollout_nodes WHERE rollout_id=? ORDER BY ord,node_id',(rollout_id,)).fetchall()]
+            events=[dict(x) for x in store.db.execute(
+                'SELECT * FROM smart_routing_rollout_events WHERE rollout_id=? ORDER BY id DESC LIMIT 100',(rollout_id,)).fetchall()] if include_timeline else []
         if not row:raise HTTPException(404,'Smart Routing rollout not found')
-        doc=dict(row);total=len(items);healthy=sum(1 for x in items if x['state'] in {'healthy','completed'})
+        for event in events:
+            try:event['metrics']=json.loads(event.get('metrics') or '{}')
+            except Exception:event['metrics']={}
+        events.reverse();doc=dict(row);total=len(items);healthy=sum(1 for x in items if x['state'] in {'healthy','completed'})
         doc.update({'rolloutId':doc.pop('id'),'revisionId':doc.pop('revision_id'),'currentIndex':doc.pop('current_index'),
-                    'observationSeconds':doc.pop('observation_seconds',5),'createdAt':doc.pop('created_at'),
-                    'startedAt':doc.pop('started_at'),'completedAt':doc.pop('completed_at'),
-                    'rolledBackAt':doc.pop('rolled_back_at'),'items':items,'totalNodes':total,'healthyNodes':healthy,
+                    'observationSeconds':doc.pop('observation_seconds',5),'controlState':doc.pop('control_state','run'),
+                    'createdAt':doc.pop('created_at'),'startedAt':doc.pop('started_at'),'pausedAt':doc.pop('paused_at',0),
+                    'resumedAt':doc.pop('resumed_at',0),'abortedAt':doc.pop('aborted_at',0),
+                    'completedAt':doc.pop('completed_at'),'rolledBackAt':doc.pop('rolled_back_at'),
+                    'items':items,'timeline':events,'totalNodes':total,'healthyNodes':healthy,
                     'progressPercent':100 if doc['state']=='completed' else int(100*healthy/max(1,total+1))})
         return doc
+
+    def _stage7_rollout_event(rollout_id:str,kind:str,detail:str='',*,node_id:str='',phase:str='',state_name:str='',metrics:dict|None=None):
+        payload=json.dumps(metrics or {},sort_keys=True,separators=(',',':'),ensure_ascii=False)
+        with store.transaction() as db:
+            db.execute('''INSERT INTO smart_routing_rollout_events(rollout_id,node_id,phase,state,kind,detail,metrics,at)
+                          VALUES(?,?,?,?,?,?,?,?)''',
+                       (rollout_id,node_id,phase,state_name,kind,detail[:500],payload,time.time()))
 
     def _stage7_rollout_order(before_roles:dict,after_roles:dict)->list[tuple[str,str]]:
         bw=[str(x) for x in before_roles.get('warpNodeIds',[])];ba=[str(x) for x in before_roles.get('adblockNodeIds',[])]
@@ -1868,13 +1882,34 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if node_id not in set(aw+aa):add(node_id,'remove')
         return order
 
-    def _stage7_rollout_mark(rollout_id:str,node_id:str,state_name:str,detail:str='',desired:dict|None=None):
+    def _stage7_rollout_mark(rollout_id:str,node_id:str,state_name:str,detail:str='',desired:dict|None=None,metrics:dict|None=None):
         now=time.time();revision=int((desired or {}).get('revision') or 0);digest=str((desired or {}).get('hash') or '')
         with store.transaction() as db:
             db.execute('''UPDATE smart_routing_rollout_nodes SET state=?,detail=?,desired_revision=?,desired_hash=?,
                           verified_at=CASE WHEN ?='healthy' THEN ? ELSE verified_at END,updated_at=?
                           WHERE rollout_id=? AND node_id=?''',
                        (state_name,detail[:500],revision,digest,state_name,now,now,rollout_id,node_id))
+        _stage7_rollout_event(rollout_id,'node_state',detail,node_id=node_id,state_name=state_name,metrics=metrics)
+
+    def _stage7_rollout_control(rollout_id:str,*,node_id:str='')->str:
+        announced=False
+        while True:
+            with store.lock:row=store.db.execute('SELECT state,phase,control_state FROM smart_routing_rollouts WHERE id=?',(rollout_id,)).fetchone()
+            if not row or row['state']!='running':return 'stop'
+            control=str(row['control_state'] or 'run')
+            if control=='abort_requested':return 'abort'
+            if control in {'pause_requested','paused'}:
+                if control=='pause_requested':
+                    with store.transaction() as db:
+                        db.execute("UPDATE smart_routing_rollouts SET control_state='paused',paused_at=?,detail=? WHERE id=? AND state='running'",
+                                   (time.time(),'Paused by owner',rollout_id))
+                if not announced:
+                    _stage7_rollout_event(rollout_id,'paused','Rollout paused by owner',node_id=node_id,phase=str(row['phase']),state_name='paused')
+                    announced=True
+                time.sleep(.25);continue
+            if announced:
+                _stage7_rollout_event(rollout_id,'resumed','Rollout resumed',node_id=node_id,phase=str(row['phase']),state_name='running')
+            return 'run'
 
     def _stage7_verify_rollout_node(node_id:str,desired:dict)->dict:
         probe=nodes.probe(node_id,timeout=8.0);state=nodes.desired_state(node_id,include_payload=False)
@@ -1892,7 +1927,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'latencyMs':probe.get('latency_ms',0),'appliedRevision':state.get('applied_revision'),
                 'appliedHash':state.get('applied_hash'),'coreState':core.get('state')}
 
-    def _stage7_rollback_rollout_nodes(rollout_id:str,reason:str)->bool:
+    def _stage7_rollback_rollout_nodes(rollout_id:str,reason:str,*,final_state:str='rolled_back')->bool:
         with store.lock:rows=[dict(x) for x in store.db.execute(
             "SELECT * FROM smart_routing_rollout_nodes WHERE rollout_id=? AND state IN ('applying','verifying','healthy','failed') ORDER BY ord DESC",
             (rollout_id,)).fetchall()]
@@ -1906,9 +1941,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 _stage7_rollout_mark(rollout_id,node_id,'rolled_back','baseline restored',desired)
             except Exception as ex:
                 ok=False;_stage7_rollout_mark(rollout_id,node_id,'rollback_failed',str(ex))
+        terminal=(final_state if ok else 'failed')
         with store.transaction() as db:
-            db.execute('UPDATE smart_routing_rollouts SET state=?,phase=?,detail=?,rolled_back_at=? WHERE id=?',
-                       ('rolled_back' if ok else 'failed','rollback',reason[:500],time.time(),rollout_id))
+            db.execute('UPDATE smart_routing_rollouts SET state=?,phase=?,control_state=?,detail=?,rolled_back_at=? WHERE id=?',
+                       (terminal,'rollback','run',reason[:500],time.time(),rollout_id))
+        _stage7_rollout_event(rollout_id,'rollback_complete',reason,phase='rollback',state_name=terminal,
+                              metrics={'nodes':len(rows),'successful':ok})
         return ok
 
     def _stage7_rollout_worker(rollout_id:str):
@@ -1924,8 +1962,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             try:safety_report=json.loads(revision.get('safety_report') or '{}')
             except Exception:safety_report={}
             thresholds=(safety_report.get('warpSafety') or {}).get('thresholds') or DEFAULT_SAFETY_THRESHOLDS
+            _stage7_rollout_event(rollout_id,'worker_started','Rollout worker active',phase=str(rollout['phase']),state_name='running')
             for index,row in enumerate(rows):
                 if row['state'] in {'healthy','completed'}:continue
+                control=_stage7_rollout_control(rollout_id,node_id=row['node_id'])
+                if control=='abort':
+                    _stage7_rollout_event(rollout_id,'abort_ack','Abort acknowledged before Node apply',node_id=row['node_id'],state_name='aborting')
+                    _stage7_rollback_rollout_nodes(rollout_id,'Aborted by owner',final_state='aborted');return
+                if control=='stop':return
                 node_id=row['node_id']
                 with store.transaction() as db:
                     db.execute('UPDATE smart_routing_rollouts SET current_index=?,phase=?,detail=? WHERE id=?',
@@ -1937,13 +1981,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     nodes.sync_desired_state(node_id,desired,legacy_bundles=build_node_bundles(node_id))
                     _stage7_rollout_mark(rollout_id,node_id,'verifying','candidate delivered',desired)
                     check=_stage7_verify_rollout_node(node_id,desired)
+                    _stage7_rollout_event(rollout_id,'health_sample','Initial post-apply health sample',
+                                          node_id=node_id,state_name='verifying',metrics=check)
                     observation=max(1.0,min(30.0,float(rollout['observation_seconds'] or 5)))
                     deadline=time.monotonic()+observation;check2=check
                     while True:
+                        control=_stage7_rollout_control(rollout_id,node_id=node_id)
+                        if control=='abort':
+                            _stage7_rollout_event(rollout_id,'abort_ack','Abort acknowledged during observation',
+                                                  node_id=node_id,state_name='aborting')
+                            _stage7_rollback_rollout_nodes(rollout_id,'Aborted by owner',final_state='aborted');return
+                        if control=='stop':return
                         remaining=deadline-time.monotonic()
                         if remaining<=0:break
                         time.sleep(min(1.0,remaining))
                         check2=_stage7_verify_rollout_node(node_id,desired)
+                        _stage7_rollout_event(rollout_id,'health_sample','Observation health sample',
+                                              node_id=node_id,state_name='verifying',metrics=check2)
                     warp_note=''
                     if node_id in warp_nodes and warp_tags:
                         remote=nodes.smart_warp_probe(node_id,warp_tags,attempts=2,timeout_seconds=5)
@@ -1951,16 +2005,27 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                             max_loss_percent=float(thresholds.get('maxLossPercent',20)),
                             max_latency_ms=float(thresholds.get('maxLatencyMs',1200)),
                             max_jitter_ms=float(thresholds.get('maxJitterMs',350)))
+                        _stage7_rollout_event(rollout_id,'warp_probe','Post-apply WARP verification',
+                                              node_id=node_id,state_name='verifying',metrics={
+                                                  'passed':gate['passed'],'items':gate.get('items',[]),
+                                                  'thresholds':gate.get('thresholds',{})})
                         if not gate['passed']:raise PolicyError('Post-apply WARP verification failed: '+'; '.join(gate['issues']))
                         warp_note='; WARP verified'
                     _stage7_rollout_mark(rollout_id,node_id,'healthy',
-                        'observed '+str(int(observation))+'s; '+str(check2.get('latencyMs',0))+'ms'+warp_note,desired)
+                        'observed '+str(int(observation))+'s; '+str(check2.get('latencyMs',0))+'ms'+warp_note,desired,
+                        metrics={'observationSeconds':observation,'health':check2,'warpVerified':bool(warp_note)})
                 except Exception as ex:
                     _stage7_rollout_mark(rollout_id,node_id,'failed',str(ex))
                     _stage7_rollback_rollout_nodes(rollout_id,'Node '+node_id+' failed: '+str(ex))
                     return
+            control=_stage7_rollout_control(rollout_id)
+            if control=='abort':
+                _stage7_rollout_event(rollout_id,'abort_ack','Abort acknowledged before Hub apply',phase='hub',state_name='aborting')
+                _stage7_rollback_rollout_nodes(rollout_id,'Aborted by owner',final_state='aborted');return
+            if control=='stop':return
             with store.transaction() as db:
                 db.execute("UPDATE smart_routing_rollouts SET phase='hub',detail='All Nodes healthy; applying Hub last' WHERE id=?",(rollout_id,))
+            _stage7_rollout_event(rollout_id,'hub_phase','All Nodes healthy; Hub apply starting',phase='hub',state_name='running')
             outbounds=engine.section('outbounds')
             current=stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {},stage7_node_roles())
             if current!=revision['baseline_hash']:
@@ -1980,10 +2045,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     db.execute("UPDATE smart_routing_rollouts SET state='completed',phase='complete',detail=?,completed_at=? WHERE id=?",
                                ('Canary and batch verified; Hub applied last',time.time(),rollout_id))
             engine.apply_config(candidate,force=True,after_success=commit)
+            _stage7_rollout_event(rollout_id,'completed','Canary and Batch healthy; Hub applied last',
+                                  phase='complete',state_name='completed',metrics={'nodes':len(rows)})
             try:manager.audit(Actor(rollout['actor'],'owner',{}),rollout['actor'],'smart.routing.rollout.complete',rollout_id,
                               'all nodes verified; hub applied last')
             except Exception:pass
         except Exception as ex:
+            try:_stage7_rollout_event(rollout_id,'worker_error',str(ex),phase='rollback',state_name='failed')
+            except Exception:pass
             try:_stage7_rollback_rollout_nodes(rollout_id,'Rollout worker failed: '+str(ex))
             except Exception:
                 with store.transaction() as db:
@@ -2049,7 +2118,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def smart_routing_rollouts(p:Principal=Depends(owner)):
         with store.lock:ids=[r[0] for r in store.db.execute(
             'SELECT id FROM smart_routing_rollouts ORDER BY created_at DESC LIMIT 20').fetchall()]
-        return {'items':[_stage7_rollout_public(x) for x in ids]}
+        return {'items':[_stage7_rollout_public(x,include_timeline=False) for x in ids]}
 
     @app.get('/api/smart-routing/rollout/{rollout_id}')
     def smart_routing_rollout_get(rollout_id:str,p:Principal=Depends(owner)):
@@ -2082,18 +2151,58 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             for idx,(node_id,role) in enumerate(order):
                 db.execute('''INSERT INTO smart_routing_rollout_nodes(rollout_id,node_id,ord,role,state,updated_at)
                               VALUES(?,?,?,?,?,?)''',(rollout_id,node_id,idx,role,'pending',now))
+        _stage7_rollout_event(rollout_id,'started','Staged rollout created',phase='canary',state_name='running',
+                              metrics={'nodes':len(order),'observationSeconds':body.observationSeconds})
         _stage7_start_worker(rollout_id)
         manager.audit(p.actor,p.actor.id,'smart.routing.rollout.start',rollout_id,
                       'nodes='+str(len(order))+'; hub last')
+        return _stage7_rollout_public(rollout_id)
+
+    @app.get('/api/smart-routing/rollout/{rollout_id}/timeline')
+    def smart_routing_rollout_timeline(rollout_id:str,p:Principal=Depends(owner)):
+        return {'rolloutId':rollout_id,'items':_stage7_rollout_public(rollout_id).get('timeline',[])}
+
+    @app.post('/api/smart-routing/rollout/{rollout_id}/pause',status_code=202)
+    def smart_routing_rollout_pause(rollout_id:str,body:SmartRoutingRolloutAction,p:Principal=Depends(owner)):
+        writable()
+        if body.confirmation!='PAUSE STAGED ROLLOUT':raise HTTPException(400,'Pause confirmation text is invalid')
+        doc=_stage7_rollout_public(rollout_id,include_timeline=False)
+        if doc['state']!='running':raise HTTPException(409,'Only a running rollout can be paused')
+        if doc['controlState'] in {'pause_requested','paused'}:return _stage7_rollout_public(rollout_id)
+        with store.transaction() as db:
+            db.execute("UPDATE smart_routing_rollouts SET control_state='pause_requested',detail=? WHERE id=? AND state='running'",
+                       ('Pause requested by owner',rollout_id))
+        _stage7_rollout_event(rollout_id,'pause_requested','Pause requested by owner',phase=str(doc.get('phase') or ''),state_name='running')
+        manager.audit(p.actor,p.actor.id,'smart.routing.rollout.pause',rollout_id,'pause requested')
         return _stage7_rollout_public(rollout_id)
 
     @app.post('/api/smart-routing/rollout/{rollout_id}/resume',status_code=202)
     def smart_routing_rollout_resume(rollout_id:str,body:SmartRoutingRolloutAction,p:Principal=Depends(owner)):
         writable()
         if body.confirmation!='RESUME STAGED ROLLOUT':raise HTTPException(400,'Resume confirmation text is invalid')
-        doc=_stage7_rollout_public(rollout_id)
+        doc=_stage7_rollout_public(rollout_id,include_timeline=False)
         if doc['state']!='running':raise HTTPException(409,'Only a running rollout can be resumed')
-        _stage7_start_worker(rollout_id);return _stage7_rollout_public(rollout_id)
+        with store.transaction() as db:
+            db.execute("UPDATE smart_routing_rollouts SET control_state='run',resumed_at=?,detail=? WHERE id=? AND state='running'",
+                       (time.time(),'Resumed by owner',rollout_id))
+        _stage7_rollout_event(rollout_id,'resume_requested','Resume requested by owner',phase=str(doc.get('phase') or ''),state_name='running')
+        _stage7_start_worker(rollout_id)
+        manager.audit(p.actor,p.actor.id,'smart.routing.rollout.resume',rollout_id,'resumed')
+        return _stage7_rollout_public(rollout_id)
+
+    @app.post('/api/smart-routing/rollout/{rollout_id}/abort',status_code=202)
+    def smart_routing_rollout_abort(rollout_id:str,body:SmartRoutingRolloutAction,p:Principal=Depends(owner)):
+        writable()
+        if body.confirmation!='ABORT STAGED ROLLOUT':raise HTTPException(400,'Abort confirmation text is invalid')
+        doc=_stage7_rollout_public(rollout_id,include_timeline=False)
+        if doc['state']!='running':raise HTTPException(409,'Only a running rollout can be aborted')
+        with store.transaction() as db:
+            db.execute("UPDATE smart_routing_rollouts SET control_state='abort_requested',aborted_at=?,detail=? WHERE id=? AND state='running'",
+                       (time.time(),'Abort requested by owner',rollout_id))
+        _stage7_rollout_event(rollout_id,'abort_requested','Abort requested by owner',phase=str(doc.get('phase') or ''),state_name='aborting')
+        _stage7_start_worker(rollout_id)
+        manager.audit(p.actor,p.actor.id,'smart.routing.rollout.abort',rollout_id,'abort requested')
+        return _stage7_rollout_public(rollout_id)
 
     @app.post('/api/smart-routing/safety-check')
     def smart_routing_safety_check(body:SmartRoutingSafetyCheck,p:Principal=Depends(owner)):

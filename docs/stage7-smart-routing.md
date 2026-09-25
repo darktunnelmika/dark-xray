@@ -153,6 +153,29 @@ GitHub workflow `Stage 7.2 Smart Routing failure rehearsal` stores bounded evide
 `rehearsal.json`, JUnit XML, the exact source commit and SHA256 hashes of the rollout
 implementation/tests. The evidence explicitly records `productionMutation=false`.
 
+### Stage 7.3 Rollout Control & Telemetry
+
+Stage 7.3 adds durable operator control and per-rollout telemetry without changing the
+Hub-last safety invariant.
+
+- **Pause** persists `pause_requested` in SQLite and the worker transitions to `paused`
+  at the next safe checkpoint. Observation loops check control state every 250 ms while
+  paused and do not advance to another Node or the Hub.
+- **Resume** clears the persisted control state and can restart the rollout worker after
+  a Hub process restart if the original worker is no longer alive.
+- **Abort + Rollback** persists `abort_requested`; the worker acknowledges it before a
+  Node apply, during the observation window, or immediately before Hub apply. Every
+  Node changed by the rollout is restored to baseline and the rollout closes as `aborted`.
+- A bounded **timeline** records rollout start, worker lifecycle, Node state changes,
+  health samples, WARP probe metrics, pause/resume/abort requests, rollback completion,
+  Hub-last transition and successful completion.
+- Health timeline metrics include Node latency, applied revision/hash and Core state.
+  WARP telemetry includes pass/fail, latency, loss, jitter and the thresholds used.
+- The Routing UI exposes Pause/Resume/Abort/Timeline controls on the active rollout and
+  keeps recent completed/aborted/rolled-back rollouts in a history card.
+- The rollout list endpoint stays lightweight; full timeline data is returned only for
+  an individual rollout or its timeline endpoint.
+
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`
@@ -161,8 +184,11 @@ Additional endpoints:
 - `POST /api/smart-routing/safety-check`
 - `GET /api/smart-routing/rollouts`
 - `GET /api/smart-routing/rollout/{rollout_id}`
+- `GET /api/smart-routing/rollout/{rollout_id}/timeline`
 - `POST /api/smart-routing/rollout/start`
+- `POST /api/smart-routing/rollout/{rollout_id}/pause`
 - `POST /api/smart-routing/rollout/{rollout_id}/resume`
+- `POST /api/smart-routing/rollout/{rollout_id}/abort`
 - `POST /api/smart-routing/activate` (Hub-only/non-Node path)
 - `POST /api/smart-routing/rollback`
 
