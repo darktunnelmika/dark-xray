@@ -1857,7 +1857,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         fmt=request.query_params.get('format')
         ua=request.headers.get('user-agent','').lower()
         accept=request.headers.get('accept','').lower()
-        native_clients=('clash','mihomo','sing-box','singbox','xray','v2ray','hiddify','nekobox','shadowrocket','streisand')
+        native_clients=('clash','mihomo','sing-box','singbox','xray','v2ray','v2box','happ','hiddify','nekobox','shadowrocket','streisand')
         wants_portal=(request.query_params.get('portal')=='1' or
                       (not fmt and 'text/html' in accept and not any(x in ua for x in native_clients)))
         if wants_portal:
