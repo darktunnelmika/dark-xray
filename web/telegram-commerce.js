@@ -14,11 +14,11 @@ enginePages.telegram=[L('Telegram Bot','ربات تلگرام')];
 navItems=function(){const n=baseNavItems();if(n.some(x=>x[0]==='telegram'))return n;const at=Math.max(0,n.findIndex(x=>x[0]==='account'));n.splice(at,0,['telegram',L('Telegram Bot','ربات تلگرام'),'link']);return n;};
 
 async function load(){
- const pairs=[['bot','/api/telegram/status'],['products','/api/commerce/products'],['gateways','/api/commerce/gateways'],['orders','/api/commerce/orders']];
+ const pairs=[['bot','/api/telegram/status'],['products','/api/commerce/products'],['orders','/api/commerce/orders']];
  const out={};await Promise.all(pairs.map(async([k,u])=>{try{out[k]=await api(u);}catch(ex){out[k]={error:ex.message};}}));TC.data=out;return out;
 }
 function botCard(b){
- const online=b.runtime_state==='online',configured=!!b.configured;
+ const online=b.runtime_state==='online',configured=!!b.configured,forum=b.forum||{},forumOk=!!forum.configured;
  return `<article class="panel tg-card tg-bot">
  <div class="tg-head"><div><span class="code-caption">DARK BOT CORE</span><h2>${L('Telegram bot','ربات تلگرام')}</h2></div>${st(online?L('ONLINE','آنلاین'):b.enabled?L('STARTING / ERROR','در حال شروع / خطا'):L('DISABLED','خاموش'),online)}</div>
  <form data-tg-form="bot" class="tg-form-grid">
@@ -27,13 +27,14 @@ function botCard(b){
  <label class="tg-switch"><input name="enabled" type="checkbox" ${b.enabled?'checked':''}><span>${L('Enable this bot','فعال‌سازی این ربات')}</span></label>
  <div class="tg-actions"><button class="btn btn-primary" type="submit">${icon('check')}${L('Save bot','ذخیره ربات')}</button><button class="btn" type="button" data-act="tgbottest">${icon('activity')}${L('Test token','تست توکن')}</button></div>
  </form><div class="tg-meta"><span>@${esc(b.bot_username||'—')}</span><span>${L('Last contact','آخرین تماس')}: ${b.last_seen?date(b.last_seen):'—'}</span></div>
+ <div class="notice ${forumOk?'':'warning'}"><b>${L('Forum connection','وضعیت اتصال انجمن')}:</b> ${forumOk?L('CONNECTED','متصل ✅'):L('NOT CONNECTED','متصل نیست ⛔')}</div>
  ${b.last_error?`<div class="notice error">${esc(b.last_error)}</div>`:''}</article>`;
 }
 function forumCard(f={}){
  const ok=!!f.configured;
- return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">REPORT CENTER</span><h2>${L('Forum report center','انجمن گزارش')}</h2></div>${st(ok?L('CONNECTED','متصل'):L('SETUP REQUIRED','نیازمند راه‌اندازی'),ok)}</div>
- <div class="tg-list">${ok?`<div class="tg-gateway"><div><b>${esc(f.title||f.chat_id)}</b><small>ID: ${esc(f.chat_id)} · ${(f.topics||[]).length} Topics</small></div><button class="btn mini" data-act="tgforumrepair">${icon('refresh')}${L('Repair','ترمیم')}</button></div>
- <div class="tg-topic-grid">${(f.topics||[]).map(t=>`<span>${esc(t.name)}</span>`).join('')}</div>`:`<div class="notice warning">${L('Start the bot as Admin. DARK will ask you to select a Forum Supergroup and will create the report topics automatically.','ربات را با ادمین Start کن؛ DARK از داخل تلگرام انجمن را می‌خواهد و Topicهای گزارش را خودکار می‌سازد.')}</div>`}</div></article>`;
+ return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">REPORT CENTER</span><h2>${L('Forum report center','انجمن گزارش')}</h2></div>${st(ok?L('CONNECTED','متصل ✅'):L('NOT CONNECTED','متصل نیست ⛔'),ok)}</div>
+ <div class="tg-list"><div class="tg-forum-status"><b>${L('Connection','اتصال')}: ${ok?L('Connected','متصل'):L('Not connected','متصل نیست')}</b><button class="btn mini" data-act="tgrefresh">${icon('refresh')}${L('Refresh status','بروزرسانی وضعیت')}</button></div>${ok?`<div class="tg-gateway"><div><b>${esc(f.title||L('Telegram Forum','انجمن تلگرام'))}</b><small>${(f.topics||[]).length} / 8 Topics</small></div><button class="btn mini" data-act="tgforumrepair">${icon('refresh')}${L('Repair topics','ترمیم Topicها')}</button></div>
+ <div class="tg-topic-grid">${(f.topics||[]).map(t=>`<span>${esc(t.name)}</span>`).join('')}</div>`:`<div class="notice warning">${L('Not connected yet. Complete Forum selection inside the Telegram bot; this panel only displays connection health.','هنوز متصل نیست. انتخاب و اتصال انجمن را داخل خود ربات تلگرام انجام بده؛ پنل فقط وضعیت اتصال را نمایش می‌دهد.')}</div>`}</div></article>`;
 }
 function priceLine(p){
  const volume=Number(p.volume_bytes||0)>0?bytes(p.volume_bytes):L('Unlimited','نامحدود');
@@ -45,10 +46,6 @@ function productsCard(products){
  return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">STORE CATALOG V2</span><h2>${L('Products & pricing','محصولات و قیمت‌گذاری')}</h2></div><button class="btn btn-primary" data-act="tgproductnew">${icon('plus')}${L('Product','محصول')}</button></div>
  <div class="tg-list">${Array.isArray(products)&&products.length?products.map(p=>`<section class="tg-product"><div class="tg-product-head"><div><b>${esc(p.name)}</b><small>${esc(p.category)} · ${esc(p.kind)} · ${esc(p.id)} · ${L('Per-user limit','سقف خرید')}: ${p.sale_limit_per_user||'∞'}</small></div><button class="btn mini" data-act="tgpricenew" data-product="${esc(p.id)}">${icon('plus')}${L('Price','قیمت')}</button></div><p>${esc(p.description||'')}</p><div>${p.prices?.length?p.prices.map(priceLine).join(''):`<div class="tg-empty">${L('No price variants yet.','هنوز قیمت تعریف نشده است.')}</div>`}</div></section>`).join(''):`<div class="tg-empty">${L('No products yet.','هنوز محصولی ساخته نشده است.')}</div>`}</div></article>`;
 }
-function gatewaysCard(rows){
- return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">MANUAL PAYMENT V1</span><h2>${L('Card payment','پرداخت کارت‌به‌کارت')}</h2></div><button class="btn" data-act="tggatewaynew">${icon('plus')}${L('Add card','افزودن کارت')}</button></div>
- <div class="tg-list">${Array.isArray(rows)&&rows.length?rows.filter(g=>g.kind==='manual').map(g=>`<div class="tg-gateway"><div><b>${esc(g.label)}</b><small>${esc(g.card_number||'—')} · ${esc(g.card_holder||'—')} · ${esc(g.bank_name||'—')}</small></div>${st(g.enabled?L('ACTIVE','فعال'):L('OFF','خاموش'),g.enabled)}</div>`).join(''):`<div class="tg-empty">${L('No card configured.','شماره کارتی تعریف نشده است.')}</div>`}</div></article>`;
-}
 function ordersCard(rows){
  const items=Array.isArray(rows)?rows.slice(0,60):[];
  return `<article class="panel tg-card tg-orders"><div class="tg-head"><div><span class="code-caption">ORDER PIPELINE</span><h2>${L('Recent orders','سفارش‌های اخیر')}</h2></div><button class="btn" data-act="tgrefresh">${icon('refresh')}${L('Refresh','بروزرسانی')}</button></div>
@@ -56,8 +53,8 @@ function ordersCard(rows){
 }
 async function page(){
  const d=await load();if(d.bot?.error)return heading(L('Telegram Bot','ربات تلگرام'),'')+`<div class="notice error">${esc(d.bot.error)}</div>`;
- return heading(L('Telegram Bot & Store','ربات تلگرام و فروشگاه'),L('Sales, administration, forum reports and product policy are all scoped to this panel.','فروش، مدیریت، گزارش انجمن و سیاست محصول همگی به همین پنل محدود هستند.'))+
- `<div class="tg-grid">${botCard(d.bot)}${forumCard(d.bot.forum)}</div><div class="tg-grid">${gatewaysCard(d.gateways)}<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">PRODUCT POLICY</span><h2>${L('Delivery rules','قوانین تحویل')}</h2></div></div><div class="tg-list"><div class="notice">${L('Each price can choose Immediate or First Connection activation and deliver Subscription, Main Config, Both, or Portal.','هر قیمت می‌تواند فعال‌سازی فوری یا اولین اتصال و تحویل ساب، کانفیگ اصلی، هر دو یا پورتال داشته باشد.')}</div></div></article></div>${productsCard(d.products)}${ordersCard(d.orders)}`;
+ return heading(L('Telegram Bot & Store','ربات تلگرام و فروشگاه'),L('The panel shows bot/forum health and product policy. Manual payment settings live only inside the Telegram admin menu.','پنل وضعیت ربات/انجمن و سیاست محصول را نشان می‌دهد؛ تنظیم پرداخت دستی فقط داخل منوی ادمین خود ربات انجام می‌شود.'))+
+ `<div class="tg-grid">${botCard(d.bot)}${forumCard(d.bot.forum)}</div><article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">BOT-ONLY PAYMENT</span><h2>${L('Payment settings','تنظیمات پرداخت')}</h2></div></div><div class="tg-list"><div class="notice">${L('Card number, card holder, bank and payment instructions are intentionally managed only inside Telegram: Admin → Manual Payment.','شماره کارت، صاحب کارت، بانک و متن پرداخت عمداً فقط داخل خود تلگرام مدیریت می‌شوند: ادمین ← پرداخت دستی.')}</div></div></article>${productsCard(d.products)}${ordersCard(d.orders)}`;
 }
 enginePage=async function(){if(state.page==='telegram')return page();return baseEnginePage();};
 function v(f,n){return String(f.get(n)||'').trim();}
@@ -75,15 +72,10 @@ async function priceDialog(product){
   closeDialog();toast(L('Price saved.','قیمت ذخیره شد.'));await renderPage();
  });
 }
-async function gatewayDialog(){
- dialog(L('Card payment','کارت به کارت'),`<div class="form-grid">${field('ID','id','card','text','required maxlength="64" dir="ltr"')}${field(L('Label','عنوان'),'label',L('Card payment','کارت به کارت'),'text','required')}${field(L('Card number','شماره کارت'),'card_number','','text','required maxlength="32" dir="ltr"')}${field(L('Card holder','نام صاحب کارت'),'card_holder','','text','maxlength="128"')}${field(L('Bank','بانک'),'bank_name','','text','maxlength="128"')}<label class="span-2">${L('Payment instructions','راهنمای پرداخت')}<textarea class="field-input" name="instructions" rows="4" maxlength="4000"></textarea></label></div>`,async f=>{
-  await api('/api/commerce/gateways','PUT',{id:v(f,'id'),label:v(f,'label'),kind:'manual',enabled:true,card_number:v(f,'card_number'),card_holder:v(f,'card_holder'),bank_name:v(f,'bank_name'),instructions:v(f,'instructions'),plugin:'',secret:null});closeDialog();toast(L('Card saved.','کارت ذخیره شد.'));await renderPage();
- });
-}
 runAction=async function(act,el){
  if(act==='tgbottest'){const r=await api('/api/telegram/test','POST',{});toast(`@${r.username||r.name} ${L('is valid.','معتبر است.')}`);TC.data=null;await renderPage();return;}
  if(act==='tgforumrepair'){await api('/api/telegram/forum/repair','POST',{});toast(L('Forum topics checked and repaired.','Topicهای انجمن بررسی و ترمیم شدند.'));await renderPage();return;}
- if(act==='tgproductnew'){await productDialog();return;}if(act==='tgpricenew'){await priceDialog(el.dataset.product);return;}if(act==='tggatewaynew'){await gatewayDialog();return;}
+ if(act==='tgproductnew'){await productDialog();return;}if(act==='tgpricenew'){await priceDialog(el.dataset.product);return;}
  if(act==='tgrefresh'){TC.data=null;await renderPage();return;}
  if(act==='tgconfirm'){if(!confirm(L('Confirm this payment and create the service?','پرداخت تأیید و سرویس ساخته شود؟')))return;const r=await api('/api/commerce/orders/'+enc(el.dataset.order)+'/confirm-payment','POST',{reference:'panel:'+Date.now()});toast(r.provisioned?L('Payment confirmed and service created.','پرداخت تأیید و سرویس ساخته شد.'):L('Payment confirmed; provisioning needs attention.','پرداخت تأیید شد؛ ساخت سرویس نیاز به بررسی دارد.'),!r.provisioned);await renderPage();return;}
  if(act==='tgprovision'){const r=await api('/api/commerce/orders/'+enc(el.dataset.order)+'/provision','POST',{});toast(L('Service provisioned: ','سرویس ساخته شد: ')+(r.client_id||''));await renderPage();return;}
