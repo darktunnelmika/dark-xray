@@ -215,9 +215,9 @@ function openDeliveryPortal(){
  window.open(url,'_blank','noopener,noreferrer');
 }
 function deliveryConfigCard(row,index,kind){
- const fail=kind==='failover';
+ const fail=kind==='failover',routeType=row.endpointType==='tunnel'?'tunnel':'direct';
  const meta=fail?`<span class="cv4d-node">${L('Node','نود')} ${e(row.failoverNode||'—')}</span><span>P${fa(row.failoverPriority??'—')}</span><span>${row.failoverLatencyMs==null?'—':fa(row.failoverLatencyMs)+' ms'}</span>`:`<span>#${e(row.inboundId)}</span><span>${L('Primary','اصلی')}</span>`;
- return `<article class="cv4d-config ${fail?'failover':'primary'}" data-cv4d-qr-kind="${kind}" data-index="${index}"><header><div><small>${meta}</small><b>${e(row.remark||L('Config','کانفیگ'))}</b></div><span class="cv4d-route">${fail?L('FAILOVER','فیل‌اور'):L('DIRECT','مستقیم')}</span></header><code>${e(row.uri||'')}</code><footer><button type="button" data-act="cv4dcopy" data-kind="${kind}" data-index="${index}">${icon('copy')}${L('Copy','کپی')}</button><button type="button" class="cv4d-qrpick" data-act="cv4dqr" data-kind="${kind}" data-index="${index}">${L('SHOW QR','نمایش QR')}</button></footer></article>`;
+ return `<article class="cv4d-config ${fail?'failover':'primary'}" data-cv4d-qr-kind="${kind}" data-index="${index}"><header><div><small>${meta}</small><b>${e(row.remark||L('Config','کانفیگ'))}</b></div><span class="cv4d-route">${fail?L('FAILOVER','فیل‌اور'):routeType==='tunnel'?L('TUNNEL','تانل'):L('DIRECT','مستقیم')}</span></header><code>${e(row.uri||'')}</code><footer><button type="button" data-act="cv4dcopy" data-kind="${kind}" data-index="${index}">${icon('copy')}${L('Copy','کپی')}</button><button type="button" class="cv4d-qrpick" data-act="cv4dqr" data-kind="${kind}" data-index="${index}">${L('SHOW QR','نمایش QR')}</button></footer></article>`;
 }
 async function deliveryV4(id){
  const result=await api('/api/clients/'+enc(id)+'/links'),direct=result.engine?.links||[],failover=result.engine?.failover||[],warnings=result.engine?.warnings||[];
