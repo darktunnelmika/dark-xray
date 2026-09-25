@@ -25,6 +25,7 @@ python -m pytest tests/test_client_presence.py -q --junitxml=qa/junit/client-pre
 python -m pytest tests/test_bulk_batching.py -q --junitxml=qa/junit/bulk-batching.xml
 python -m pytest tests/test_subscription_v2.py -q --junitxml=qa/junit/subscription-v2.xml
 python -m pytest tests/test_subscription_path.py -q --junitxml=qa/junit/subscription-path.xml
+python -m pytest tests/test_subscription_portal.py -q --junitxml=qa/junit/subscription-portal.xml
 python -m pytest tests/test_hosts_v3.py -q --junitxml=qa/junit/hosts-v3.xml
 python -m pytest tests/test_accounting_stability.py -q --junitxml=qa/junit/accounting-stability.xml
 python -m pytest tests/test_meter_write_amplification.py -q --junitxml=qa/junit/meter-write-amplification.xml
@@ -95,6 +96,7 @@ node --test tests/settings-operations.test.cjs
 node --test tests/node-control-live.test.cjs
 node --test tests/render-generation.test.cjs
 node --test tests/subscription-policy-v3.test.cjs
+node --test tests/subscription-portal.test.cjs
 node --test tests/sync-v4.test.cjs
 
 node --test tests/node-pairing-ui.test.cjs
