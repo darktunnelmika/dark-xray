@@ -562,3 +562,234 @@ def test_store_manager_v3_archives_product_with_order_history(env):
         assert c.get('/api/commerce/orders').json()[0]['id']==order['id']
     finally:
         worker.api.close()
+
+def _credit_wallet(center,owner,telegram_id,amount,reference):
+    with center.store.transaction() as db:
+        center._credit_tx(db,owner,telegram_id,amount,'topup',reference,'test credit')
+
+
+def test_customer_v2_menu_is_exactly_six_simple_sections(env):
+    _,_,_,_,c=env
+    worker,_=_bot_worker(c,993001)
+    try:
+        labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
+        assert labels==[
+            '🛍 خرید اشتراک','🔄 تمدید سرویس',
+            '💰 کیف پول + شارژ','📦 سرویس‌های من',
+            '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
+        ]
+    finally:
+        worker.api.close()
+
+
+def test_wallet_topup_approval_is_idempotent(env):
+    _,_,_,_,c=env
+    center=c.app.state.telegram_runtime.customer
+    top=center.create_topup('dark',700001,'wallet-user',250000)
+    center.record_topup_receipt('dark',700001,'telegram:photo:test')
+    first=center.approve_topup('dark',top['row_id'])
+    second=center.approve_topup('dark',top['row_id'])
+    assert first['status']=='approved' and second['status']=='approved'
+    assert center.wallet('dark',700001)['balance_minor']==250000
+    rows=center.ledger('dark',700001,20)
+    assert len([x for x in rows if x['kind']=='topup'])==1
+
+
+def test_wallet_purchase_provisions_once_and_debits_once(env):
+    store,_,manager,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    body=price_payload(inbound_id,price_id='wallet-plan',price_minor=120000,volume_bytes=15*1024**3)
+    assert c.put('/api/commerce/products/turbo/prices',json=body).status_code==200
+    center=c.app.state.telegram_runtime.customer
+    _credit_wallet(center,'dark',700002,500000,'seed-purchase')
+    order=c.app.state.telegram_commerce.create_order('dark',700002,'buyer','turbo','wallet-plan')
+    first=center.pay_purchase('dark',order['id'])
+    second=center.pay_purchase('dark',order['id'])
+    assert first['provisioned'] is True and second['provisioned'] is True
+    assert first['client_id']==second['client_id']
+    assert center.wallet('dark',700002)['balance_minor']==380000
+    purchases=[x for x in center.ledger('dark',700002,20) if x['kind']=='purchase']
+    assert len(purchases)==1 and purchases[0]['delta_minor']==-120000
+    detail=manager.detail(center.commerce.actor_for('dark'),first['client_id'],credentials=True)
+    assert detail['client']['tgId']==700002
+    with store.lock:
+        assert store.db.execute("SELECT COUNT(*) FROM clients WHERE id=?",(first['client_id'],)).fetchone()[0]==1
+
+
+def test_referral_rewards_only_after_first_successful_purchase(env):
+    _,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(
+        inbound_id,price_id='ref-plan',price_minor=100000,volume_bytes=5*1024**3)).status_code==200
+    center=c.app.state.telegram_runtime.customer
+    center.set_referral_reward('dark',40000)
+    ref=center.ensure_referral_profile('dark',710001)
+    assert center.register_referral('dark',710002,ref['code']) is True
+    _credit_wallet(center,'dark',710002,300000,'seed-ref')
+    order=center.commerce.create_order('dark',710002,'child','turbo','ref-plan')
+    center.pay_purchase('dark',order['id'])
+    assert center.wallet('dark',710001)['balance_minor']==40000
+    stats=center.referral_stats('dark',710001)
+    assert stats['invited']==1 and stats['qualified']==1 and stats['earned']==40000
+    center.pay_purchase('dark',order['id'])
+    assert center.wallet('dark',710001)['balance_minor']==40000
+
+
+def test_wallet_renewal_updates_real_service_and_is_idempotent(env):
+    _,_,manager,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    price=price_payload(inbound_id,price_id='renew-wallet',price_minor=90000,
+                        duration_days=20,volume_bytes=8*1024**3,ip_limit=3,hwid_limit=1)
+    assert c.put('/api/commerce/products/turbo/prices',json=price).status_code==200
+    center=c.app.state.telegram_runtime.customer
+    _credit_wallet(center,'dark',720001,400000,'seed-renew')
+    order=center.commerce.create_order('dark',720001,'renewuser','turbo','renew-wallet')
+    bought=center.pay_purchase('dark',order['id'])
+    client_id=bought['client_id']
+    before=manager.detail(center.commerce.actor_for('dark'),client_id,credentials=True)['client']
+    renewal=center.create_renewal_order('dark',720001,'renewuser',client_id,'renew-wallet')
+    result=center.pay_renewal('dark',renewal['id'])
+    again=center.pay_renewal('dark',renewal['id'])
+    assert result['status']=='renewed' and again['status']=='renewed'
+    after=manager.detail(center.commerce.actor_for('dark'),client_id,credentials=True)['client']
+    assert int(after['expiryTime'])>=int(before['expiryTime'])+20*86400*1000-1000
+    assert after['totalGB']==8*1024**3 and after['limitIp']==3 and after['limitHwid']==1
+    assert center.wallet('dark',720001)['balance_minor']==220000
+    renewals=[x for x in center.ledger('dark',720001,20) if x['kind']=='renewal']
+    assert len(renewals)==1 and renewals[0]['delta_minor']==-90000
+
+
+def test_customer_support_ticket_roundtrip(env):
+    _,_,_,_,c=env
+    worker,sent=_bot_worker(c,993010)
+    worker.api.call=lambda method,payload=None: {}
+    customer=730001
+    try:
+        assert worker.handle_customer_callback('supnew',customer,customer,{'id':customer,'username':'supporter'})
+        worker.handle_customer_text(customer,customer,'مشکل اتصال','supporter')
+        worker.handle_customer_text(customer,customer,'کانفیگ من متصل نمی‌شود','supporter')
+        tickets=worker.runtime.customer.tickets_for_customer('dark',customer)
+        assert len(tickets)==1 and tickets[0]['status']=='open'
+        msgs=worker.runtime.customer.ticket_messages('dark',tickets[0]['id'])
+        assert len(msgs)==1 and msgs[0]['sender_type']=='customer'
+        row_id=tickets[0]['row_id']
+        assert worker.handle_customer_callback('asupreply:'+str(row_id),993010,993010,{'id':993010})
+        worker.handle_customer_text(993010,993010,'بررسی شد؛ دوباره تست کنید','admin')
+        msgs=worker.runtime.customer.ticket_messages('dark',tickets[0]['id'])
+        assert [m['sender_type'] for m in msgs]==['customer','admin']
+        assert any(chat==customer and 'پاسخ پشتیبانی' in text for chat,text,_ in sent)
+        assert worker.handle_customer_callback('asupclose:'+str(row_id),993010,993010,{'id':993010})
+        assert worker.runtime.customer.ticket(tickets[0]['id'],'dark')['status']=='closed'
+    finally:
+        worker.api.close()
+
+
+def test_start_payload_registers_referral(env):
+    _,_,_,_,c=env
+    worker,sent=_bot_worker(c,993020)
+    ref=worker.runtime.customer.ensure_referral_profile('dark',740001)
+    worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
+    try:
+        worker.handle({'message':{'chat':{'id':740002,'type':'private'},
+                                  'from':{'id':740002,'username':'child'},
+                                  'text':'/start ref_'+ref['code']}})
+        profile=worker.runtime.customer.ensure_referral_profile('dark',740002)
+        assert profile['referrer_telegram_id']==740001
+    finally:
+        worker.api.close()
+
+
+def test_customer_v2_wallet_referral_and_support_survive_full_backup(env,tmp_path):
+    import dataclasses
+    import sqlite3
+    from pathlib import Path
+    from backup import create_backup,restore_backup
+    store,engine,_,_,c=env
+    center=c.app.state.telegram_runtime.customer
+    _credit_wallet(center,'dark',750001,345000,'backup-wallet')
+    ref=center.ensure_referral_profile('dark',750001)
+    center.ensure_referral_profile('dark',750002)
+    assert center.register_referral('dark',750002,ref['code'])
+    ticket=center.create_ticket('dark',750001,'backupuser','Backup support')
+    center.add_ticket_message('dark',ticket['id'],'customer',750001,text='keep this message')
+    data=Path(store.path).parent
+    config=data/'config.json'
+    config.write_text(json.dumps(dataclasses.asdict(engine.config)),encoding='utf-8')
+    archive=tmp_path/'customer-v2.darkbackup'
+    create_backup(data,config,archive,'Customer-Backup-Passphrase-123!')
+    dest=tmp_path/'customer-v2-restored'
+    result=restore_backup(archive,dest,'Customer-Backup-Passphrase-123!')
+    assert result['restored'] is True
+    with sqlite3.connect(dest/'data/dark.sqlite3') as db:
+        assert db.execute("SELECT balance_minor FROM customer_wallets WHERE owner='dark' AND telegram_id=750001").fetchone()[0]==345000
+        row=db.execute("SELECT referrer_telegram_id FROM customer_referrals WHERE owner='dark' AND telegram_id=750002").fetchone()
+        assert row[0]==750001
+        assert db.execute("SELECT subject FROM customer_support_tickets WHERE id=?",(ticket['id'],)).fetchone()[0]=='Backup support'
+        assert db.execute("SELECT text FROM customer_support_messages WHERE ticket_id=?",(ticket['id'],)).fetchone()[0]=='keep this message'
+
+
+def test_customer_wallet_purchase_refuses_insufficient_balance_without_debit(env):
+    _,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(
+        inbound_id,price_id='expensive-wallet',price_minor=500000)).status_code==200
+    center=c.app.state.telegram_runtime.customer
+    _credit_wallet(center,'dark',760001,100000,'seed-low')
+    order=center.commerce.create_order('dark',760001,'low','turbo','expensive-wallet')
+    import pytest
+    from dark_policy import PolicyError
+    with pytest.raises(PolicyError,match='Insufficient wallet balance'):
+        center.pay_purchase('dark',order['id'])
+    assert center.wallet('dark',760001)['balance_minor']==100000
+    assert center.commerce.order(order['id'],'dark')['status']=='pending'
+
+
+def test_representative_panel_has_independent_bot_customer_wallet_store_and_support(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/sellerbot',json={
+        'name':'Seller Bot','allowed':[inbound_id],'volume_credit_bytes':200*1024**3,
+        'unlimited_credit':5,'max_clients':50}).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'sellerbot','password':'SellerBotPass88','role':'reseller'}).status_code==200
+    token,p=auth.login('sellerbot','SellerBotPass88','','127.0.0.7',3600,'seller-bot-test')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        bot_token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        r=seller.put('/api/telegram/settings',json={
+            'enabled':False,'bot_token':bot_token,'admin_telegram_id':880001})
+        assert r.status_code==200,r.text
+        status=seller.get('/api/telegram/status').json()
+        assert status['owner']=='sellerbot' and status['configured'] is True
+        assert seller.put('/api/commerce/products',json={
+            'id':'seller-plan','name':'Seller Plan','description':'Rep scoped',
+            'category':'Seller','kind':'volume','sale_limit_per_user':0,
+            'renewal_enabled':True,'add_volume_enabled':True,
+            'active':True,'visible':True}).status_code==200
+        center=seller.app.state.telegram_runtime.customer
+        _credit_wallet(center,'sellerbot',880002,150000,'seller-wallet')
+        assert center.wallet('sellerbot',880002)['balance_minor']==150000
+        assert center.wallet('dark',880002)['balance_minor']==0
+        ticket=center.create_ticket('sellerbot',880002,'buyer','Seller support')
+        center.add_ticket_message('sellerbot',ticket['id'],'customer',880002,text='help')
+        assert len(center.tickets_for_customer('sellerbot',880002))==1
+        assert len(center.tickets_for_customer('dark',880002))==0
+        worker=BotWorker(seller.app.state.telegram_runtime,'sellerbot',bot_token,'seller-v2')
+        try:
+            assert worker.owner_role()=='reseller'
+            admin_labels=[x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row]
+            assert '➕ ساخت نماینده' not in admin_labels
+            customer_labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
+            assert customer_labels==[
+                '🛍 خرید اشتراک','🔄 تمدید سرویس',
+                '💰 کیف پول + شارژ','📦 سرویس‌های من',
+                '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
+            ]
+        finally:
+            worker.api.close()
+    assert c.get('/api/telegram/status').json()['owner']=='dark'
+    assert all(x['id']!='seller-plan' for x in c.get('/api/commerce/products').json())

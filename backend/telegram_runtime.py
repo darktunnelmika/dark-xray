@@ -10,6 +10,8 @@ import httpx
 from auth import DEFAULTS
 from dark_policy import Actor, NAME_RE, PolicyError
 from telegram_forum import TelegramForumCenter
+from telegram_customer import CustomerCenter
+from telegram_customer_runtime import CustomerBotFeatures
 
 API_ROOT='https://api.telegram.org'
 
@@ -49,7 +51,7 @@ class TelegramAPI:
         if not doc.get('ok'):raise RuntimeError(str(doc.get('description') or f'Telegram API {r.status_code}'))
         return doc.get('result')
 
-class BotWorker:
+class BotWorker(CustomerBotFeatures):
     def __init__(self,runtime,owner:str,token:str,token_mark:str):
         self.runtime=runtime;self.owner=owner;self.token=token;self.token_mark=token_mark
         self.stop_event=threading.Event();self.thread=None;self.api=TelegramAPI(token)
@@ -138,17 +140,21 @@ class BotWorker:
         return self.actor().role
 
     def main_keyboard(self,admin:bool)->dict:
-        rows=[['🛍 فروشگاه','📦 سرویس‌های من']]
+        rows=[
+            ['🛍 خرید اشتراک','🔄 تمدید سرویس'],
+            ['💰 کیف پول + شارژ','📦 سرویس‌های من'],
+            ['👥 زیرمجموعه‌گیری','🎫 پشتیبانی'],
+        ]
         if admin:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
                 ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
-                ['📊 گزارش‌ها','💾 بکاپ'],
-                ['⚙️ تنظیمات ربات'],
+                ['📊 گزارش‌ها','🎫 پشتیبانی'],
+                ['💾 بکاپ','⚙️ تنظیمات ربات'],
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
-            rows += [['🛍 فروشگاه','📦 سرویس‌های من']]
+            rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
         return {'keyboard':[[{'text':x} for x in row] for row in rows],
                 'resize_keyboard':True,'is_persistent':True}
 
@@ -211,6 +217,7 @@ class BotWorker:
             self.api.send(chat_id,'✅ انجمن DARK متصل شد و دسته‌بندی‌های گزارش ساخته شدند.',self.main_keyboard(True))
             return
         if msg.get('photo') or msg.get('document'):
+            if self.handle_customer_media(chat_id,user_id,msg):return
             if self.handle_receipt(chat_id,user_id,msg):return
         text=str(msg.get('text') or '').strip()
         if not text:return
@@ -219,6 +226,10 @@ class BotWorker:
             self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
             self.api.send(chat_id,'عملیات لغو شد.',self.main_keyboard(self.is_admin(user_id)));return
         session=self.sessions.get(user_id,'')
+        if session.startswith('customer_'):
+            self.handle_customer_text(chat_id,user_id,text,str(sender.get('username') or ''));return
+        if session.startswith('admin_support_') and self.is_admin(user_id):
+            self.handle_customer_text(chat_id,user_id,text,str(sender.get('username') or ''));return
         if session.startswith('pay_') and self.is_admin(user_id):
             self.handle_payment_setup_text(chat_id,user_id,text);return
         if session.startswith('store_') and self.is_admin(user_id):
@@ -227,9 +238,21 @@ class BotWorker:
             self.handle_service_text(chat_id,user_id,text);return
         if session=='new_rep':
             self.create_representative_from_text(chat_id,user_id,text);return
-        if low in ('/start','start'):self.send_home(chat_id,user_id);return
-        if low=='/shop' or text=='🛍 فروشگاه':self.shop(chat_id);return
+        if low.startswith('/start') or low=='start':
+            parts=text.split(None,1)
+            self.runtime.customer.ensure_referral_profile(self.owner,user_id)
+            if len(parts)==2 and parts[1].startswith('ref_'):
+                self.runtime.customer.register_referral(self.owner,user_id,parts[1][4:])
+            self.send_home(chat_id,user_id);return
+        if low=='/shop' or text=='🛍 خرید اشتراک':self.shop(chat_id);return
+        if text=='🔄 تمدید سرویس':self.customer_renew_services(chat_id,user_id);return
+        if text=='💰 کیف پول + شارژ':self.customer_wallet_menu(chat_id,user_id);return
         if low=='/services' or text=='📦 سرویس‌های من':self.services(chat_id,user_id);return
+        if text=='👥 زیرمجموعه‌گیری':self.customer_referral_menu(chat_id,user_id);return
+        if text=='🎫 پشتیبانی':
+            if self.is_admin(user_id):self.admin_support(chat_id)
+            else:self.customer_support_menu(chat_id,user_id)
+            return
         if low=='/status' or text=='📊 وضعیت ربات':self.status_menu(chat_id,user_id);return
         if text=='🏠 داشبورد' and self.is_admin(user_id):self.admin_dashboard(chat_id);return
         if text in ('👥 کاربران','👥 مدیریت کاربران') and self.is_admin(user_id):self.admin_clients(chat_id);return
@@ -251,14 +274,7 @@ class BotWorker:
         self.send_home(chat_id,user_id)
 
     def shop(self,chat_id:int):
-        products=self.runtime.commerce.product_rows(self.owner,public=True)
-        if not products:self.api.send(chat_id,'فعلاً محصول فعالی در فروشگاه تعریف نشده است.');return
-        buttons=[]
-        for p in products:
-            if not any(x['active'] for x in p['prices']):continue
-            buttons.append([{'text':p['name'],'callback_data':'p:'+str(p['row_id'])}])
-        if not buttons:self.api.send(chat_id,'فعلاً پلن قابل خریدی وجود ندارد.');return
-        self.api.send(chat_id,'🛍 فروشگاه DARK\nمحصول را انتخاب کن:',{'inline_keyboard':buttons})
+        return self.customer_shop(chat_id)
 
     def product_by_rowid(self,row_id:int)->dict[str,Any]:
         with self.runtime.store.lock:
@@ -298,6 +314,7 @@ class BotWorker:
     def handle_callback(self,q:dict[str,Any]):
         data=str(q.get('data') or '');sender=q.get('from') or {};user_id=int(sender['id'])
         msg=q.get('message') or {};chat_id=int((msg.get('chat') or {}).get('id') or user_id)
+        if self.handle_customer_callback(data,chat_id,user_id,sender):return
         if data.startswith('p:'):
             p=self.product_by_rowid(int(data.split(':',1)[1]))
             prices=[x for x in self.runtime.commerce.product_rows(self.owner,public=True) if x['id']==p['id']][0]['prices']
@@ -486,14 +503,7 @@ class BotWorker:
         return True
 
     def services(self,chat_id:int,user_id:int):
-        rows=[x for x in self.runtime.manager.list(self.actor()) if int(x.get('client',{}).get('tgId') or 0)==int(user_id)]
-        if not rows:self.api.send(chat_id,'هنوز سرویسی به Telegram ID شما متصل نیست.');return
-        lines=['📦 سرویس‌های من']
-        for r in rows[:20]:
-            c=r.get('client') or {};quota=int(c.get('totalGB') or 0);used=int(r.get('used_bytes') or 0)
-            left='نامحدود' if quota==0 else self.bytes(max(0,quota-used))
-            lines.append(f"• {r['email']}\n  باقی‌مانده: {left}\n  وضعیت: {'فعال' if not r.get('block_reasons') else 'محدود'}")
-        self.api.send(chat_id,'\n'.join(lines))
+        return self.customer_services(chat_id,user_id)
 
     @staticmethod
     def bytes(v:int)->str:
@@ -961,11 +971,14 @@ class BotWorker:
 
     def admin_settings(self,chat_id:int):
         cfg=self.bot_config();forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
+        customer=self.runtime.customer.settings(self.owner)
         forum_state='متصل' if forum.get('configured') else ('Rebind Required' if forum.get('rebind_required') else 'متصل نیست')
         self.api.send(chat_id,f"⚙️ تنظیمات DARK BOT\n"
                       f"Bot: @{cfg.get('bot_username') or '—'}\nAdmin ID: {cfg.get('admin_telegram_id')}\n"
                       f"Forum: {forum_state}\nPayment: {'فعال' if gateway and gateway.get('enabled') else 'غیرفعال/تنظیم نشده'}\n"
-                      "Token از پنل وب تغییر می‌کند؛ پرداخت دستی از همین Bot مدیریت می‌شود.")
+                      f"Referral reward: {amount(customer['referral_reward_minor'],'IRT')}\n"
+                      "Token از پنل وب تغییر می‌کند؛ پرداخت دستی از همین Bot مدیریت می‌شود.",
+                      {'inline_keyboard':[[{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}]]})
 
     def client_row(self,row_id:int)->str:
         with self.runtime.store.lock:
@@ -1274,6 +1287,7 @@ class TelegramBotRuntime:
     def __init__(self,commerce,manager,auth,audit):
         self.commerce=commerce;self.store=commerce.store;self.manager=manager;self.auth=auth;self.audit=audit
         self.forum=TelegramForumCenter(self.store)
+        self.customer=CustomerCenter(self.store,commerce,manager)
         self.stop_event=threading.Event();self.wake_event=threading.Event();self.thread=None
         self.workers:dict[str,BotWorker]={};self.statuses:dict[str,dict[str,Any]]={};self.lock=threading.RLock()
 
