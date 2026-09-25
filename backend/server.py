@@ -1854,10 +1854,32 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not row:raise HTTPException(404)
         if store.client_reasons(row['email']) or row['external_disabled']:raise HTTPException(403,'Subscription suspended')
         if row['state']!='applied':raise HTTPException(503,'Customer configuration has not been saved to the runtime')
-        engine.check_device(row['email'],request.headers.get('x-hwid',''),request.headers.get('x-device-os',''),request.headers.get('x-device-model',''))
         fmt=request.query_params.get('format')
+        ua=request.headers.get('user-agent','').lower()
+        accept=request.headers.get('accept','').lower()
+        native_clients=('clash','mihomo','sing-box','singbox','xray','v2ray','hiddify','nekobox','shadowrocket','streisand')
+        wants_portal=(request.query_params.get('portal')=='1' or
+                      (not fmt and 'text/html' in accept and not any(x in ua for x in native_clients)))
+        if wants_portal:
+            with store.lock:
+                core_row=store.db.execute('SELECT body,up,down FROM core_clients WHERE email=?',(row['email'],)).fetchone()
+            client=json.loads(core_row['body']) if core_row else {}
+            used=(int(core_row['up'])+int(core_row['down'])) if core_row else (int(row['last_up'])+int(row['last_down']))
+            total=max(0,int(client.get('totalGB',0) or 0))
+            expiry=max(0,int(client.get('expiryTime',0) or 0)//1000)
+            public_url=config.public_origin.rstrip('/')+str(sub.get('path','/sub'))+'/'+public_token
+            portal_data={'title':sub.get('profile_title','DARK XRAY'),'client':row['email'],'url':public_url,
+                         'used':used,'total':total,'expiry':expiry,
+                         'update_hours':int(sub.get('profile_update_interval_hours',6)),
+                         'announce':sub.get('announce',''),'support_url':sub.get('support_url','')}
+            safe=json.dumps(portal_data,ensure_ascii=False,separators=(',',':')).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
+            page=(ROOT/'web/sub-portal.html').read_text(encoding='utf-8').replace('__SUB_DATA__',safe)
+            return Response(page,media_type='text/html; charset=utf-8',
+                            headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer',
+                                     'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
+                                     'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"})
+        engine.check_device(row['email'],request.headers.get('x-hwid',''),request.headers.get('x-device-os',''),request.headers.get('x-device-model',''))
         if not fmt:
-            ua=request.headers.get('user-agent','').lower()
             if sub.get('auto_detect',True) and any(x in ua for x in ('clash','mihomo')):fmt='clash'
             else:fmt=sub.get('default_format','base64')
         extra=failover_links(row['email'])
