@@ -30,6 +30,7 @@ python -m pytest tests/test_hosts_v3.py -q --junitxml=qa/junit/hosts-v3.xml
 python -m pytest tests/test_accounting_stability.py -q --junitxml=qa/junit/accounting-stability.xml
 python -m pytest tests/test_meter_write_amplification.py -q --junitxml=qa/junit/meter-write-amplification.xml
 python -m pytest tests/test_finance_hardening.py -q --junitxml=qa/junit/finance-hardening.xml
+python -m pytest tests/test_telegram_commerce.py -q --junitxml=qa/junit/telegram-commerce.xml
 python -m pytest tests/test_destructive_recovery.py -q --junitxml=qa/junit/destructive-recovery.xml
 python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-consistency.xml
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
