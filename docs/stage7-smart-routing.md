@@ -208,6 +208,31 @@ into bounded batches so every pinned HTTPS request stays within the Node transpo
 GitHub workflow `Stage 7.4 Real multi-Node acceptance` pins checkout to the exact candidate
 SHA and stores acceptance JSON, exact source commit and SHA256 source evidence.
 
+### Stage 7.5 Soak & Stability
+
+Stage 7.5 runs the real-process Stage 7.4 lab repeatedly to detect state corruption,
+worker/thread leaks, bounded-memory regressions, SQLite contention and recovery drift.
+The default release gate is **50 rollout cycles** across five repeating fault modes:
+
+- 10 × Pause → real Hub process restart → Resume → complete.
+- 10 × Pause/Resume during a live observation window.
+- 10 × owner Abort during Canary/Batch observation → automatic rollback.
+- 10 × post-apply WARP degradation → Safety threshold rollback.
+- 10 × real Node Agent process flap → fail-closed rollout, Node restart and baseline re-sync.
+
+The soak report records process RSS/thread counts, Hub restart count, rollout/event counts,
+rollback outcomes and direct SQLite invariants. The gate requires `PRAGMA quick_check=ok`,
+zero running rollouts, zero transient rollout-node states, zero duplicate rollout-node rows,
+zero terminal rollouts with a non-run control flag, exactly one start event per cycle, bounded
+RSS/thread growth and 100% eventual recovery of all injected failure cycles.
+
+The first 50-cycle acceptance on the Stage 7 branch completed with 20 `completed`,
+10 `aborted`, 10 `rolled_back` and 10 intentional outage `failed` rollouts. There were
+1,112 timeline events, no stuck/transient state, thread delta 0, and only ~3 MiB total RSS
+increase across the five real processes. Immediate rollback success is expected to be below
+100% for the intentional hard Node-outage cases; after Node restart and baseline sync,
+eventual recovery must be exactly 100%.
+
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`
