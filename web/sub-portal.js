@@ -59,7 +59,7 @@ const dict={
   desktop3t:"پروفایل را Refresh کنید",desktop3d:"اشتراک را دریافت و بروزرسانی دوره‌ای را فعال کنید."
  }
 };
-let lang=localStorage.getItem("dark-sub-lang")||((navigator.language||"").toLowerCase().startsWith("fa")?"fa":"en");
+let lang=localStorage.getItem("dark-sub-lang")||"en";
 let format=state.default_format&&state.formats?.[state.default_format]?state.default_format:"base64";
 let platform="android";
 const t=k=>(dict[lang]&&dict[lang][k])||dict.en[k]||k;
