@@ -322,6 +322,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     from node_recovery import install_hub_recovery
     install_hub_recovery(app,nodes,owner,writable,manager.audit)
 
+    from telegram_commerce import install_telegram_commerce
+    install_telegram_commerce(app,store,auth,current,writable,manager.audit)
+
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
 
