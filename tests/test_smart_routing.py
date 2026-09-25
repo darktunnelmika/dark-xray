@@ -1,7 +1,8 @@
 import copy
 import pytest
 
-from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, classify_nodes, rank_warp_paths
+from smart_routing import (SmartRoutingError,build_stage7_candidate_config,build_stage7_patch,build_stage7_plan,
+                           classify_nodes,rank_warp_paths,stage7_state_hash)
 
 
 def base_outbounds():
@@ -85,3 +86,30 @@ def test_stage7_plan_infers_common_warp_regions_without_exposing_settings():
     assert rows['warp-de']['region']=='Germany'
     assert rows['warp-us']['node']=='warp-us'
     assert all('settings' not in row for row in rows.values())
+
+def test_stage7_patch_preserves_existing_observatory_and_merges_warp_selectors():
+    existing={'subjectSelector':['direct'],'probeURL':'https://example.test/204',
+              'probeInterval':'30s','enableConcurrency':False}
+    patch=build_stage7_patch(base_outbounds(),{'rules':[]},current_observatory=existing,
+                             warp_outbound_tags=['warp-us','warp-de'])
+    assert patch['observatory']['subjectSelector']==['direct','warp-us','warp-de']
+    assert patch['observatory']['probeURL']=='https://example.test/204'
+    assert patch['observatory']['probeInterval']=='30s'
+    assert patch['observatory']['enableConcurrency'] is False
+    assert existing['subjectSelector']==['direct']
+
+
+def test_stage7_patch_refuses_non_wireguard_warp_selection():
+    with pytest.raises(SmartRoutingError,match='requires WireGuard'):
+        build_stage7_patch(base_outbounds(),{'rules':[]},warp_outbound_tags=['direct'])
+
+
+def test_stage7_state_hash_and_candidate_overlay_are_deterministic():
+    out=base_outbounds();routing={'domainStrategy':'AsIs','rules':[]};obs={}
+    patch=build_stage7_patch(out,routing,current_observatory=obs,warp_outbound_tags=['warp-us'])
+    a=stage7_state_hash(out,routing,obs);b=stage7_state_hash(copy.deepcopy(out),copy.deepcopy(routing),{})
+    assert a==b
+    base={'outbounds':copy.deepcopy(out),'routing':copy.deepcopy(routing),'dns':{'servers':['1.1.1.1']}}
+    cfg=build_stage7_candidate_config(base,patch)
+    assert cfg['routing']['rules'][1]['ruleTag']=='dark-smart-warp-ai'
+    assert 'observatory' not in cfg

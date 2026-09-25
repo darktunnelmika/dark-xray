@@ -47,3 +47,19 @@ test('inbound Smart WARP scan and selection do not apply or restart',()=>{
   assert.doesNotMatch(body,/saveEditor\(/);
   assert.match(body,/preview only/i);
 });
+
+test('reviewed Smart Routing flow separates validation, apply and rollback',()=>{
+  for(const endpoint of ['/api/smart-routing/validate','/api/smart-routing/review',
+    '/api/smart-routing/revisions','/api/smart-routing/activate','/api/smart-routing/rollback']){
+    assert.match(src,new RegExp(endpoint.replaceAll('/','\\/')));
+  }
+  const reviewStart=src.indexOf('async function showSmartRoutingReview');
+  const reviewEnd=src.indexOf('async function smartRoutingPreview',reviewStart);
+  const reviewBody=src.slice(reviewStart,reviewEnd);
+  assert.match(reviewBody,/REVIEW SMART ROUTING/);
+  assert.doesNotMatch(reviewBody,/APPLY SMART ROUTING/);
+  assert.match(src,/Apply reviewed change/);
+  assert.match(src,/Rollback snapshot is available/);
+  assert.match(src,/xv7smartapply/);
+  assert.match(src,/xv7smartrollback/);
+});

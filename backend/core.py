@@ -154,6 +154,15 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_client_tombstones(
               email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL,down INTEGER NOT NULL,deleted_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS smart_routing_revisions(
+              id TEXT PRIMARY KEY,actor TEXT NOT NULL,created_at REAL NOT NULL,
+              baseline_hash TEXT NOT NULL,candidate_hash TEXT NOT NULL,
+              before_routing TEXT NOT NULL,before_observatory TEXT NOT NULL,
+              after_routing TEXT NOT NULL,after_observatory TEXT NOT NULL,
+              request_body TEXT NOT NULL,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',
+              applied_at REAL NOT NULL DEFAULT 0,rolled_back_at REAL NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS smart_routing_revisions_created
+              ON smart_routing_revisions(created_at DESC);
             ''')
         self.validate_schema_only=True
 
@@ -861,43 +870,58 @@ class CoreEngine:
         self.process=None
         if self.log_handle:self.log_handle.close();self.log_handle=None
 
+    def _apply_config_locked(self,cfg:dict,*,start:bool=False,force:bool=False,after_success=None)->dict:
+        newhash=self.config_hash(cfg)
+        if not force and self.running and newhash==self.applied_hash:
+            if after_success:after_success()
+            return self.runtime_state()
+        self.validate(cfg)
+        old=(self.runtime/'active.json').read_text() if (self.runtime/'active.json').exists() else None
+        oldhash=self.applied_hash;was=self.running
+        self.collect_stats(force=True,strict=was)
+        if was:self._stop_child()
+        else:
+            # Avoid attaching to an unrelated process on the control API port.
+            s=socket.socket()
+            try:
+                # A closed API connection may retain TIME_WAIT after a crash.
+                # Reuse that address, not a live listener; never use SO_REUSEPORT.
+                s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                s.bind(('127.0.0.1',self.config.xray_api_port))
+            except OSError:raise CoreError('Core API port already occupied by another process',status=409)
+            finally:s.close()
+        if old:self._atomic(self.runtime/'previous.json',old)
+        self._atomic(self.runtime/'active.json',json.dumps(cfg,indent=2))
+        try:
+            if start or was or self.wants_running:self._spawn()
+            if after_success:after_success()
+        except Exception as e:
+            self._stop_child()
+            rollback='no previous running generation'
+            if old:
+                self._atomic(self.runtime/'active.json',old)
+                if was:
+                    try:self._spawn();rollback='previous process configuration restored'
+                    except Exception:rollback='previous configuration written, restart failed'
+            self.applied_hash=oldhash if self.running else '';self.last_error=str(e)+'; '+rollback
+            status=e.status if isinstance(e,CoreError) else 503
+            uncertain=e.uncertain if isinstance(e,CoreError) else False
+            raise CoreError(self.last_error,status=status,uncertain=uncertain)
+        self.applied_hash=newhash if self.running else ''
+        self.last_apply=time.time();self.last_error='';self.wants_running=self.running
+        return self.runtime_state()
+
+    def apply_config(self,cfg:dict,*,start:bool=False,force:bool=False,after_success=None)->dict:
+        """Apply an already-built config and commit reviewed state under the same engine lock."""
+        self._write()
+        if not isinstance(cfg,dict):raise CoreError('Candidate configuration must be an object')
+        with self.lock:
+            return self._apply_config_locked(copy.deepcopy(cfg),start=start,force=force,after_success=after_success)
+
     def apply(self,*,start:bool=False,force:bool=False)->dict:
         self._write()
         with self.lock:
-            cfg=self.build_config();newhash=self.config_hash(cfg)
-            if not force and self.running and newhash==self.applied_hash:return self.runtime_state()
-            self.validate(cfg)
-            old=(self.runtime/'active.json').read_text() if (self.runtime/'active.json').exists() else None
-            oldhash=self.applied_hash;was=self.running
-            self.collect_stats(force=True,strict=was)
-            if was:self._stop_child()
-            else:
-                # Avoid attaching to an unrelated process on the control API port.
-                s=socket.socket()
-                try:
-                    # A closed API connection may retain TIME_WAIT after a crash.
-                    # Reuse that address, not a live listener; never use SO_REUSEPORT.
-                    s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-                    s.bind(('127.0.0.1',self.config.xray_api_port))
-                except OSError:raise CoreError('Core API port already occupied by another process',status=409)
-                finally:s.close()
-            if old:self._atomic(self.runtime/'previous.json',old)
-            self._atomic(self.runtime/'active.json',json.dumps(cfg,indent=2))
-            try:
-                if start or was or self.wants_running:self._spawn()
-            except Exception as e:
-                self._stop_child()
-                rollback='no previous running generation'
-                if old:
-                    self._atomic(self.runtime/'active.json',old)
-                    if was:
-                        try:self._spawn();rollback='previous process configuration restored'
-                        except Exception:rollback='previous configuration written, restart failed'
-                self.applied_hash=oldhash if self.running else '';self.last_error=str(e)+'; '+rollback
-                raise CoreError(self.last_error,status=503)
-            self.applied_hash=newhash if self.running else ''
-            self.last_apply=time.time();self.last_error='';self.wants_running=self.running
-            return self.runtime_state()
+            return self._apply_config_locked(self.build_config(),start=start,force=force)
 
     def command(self,action:str)->dict:
         self._write()

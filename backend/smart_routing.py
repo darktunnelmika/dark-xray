@@ -9,6 +9,8 @@ shown in the UI and reviewed before a later apply step.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import statistics
 from typing import Any
 
@@ -158,6 +160,7 @@ def build_stage7_patch(
     outbounds: list[dict[str, Any]],
     routing: dict[str, Any],
     *,
+    current_observatory: dict[str, Any] | None = None,
     warp_outbound_tags: list[str] | None = None,
     enable_warp_ai: bool = True,
     enable_adblock: bool = True,
@@ -194,6 +197,10 @@ def build_stage7_patch(
             missing = [tag for tag in warp_tags if tag not in known]
             if missing:
                 raise SmartRoutingError("Unknown WARP outbound tag(s): " + ", ".join(missing))
+            by_tag = {str(o.get("tag")): o for o in outbounds if isinstance(o, dict) and o.get("tag")}
+            not_wireguard = [tag for tag in warp_tags if str(by_tag[tag].get("protocol") or "").lower() != "wireguard"]
+            if not_wireguard:
+                raise SmartRoutingError("Smart WARP requires WireGuard outbound tag(s): " + ", ".join(not_wireguard))
             if len(warp_tags) == 1:
                 target = {"outboundTag": warp_tags[0]}
             else:
@@ -216,14 +223,19 @@ def build_stage7_patch(
         routing_patch["balancers"].append(balancer)
     routing_patch["rules"] = rules_to_prepend + list(routing_patch.get("rules", []))
 
-    observatory_patch = None
+    observatory_patch = copy.deepcopy(current_observatory) if isinstance(current_observatory, dict) and current_observatory else None
     if enable_warp_ai and len(warp_tags) > 1:
-        observatory_patch = {
-            "subjectSelector": warp_tags[:],
-            "probeURL": "https://www.gstatic.com/generate_204",
-            "probeInterval": "1m",
-            "enableConcurrency": True,
-        }
+        observatory_patch = observatory_patch or {}
+        selectors = observatory_patch.get("subjectSelector", [])
+        if not isinstance(selectors, list):
+            raise SmartRoutingError("Existing Observatory subjectSelector is invalid")
+        observatory_patch["subjectSelector"] = _dedupe_tags([
+            *[str(x) for x in selectors if isinstance(x, str) and x],
+            *warp_tags,
+        ])
+        observatory_patch.setdefault("probeURL", "https://www.gstatic.com/generate_204")
+        observatory_patch.setdefault("probeInterval", "1m")
+        observatory_patch.setdefault("enableConcurrency", True)
 
     return {
         "previewOnly": True,
@@ -240,6 +252,34 @@ def build_stage7_patch(
         ],
     }
 
+
+
+def stage7_state_hash(
+    outbounds: list[dict[str, Any]],
+    routing: dict[str, Any],
+    observatory: dict[str, Any] | None,
+) -> str:
+    """Stable hash used to fence reviewed Stage 7 changes against concurrent edits."""
+    payload = {
+        "outbounds": copy.deepcopy(outbounds),
+        "routing": copy.deepcopy(routing),
+        "observatory": copy.deepcopy(observatory) if isinstance(observatory, dict) else {},
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def build_stage7_candidate_config(base_config: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Overlay a reviewed Stage 7 patch onto a compiled Xray config without touching storage."""
+    cfg = copy.deepcopy(base_config)
+    cfg["outbounds"] = copy.deepcopy(patch["outbounds"])
+    cfg["routing"] = copy.deepcopy(patch["routing"])
+    observatory = patch.get("observatory")
+    if observatory:
+        cfg["observatory"] = copy.deepcopy(observatory)
+    else:
+        cfg.pop("observatory", None)
+    return cfg
 
 def rank_warp_paths(observations: list[dict[str, Any]], *, max_results: int = 8) -> list[dict[str, Any]]:
     """Rank pre-collected WARP path observations by health, latency and loss."""

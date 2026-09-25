@@ -36,7 +36,8 @@ from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT,NAME_RE
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
-from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths
+from smart_routing import (SmartRoutingError,build_stage7_candidate_config,build_stage7_patch,build_stage7_plan,
+                           rank_warp_paths,stage7_state_hash)
 from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
@@ -192,6 +193,13 @@ class SmartRoutingPreview(Model):
     warpAi:bool=True
     adblock:bool=True
     warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)
+class SmartRoutingReview(SmartRoutingPreview):
+    baselineHash:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    candidateHash:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    confirmation:str=Field(min_length=1,max_length=64)
+class SmartRoutingRevisionAction(Model):
+    revisionId:str=Field(min_length=16,max_length=64,pattern=r'^[0-9a-f]+$')
+    confirmation:str=Field(min_length=1,max_length=64)
 class SmartWarpRank(Model):
     observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
 class SmartWarpScan(Model):
@@ -1715,14 +1723,137 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def smart_routing_plan(p:Principal=Depends(owner)):
         return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))
 
-    @app.post('/api/smart-routing/preview')
-    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+    def _stage7_material(body:SmartRoutingPreview):
+        outbounds=engine.section('outbounds');routing=engine.section('routing')
+        observatory=engine.section('observatory') or {}
         try:
-            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),
-                                      warp_outbound_tags=body.warpOutboundTags,
-                                      enable_warp_ai=body.warpAi,enable_adblock=body.adblock)
+            patch=build_stage7_patch(outbounds,routing,current_observatory=observatory,
+                                     warp_outbound_tags=body.warpOutboundTags,
+                                     enable_warp_ai=body.warpAi,enable_adblock=body.adblock)
         except SmartRoutingError as ex:
             raise HTTPException(400,str(ex))
+        candidate=build_stage7_candidate_config(engine.build_config(),patch)
+        baseline_hash=stage7_state_hash(outbounds,routing,observatory)
+        candidate_hash=stage7_state_hash(outbounds,patch['routing'],patch.get('observatory') or {})
+        return outbounds,routing,observatory,patch,candidate,baseline_hash,candidate_hash
+
+    def _stage7_revision(revision_id:str)->dict:
+        with store.lock:row=store.db.execute('SELECT * FROM smart_routing_revisions WHERE id=?',(revision_id,)).fetchone()
+        if not row:raise HTTPException(404,'Smart Routing revision not found')
+        return dict(row)
+
+    def _stage7_public(row:dict)->dict:
+        request=json.loads(row['request_body'])
+        return {'revisionId':row['id'],'actor':row['actor'],'createdAt':row['created_at'],
+                'baselineHash':row['baseline_hash'],'candidateHash':row['candidate_hash'],
+                'state':row['state'],'detail':row['detail'],'appliedAt':row['applied_at'],
+                'rolledBackAt':row['rolled_back_at'],'request':request,
+                'rollbackAvailable':row['state']=='applied'}
+
+    def _stage7_write_sections(db,routing:dict,observatory:dict):
+        for name,value in (('routing',routing),('observatory',observatory)):
+            db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
+                       (name,json.dumps(value)))
+
+    @app.post('/api/smart-routing/preview')
+    def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+        _o,_r,_obs,patch,_candidate,baseline_hash,candidate_hash=_stage7_material(body)
+        return {k:v for k,v in patch.items() if k!='outbounds'}|{'baselineHash':baseline_hash,'candidateHash':candidate_hash}
+
+    @app.post('/api/smart-routing/validate')
+    def smart_routing_validate(body:SmartRoutingPreview,p:Principal=Depends(owner)):
+        _o,_r,_obs,patch,candidate,baseline_hash,candidate_hash=_stage7_material(body)
+        validated=engine.validate(candidate)
+        manager.audit(p.actor,p.actor.id,'smart.routing.validate',candidate_hash[:16],
+                      'candidate validated only; production traffic unchanged')
+        return {'validated':True,'baselineHash':baseline_hash,'candidateHash':candidate_hash,
+                'candidateConfigHash':validated['hash'],'warnings':patch.get('warnings',[]),
+                'runtimeMutation':False,'saveMutation':False,'rollbackPrepared':False}
+
+    @app.post('/api/smart-routing/review')
+    def smart_routing_review(body:SmartRoutingReview,p:Principal=Depends(owner)):
+        writable()
+        _o,routing,observatory,patch,candidate,baseline_hash,candidate_hash=_stage7_material(body)
+        if body.confirmation!='REVIEW SMART ROUTING':raise HTTPException(400,'Review confirmation text is invalid')
+        if body.baselineHash!=baseline_hash:raise HTTPException(409,'Smart Routing baseline changed; validate again')
+        if body.candidateHash!=candidate_hash:raise HTTPException(409,'Smart Routing candidate changed; validate again')
+        engine.validate(candidate)
+        revision_id=secrets.token_hex(16);now=time.time()
+        request={'warpAi':body.warpAi,'adblock':body.adblock,'warpOutboundTags':body.warpOutboundTags}
+        with store.transaction() as db:
+            db.execute('''INSERT INTO smart_routing_revisions(
+                id,actor,created_at,baseline_hash,candidate_hash,before_routing,before_observatory,
+                after_routing,after_observatory,request_body,state,detail)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (revision_id,p.actor.id,now,baseline_hash,candidate_hash,json.dumps(routing),json.dumps(observatory),
+                 json.dumps(patch['routing']),json.dumps(patch.get('observatory') or {}),json.dumps(request),
+                 'reviewed','Validated and reviewed; no settings or runtime mutation'))
+        manager.audit(p.actor,p.actor.id,'smart.routing.review',revision_id,'rollback snapshot prepared; not applied')
+        return _stage7_public(_stage7_revision(revision_id))|{'runtimeMutation':False,'saveMutation':False}
+
+    @app.get('/api/smart-routing/revisions')
+    def smart_routing_revisions(p:Principal=Depends(owner)):
+        with store.lock:rows=[dict(x) for x in store.db.execute(
+            'SELECT * FROM smart_routing_revisions ORDER BY created_at DESC LIMIT 30').fetchall()]
+        return {'items':[_stage7_public(x) for x in rows]}
+
+    @app.post('/api/smart-routing/activate')
+    def smart_routing_activate(body:SmartRoutingRevisionAction,p:Principal=Depends(owner)):
+        writable()
+        if body.confirmation!='APPLY SMART ROUTING':raise HTTPException(400,'Apply confirmation text is invalid')
+        row=_stage7_revision(body.revisionId)
+        if row['state']!='reviewed':raise HTTPException(409,'Only a reviewed Smart Routing revision can be applied')
+        before_routing=json.loads(row['before_routing']);before_observatory=json.loads(row['before_observatory'])
+        after_routing=json.loads(row['after_routing']);after_observatory=json.loads(row['after_observatory'])
+        outbounds=engine.section('outbounds')
+        if stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {})!=row['baseline_hash']:
+            raise HTTPException(409,'Smart Routing baseline changed after review; create a new review')
+        patch={'outbounds':outbounds,'routing':after_routing,'observatory':after_observatory}
+        candidate=build_stage7_candidate_config(engine.build_config(),patch)
+        engine.validate(candidate)
+        def commit():
+            with store.transaction() as db:
+                current=stage7_state_hash(engine.section('outbounds'),engine.section('routing'),engine.section('observatory') or {})
+                live=db.execute('SELECT state FROM smart_routing_revisions WHERE id=?',(body.revisionId,)).fetchone()
+                if not live or live['state']!='reviewed' or current!=row['baseline_hash']:
+                    raise CoreError('Smart Routing review became stale during apply',status=409)
+                _stage7_write_sections(db,after_routing,after_observatory)
+                db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,applied_at=? WHERE id=?',
+                           ('applied','Runtime accepted candidate and reviewed settings committed',time.time(),body.revisionId))
+        runtime=engine.apply_config(candidate,force=True,after_success=commit)
+        manager.audit(p.actor,p.actor.id,'smart.routing.apply',body.revisionId,'reviewed candidate applied with rollback snapshot')
+        return _stage7_public(_stage7_revision(body.revisionId))|{'runtime':runtime,'applied':True}
+
+    @app.post('/api/smart-routing/rollback')
+    def smart_routing_rollback(body:SmartRoutingRevisionAction,p:Principal=Depends(owner)):
+        writable();row=_stage7_revision(body.revisionId)
+        if body.confirmation!='ROLLBACK SMART ROUTING':raise HTTPException(400,'Rollback confirmation text is invalid')
+        if row['state']=='reviewed':
+            with store.transaction() as db:
+                db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,rolled_back_at=? WHERE id=? AND state=?',
+                           ('discarded','Reviewed revision discarded before apply',time.time(),body.revisionId,'reviewed'))
+            manager.audit(p.actor,p.actor.id,'smart.routing.discard',body.revisionId,'reviewed change discarded; runtime unchanged')
+            return _stage7_public(_stage7_revision(body.revisionId))|{'runtimeMutation':False}
+        if row['state']!='applied':raise HTTPException(409,'Only an applied or reviewed Smart Routing revision can be rolled back')
+        before_routing=json.loads(row['before_routing']);before_observatory=json.loads(row['before_observatory'])
+        outbounds=engine.section('outbounds')
+        current_hash=stage7_state_hash(outbounds,engine.section('routing'),engine.section('observatory') or {})
+        if current_hash!=row['candidate_hash']:raise HTTPException(409,'Routing changed after this revision; automatic rollback refused')
+        previous=build_stage7_candidate_config(engine.build_config(),
+            {'outbounds':outbounds,'routing':before_routing,'observatory':before_observatory})
+        engine.validate(previous)
+        def commit():
+            with store.transaction() as db:
+                current=stage7_state_hash(engine.section('outbounds'),engine.section('routing'),engine.section('observatory') or {})
+                live=db.execute('SELECT state FROM smart_routing_revisions WHERE id=?',(body.revisionId,)).fetchone()
+                if not live or live['state']!='applied' or current!=row['candidate_hash']:
+                    raise CoreError('Smart Routing revision changed during rollback',status=409)
+                _stage7_write_sections(db,before_routing,before_observatory)
+                db.execute('UPDATE smart_routing_revisions SET state=?,detail=?,rolled_back_at=? WHERE id=?',
+                           ('rolled_back','Previous routing and Observatory restored after runtime validation',time.time(),body.revisionId))
+        runtime=engine.apply_config(previous,force=True,after_success=commit)
+        manager.audit(p.actor,p.actor.id,'smart.routing.rollback',body.revisionId,'previous reviewed snapshot restored')
+        return _stage7_public(_stage7_revision(body.revisionId))|{'runtime':runtime,'rolledBack':True}
 
     @app.post('/api/smart-routing/warp-rank')
     def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):

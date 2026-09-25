@@ -49,13 +49,42 @@ Example body:
 }
 ```
 
-## Apply flow planned for the next step
+## Reviewed apply and rollback flow
 
-1. Show preview in Outbound/Routing UI.
-2. Run Xray validation against the returned routing/outbound patch.
-3. Save settings only after explicit owner confirmation.
-4. Restart/reload Xray through the existing manager path.
-5. Keep rollback evidence if apply fails.
+Stage 7 now keeps traffic unchanged through the first three gates:
+
+1. **Preview** builds the proposed rules, balancer and Observatory state without
+   saving settings. The preview API does not return WireGuard secret material.
+2. **Validate** compiles the complete candidate Xray configuration and runs
+   Xray `-test`; neither settings nor runtime are changed.
+3. **Review** re-validates the same baseline/candidate hashes and stores a durable
+   revision containing the previous and proposed Routing/Observatory snapshots.
+   This still does not apply anything.
+
+Only the explicit **Apply reviewed change** action may change runtime traffic.
+It is protected by a baseline hash so concurrent Routing/Outbound/Observatory
+edits make the review stale instead of being overwritten. The candidate runtime
+is validated and started first; reviewed settings are committed only after the
+candidate runtime is accepted. If that commit fails, the previous owned Xray
+generation is restored.
+
+An applied revision exposes **Rollback**. Rollback is accepted only while the
+current Smart Routing state still matches that revision's candidate hash, so
+later operator changes are never silently overwritten. The saved pre-apply
+Routing and Observatory snapshot is validated, restored to runtime, and then
+committed atomically.
+
+Existing Observatory values are preserved: Smart WARP adds its selectors and
+uses defaults only for Observatory fields that were previously absent.
+Only real `wireguard` outbound tags are accepted as Smart WARP paths.
+
+Additional endpoints:
+
+- `POST /api/smart-routing/validate`
+- `POST /api/smart-routing/review`
+- `GET /api/smart-routing/revisions`
+- `POST /api/smart-routing/activate`
+- `POST /api/smart-routing/rollback`
 
 ## Real WARP path scan (Inbound)
 
