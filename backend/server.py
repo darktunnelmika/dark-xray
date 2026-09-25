@@ -437,7 +437,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.put('/api/bot/settings')
     def telegram_bot_settings_put(body:TelegramBotSettingsBody,p:Principal=Depends(commerce_admin)):
         writable()
-        return commerce.save_bot(p.actor,body.token,body.admin_telegram_id,body.enabled)
+        result=commerce.save_bot(p.actor,body.token,body.admin_telegram_id,body.enabled)
+        if body.enabled and not config.test_engine:
+            return commerce.connect_bot(p.actor,config.public_origin)
+        return result
 
     @app.get('/api/shop/products')
     def shop_products(p:Principal=Depends(commerce_admin)):
