@@ -7,6 +7,9 @@ import re
 import secrets
 import time
 from typing import Any
+from urllib.error import HTTPError,URLError
+from urllib.parse import urlsplit,urlunsplit
+from urllib.request import Request,urlopen
 
 from dark_policy import Actor, MAX_INT, NAME_RE, PermissionDenied, PolicyError
 
@@ -119,6 +122,7 @@ class BotCommerce:
             "configured": True, "owner_id": owner_id, "enabled": bool(row["enabled"]),
             "admin_telegram_id": row["admin_telegram_id"],
             "bot_username": row["bot_username"], "last_error": row["last_error"],
+            "connected": bool(row["bot_username"] and not row["last_error"] and row["enabled"]),
             "webhook_path": "/telegram/" + row["public_id"],
             "token_hint": "…" + token[-6:], "updated_at": row["updated_at"]
         }
@@ -142,8 +146,8 @@ class BotCommerce:
         public_id = old["public_id"] if old else secrets.token_urlsafe(12)
         webhook_secret = old["webhook_secret"] if old else secrets.token_urlsafe(32)
         created_at = old["created_at"] if old else now
-        bot_username = old["bot_username"] if old else ""
-        last_error = old["last_error"] if old else ""
+        bot_username = (old["bot_username"] if old else "") if not raw else ""
+        last_error = (old["last_error"] if old else "") if not raw else ""
         with self.store.transaction() as db:
             db.execute(
                 """INSERT INTO telegram_bots(
@@ -162,6 +166,91 @@ class BotCommerce:
             f"enabled={bool(enabled)}; admin_telegram_id={admin_telegram_id}"
         )
         return self.bot_settings(actor)
+
+    @staticmethod
+    def _telegram_call(token: str, method: str, payload: dict | None = None) -> Any:
+        url = "https://api.telegram.org/bot" + token + "/" + method
+        data = json.dumps(payload or {}).encode()
+        request = Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(request, timeout=10) as response:
+                raw = response.read(1024 * 1024)
+        except HTTPError as ex:
+            raise PolicyError("Telegram API HTTP " + str(ex.code)) from None
+        except URLError:
+            raise PolicyError("Telegram API is unreachable") from None
+        except Exception:
+            raise PolicyError("Telegram API connection failed") from None
+        try:
+            doc = json.loads(raw)
+        except (TypeError, ValueError):
+            raise PolicyError("Telegram API returned invalid JSON") from None
+        if not isinstance(doc, dict) or not doc.get("ok"):
+            description = str(doc.get("description") or "Telegram API rejected the request")
+            raise PolicyError(description[:200])
+        return doc.get("result")
+
+    def connect_bot(self, actor: Actor, public_origin: str) -> dict:
+        owner_id = self._panel_owner(actor)
+        with self.store.lock:
+            row = self.store.db.execute(
+                "SELECT * FROM telegram_bots WHERE owner_id=?", (owner_id,)
+            ).fetchone()
+        if not row:
+            raise PolicyError("Telegram bot is not configured")
+        if not row["enabled"]:
+            result = self.bot_settings(actor)
+            result["connected"] = False
+            return result
+        parsed = urlsplit(public_origin)
+        if parsed.scheme != "https" or not parsed.netloc:
+            error = "Telegram webhook requires an HTTPS public panel origin"
+            with self.store.transaction() as db:
+                db.execute(
+                    "UPDATE telegram_bots SET bot_username='',last_error=?,updated_at=? WHERE owner_id=?",
+                    (error, time.time(), owner_id)
+                )
+            result = self.bot_settings(actor)
+            result["connected"] = False
+            return result
+        token = self.auth.cipher.decrypt(row["token_enc"].encode()).decode()
+        webhook_url = urlunsplit(
+            (parsed.scheme, parsed.netloc, "/telegram/" + row["public_id"], "", "")
+        )
+        try:
+            me = self._telegram_call(token, "getMe")
+            if not isinstance(me, dict) or not me.get("username"):
+                raise PolicyError("Telegram bot identity is unavailable")
+            self._telegram_call(token, "setWebhook", {
+                "url": webhook_url,
+                "secret_token": row["webhook_secret"],
+                "allowed_updates": ["message"],
+                "drop_pending_updates": False
+            })
+        except PolicyError as ex:
+            with self.store.transaction() as db:
+                db.execute(
+                    "UPDATE telegram_bots SET bot_username='',last_error=?,updated_at=? WHERE owner_id=?",
+                    (str(ex)[:200], time.time(), owner_id)
+                )
+            self.manager.audit(
+                actor, owner_id, "telegram_bot.connect_failed", owner_id, str(ex)[:200]
+            )
+            result = self.bot_settings(actor)
+            result["connected"] = False
+            return result
+        with self.store.transaction() as db:
+            db.execute(
+                "UPDATE telegram_bots SET bot_username=?,last_error='',updated_at=? WHERE owner_id=?",
+                (str(me["username"])[:128], time.time(), owner_id)
+            )
+        self.manager.audit(
+            actor, owner_id, "telegram_bot.connected", owner_id, "webhook registered"
+        )
+        result = self.bot_settings(actor)
+        result["connected"] = True
+        result["webhook_url"] = webhook_url
+        return result
 
     def _product(self, owner_id: str, product_id: str):
         with self.store.lock:
