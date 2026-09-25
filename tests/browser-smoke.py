@@ -208,6 +208,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert narrow_side and narrow_side['x']+narrow_side['width']<=1,narrow_side
             report['mobile_360']=narrow
             mark('360px narrow mobile dashboard keeps shell, topbar and closed sidebar in bounds')
+            page.evaluate("document.documentElement.setAttribute('dir','rtl')")
+            page.wait_for_timeout(60)
+            rtl_side=page.locator('.sidebar').bounding_box()
+            assert rtl_side and rtl_side['x']>=page.evaluate('window.innerWidth')-1,rtl_side
+            page.evaluate("document.documentElement.setAttribute('dir','ltr')")
+            page.wait_for_timeout(60)
+            mark('closed mobile sidebar stays fully offscreen in RTL as well as LTR')
             page.screenshot(path=str(OUT/'browser-mobile-en.png'),full_page=True)
 
             page.set_viewport_size({'width':1440,'height':1000})
