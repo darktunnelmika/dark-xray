@@ -328,6 +328,9 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
 
     status=client.get('/api/warp/status').json()
     assert status['mode']=='off' and status['endpoint']=='162.159.192.1:2408'
+    scan=client.post('/api/warp/scan',json={'tag':'warp'})
+    assert scan.status_code==200,scan.text
+    assert scan.json()['passed'] is True and scan.json()['productionTrafficMutation'] is False
 
     ai=client.post('/api/warp/mode',json={'tag':'warp','mode':'ai','adblock':False})
     assert ai.status_code==200,ai.text
