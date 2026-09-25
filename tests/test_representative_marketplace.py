@@ -245,3 +245,24 @@ def test_marketplace_plan_order_subscription_and_wallet_survive_full_backup(env,
         sub=db.execute("SELECT status,representative_id FROM representative_subscriptions WHERE owner='dark' AND buyer_telegram_id=840001").fetchone()
         assert sub==('active',rep_id)
         assert db.execute("SELECT balance_minor FROM customer_wallets WHERE owner='dark' AND telegram_id=840001").fetchone()[0]==80000
+def test_bot_purchase_delivery_includes_panel_url(env):
+    _,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/representative-marketplace/plans/starter',json=plan_payload(
+        inbound_id,price_minor=50000)).status_code==200
+    market=c.app.state.telegram_runtime.marketplace
+    center=c.app.state.telegram_runtime.customer
+    credit_wallet(center,'dark',850001,100000,'rep-url-seed')
+    plan=market.plan_rows('dark',public=True)[0]
+    order=market.create_order('dark',850001,'urlbuyer',plan['row_id'],'purchase')
+    worker=BotWorker(c.app.state.telegram_runtime,'dark',
+                     '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','rep-url')
+    sent=[]
+    worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
+    try:
+        worker.customer_representative_pay(850001,850001,order['id'])
+        text='\n'.join(x[1] for x in sent)
+        assert 'Panel: '+worker.runtime.manager.engine.config.public_origin.rstrip('/') in text
+        assert 'Username:' in text and 'Password:' in text
+    finally:
+        worker.api.close()
