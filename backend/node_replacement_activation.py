@@ -63,7 +63,7 @@ class ReplacementActivation:
                 'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id', (node,))]
             raw = self.store.db.execute("SELECT body FROM core_sections WHERE name='hosts'").fetchone()
             hosts = json.loads(raw[0]) if raw else []
-            public_hosts = [{k: h[k] for k in ('inboundId','runtime','address','port','enable','remark') if k in h}
+            public_hosts = [{k: h[k] for k in ('inboundId','runtime','address','port','enable','remark','endpointType') if k in h}
                             for h in hosts if h.get('inboundId') in assignments]
             ports = []
             for inbound_id in assignments:
