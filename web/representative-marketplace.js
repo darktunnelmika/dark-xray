@@ -3,7 +3,7 @@
 'use strict';
 if(typeof navItems!=='function'||typeof enginePage!=='function'||typeof runAction!=='function')return;
 const baseNavItems=navItems,baseEnginePage=enginePage,baseRunAction=runAction;
-const RM={plans:null};
+const RM={plans:null,subs:null};
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 const esc=v=>e(String(v??''));
 const fmt=v=>Number(v||0).toLocaleString()+' تومان';
@@ -22,6 +22,11 @@ async function loadPlans(){
  if(!isPrimaryOwner()){RM.plans=[];return RM.plans;}
  RM.plans=await api('/api/representative-marketplace/plans');
  return RM.plans;
+}
+async function loadSubs(){
+ if(!isPrimaryOwner()){RM.subs=[];return RM.subs;}
+ RM.subs=await api('/api/representative-marketplace/subscriptions');
+ return RM.subs;
 }
 function stateTag(p){
  if(p.active&&p.visible)return '<span class="tag green">PUBLISHED</span>';
@@ -44,7 +49,7 @@ function card(p){
 }
 async function page(){
  if(!isPrimaryOwner())return heading(L('Representative Plans','پلن‌های نمایندگی'),'')+'<div class="notice error">'+L('Only the primary Owner can manage representative plans.','فقط Owner اصلی می‌تواند پلن‌های نمایندگی را مدیریت کند.')+'</div>';
- const plans=await loadPlans();
+ const [plans,subs]=await Promise.all([loadPlans(),loadSubs()]);
  return heading(L('Representative Marketplace','مارکت نمایندگی'),
    L('You define the complete plan. Customers can only select and pay for published plans.','تمام مشخصات پلن را Owner تعیین می‌کند؛ مشتری فقط پلن منتشرشده را انتخاب و پرداخت می‌کند.'))+
  `<article class="panel tg-card">
@@ -53,6 +58,10 @@ async function page(){
    </div>
    <div class="notice">${L('Price, duration, credits, client caps, prefix, IP/HWID caps, Inbounds and bot permission are fixed by the Owner. The buyer cannot customize them.','قیمت، مدت، اعتبارها، سقف کلاینت، Prefix، سقف IP/HWID، Inboundها و مجوز Bot فقط توسط Owner تعیین می‌شوند و خریدار امکان تغییرشان را ندارد.')}</div>
    <div class="tg-list">${plans.length?plans.map(card).join(''):'<div class="tg-empty">'+L('No plans yet.','هنوز پلنی ساخته نشده است.')+'</div>'}</div>
+  </article>
+  <article class="panel tg-card">
+   <div class="tg-head"><div><span class="code-caption">SUBSCRIPTIONS</span><h2>${L('Representative subscriptions','اشتراک‌های نمایندگی')}</h2></div></div>
+   <div class="tg-list">${subs.length?subs.map(x=>`<div class="tg-price"><div><b>${esc(x.representative_id)}</b><small>Telegram ${esc(x.buyer_telegram_id)} · ${esc(x.plan_id)}</small></div><small>${x.status==='active'?'ACTIVE':'SUSPENDED'} · ${new Date(Number(x.expires_at||0)*1000).toLocaleString()}</small></div>`).join(''):'<div class="tg-empty">'+L('No representative subscriptions yet.','هنوز اشتراک نمایندگی ساخته نشده است.')+'</div>'}</div>
   </article>`;
 }
 enginePage=async function(){if(state.page==='repplans')return page();return baseEnginePage();};
