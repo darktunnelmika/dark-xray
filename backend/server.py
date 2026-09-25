@@ -1881,6 +1881,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def subscription_portal_request(request:Request)->bool:
         if request.query_params.get('format') or request.query_params.get('raw') in {'1','true','yes'}:return False
         accept=request.headers.get('accept','').lower();ua=request.headers.get('user-agent','').lower()
+        machine_clients=('clash','mihomo','hiddify','v2ray','sing-box','singbox','shadowrocket','nekobox','stash','loon','surge')
+        if any(x in ua for x in machine_clients):return False
         browser=any(x in ua for x in ('mozilla/','applewebkit/','chrome/','safari/','firefox/','edg/'))
         return browser and 'text/html' in accept
 
