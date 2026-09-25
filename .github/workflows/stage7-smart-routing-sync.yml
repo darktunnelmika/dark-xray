@@ -90,4 +90,6 @@ jobs:
             git add SHA256SUMS
             git commit -m "Refresh checksums for Stage 7 smart routing API"
           fi
-          git push origin work/stage7-smart-routing
+          git fetch origin work/stage7-smart-routing
+          git rebase origin/work/stage7-smart-routing
+          git push origin HEAD:work/stage7-smart-routing
