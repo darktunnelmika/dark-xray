@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 15
     env:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
-      DARK_REAL_XRAY_BINARY: ${{ github.workspace }}/.test-core/xray
+      DARK_REAL_XRAY_BINARY: /tmp/dark-stage6-core/xray
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -33,10 +33,10 @@ jobs:
           python -m pytest -q             tests/test_nodes_v2.py::test_global_block_refreshes_all_node_desired_states_and_reports_offline_convergence             tests/test_nodes_v2.py::test_hub_observe_node_enforce_is_translated_only_for_agent_payload             tests/test_settings_v2.py::test_ipguard_legacy_mode_hydrates_node_mode_and_independent_node_enforce_is_allowed             tests/test_node_control_lifecycle.py::test_agent_health_exposes_guard_state_without_claiming_enforcement             tests/test_security_center_v4.py
       - name: Fetch verified official Xray
         run: |
-          python tools/fetch-core.py --version v26.3.27 --destination "$GITHUB_WORKSPACE/.test-core"
-          # The packet acceptance test intentionally drops to nobody. Keep only
-          # the verified test core directory/binary traversable and executable.
-          chmod 0755 "$GITHUB_WORKSPACE/.test-core" "$GITHUB_WORKSPACE/.test-core/xray"
+          python tools/fetch-core.py --version v26.3.27 --destination /tmp/dark-stage6-core
+          # The packet acceptance test intentionally drops to nobody, so keep
+          # its verified Xray fixture outside the runner workspace hierarchy.
+          chmod 0755 /tmp/dark-stage6-core /tmp/dark-stage6-core/xray
       - name: Real Node Guard packet path in isolated namespaces
         run: |
           export DARK_SECURITY_PARENT_NETNS="$(readlink /proc/self/ns/net)"
@@ -48,7 +48,7 @@ jobs:
           mkdir -p qa/stage6-node-guard
           git rev-parse HEAD > qa/stage6-node-guard/source-commit.txt
           sha256sum backend/core.py backend/node_runtime.py backend/node_agent.py backend/nodes.py backend/server.py             backend/guard_bridge.py backend/guardd.py tests/test_node_real_guard_enforcement.py             tests/node_guard_packet_lab.py web/ipguard-v4.js > qa/stage6-node-guard/source-sha256.txt
-          test ! -f .test-core/DARK-CORE-PROVENANCE.json || cp .test-core/DARK-CORE-PROVENANCE.json qa/stage6-node-guard/core-provenance.json
+          test ! -f /tmp/dark-stage6-core/DARK-CORE-PROVENANCE.json || cp /tmp/dark-stage6-core/DARK-CORE-PROVENANCE.json qa/stage6-node-guard/core-provenance.json
       - name: Upload Stage 6 evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
