@@ -176,6 +176,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.wait_for_function("()=>!document.querySelector('.sidebar')?.classList.contains('open')&&!document.querySelector('.menu-backdrop')")
             assert not page.evaluate("document.body.classList.contains('mobile-nav-open')")
             assert mobile.get_attribute('aria-expanded')=='false'
+            closed_box=page.locator('.sidebar').bounding_box()
+            assert closed_box and closed_box['x']+closed_box['width']<=1,closed_box
 
             mobile.click()
             page.locator('.nav-btn[data-page="clients"]').click()
