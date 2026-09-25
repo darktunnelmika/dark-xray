@@ -69,3 +69,14 @@ def test_hwid_policy_is_not_bypassed_by_browser_portal(env):
     assert client.patch("/api/clients/portal-user",json={"client":{"limitHwid":1}}).status_code==202
     assert client.get(url,headers={"accept":"text/html","user-agent":"Mozilla/5.0"}).status_code==200
     assert client.get(url+"?format=base64",headers={"accept":"*/*","user-agent":"curl/8"}).status_code==403
+
+
+@pytest.mark.parametrize("user_agent",[
+    "Clash.Meta/1.19","Mihomo/1.19","Hiddify/2.5","v2rayNG/1.10",
+    "sing-box/1.12","Shadowrocket/2.2","NekoBox/1.4","Stash/2.6","Surge/5"
+])
+def test_known_subscription_clients_never_receive_html(env,user_agent):
+    client,url=env
+    response=client.get(url,headers={"accept":"text/html,*/*","user-agent":user_agent+" Mozilla/5.0"})
+    assert response.status_code==200
+    assert not response.headers["content-type"].startswith("text/html")
