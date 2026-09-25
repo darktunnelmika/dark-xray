@@ -48,9 +48,10 @@ test('inbound Smart WARP scan and selection do not apply or restart',()=>{
   assert.match(body,/preview only/i);
 });
 
-test('reviewed Smart Routing flow separates validation, apply and rollback',()=>{
+test('reviewed Smart Routing flow separates validation, staged rollout and rollback',()=>{
   for(const endpoint of ['/api/smart-routing/validate','/api/smart-routing/review',
-    '/api/smart-routing/revisions','/api/smart-routing/safety-check','/api/smart-routing/activate','/api/smart-routing/rollback']){
+    '/api/smart-routing/revisions','/api/smart-routing/safety-check','/api/smart-routing/rollouts',
+    '/api/smart-routing/rollout/start','/api/smart-routing/rollback']){
     assert.match(src,new RegExp(endpoint.replaceAll('/','\\/')));
   }
   const reviewStart=src.indexOf('async function showSmartRoutingReview');
@@ -58,9 +59,9 @@ test('reviewed Smart Routing flow separates validation, apply and rollback',()=>
   const reviewBody=src.slice(reviewStart,reviewEnd);
   assert.match(reviewBody,/REVIEW SMART ROUTING/);
   assert.doesNotMatch(reviewBody,/APPLY SMART ROUTING/);
-  assert.match(src,/Apply reviewed change/);
-  assert.match(src,/Rollback snapshot is available/);
-  assert.match(src,/xv7smartapply/);
+  assert.match(src,/Start staged rollout/);
+  assert.match(src,/START STAGED ROLLOUT/);
+  assert.match(src,/xv7smartrollout/);
   assert.match(src,/xv7smartrollback/);
 });
 
@@ -82,5 +83,15 @@ test('Smart Routing Safety Gate locks apply until a live pass exists',()=>{
   assert.match(src,/maxLatencyMs:1200/);
   assert.match(src,/maxJitterMs:350/);
   assert.match(src,/Safety Gate/);
-  assert.match(src,/r\.safetyPassed\?button\(L\('Apply reviewed change'/);
+  assert.match(src,/r\.safetyPassed\?button\(L\('Start staged rollout'/);
+});
+
+test('Stage 7.1 staged rollout UI shows canary batch hub-last and automatic rollback',()=>{
+  assert.match(src,/async function startSmartRollout/);
+  assert.match(src,/Canary → Verify → Batch → Hub last/);
+  assert.match(src,/automatic rollback/);
+  assert.match(src,/smartRollouts/);
+  assert.match(src,/progressPercent/);
+  assert.match(src,/healthyNodes/);
+  assert.match(src,/\/api\/smart-routing\/rollout\//);
 });

@@ -1144,6 +1144,22 @@ class NodeRegistry:
         return {'latency_ms':ms,'items':doc}
 
     @installation_operation
+    def smart_warp_probe(self,node_id:str,tags:list[str],*,attempts:int=2,timeout_seconds:int=5)->dict:
+        if not isinstance(tags,list) or not 1<=len(tags)<=8 or any(not isinstance(x,str) or not x for x in tags):
+            raise PolicyError('Invalid Smart WARP probe tags')
+        doc,ms=self._request(node_id,'/node/api/v1/smart-warp/probe','POST',
+                             {'outboundTags':tags,'attempts':attempts,'timeoutSeconds':timeout_seconds},
+                             float(timeout_seconds*max(1,attempts)*len(tags)+12))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
+            raise PolicyError('Invalid Node Smart WARP probe response')
+        for item in doc['items']:
+            if not isinstance(item,dict) or not isinstance(item.get('tag'),str):
+                raise PolicyError('Invalid Node Smart WARP probe item')
+            if any(k in item for k in ('secretKey','privateKey','settings','peers')):
+                raise PolicyError('Node Smart WARP probe leaked secret material')
+        return {'node_id':node_id,'latency_ms':ms,'items':doc['items'],'productionTrafficMutation':False}
+
+    @installation_operation
     def deploy_inbound(self,node_id:str,payload:dict)->dict:
         if not isinstance(payload,dict):raise PolicyError('Inbound payload must be an object')
         doc,ms=self._request(node_id,'/node/api/inbounds','POST',payload,12.0)

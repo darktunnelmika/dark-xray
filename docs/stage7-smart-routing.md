@@ -110,13 +110,35 @@ check itself does not mutate traffic or restart production Xray.
 - Safety reports contain only health/metric data; WireGuard secret material is
   never returned.
 
+### Stage 7.1 Canary / Staged Apply
+
+Safety PASS revisions use a persisted per-Node rollout instead of a fleet-wide direct apply.
+The default sequence is **Canary → Verify → Batch → Hub last**.
+
+- The first WARP-role Node and first Adblock-role Node are Canary targets.
+- Every changed Node receives a rollout-specific candidate desired state while all
+  not-yet-rolled Nodes stay on the baseline configuration.
+- After each Node acknowledges the desired revision, DARK verifies Core health twice.
+- WARP-role Nodes additionally run an isolated Node-local WARP probe after apply;
+  the same Safety Gate loss/latency/jitter thresholds are enforced again.
+- If any Node fails delivery, convergence, health, or post-apply WARP verification,
+  all Nodes already changed by that rollout are automatically restored to baseline.
+- The Hub data plane is not changed during Canary/Batch. It is applied only after
+  every Node verifies healthy.
+- Running rollouts are persisted and automatically resume after Hub process restart.
+- Node-targeted revisions cannot use the direct apply endpoint; staged rollout is mandatory.
+
 Additional endpoints:
 
 - `POST /api/smart-routing/validate`
 - `POST /api/smart-routing/review`
 - `GET /api/smart-routing/revisions`
 - `POST /api/smart-routing/safety-check`
-- `POST /api/smart-routing/activate`
+- `GET /api/smart-routing/rollouts`
+- `GET /api/smart-routing/rollout/{rollout_id}`
+- `POST /api/smart-routing/rollout/start`
+- `POST /api/smart-routing/rollout/{rollout_id}/resume`
+- `POST /api/smart-routing/activate` (Hub-only/non-Node path)
 - `POST /api/smart-routing/rollback`
 
 ## Real WARP path scan (Inbound)

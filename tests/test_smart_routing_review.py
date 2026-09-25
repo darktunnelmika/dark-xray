@@ -1,3 +1,5 @@
+import hashlib
+import json
 import shutil
 import socket
 import time
@@ -56,7 +58,34 @@ def stage7_env(tmp_path,monkeypatch):
     engine.save_section('observatory',{'subjectSelector':['direct'],'probeURL':'https://example.test/204',
                                        'probeInterval':'30s','enableConcurrency':False})
     app=make_app(manager,auth,background=False)
+    node_store={};counter={'n':0}
     monkeypatch.setattr(app.state.nodes,'list',lambda: ready_nodes())
+    monkeypatch.setattr(app.state.nodes,'assignments',lambda node_id: [])
+    def fake_set(node_id,value):
+        raw=json.dumps(value,sort_keys=True,separators=(',',':')).encode();digest=hashlib.sha256(raw).hexdigest()
+        old=node_store.get(node_id);counter['n']+=0 if old and old['hash']==digest else 1
+        revision=(old or {}).get('revision',0)+(0 if old and old['hash']==digest else 1)
+        node_store[node_id]={'node_id':node_id,'revision':revision,'hash':digest,'payload':value,'pending':True,
+                             'applied_revision':(old or {}).get('applied_revision',0),'applied_hash':(old or {}).get('applied_hash',''),
+                             'last_error':''}
+        return node_store[node_id]
+    def fake_desired(node_id,include_payload=True):
+        row=dict(node_store.get(node_id,{'node_id':node_id,'revision':0,'hash':'','payload':{},'pending':False,
+                                        'applied_revision':0,'applied_hash':'','last_error':''}))
+        if not include_payload:row.pop('payload',None)
+        return row
+    def fake_sync(node_id,state,legacy_bundles=None):
+        row=node_store[node_id];row['pending']=False;row['applied_revision']=state['revision'];row['applied_hash']=state['hash'];row['last_error']=''
+        return {'desired_state_applied':True,'items':[],'desired_revision':state['revision'],'desired_hash':state['hash']}
+    def fake_probe(node_id,timeout=8.0):
+        return {'node':{'id':node_id},'latency_ms':12,'health':{'service':'DARK XRAY NODE','core':{'state':'running','dirty':False,'last_error':''}}}
+    monkeypatch.setattr(app.state.nodes,'set_desired_state',fake_set)
+    monkeypatch.setattr(app.state.nodes,'desired_state',fake_desired)
+    monkeypatch.setattr(app.state.nodes,'sync_desired_state',fake_sync)
+    monkeypatch.setattr(app.state.nodes,'probe',fake_probe)
+    monkeypatch.setattr(app.state.nodes,'smart_warp_probe',lambda node_id,tags,attempts=2,timeout_seconds=5:{
+        'node_id':node_id,'latency_ms':10,'productionTrafficMutation':False,
+        'items':[{'tag':tag,'ok':True,'latencyMs':80.0,'lossPercent':0.0,'jitterMs':5.0} for tag in tags]})
     monkeypatch.setattr(server_module,'scan_warp_outbounds',lambda binary,assets,outbounds,attempts=3,timeout=5.0:[
         {'tag':str(o.get('tag')),'ok':True,'latenciesMs':[70.0,75.0,72.0][:attempts],
          'lossPercent':0.0,'attempts':attempts,'successes':attempts,'failures':0,'error':'',
@@ -92,6 +121,19 @@ def safety(client,revision_id):
     assert response.status_code==200,response.text
     assert response.json()['safetyPassed'] is True,response.text
     return response.json()
+
+
+def start_rollout(client,revision_id):
+    response=client.post('/api/smart-routing/rollout/start',json={
+        'revisionId':revision_id,'confirmation':'START STAGED ROLLOUT'})
+    assert response.status_code==202,response.text
+    rollout_id=response.json()['rolloutId']
+    deadline=time.time()+8
+    while time.time()<deadline:
+        doc=client.get('/api/smart-routing/rollout/'+rollout_id).json()
+        if doc['state']!='running':return doc
+        time.sleep(.05)
+    raise AssertionError('rollout did not finish')
 def test_stage7_preview_redacts_wireguard_secrets_and_validate_does_not_mutate(stage7_env):
     _store,engine,client=stage7_env
     before_routing=engine.section('routing');before_obs=engine.section('observatory')
@@ -116,10 +158,10 @@ def test_stage7_review_activate_and_rollback_round_trip(stage7_env):
     checked=safety(client,reviewed['revisionId'])
     assert checked['safetyReport']['productionTrafficMutation'] is False
 
-    activated=client.post('/api/smart-routing/activate',json={
-        'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
-    assert activated.status_code==200,activated.text
-    assert activated.json()['state']=='applied'
+    rollout=start_rollout(client,reviewed['revisionId'])
+    assert rollout['state']=='completed',rollout
+    assert rollout['phase']=='complete'
+    assert all(x['state']=='completed' for x in rollout['items'])
     routing=engine.section('routing');obs=engine.section('observatory')
     assert [r['ruleTag'] for r in routing['rules'][:2]]==['dark-smart-adblock','dark-smart-warp-ai']
     assert obs['subjectSelector']==['direct','warp-us','warp-de']
@@ -170,15 +212,8 @@ def test_stage7_apply_requires_csrf_confirmation_and_writes_enabled(stage7_env):
     finally:
         engine.config.writes_enabled=True
 
-def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env,monkeypatch):
+def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env):
     store,engine,client=stage7_env
-    fake_nodes=[
-        {'id':'node-us','name':'USA','region':'USA','enabled':True,'online':True},
-        {'id':'node-de','name':'Germany','region':'Germany','enabled':True,'online':True},
-        {'id':'node-fr','name':'France','region':'France','enabled':True,'online':True},
-        {'id':'node-uk','name':'UK','region':'UK','enabled':True,'online':True},
-    ]
-    monkeypatch.setattr(client.app.state.nodes,'list',lambda: fake_nodes)
     body=request_body()|{'warpNodeIds':['node-us','node-de'],
                          'adblockNodeIds':['node-fr','node-uk']}
     validated=client.post('/api/smart-routing/validate',json=body)
@@ -194,9 +229,8 @@ def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env,monkeypatch)
     assert revision['nodeRoles']==validated.json()['nodeRoles']
     safety(client,revision['revisionId'])
 
-    applied=client.post('/api/smart-routing/activate',json={
-        'revisionId':revision['revisionId'],'confirmation':'APPLY SMART ROUTING'})
-    assert applied.status_code==200,applied.text
+    rollout=start_rollout(client,revision['revisionId'])
+    assert rollout['state']=='completed',rollout
     with store.lock:
         roles=[tuple(r) for r in store.db.execute(
             'SELECT node_id,warp_ai,adblock FROM smart_routing_node_roles ORDER BY node_id')]
@@ -211,13 +245,13 @@ def test_stage7_review_applies_and_rolls_back_node_roles(stage7_env,monkeypatch)
     assert engine.section('routing').get('rules',[])==[]
 
 
-def test_stage7_apply_is_locked_until_safety_gate_passes(stage7_env):
+def test_stage7_rollout_is_locked_until_safety_gate_passes(stage7_env):
     _store,_engine,client=stage7_env
     reviewed=review(client)
-    denied=client.post('/api/smart-routing/activate',json={
-        'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
+    denied=client.post('/api/smart-routing/rollout/start',json={
+        'revisionId':reviewed['revisionId'],'confirmation':'START STAGED ROLLOUT'})
     assert denied.status_code==409,denied.text
-    assert 'Safety Gate' in denied.text
+    assert 'Safety PASS' in denied.text
 
 
 def test_stage7_safety_gate_blocks_offline_selected_node(stage7_env,monkeypatch):
@@ -231,13 +265,44 @@ def test_stage7_safety_gate_blocks_offline_selected_node(stage7_env,monkeypatch)
     assert any('node-de' in x and 'offline' in x for x in doc['safetyReport']['issues'])
 
 
-def test_stage7_safety_gate_expires_before_apply(stage7_env):
+def test_stage7_safety_gate_expires_before_rollout(stage7_env):
     store,_engine,client=stage7_env
     reviewed=review(client);safety(client,reviewed['revisionId'])
     with store.transaction() as db:
         db.execute('UPDATE smart_routing_revisions SET safety_checked_at=? WHERE id=?',
                    (time.time()-301,reviewed['revisionId']))
+    denied=client.post('/api/smart-routing/rollout/start',json={
+        'revisionId':reviewed['revisionId'],'confirmation':'START STAGED ROLLOUT'})
+    assert denied.status_code==409,denied.text
+    assert 'Safety PASS' in denied.text
+
+
+def test_stage7_staged_rollout_auto_rolls_back_when_second_canary_fails(stage7_env,monkeypatch):
+    store,engine,client=stage7_env
+    before_routing=engine.section('routing');reviewed=review(client);safety(client,reviewed['revisionId'])
+    counts={}
+    def flaky_probe(node_id,timeout=8.0):
+        counts[node_id]=counts.get(node_id,0)+1
+        if node_id=='node-fr' and counts[node_id]==2:
+            raise OSError('simulated canary verification failure')
+        return {'node':{'id':node_id},'latency_ms':12,
+                'health':{'service':'DARK XRAY NODE','core':{'state':'running','dirty':False,'last_error':''}}}
+    monkeypatch.setattr(client.app.state.nodes,'probe',flaky_probe)
+    rollout=start_rollout(client,reviewed['revisionId'])
+    assert rollout['state']=='rolled_back',rollout
+    states={x['node_id']:x['state'] for x in rollout['items']}
+    assert states['node-us']=='rolled_back'
+    assert states['node-fr']=='rolled_back'
+    assert engine.section('routing')==before_routing
+    with store.lock:
+        revision=store.db.execute('SELECT state FROM smart_routing_revisions WHERE id=?',(reviewed['revisionId'],)).fetchone()
+    assert revision['state']=='reviewed'
+
+
+def test_stage7_direct_apply_is_disabled_for_node_targeted_revision(stage7_env):
+    _store,_engine,client=stage7_env
+    reviewed=review(client);safety(client,reviewed['revisionId'])
     denied=client.post('/api/smart-routing/activate',json={
         'revisionId':reviewed['revisionId'],'confirmation':'APPLY SMART ROUTING'})
     assert denied.status_code==409,denied.text
-    assert 'expired' in denied.text
+    assert 'staged rollout' in denied.text

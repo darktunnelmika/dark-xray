@@ -169,6 +169,19 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS smart_routing_node_roles(
               node_id TEXT PRIMARY KEY,warp_ai INTEGER NOT NULL DEFAULT 0,
               adblock INTEGER NOT NULL DEFAULT 0,updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollouts(
+              id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,actor TEXT NOT NULL,created_at REAL NOT NULL,
+              state TEXT NOT NULL,phase TEXT NOT NULL DEFAULT 'nodes',current_index INTEGER NOT NULL DEFAULT 0,
+              detail TEXT NOT NULL DEFAULT '',started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
+              rolled_back_at REAL NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS smart_routing_rollouts_created ON smart_routing_rollouts(created_at DESC);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollout_nodes(
+              rollout_id TEXT NOT NULL,node_id TEXT NOT NULL,ord INTEGER NOT NULL,role TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'pending',detail TEXT NOT NULL DEFAULT '',
+              desired_revision INTEGER NOT NULL DEFAULT 0,desired_hash TEXT NOT NULL DEFAULT '',
+              verified_at REAL NOT NULL DEFAULT 0,updated_at REAL NOT NULL DEFAULT 0,
+              PRIMARY KEY(rollout_id,node_id));
+            CREATE INDEX IF NOT EXISTS smart_routing_rollout_nodes_order ON smart_routing_rollout_nodes(rollout_id,ord);
             ''')
             revision_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_revisions)')}
             if 'before_node_roles' not in revision_cols:
