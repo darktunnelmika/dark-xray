@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  sync:
+  sync-stage7-api:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Stage 7 branch
@@ -21,45 +21,40 @@ jobs:
           ref: work/stage7-smart-routing
           fetch-depth: 0
 
-      - name: Patch server API endpoints
-        shell: bash
+      - name: Patch server.py with Smart Routing preview API
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('backend/server.py')
-          text=p.read_text()
-          imp='from update_bridge import UpdateBrokerClient,UpdateBrokerError\n'
-          add='from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths\n'
+          p = Path('backend/server.py')
+          text = p.read_text()
+
+          old = 'from update_bridge import UpdateBrokerClient,UpdateBrokerError\n'
+          add = 'from smart_routing import SmartRoutingError,build_stage7_patch,build_stage7_plan,rank_warp_paths\n'
           if add not in text:
-              text=text.replace(imp,imp+add)
-          marker="class FullBackupBody(Model):\n"
-          models="""
-class SmartRoutingPreview(Model):
+              text = text.replace(old, old + add)
+
+          model_marker = 'class FullBackupBody(Model):\n    passphrase:str=Field(min_length=12,max_length=512)\n'
+          model_add = '''class SmartRoutingPreview(Model):
     warpAi:bool=True
     adblock:bool=True
     warpOutboundTags:list[str]=Field(default_factory=list,max_length=32)
-
 class SmartWarpRank(Model):
-    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=128)
-
-"""
+    observations:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
+'''
           if 'class SmartRoutingPreview(Model):' not in text:
-              text=text.replace(marker,models+marker)
-          traffic_marker='    def traffic_engine_doc():\n'
-          endpoints="""
-    def smart_routing_plan_payload():
-        return build_stage7_plan(nodes.list(), engine.section('outbounds'), engine.section('routing'))
+              text = text.replace(model_marker, model_add + model_marker)
 
-    @app.get('/api/smart-routing/plan')
+          route_marker = "    @app.get('/api/security-center')\n    def security_center(p:Principal=Depends(current)):return security_center_payload(p)\n"
+          route_add = '''    @app.get('/api/smart-routing/plan')
     def smart_routing_plan(p:Principal=Depends(owner)):
-        return smart_routing_plan_payload()
+        return build_stage7_plan(nodes.list(),engine.section('outbounds'),engine.section('routing'))
 
     @app.post('/api/smart-routing/preview')
     def smart_routing_preview(body:SmartRoutingPreview,p:Principal=Depends(owner)):
         try:
-            return build_stage7_patch(engine.section('outbounds'), engine.section('routing'),
+            return build_stage7_patch(engine.section('outbounds'),engine.section('routing'),
                                       warp_outbound_tags=body.warpOutboundTags,
-                                      enable_warp_ai=body.warpAi, enable_adblock=body.adblock)
+                                      enable_warp_ai=body.warpAi,enable_adblock=body.adblock)
         except SmartRoutingError as ex:
             raise HTTPException(400,str(ex))
 
@@ -67,17 +62,18 @@ class SmartWarpRank(Model):
     def smart_routing_warp_rank(body:SmartWarpRank,p:Principal=Depends(owner)):
         return {'items':rank_warp_paths(body.observations),'previewOnly':True}
 
-"""
+'''
           if "/api/smart-routing/plan" not in text:
-              text=text.replace(traffic_marker,endpoints+traffic_marker)
+              text = text.replace(route_marker, route_add + route_marker)
+
           p.write_text(text)
           PY
 
       - name: Install test dependencies
         run: |
-          python3 -m pip install --user -q --disable-pip-version-check pytest fastapi httpx httpx2 uvicorn pydantic psutil
+          python3 -m pip install --user -q --disable-pip-version-check -r requirements.txt -r requirements-dev.txt httpx httpx2 uvicorn pytest
 
-      - name: Run Stage 7 tests
+      - name: Run targeted tests
         run: |
           PYTHONPATH=backend python3 -m pytest -q tests/test_smart_routing.py tests/test_v06.py tests/test_web_contract.py
           python3 tools/repo-check.py
@@ -86,14 +82,14 @@ class SmartWarpRank(Model):
         run: |
           python3 tools/release_snapshot.py --refresh-source-sums --json-only
 
-      - name: Commit generated changes
+      - name: Commit API wiring
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
-            echo "No changes to commit"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/server.py SHA256SUMS
+          if git diff --cached --quiet; then
+            echo 'No generated changes'
           else
-            git add backend/server.py SHA256SUMS
-            git commit -m "Wire Stage 7 smart routing preview API"
+            git commit -m 'Wire Stage 7 smart routing preview API'
             git push origin HEAD:work/stage7-smart-routing
           fi
