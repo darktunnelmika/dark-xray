@@ -1,0 +1,26 @@
+.tg-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.85fr);gap:16px;margin-bottom:16px}
+.tg-card{margin-bottom:16px;overflow:hidden}
+.tg-grid>.tg-card{margin-bottom:0}
+.tg-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:16px 18px;border-bottom:1px solid var(--border)}
+.tg-head h2{margin:4px 0 0;font-size:14px}
+.tg-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;padding:16px 18px}
+.tg-form-grid label{display:grid;gap:6px;font-size:10px;color:var(--muted)}
+.tg-switch{grid-column:1/-1;display:flex!important;align-items:center!important;gap:9px!important;border:1px solid var(--border);border-radius:8px;background:#081019;padding:10px 12px}
+.tg-switch input{accent-color:var(--green)}
+.tg-actions{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.tg-meta{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;padding:0 18px 16px;color:var(--faint);font:9px var(--mono)}
+.tg-state{display:inline-flex;align-items:center;border:1px solid #ffc66e33;background:#ffc66e08;color:var(--amber);padding:4px 7px;border-radius:999px;font:8px var(--mono);white-space:nowrap}
+.tg-state.ok{border-color:#28f7a03d;background:#28f7a009;color:var(--green)}
+.tg-list{padding:14px 18px;display:grid;gap:10px}
+.tg-product{border:1px solid var(--border);background:#071019;border-radius:10px;padding:12px}
+.tg-product-head,.tg-gateway,.tg-price{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.tg-product-head b,.tg-gateway b,.tg-price b{display:block;font-size:11px}
+.tg-product-head small,.tg-gateway small,.tg-price small{display:block;margin-top:4px;color:var(--faint);font-size:9px}
+.tg-product>p{margin:9px 0;color:var(--muted);font-size:10px;line-height:1.65}
+.tg-price{padding:9px 0;border-top:1px solid #ffffff08}
+.tg-gateway{border:1px solid var(--border);border-radius:9px;background:#071019;padding:11px 12px}
+.tg-empty{padding:18px;text-align:center;color:var(--muted);font-size:10px}
+.tg-error{display:block;color:var(--red);white-space:normal;max-width:320px;margin-top:5px}
+.tg-orders{margin-top:16px}
+@media(max-width:980px){.tg-grid{grid-template-columns:1fr}.tg-form-grid{grid-template-columns:1fr}.tg-switch,.tg-actions{grid-column:1}.tg-orders .data-table{min-width:900px}}
+@media(max-width:640px){.tg-head{padding:14px}.tg-form-grid,.tg-list{padding:14px}.tg-actions .btn{flex:1}.tg-product-head{align-items:flex-start}.tg-meta{padding-inline:14px}}
