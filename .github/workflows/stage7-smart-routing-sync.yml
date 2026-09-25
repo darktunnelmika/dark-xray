@@ -35,6 +35,7 @@ jobs:
           from pathlib import Path
           path = Path('backend/server.py')
           text = path.read_text()
+          text = text.replace('from smart_routing import SmartRoutingError,build_stage7_patch,build_stage7_plan,rank_warp_paths\n', '')
 
           imp = "from smart_routing import SmartRoutingError, build_stage7_patch, build_stage7_plan, rank_warp_paths\n"
           if imp not in text:
