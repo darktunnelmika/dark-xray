@@ -638,6 +638,51 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.screenshot(path=str(OUT/'browser-mobile-fa.png'),full_page=True)
             mark('390px mobile Persian page has no document horizontal overflow')
 
+            # Mobile shell: menu must stay inside the viewport and fully clean up
+            # its backdrop/body lock when closed or after choosing a workspace.
+            mobile=page.locator('.mobile-menu')
+            mobile.wait_for(state='visible',timeout=10000)
+            assert mobile.get_attribute('aria-controls')=='dark-mobile-nav'
+            assert mobile.get_attribute('aria-expanded')=='false'
+            mobile.click()
+            page.wait_for_function("()=>document.querySelector('.sidebar')?.classList.contains('open')&&document.querySelector('.menu-backdrop')")
+            assert page.evaluate("document.body.classList.contains('mobile-nav-open')")
+            side_box=page.locator('.sidebar').bounding_box()
+            assert side_box and side_box['x']>=-1 and side_box['x']+side_box['width']<=page.evaluate('window.innerWidth')+1,side_box
+            assert mobile.get_attribute('aria-expanded')=='true'
+            page.keyboard.press('Escape')
+            page.wait_for_function("()=>!document.querySelector('.sidebar')?.classList.contains('open')&&!document.querySelector('.menu-backdrop')")
+            assert not page.evaluate("document.body.classList.contains('mobile-nav-open')")
+            assert mobile.get_attribute('aria-expanded')=='false'
+
+            mobile.click()
+            page.locator('.nav-btn[data-page="clients"]').click()
+            page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='clients'&&!document.querySelector('.sidebar')?.classList.contains('open')")
+            assert page.locator('.menu-backdrop').count()==0
+            assert not page.evaluate("document.body.classList.contains('mobile-nav-open')")
+            mark('mobile menu opens inside viewport and closes on Escape or workspace navigation')
+
+            report['mobile_widths']={}
+            for name in pages:
+                page.evaluate("(p)=>go(p)",name)
+                page.wait_for_function("p=>document.querySelector('.nav-btn.active')?.dataset.page===p",arg=name,timeout=10000)
+                page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
+                page.wait_for_timeout(60)
+                dims=page.evaluate("()=>({scroll:document.documentElement.scrollWidth,inner:window.innerWidth})")
+                report['mobile_widths'][name]=dims
+                assert dims['scroll']<=dims['inner']+2,(name,dims)
+            mark('all primary owner workspaces stay within the 390px mobile document width')
+
+            page.set_viewport_size({'width':360,'height':740})
+            page.evaluate("go('dashboard')")
+            page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='dashboard'",timeout=10000)
+            page.wait_for_timeout(100)
+            narrow=page.evaluate("()=>({scroll:document.documentElement.scrollWidth,inner:window.innerWidth,topbar:document.querySelector('.topbar')?.getBoundingClientRect().width})")
+            assert narrow['scroll']<=narrow['inner']+2,narrow
+            assert narrow['topbar']<=narrow['inner']+1,narrow
+            report['mobile_360']=narrow
+            mark('360px narrow mobile dashboard keeps shell and topbar inside viewport')
+
             if errors:raise RuntimeError('JavaScript page errors: '+json.dumps(errors,ensure_ascii=False))
             mark('no uncaught JavaScript runtime errors')
             report['status']='passed'
