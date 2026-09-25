@@ -50,5 +50,3 @@ Example body:
 3. Save settings only after explicit owner confirmation.
 4. Restart/reload Xray through the existing manager path.
 5. Keep rollback evidence if apply fails.
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
