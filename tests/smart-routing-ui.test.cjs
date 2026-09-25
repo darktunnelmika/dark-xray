@@ -128,12 +128,20 @@ test('Stage 7.3 live rollout modal keeps control and telemetry visible',()=>{
 });
 
 
-test('Smart WARP is a standalone simple workspace while Xray keeps technical Outbounds and Routing tabs',()=>{
-  assert.match(src,/state\.page==='smart'/);
-  assert.match(src,/WARP and Adblock without Routing complexity/);
-  assert.match(src,/Four simple steps/);
-  assert.match(src,/xv7gotooutbounds/);
-  assert.match(src,/xv7warpscan/);
+test('WARP lives inside Xray Outbounds with simple one-click controls',()=>{
+  assert.match(src,/function warpSimpleCard/);
+  assert.match(src,/Create WARP/);
+  assert.match(src,/AI Only/);
+  assert.match(src,/All Traffic/);
+  assert.match(src,/Rotate IP/);
+  assert.match(src,/xvwarpcreate/);
+  assert.match(src,/xvwarptest/);
+  assert.match(src,/xvwarpmode/);
+  assert.match(src,/\/api\/warp\/status/);
+  assert.match(src,/\/api\/warp\/create/);
+  assert.match(src,/\/api\/warp\/rotate/);
+  assert.match(src,/\/api\/warp\/mode/);
+  assert.doesNotMatch(src,/state\.page==='smart'/);
   const tabs=src.slice(src.indexOf('function xtabs()'),src.indexOf('function xcard'));
   assert.match(tabs,/Outbounds/);
   assert.match(tabs,/Routing/);
