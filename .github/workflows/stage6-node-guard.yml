@@ -32,7 +32,11 @@ jobs:
         run: |
           python -m pytest -q             tests/test_nodes_v2.py::test_global_block_refreshes_all_node_desired_states_and_reports_offline_convergence             tests/test_nodes_v2.py::test_hub_observe_node_enforce_is_translated_only_for_agent_payload             tests/test_settings_v2.py::test_ipguard_legacy_mode_hydrates_node_mode_and_independent_node_enforce_is_allowed             tests/test_node_control_lifecycle.py::test_agent_health_exposes_guard_state_without_claiming_enforcement             tests/test_security_center_v4.py
       - name: Fetch verified official Xray
-        run: python tools/fetch-core.py --version v26.3.27 --destination "$GITHUB_WORKSPACE/.test-core"
+        run: |
+          python tools/fetch-core.py --version v26.3.27 --destination "$GITHUB_WORKSPACE/.test-core"
+          # The packet acceptance test intentionally drops to nobody. Keep only
+          # the verified test core directory/binary traversable and executable.
+          chmod 0755 "$GITHUB_WORKSPACE/.test-core" "$GITHUB_WORKSPACE/.test-core/xray"
       - name: Real Node Guard packet path in isolated namespaces
         run: |
           export DARK_SECURITY_PARENT_NETNS="$(readlink /proc/self/ns/net)"
