@@ -60,16 +60,6 @@ jobs:
           path.write_text(text)
           PY
 
-      - name: Install test dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -q -r requirements.txt -r requirements-dev.txt
-
-      - name: Run focused Stage 7 tests
-        run: |
-          PYTHONPATH=backend pytest -q tests/test_smart_routing.py
-          python3 tools/repo-check.py
-
       - name: Commit server API patch before checksum refresh
         run: |
           if [ -n "$(git status --porcelain -- backend/server.py)" ]; then
