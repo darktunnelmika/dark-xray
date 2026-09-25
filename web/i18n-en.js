@@ -59,6 +59,7 @@ const exact=new Map(Object.entries({
  'هاست‌ها':'Hosts',
  'اوتباندها':'Outbounds',
  'روتینگ':'Routing',
+ 'وارپ هوشمند':'Smart WARP',
  'نودها':'Nodes',
  'تنظیمات Xray':'Xray Settings',
  'تنظیمات پنل':'Panel Settings',
