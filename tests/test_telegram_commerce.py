@@ -568,7 +568,7 @@ def _credit_wallet(center,owner,telegram_id,amount,reference):
         center._credit_tx(db,owner,telegram_id,amount,'topup',reference,'test credit')
 
 
-def test_customer_v2_menu_is_exactly_six_simple_sections(env):
+def test_owner_customer_menu_adds_representative_marketplace(env):
     _,_,_,_,c=env
     worker,_=_bot_worker(c,993001)
     try:
@@ -577,6 +577,7 @@ def test_customer_v2_menu_is_exactly_six_simple_sections(env):
             '🛍 خرید اشتراک','🔄 تمدید سرویس',
             '💰 کیف پول + شارژ','📦 سرویس‌های من',
             '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
+            '🏪 خرید پنل نمایندگی',
         ]
     finally:
         worker.api.close()

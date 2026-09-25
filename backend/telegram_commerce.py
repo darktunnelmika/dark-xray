@@ -415,6 +415,8 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     commerce=TelegramCommerce(store,auth.cipher)
     from telegram_runtime import TelegramBotRuntime
     runtime=TelegramBotRuntime(commerce,manager,auth,audit)
+    from representative_marketplace import install_representative_marketplace
+    install_representative_marketplace(app,runtime.marketplace,current,writable,audit)
     app.state.telegram_commerce=commerce
     app.state.telegram_runtime=runtime
 
@@ -425,6 +427,8 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     @app.put('/api/telegram/settings')
     def telegram_settings_put(body:BotSettingsBody,p=Depends(current)):
         writable();oid=commerce.owner_for(p);now=time.time()
+        if p.actor.role=='reseller' and body.enabled and not runtime.marketplace.bot_allowed(oid):
+            raise PolicyError('This representative plan does not allow an independent Telegram bot')
         with store.transaction() as db:
             old=db.execute("SELECT token_enc FROM telegram_bots WHERE owner=?",(oid,)).fetchone()
             token=commerce._seal(body.bot_token) if body.bot_token else (old['token_enc'] if old else '')
