@@ -603,18 +603,15 @@ class BotCommerce:
             }
 
         if text in ("/start", "start", ""):
-            suffix = "
-دسترسی مدیریت برای این Telegram ID فعال است." if is_admin else ""
-            return reply("DARK XRAY
-فروش و مدیریت سرویس از همین ربات انجام می‌شود." + suffix)
+            suffix = "\nدسترسی مدیریت برای این Telegram ID فعال است." if is_admin else ""
+            return reply("DARK XRAY\nفروش و مدیریت سرویس از همین ربات انجام می‌شود." + suffix)
         if text in ("🛒 فروشگاه", "/store"):
             catalog = self.public_catalog(owner_id)
             if not catalog:
                 return reply("فعلاً محصول فعالی در فروشگاه وجود ندارد.")
             lines = ["🛒 فروشگاه"]
             for product in catalog:
-                lines.append("
-" + product["name"])
+                lines.append("\n" + product["name"])
                 for plan in product["plans"]:
                     quota = (
                         "نامحدود" if plan["service_type"] == "unlimited"
@@ -622,11 +619,9 @@ class BotCommerce:
                     )
                     lines.append(
                         f"• {plan['label']} — {quota} / {plan['duration_days']} روز — "
-                        f"{plan['price_amount']} {plan['currency']}
-  /buy {plan['id']}"
+                        f"{plan['price_amount']} {plan['currency']}\n  /buy {plan['id']}"
                     )
-            return reply("
-".join(lines))
+            return reply("\n".join(lines))
         if text.startswith("/buy "):
             plan_id = text.split(None, 1)[1].strip()
             methods = self.payment_methods(
@@ -638,16 +633,10 @@ class BotCommerce:
             order = self.create_order(owner_id, user_id, plan_id, ready[0]["id"])
             method = ready[0]
             return reply(
-                f"سفارش {order['id']} ساخته شد.
-"
-                f"مبلغ: {order['amount']} {order['currency']}
-"
-                "وضعیت: در انتظار پرداخت
-
-"
-                f"{method['instructions']}
-
-"
+                f"سفارش {order['id']} ساخته شد.\n"
+                f"مبلغ: {order['amount']} {order['currency']}\n"
+                "وضعیت: در انتظار پرداخت\n\n"
+                f"{method['instructions']}\n\n"
                 "پس از تأیید پرداخت توسط ادمین، سرویس خودکار ساخته می‌شود."
             )
         if text in ("📦 سفارش‌های من", "/orders"):
@@ -661,8 +650,7 @@ class BotCommerce:
                 )
                 if row["status"] == "fulfilled" and row["subscription_url"]:
                     lines.append(row["subscription_url"])
-            return reply("
-".join(lines))
+            return reply("\n".join(lines))
         if text in ("🛠 مدیریت", "/admin"):
             if not is_admin:
                 return reply("این بخش فقط برای ادمین عددی تنظیم‌شدهٔ ربات است.")
@@ -676,11 +664,8 @@ class BotCommerce:
                 if x["status"] in ("pending_payment", "paid", "fulfillment_failed")
             )
             return reply(
-                f"🛠 مدیریت DARK
-کاربران: {clients}
-"
-                f"سفارش‌های نیازمند بررسی: {pending}
-"
+                f"🛠 مدیریت DARK\nکاربران: {clients}\n"
+                f"سفارش‌های نیازمند بررسی: {pending}\n"
                 "برای عملیات کامل از پنل وب استفاده کنید."
             )
         if text in ("👥 نمایندگان", "/representatives"):
@@ -692,10 +677,9 @@ class BotCommerce:
                        JOIN api_admins a ON a.id=p.id
                        WHERE a.role='reseller' ORDER BY p.id"""
                 )]
-            body = "
-".join(
+            body = "\n".join(
                 "• " + r["name"] + " — " + r["id"] for r in reps
             ) if reps else "هنوز نماینده‌ای ساخته نشده است."
-            return reply("👥 نمایندگان
-" + body)
+            return reply("👥 نمایندگان\n" + body)
         return reply("از منوی ربات استفاده کنید یا /store و /orders را بزنید.")
+
