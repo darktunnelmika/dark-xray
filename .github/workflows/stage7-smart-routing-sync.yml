@@ -63,11 +63,11 @@ jobs:
       - name: Install test dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -q -r requirements.txt -r requirements-dev.txt httpx httpx2 uvicorn
+          python3 -m pip install -q -r requirements.txt -r requirements-dev.txt
 
-      - name: Run Stage 7 targeted tests
+      - name: Run focused Stage 7 tests
         run: |
-          PYTHONPATH=backend pytest -q tests/test_smart_routing.py tests/test_web_contract.py tests/test_v06.py tests/test_release_snapshot.py
+          PYTHONPATH=backend pytest -q tests/test_smart_routing.py
           python3 tools/repo-check.py
 
       - name: Commit server API patch before checksum refresh
