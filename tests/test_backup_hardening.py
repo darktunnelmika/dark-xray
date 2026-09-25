@@ -71,3 +71,56 @@ def test_backup_refuses_non_object_config(tmp_path):
     config.write_text('[]',encoding='utf-8')
     with pytest.raises(PolicyError,match='JSON object'):
         create_backup(data,config,tmp_path/'bad.darkbackup',PASS)
+
+
+def test_full_backup_restores_telegram_business_state_but_resets_bot_identity(tmp_path):
+    data,config=minimal_source(tmp_path)
+    with sqlite3.connect(data/'dark.sqlite3') as db:
+        db.executescript("""
+        CREATE TABLE telegram_bots(
+          owner TEXT PRIMARY KEY,enabled INTEGER NOT NULL,token_enc TEXT NOT NULL,
+          admin_telegram_id INTEGER NOT NULL,updated_at REAL NOT NULL,update_offset INTEGER NOT NULL,
+          bot_username TEXT NOT NULL,last_error TEXT NOT NULL,last_seen REAL NOT NULL,forum_prompted_at REAL NOT NULL);
+        CREATE TABLE telegram_forums(
+          owner TEXT PRIMARY KEY,chat_id INTEGER NOT NULL,title TEXT NOT NULL,enabled INTEGER NOT NULL,
+          configured_at REAL NOT NULL,updated_at REAL NOT NULL,last_audit_id INTEGER NOT NULL,last_daily_key TEXT NOT NULL);
+        CREATE TABLE telegram_forum_topics(
+          owner TEXT NOT NULL,kind TEXT NOT NULL,name TEXT NOT NULL,thread_id INTEGER NOT NULL,
+          updated_at REAL NOT NULL,PRIMARY KEY(owner,kind));
+        CREATE TABLE commerce_products(
+          id TEXT NOT NULL,owner TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(owner,id));
+        CREATE TABLE commerce_gateways(
+          id TEXT NOT NULL,owner TEXT NOT NULL,kind TEXT NOT NULL,card_number TEXT NOT NULL,
+          PRIMARY KEY(owner,id));
+        CREATE TABLE commerce_orders(id TEXT PRIMARY KEY,owner TEXT NOT NULL,status TEXT NOT NULL);
+        """)
+        db.execute("INSERT INTO telegram_bots VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   ('dark',1,'OLD-ENCRYPTED-TOKEN',1906987468,1.0,9988,'old_bot','old timeout',123.0,44.0))
+        db.execute("INSERT INTO telegram_forums VALUES(?,?,?,?,?,?,?,?)",
+                   ('dark',-100777,'DARK Reports',1,1.0,2.0,55,'2026-09-24'))
+        db.execute("INSERT INTO telegram_forum_topics VALUES(?,?,?,?,?)",
+                   ('dark','sales','💰 فروش',101,1.0))
+        db.execute("INSERT INTO commerce_products VALUES(?,?,?)",('vip','dark','VIP'))
+        db.execute("INSERT INTO commerce_gateways VALUES(?,?,?,?)",('card','dark','manual','6037991234567890'))
+        db.execute("INSERT INTO commerce_orders VALUES(?,?,?)",('ord1','dark','provisioned'))
+        db.commit()
+    archive=tmp_path/'telegram-full.darkbackup'
+    manifest=create_backup(data,config,archive,PASS)
+    assert manifest['telegram_disaster_recovery']['bot_token_reset_on_restore'] is True
+    restored=tmp_path/'telegram-restored'
+    result=restore_backup(archive,restored,PASS)
+    assert result['new_bot_token_required'] is True
+    assert result['forum_rebind_required'] is True
+    with sqlite3.connect(restored/'data/dark.sqlite3') as db:
+        db.row_factory=sqlite3.Row
+        bot=db.execute("SELECT * FROM telegram_bots WHERE owner='dark'").fetchone()
+        assert bot['admin_telegram_id']==1906987468
+        assert bot['enabled']==0 and bot['token_enc']=='' and bot['update_offset']==0
+        assert bot['bot_username']=='' and bot['last_error']=='' and bot['last_seen']==0
+        forum=db.execute("SELECT * FROM telegram_forums WHERE owner='dark'").fetchone()
+        assert forum['chat_id']==-100777 and forum['rebind_required']==1
+        assert forum['rebind_reason']=='restored-backup'
+        assert db.execute("SELECT thread_id FROM telegram_forum_topics WHERE owner='dark' AND kind='sales'").fetchone()[0]==101
+        assert db.execute("SELECT name FROM commerce_products WHERE owner='dark' AND id='vip'").fetchone()[0]=='VIP'
+        assert db.execute("SELECT card_number FROM commerce_gateways WHERE owner='dark' AND id='card'").fetchone()[0]=='6037991234567890'
+        assert db.execute("SELECT status FROM commerce_orders WHERE id='ord1'").fetchone()[0]=='provisioned'
