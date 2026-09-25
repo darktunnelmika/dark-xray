@@ -220,8 +220,9 @@ class CustomerBotFeatures:
         sub=result.get('subscription') or {}
         expires=time.strftime('%Y-%m-%d %H:%M',time.localtime(float(sub.get('expires_at') or 0)))
         if result.get('password'):
+            panel_url=str(self.runtime.manager.engine.config.public_origin or '').rstrip('/')
             self.api.send(chat_id,
-                f"✅ پنل نمایندگی ساخته شد.\n\nUsername: {result['username']}\nPassword: {result['password']}\n"
+                f"✅ پنل نمایندگی ساخته شد.\n\nPanel: {panel_url}\nUsername: {result['username']}\nPassword: {result['password']}\n"
                 f"انقضا: {expires}\n\nاین رمز را همین حالا ذخیره کن. مشخصات پلن توسط Owner تعیین شده است.")
             self.runtime.marketplace.mark_credentials_delivered(self.owner,order_id)
         else:
