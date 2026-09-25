@@ -68,3 +68,17 @@ def test_host_v3_validation_rejects_fake_or_conflicting_controls(env):
     cases=[host(iid,security='reality'),host(iid,overrideSniFromAddress=True,keepSniBlank=True),host(iid,finalMask='[]'),host(iid,mihomoIpVersion='magic'),host(iid,excludeFromSubTypes=['clash','clash'])]
     for value in cases:
         r=c.put('/api/settings/hosts',json={'value':[value]});assert r.status_code==422,(value,r.text)
+
+
+def test_host_v3_endpoint_type_is_persisted_and_exported(env):
+    store,engine,c=env;iid,url=setup_client(c,'host-pair-user')
+    values=[
+        host(iid,runtime='local',endpointType='direct',address='direct.example.test',port=443,remark='DIRECT'),
+        host(iid,runtime='node:pair-node',endpointType='tunnel',address='iran.example.test',port=20001,remark='TUNNEL'),
+    ]
+    assert c.put('/api/settings/hosts',json={'value':values}).status_code==200
+    out=engine.links('host-pair-user',runtime_ready={'local':{iid},'node:pair-node':{iid}})
+    assert [(x['endpointType'],x['runtime']) for x in out['links']]==[('direct','local'),('tunnel','node:pair-node')]
+    assert ':20001' in out['links'][1]['uri']
+    bad=host(iid,endpointType='invalid')
+    assert c.put('/api/settings/hosts',json={'value':[bad]}).status_code==422
