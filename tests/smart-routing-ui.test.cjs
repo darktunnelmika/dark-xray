@@ -139,6 +139,7 @@ test('WARP lives inside Xray Outbounds with simple one-click controls',()=>{
   assert.match(src,/xvwarpmode/);
   assert.match(src,/\/api\/warp\/status/);
   assert.match(src,/\/api\/warp\/create/);
+  assert.match(src,/\/api\/warp\/scan/);
   assert.match(src,/\/api\/warp\/rotate/);
   assert.match(src,/\/api\/warp\/mode/);
   assert.doesNotMatch(src,/state\.page==='smart'/);
