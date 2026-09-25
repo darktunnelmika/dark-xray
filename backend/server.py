@@ -1847,6 +1847,22 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return _warp_status(body.tag)|{'rotated':True,'deviceId':result['deviceId'],
                                        'runtimeMutation':False,'activationRequired':True}
 
+    @app.post('/api/warp/scan')
+    def warp_scan(body:WarpCreate,p:Principal=Depends(owner)):
+        outbound=_warp_outbound(body.tag)
+        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
+            raise HTTPException(409,'Create the WARP outbound first')
+        try:observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
+        except SmartWarpProbeError as ex:raise HTTPException(409,'WARP scan failed: '+str(ex))
+        ranked=rank_warp_paths(observations,max_results=1)
+        safety=evaluate_warp_safety(ranked,[body.tag],
+            max_loss_percent=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),
+            max_latency_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),
+            max_jitter_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs']))
+        manager.audit(p.actor,p.actor.id,'warp.scan',body.tag,'isolated temporary Xray; production traffic unchanged')
+        return {'passed':safety['passed'],'items':ranked,'issues':safety['issues'],
+                'thresholds':safety['thresholds'],'productionTrafficMutation':False}
+
     @app.post('/api/warp/mode')
     def warp_mode(body:WarpMode,p:Principal=Depends(owner)):
         writable();outbound=_warp_outbound(body.tag)
@@ -1858,7 +1874,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         safety=None
         if body.mode!='off':
             try:
-                observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=2,timeout=5.0)
+                observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
             except SmartWarpProbeError as ex:raise HTTPException(409,'WARP safety scan failed: '+str(ex))
             ranked=rank_warp_paths(observations,max_results=1)
             safety=evaluate_warp_safety(ranked,[body.tag],
