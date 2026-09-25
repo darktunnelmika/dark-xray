@@ -112,3 +112,37 @@ test('Clients V5 delivery QR resolves subscription, direct and failover payloads
   assert.match(src,/function renderDeliveryQr\(/);
   assert.match(src,/QR always contains the exact selected subscription or config route/);
 });
+
+
+test('Clients V6 delivery QR has deterministic visible sizing and selected-link state',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  const css=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.css'),'utf8');
+  assert.match(src,/svg\.setAttribute\('width','240'\)/);
+  assert.match(src,/svg\.setAttribute\('height','240'\)/);
+  assert.match(src,/box\.dataset\.ready='true'/);
+  assert.match(src,/id="cv4d-qr-stage"/);
+  assert.match(src,/id="cv4d-selected-payload"/);
+  assert.match(src,/data-cv4d-qr-kind/);
+  assert.match(css,/#cv4d-qr\[data-ready="true"\] svg/);
+  assert.match(css,/width:240px!important;height:240px!important/);
+  assert.match(css,/\.cv4d-qr-stage\{[^}]*width:250px[^}]*height:250px/);
+});
+
+test('Clients V6 delivery center exposes complete QR and customer-link actions',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  for(const action of ['cv4dcopyselected','cv4ddownload','cv4ddownloadpng','cv4dopenportal'])assert.match(src,new RegExp(action));
+  assert.match(src,/OPEN CUSTOMER PORTAL/);
+  assert.match(src,/SHOW SUBSCRIPTION QR/);
+  assert.match(src,/SHOW QR/);
+  assert.match(src,/new XMLSerializer\(\)/);
+  assert.match(src,/canvas\.toDataURL\('image\/png'\)/);
+});
+
+test('Clients V6 link center has cyber scanner frame and mobile-safe QR sizing',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.css'),'utf8');
+  assert.match(css,/Clients V6 — cyber link delivery center/);
+  assert.match(css,/\.cv4d-corner\.tl/);
+  assert.match(css,/\.cv4d-corner\.br/);
+  assert.match(css,/@media\(max-width:620px\)/);
+  assert.match(css,/#cv4d-qr\[data-ready="true"\] svg\{width:100%!important;height:100%!important\}/);
+});
