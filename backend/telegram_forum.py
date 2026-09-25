@@ -52,7 +52,9 @@ class TelegramForumCenter:
               configured_at REAL NOT NULL,
               updated_at REAL NOT NULL,
               last_audit_id INTEGER NOT NULL DEFAULT 0,
-              last_daily_key TEXT NOT NULL DEFAULT '');
+              last_daily_key TEXT NOT NULL DEFAULT '',
+              rebind_required INTEGER NOT NULL DEFAULT 0,
+              rebind_reason TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS telegram_forum_topics(
               owner TEXT NOT NULL,
               kind TEXT NOT NULL,
@@ -61,6 +63,11 @@ class TelegramForumCenter:
               updated_at REAL NOT NULL,
               PRIMARY KEY(owner,kind));
             """)
+            columns={r[1] for r in store.db.execute('PRAGMA table_info(telegram_forums)')}
+            if 'rebind_required' not in columns:
+                store.db.execute("ALTER TABLE telegram_forums ADD COLUMN rebind_required INTEGER NOT NULL DEFAULT 0")
+            if 'rebind_reason' not in columns:
+                store.db.execute("ALTER TABLE telegram_forums ADD COLUMN rebind_reason TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def request_keyboard()->dict[str,Any]:
@@ -81,8 +88,12 @@ class TelegramForumCenter:
             forum=self.store.db.execute('SELECT * FROM telegram_forums WHERE owner=?',(owner,)).fetchone()
             topics=[dict(r) for r in self.store.db.execute(
                 'SELECT kind,name,thread_id,updated_at FROM telegram_forum_topics WHERE owner=? ORDER BY kind',(owner,))]
-        if not forum:return {'configured':False,'chat_id':None,'title':'','topics':[]}
-        return {'configured':True,'chat_id':int(forum['chat_id']),'title':forum['title'],
+        if not forum:return {'configured':False,'preserved':False,'rebind_required':False,
+                             'chat_id':None,'title':'','topics':[]}
+        rebind=bool(forum['rebind_required'])
+        return {'configured':bool(forum['enabled']) and not rebind,'preserved':True,
+                'rebind_required':rebind,'rebind_reason':forum['rebind_reason'],
+                'chat_id':int(forum['chat_id']),'title':forum['title'],
                 'enabled':bool(forum['enabled']),'topics':topics,'updated_at':forum['updated_at']}
 
     def _verify(self,api,chat_id:int,bot_user_id:int)->dict[str,Any]:
@@ -117,12 +128,13 @@ class TelegramForumCenter:
             topic=api.call('createForumTopic',{'chat_id':chat_id,'name':name})
             created[kind]=int(topic['message_thread_id'])
         with self.store.transaction() as db:
-            db.execute("""INSERT INTO telegram_forums(owner,chat_id,title,enabled,configured_at,updated_at,last_audit_id,last_daily_key)
-              VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET chat_id=excluded.chat_id,title=excluded.title,
+            db.execute("""INSERT INTO telegram_forums(owner,chat_id,title,enabled,configured_at,updated_at,last_audit_id,last_daily_key,
+              rebind_required,rebind_reason)
+              VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner) DO UPDATE SET chat_id=excluded.chat_id,title=excluded.title,
               enabled=1,updated_at=excluded.updated_at,last_audit_id=excluded.last_audit_id,
-              last_daily_key=excluded.last_daily_key""",
+              last_daily_key=excluded.last_daily_key,rebind_required=0,rebind_reason=''""",
               (owner,chat_id,str(chat.get('title') or chat_shared.get('title') or ''),1,now,now,max_audit,
-               time.strftime('%Y-%m-%d',time.localtime(now))))
+               time.strftime('%Y-%m-%d',time.localtime(now)),0,''))
             if not old or int(old['chat_id'])!=chat_id:
                 db.execute('DELETE FROM telegram_forum_topics WHERE owner=?',(owner,))
             for kind,name in TOPICS.items():
@@ -135,6 +147,7 @@ class TelegramForumCenter:
 
     def repair(self,api,owner:str,bot_user_id:int)->dict[str,Any]:
         st=self.status(owner)
+        if st.get('rebind_required'):raise PolicyError('Recovered forum must be rebound to the new bot first')
         if not st['configured']:raise PolicyError('Forum report center is not configured')
         chat_id=int(st['chat_id']);self._verify(api,chat_id,bot_user_id)
         known={x['kind']:x for x in st['topics']}
@@ -158,11 +171,40 @@ class TelegramForumCenter:
             db.execute('UPDATE telegram_forums SET updated_at=? WHERE owner=?',(now,owner))
         return self.status(owner)
 
+    def rebind_existing(self,api,owner:str,bot_user_id:int)->dict[str,Any]:
+        st=self.status(owner)
+        if not st.get('preserved'):raise PolicyError('No recovered forum is available to rebind')
+        chat_id=int(st['chat_id'])
+        chat=self._verify(api,chat_id,bot_user_id)
+        known={x['kind']:x for x in st['topics']}
+        now=time.time();created={}
+        for kind,name in TOPICS.items():
+            row=known.get(kind);valid=False
+            if row:
+                try:
+                    api.call('sendMessage',{'chat_id':chat_id,'message_thread_id':int(row['thread_id']),
+                                            'text':'🧪 DARK recovery topic verification','disable_notification':True})
+                    valid=True;created[kind]=int(row['thread_id'])
+                except Exception:valid=False
+            if not valid:
+                topic=api.call('createForumTopic',{'chat_id':chat_id,'name':name})
+                created[kind]=int(topic['message_thread_id'])
+        with self.store.transaction() as db:
+            db.execute("""UPDATE telegram_forums SET title=?,enabled=1,rebind_required=0,rebind_reason='',updated_at=?
+              WHERE owner=?""",(str(chat.get('title') or st.get('title') or ''),now,owner))
+            for kind,name in TOPICS.items():
+                db.execute("""INSERT INTO telegram_forum_topics(owner,kind,name,thread_id,updated_at)
+                  VALUES(?,?,?,?,?) ON CONFLICT(owner,kind) DO UPDATE SET name=excluded.name,
+                  thread_id=excluded.thread_id,updated_at=excluded.updated_at""",
+                  (owner,kind,name,created[kind],now))
+        self.report(api,owner,'system','✅ DARK Report Center rebound after disaster recovery. Topic routing is active.')
+        return self.status(owner)
+
     def _target(self,owner:str,kind:str)->tuple[int,int]|None:
         with self.store.lock:
             row=self.store.db.execute("""SELECT f.chat_id,t.thread_id FROM telegram_forums f
               JOIN telegram_forum_topics t ON t.owner=f.owner
-              WHERE f.owner=? AND f.enabled=1 AND t.kind=?""",(owner,kind)).fetchone()
+              WHERE f.owner=? AND f.enabled=1 AND COALESCE(f.rebind_required,0)=0 AND t.kind=?""",(owner,kind)).fetchone()
         return (int(row['chat_id']),int(row['thread_id'])) if row else None
 
     def report(self,api,owner:str,kind:str,text:str,reply_markup:dict|None=None)->bool:
@@ -199,7 +241,7 @@ class TelegramForumCenter:
         except Exception:tz=ZoneInfo('UTC')
         now=datetime.now(tz);current_key=now.strftime('%Y-%m-%d')
         with self.store.lock:
-            forum=self.store.db.execute('SELECT last_daily_key FROM telegram_forums WHERE owner=? AND enabled=1',(owner,)).fetchone()
+            forum=self.store.db.execute('SELECT last_daily_key FROM telegram_forums WHERE owner=? AND enabled=1 AND COALESCE(rebind_required,0)=0',(owner,)).fetchone()
         if not forum or str(forum['last_daily_key'] or '')==current_key:return False
         day=now.date()-timedelta(days=1)
         start=datetime.combine(day,dt_time.min,tzinfo=tz).timestamp()
@@ -225,7 +267,7 @@ class TelegramForumCenter:
 
     def poll_audits(self,api,owner:str,role:str,limit:int=40)->int:
         with self.store.lock:
-            forum=self.store.db.execute('SELECT last_audit_id FROM telegram_forums WHERE owner=? AND enabled=1',(owner,)).fetchone()
+            forum=self.store.db.execute('SELECT last_audit_id FROM telegram_forums WHERE owner=? AND enabled=1 AND COALESCE(rebind_required,0)=0',(owner,)).fetchone()
             if not forum:return 0
             cursor=int(forum['last_audit_id'] or 0)
             if role=='owner':
