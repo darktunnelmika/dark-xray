@@ -105,6 +105,31 @@ def _known_tags(outbounds: list[dict[str, Any]]) -> set[str]:
     return {str(o.get("tag")) for o in outbounds if isinstance(o, dict) and o.get("tag")}
 
 
+def _warp_candidate_meta(outbound: dict[str, Any]) -> dict[str, Any]:
+    tag = str(outbound.get("tag") or "")
+    meta = outbound.get("panelMeta") if isinstance(outbound.get("panelMeta"), dict) else {}
+    explicit_region = str(meta.get("region") or outbound.get("region") or "").strip()
+    text = " ".join([tag, str(outbound.get("remark") or ""), explicit_region]).lower()
+    region = explicit_region
+    if not region:
+        if _matches_hint(text, {"us", "usa", "united states", "america"}):
+            region = "USA"
+        elif _matches_hint(text, {"de", "deu", "germany", "deutschland"}):
+            region = "Germany"
+        elif _matches_hint(text, {"fr", "fra", "france"}):
+            region = "France"
+        elif _matches_hint(text, {"gb", "gbr", "uk", "united kingdom", "england"}):
+            region = "UK"
+    node = str(meta.get("nodeName") or meta.get("nodeId") or outbound.get("nodeName") or outbound.get("nodeId") or tag)
+    return {
+        "tag": tag,
+        "node": node,
+        "region": region or "—",
+        "protocol": str(outbound.get("protocol") or ""),
+        "likelyWarp": tag.startswith(("warp", "wg-warp", "dark-warp")) or bool(meta.get("smartWarp")),
+    }
+
+
 def _dedupe_tags(tags: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -250,6 +275,8 @@ def rank_warp_paths(observations: list[dict[str, Any]], *, max_results: int = 8)
 
 def build_stage7_plan(nodes: list[dict[str, Any]], outbounds: list[dict[str, Any]], routing: dict[str, Any]) -> dict[str, Any]:
     tags = sorted(_known_tags(outbounds))
+    warp_candidates = [_warp_candidate_meta(o) for o in outbounds
+                       if isinstance(o, dict) and str(o.get("protocol") or "").lower() == "wireguard"]
     stage7_rules = [r for r in routing.get("rules", []) if isinstance(r, dict) and r.get("ruleTag") in STAGE7_RULE_TAGS]
     return {
         "stage": "stage7-smart-routing",
@@ -257,6 +284,7 @@ def build_stage7_plan(nodes: list[dict[str, Any]], outbounds: list[dict[str, Any
         "nodes": classify_nodes(nodes),
         "outboundTags": tags,
         "configuredWarpCandidates": [t for t in tags if t.startswith(("warp", "wg-warp", "dark-warp"))],
+        "warpCandidates": warp_candidates,
         "activeStage7Rules": stage7_rules,
         "scanPlan": {"targets": DEFAULT_WARP_SCAN_TARGETS[:], "mode": "manual_or_scheduled_probe"},
         "capabilities": {
