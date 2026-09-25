@@ -29,6 +29,9 @@ Adblock routing easy to review before any apply step.
   outbound tags, WARP candidates and active Stage 7 rules.
 - `POST /api/smart-routing/preview` accepts selected WARP outbound tags and
   returns a reviewed routing/observatory preview. It does not save settings.
+- The Xray Routing page now shows a **Smart WARP + Smart Adblock** preview card.
+  Its **Build preview** action calls the preview API and shows only the proposed
+  Stage 7 rules/balancer/Observatory plan; it does not save or restart Xray.
 
 Example body:
 
@@ -47,3 +50,5 @@ Example body:
 3. Save settings only after explicit owner confirmation.
 4. Restart/reload Xray through the existing manager path.
 5. Keep rollback evidence if apply fails.
+
+[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
