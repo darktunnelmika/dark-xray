@@ -746,3 +746,50 @@ def test_customer_wallet_purchase_refuses_insufficient_balance_without_debit(env
         center.pay_purchase('dark',order['id'])
     assert center.wallet('dark',760001)['balance_minor']==100000
     assert center.commerce.order(order['id'],'dark')['status']=='pending'
+
+
+def test_representative_panel_has_independent_bot_customer_wallet_store_and_support(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/sellerbot',json={
+        'name':'Seller Bot','allowed':[inbound_id],'volume_credit_bytes':200*1024**3,
+        'unlimited_credit':5,'max_clients':50}).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'sellerbot','password':'SellerBotPass88','role':'reseller'}).status_code==200
+    token,p=auth.login('sellerbot','SellerBotPass88','','127.0.0.7',3600,'seller-bot-test')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        bot_token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        r=seller.put('/api/telegram/settings',json={
+            'enabled':False,'bot_token':bot_token,'admin_telegram_id':880001})
+        assert r.status_code==200,r.text
+        status=seller.get('/api/telegram/status').json()
+        assert status['owner']=='sellerbot' and status['configured'] is True
+        assert seller.put('/api/commerce/products',json={
+            'id':'seller-plan','name':'Seller Plan','description':'Rep scoped',
+            'category':'Seller','kind':'volume','sale_limit_per_user':0,
+            'renewal_enabled':True,'add_volume_enabled':True,
+            'active':True,'visible':True}).status_code==200
+        center=seller.app.state.telegram_runtime.customer
+        _credit_wallet(center,'sellerbot',880002,150000,'seller-wallet')
+        assert center.wallet('sellerbot',880002)['balance_minor']==150000
+        assert center.wallet('dark',880002)['balance_minor']==0
+        ticket=center.create_ticket('sellerbot',880002,'buyer','Seller support')
+        center.add_ticket_message('sellerbot',ticket['id'],'customer',880002,text='help')
+        assert len(center.tickets_for_customer('sellerbot',880002))==1
+        assert len(center.tickets_for_customer('dark',880002))==0
+        worker=BotWorker(seller.app.state.telegram_runtime,'sellerbot',bot_token,'seller-v2')
+        try:
+            assert worker.owner_role()=='reseller'
+            admin_labels=[x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row]
+            assert '➕ ساخت نماینده' not in admin_labels
+            customer_labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
+            assert customer_labels==[
+                '🛍 خرید اشتراک','🔄 تمدید سرویس',
+                '💰 کیف پول + شارژ','📦 سرویس‌های من',
+                '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
+            ]
+        finally:
+            worker.api.close()
+    assert c.get('/api/telegram/status').json()['owner']=='dark'
+    assert all(x['id']!='seller-plan' for x in c.get('/api/commerce/products').json())
