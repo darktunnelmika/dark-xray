@@ -56,6 +56,7 @@ function architecture(d){
   <article class="panel ip4-arch-card"><small>${L('02 / LOCAL ENFORCE','۰۲ / اعمال محلی')}</small><h3>${L('Native nftables Guard','گارد بومی nftables')}</h3><b class="${applied?'ok':'warn'}">${applied?L('APPLIED','اعمال‌شده'):e(String(g.state||'OBSERVE').toUpperCase())}</b><p>${L('Root-owned DARK broker can block only approved Xray data ports on this host.','کارگزار روت DARK فقط پورت‌های دیتای Xray تأییدشدهٔ همین سرور را مسدود می‌کند.')}</p></article>
   <article class="panel ip4-arch-card"><small>${L('03 / GLOBAL POLICY','۰۳ / سیاست سراسری')}</small><h3>${L('Local + Node aggregation','تجمیع محلی + نود')}</h3><b class="ok">${L('CENTRAL POLICY','سیاست مرکزی')}</b><p>${L('Verified observations from assigned nodes are combined and can block the client service globally.','مشاهده‌های تأییدشده نودها تجمیع می‌شوند و می‌توانند سرویس کاربر را سراسری مسدود کنند.')}</p></article>
   <article class="panel ip4-arch-card"><small>${L('04 / NODE TELEMETRY','۰۴ / تله‌متری نود')}</small><h3>${L('Security telemetry','تله‌متری امنیت')}</h3><b class="${nodes&&nodes.source_verified===nodes.total&&nodes.total?'ok':'warn'}">${nodes?fa(nodes.source_verified)+' / '+fa(nodes.total):'—'}</b><p>${L('Fresh / source-verified node security reports. Stale telemetry never creates a new block.','گزارش‌های تازه و دارای مبدأ تأییدشدهٔ نود؛ تله‌متری قدیمی مسدودی جدید ایجاد نمی‌کند.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('05 / NODE ENFORCE','۰۵ / اعمال روی نود')}</small><h3>${L('Node Guard & convergence','گارد نود و همگرایی')}</h3><b class="${nodes&&nodes.guard_enforce>0&&nodes.guard_ready===nodes.guard_enforce?'ok':'warn'}">${nodes?fa(nodes.guard_ready||0)+' / '+fa(nodes.guard_enforce||0):'—'}</b><p>${nodes?L('Guard-ready / Enforce nodes. Policy pending: ','نود Guard-ready / Enforce. سیاست در انتظار: ')+fa(nodes.policy_pending||0)+L(' · offline: ',' · آفلاین: ')+fa(nodes.offline||0):L('Owner-only Node status.','وضعیت نود فقط برای مالک.')}</p></article>
  </section>`;
 }
 async function securityPage(){
@@ -74,6 +75,8 @@ async function securityPage(){
     ${metric(L('Device blocks','بلاک دستگاه'),fa(s.device_blocked||0))}
     ${metric(L('Active local nft bans','بن محلی nft فعال'),fa(s.active_local_bans||0))}
     ${metric(L('Recent violations','تخلف اخیر'),fa(s.recent_violations||0))}
+    ${metric(L('Node Guard ready','گارد نود آماده'),d.nodes?fa(d.nodes.guard_ready||0)+' / '+fa(d.nodes.guard_enforce||0):'—')}
+    ${metric(L('Node policy pending','سیاست نود در انتظار'),d.nodes?fa(d.nodes.policy_pending||0):'—',d.nodes?L('offline ','آفلاین ')+fa(d.nodes.offline||0):'')}
    </section>
    <section class="ip4-section"><header><div><small>DARK / CLIENT SECURITY MATRIX</small><h2>${L('Client policy state','وضعیت سیاست کاربران')}</h2></div><span>${fa((d.clients||[]).length)}</span></header>
     <div class="ip4-clients">${(d.clients||[]).length?(d.clients||[]).map(clientRow).join(''):empty(L('No clients visible in this security scope.','کاربری در این محدوده امنیتی نیست.'))}</div>
@@ -90,6 +93,7 @@ ipPage=securityPage;
 async function inspectClient(id){
  const global=await api('/api/clients/'+enc(id)+'/security-global');
  const localIps=global.local_ips||[],remoteIps=global.remote_ips||[],localDevices=global.local_devices||[],remoteDevices=global.remote_devices||[];
+ const conv=global.convergence||{},convItems=conv.items||[];
  const ipRows=[...localIps.map(x=>({...x,source:'LOCAL'})),...remoteIps.map(x=>({...x,source:'NODE '+x.node_id}))];
  const devRows=[...localDevices.map(x=>({...x,source:'LOCAL',device_id:x.id})),...remoteDevices.map(x=>({...x,source:'NODE '+x.node_id}))];
  dialog(L('Security inspection','بررسی امنیت')+' · '+id,`<div class="ip4-dialog">
@@ -98,7 +102,12 @@ async function inspectClient(id){
    <div><span>HWID</span><b>${fa(global.device_count||0)} / ${global.limit_hwid?fa(global.limit_hwid):'∞'}</b></div>
    <div><span>${L('IP enforceable','قابل اعمال IP')}</span><b>${global.ip_enforceable?L('YES','بله'):L('NO / STALE','خیر / ناقص')}</b></div>
    <div><span>${L('Assigned nodes','نودهای مرتبط')}</span><b>${e((global.nodes||[]).join(', ')||'—')}</b></div>
+   <div><span>${L('Authorization convergence','همگرایی مجوز')}</span><b>${conv.authorization_converged?L('CONVERGED','همگرا'):L('PENDING','در انتظار')}</b></div>
+   <div><span>${L('Pending nodes','نودهای در انتظار')}</span><b>${e((conv.pending_nodes||[]).join(', ')||'—')}</b></div>
+   <div><span>${L('Offline nodes','نودهای آفلاین')}</span><b>${e((conv.offline_nodes||[]).join(', ')||'—')}</b></div>
   </div></section>
+  <section><header><h3>${L('Node application state','وضعیت اعمال روی نود')}</h3></header>
+   <div class="ip4-detail-list">${convItems.length?convItems.map(x=>`<div><span class="ip4-source">${e(x.node_id)}</span><b>${e(String(x.status||'pending').toUpperCase())}</b><small>${L('Guard','گارد')}: ${e(x.guard_mode||'observe')} / ${e(x.guard_state||'unknown')}</small></div>`).join(''):empty(L('No assigned DARK nodes.','نود DARK مرتبطی وجود ندارد.'))}</div></section>
   <section><header><h3>${L('Observed source IPs','IPهای مشاهده‌شده')}</h3><div><button type="button" class="btn" data-act="ip4clearips" data-id="${e(id)}">${L('Clear history','پاک‌کردن تاریخچه')}</button></div></header>
    <div class="ip4-detail-list">${ipRows.length?ipRows.map(x=>`<div><span class="ip4-source">${e(x.source)}</span><code>${e(x.ip)}</code><small>${date(x.last_seen||x.lastSeen)}</small></div>`).join(''):empty(L('No IP observations.','IP ثبت‌شده‌ای نیست.'))}</div></section>
   <section><header><h3>${L('Registered devices','دستگاه‌های ثبت‌شده')}</h3><div><button type="button" class="btn" data-act="ip4cleardevices" data-id="${e(id)}">${L('Clear devices','پاک‌کردن دستگاه‌ها')}</button></div></header>

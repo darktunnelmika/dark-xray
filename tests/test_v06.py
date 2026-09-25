@@ -410,3 +410,27 @@ def test_core_import_rejects_bad_hash_before_creating_destination(tmp_path):
     dest=tmp_path/'core';tool=Path(__file__).resolve().parents[1]/'tools/import-core.py'
     r=subprocess.run([sys.executable,str(tool),'--archive',str(archive),'--sha256','0'*64,'--destination',str(dest)],capture_output=True,text=True)
     assert r.returncode!=0 and not dest.exists()
+
+def test_guard_sync_replays_active_sqlite_bans_after_broker_lease_loss(env,tmp_path):
+    store,engine,manager,_,c=env;create(c);engine.config.direct_source_verified=True
+    cfg=dataclasses.replace(broker_config(allowed_ports=[19443]),allowed_uid=os.getuid())
+    fake=FakeNft();fw=NftFirewall(cfg,fake);fw.bootstrap()
+    path=tmp_path/'replay-guard.sock';server=BrokerServer(str(path),fw)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start();engine.config.guard_socket=str(path)
+    try:
+        r=c.put('/api/settings/ipguard',json={'value':{'mode':'enforce','window_seconds':120,'ban_seconds':60,'exempt_ips':[]}})
+        assert r.status_code==200 and engine.ip_status()['applied']
+        access=engine.runtime/'access.log'
+        access.write_text('from tcp:8.8.8.8:50001 accepted tcp:1.1.1.1:443 [dark-test -> direct] email: dark-test\n')
+        engine.read_ip_log()
+        with access.open('a') as f:f.write('from tcp:8.8.4.4:50002 accepted tcp:1.1.1.1:443 [dark-test -> direct] email: dark-test\n')
+        engine.read_ip_log()
+        ban_commands=[kw.get('input') or '' for _,kw in fake.calls if '8.8.4.4 . 19443' in (kw.get('input') or '')]
+        assert len(ban_commands)==1
+        fw.leases.clear()  # broker restart / volatile nft lease loss
+        status=engine.sync_ip_guard()
+        replayed=[kw.get('input') or '' for _,kw in fake.calls if '8.8.4.4 . 19443' in (kw.get('input') or '')]
+        assert len(replayed)>=2
+        assert engine.ip_status()['broker']['restored_active_bans']>=1
+    finally:
+        server.shutdown();server.server_close();worker.join()

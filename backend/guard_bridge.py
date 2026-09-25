@@ -75,11 +75,14 @@ class BrokerExecutor:
         self.status_info = status
         return status
 
-    def ban(self, jail: str, ip: str):
+    def ban(self, jail: str, ip: str, seconds: int | None = None):
         if jail not in self.jails:
             raise PolicyError('Unmanaged data-port group')
+        duration = self.policy.ban_seconds if seconds is None else int(seconds)
+        if duration <= 0:
+            raise PolicyError('Invalid ban duration')
         self.client.request({'operation': 'ban', 'ip': normalize_ip(ip),
-                             'ports': list(self.jails[jail]), 'seconds': self.policy.ban_seconds})
+                             'ports': list(self.jails[jail]), 'seconds': duration})
 
     def unban(self, jail: str, ip: str):
         if jail not in self.jails:

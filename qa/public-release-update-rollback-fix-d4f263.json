@@ -1,0 +1,29 @@
+{
+  "base_release_commit": "d4f263924dbf873859aba069d856c52decc8204d",
+  "base_release_tag": "v0.9.0-rc7-stage6-final",
+  "base_release_tree": "e964d4f12d8330c04acb7eb1aa9409b13c45762b",
+  "fix_scope": "tools/update.py rollback reactivation",
+  "gate": "public-release-update-rollback-fix",
+  "note": "This validates the rollback reactivation fix against a patched public-release artifact. A new GitHub commit/release artifact must be built so the public release itself carries the fix.",
+  "passed": true,
+  "recorded_at": 1790273568.78093,
+  "result": {
+    "critical_seen": false,
+    "darkxray_check": "ok",
+    "rollback_message": "Previous DARK XRAY source and database restored; panel route is healthy.",
+    "rollback_ok": true,
+    "rollback_status": "rolled_back",
+    "services_active": [
+      "dark-xray.service",
+      "dark-xray-update.service"
+    ],
+    "sqlite_quick_check": "ok",
+    "update_activation_failed_as_expected": true
+  },
+  "test_environment": "systemd-nspawn clean Ubuntu 24.04 public-release container on Node2",
+  "test_method": "single-use systemd ExecStartPre failure marker under /var/lib/dark-xray, writable by darkxray, then rollback restore",
+  "tests": {
+    "pytest": "tests/test_update_transaction.py tests/test_release_snapshot.py: 16 passed",
+    "repo_check": "passed for 319 files"
+  }
+}

@@ -3,9 +3,9 @@
 تاریخ بازبینی: **19 سپتامبر 2026**  
 نسخهٔ سورس فعلی: **`0.9.0-rc7`**  
 Snapshot سبز `main`: **`88e9e5967c3577378f0cca03305b6d127f238176` — Run 761 — 8/8 Gate PASS**  
-Tag `v0.9.0-rc7`: **هنوز منتشر نشده**
+Tag هدف Release Preparation: **`v0.9.0-rc7`** — هنوز در این branch منتشر نشده
 
-> «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. DARK XRAY هنوز Production Ready اعلام نشده، چون بخشی از گیت‌ها باید روی VPS/Provider هدف انجام شوند.
+> «سبز بودن CI» در این فایل فقط برای سناریوی مشخص همان Gate معنا دارد. Stage 4 واقعی روی VPS مستقل PASS شده است، اما DARK XRAY هنوز Stable/Production Ready اعلام نشده چون fresh exact-artifact install، production certificate issue/renewal، final artifact rollback rehearsal و مرزهای کامل enforcement چندنودی باز هستند.
 
 ## وضعیت کلی
 
@@ -24,7 +24,7 @@ DARK XRAY اکنون پنل مستقل با DB/API/UI، یک Primary Owner، Rep
 | Public Endpoints | V3 با تفکیک Xray listener از آدرس تحویل به مشتری |
 | Security / Sync | Security Center V4 + Sync Runtime V4 |
 | Panel/Subscription paths | collision protection در Web و CLI |
-| Domain / TLS | workflow موجود؛ provider/live renewal هنوز گیت VPS است |
+| Domain / TLS | HTTPS/HSTS + public staging HTTP-01 rehearsal PASS؛ issue/renewal production certificate روی provider نهایی هنوز باز است |
 | Finance / Ledger | event-id idempotency، lifetime/current separation، Owner-only credit |
 | Nodes V4 | HTTPS-only + DNS/TLS pinning + orchestrator + inbound/credential mirror + Central traffic + Global IP/device state + subscription failover + reconnect/reset recovery |
 | Safe Update / Web Update | root-owned broker + exact-commit CI gate + source/SQLite snapshot + dependency preflight + health-gated rollback |
@@ -203,14 +203,13 @@ sudo darkxray production-gate --json-only
 
 ## گیت‌های باقی‌مانده قبل از Production Ready
 
-1. **Fresh install روی VPS هدف واقعی** با image/provider نهایی و exact commit/release.
-2. **Reboot/Power-cycle واقعی ماشین** و بررسی Panel/Xray/SQLite بعد boot.
-3. **Domain/TLS provider gate**: issue و renewal واقعی Let's Encrypt، Secure Cookie و HSTS.
-4. **IP Guard روی topology واقعی**: تأیید اینکه source مشاهده‌شده در Xray همان packet source قابل enforce است.
-5. **دو VPS واقعی Node** با HTTPS معتبر، `darkxray node-wan-gate`، Traffic/Security Sync، Failover readiness، reset coordination و مشاهده واقعی Down → Recovery روی WAN.
-6. **Capacity روی VPS هدف**؛ smoke هزار Client/SQLite contention در CI سبز است ولی ظرفیت provider/hardware باید روی مقصد اندازه‌گیری شود.
-7. **Update/Rollback rehearsal** روی VPS disposable با exact release artifact نهایی.
-8. **Stable promotion** بعد از پاس‌شدن گیت‌های VPS واقعی همین RC.
+Stage 4 روی exact head `94ae50548f105bea7e79b40a28f7f5ae3704056d` و tree یکسان merge commit `37a640817fe64e8e5c066df7f691b624c6ed5707` PASS شده است. reboot واقعی، HTTPS/HSTS، دو Node واقعی، verified source-IP، Down → Recovery، ACME staging rehearsal و سه workload هزارکلاینتی دیگر گیت باز Stage 4 نیستند.
+
+1. **Fresh exact-artifact install** روی image/provider نهایی مقصد.
+2. **Production certificate provider gate**: issue و renewal واقعی گواهی production؛ Stage 4 فقط public staging HTTP-01 rehearsal را ثابت کرد.
+3. **Global multi-node enforcement نهایی**: semantics نود آفلاین، IP/HWID policy و packet-level enforcement که همچنان host-local است.
+4. **Provider capacity/SLA sizing** فراتر از workload پذیرش 3×1000 Client / concurrency 12.
+5. **Stable promotion / publication** فقط بعد از fresh provider install، production certificate و enforcement boundaryهای باز؛ tag نهایی باید همین snapshot ثابت را نشان دهد.
 
 ## مرزهایی که نباید بیش از واقعیت ادعا شوند
 
@@ -219,10 +218,12 @@ sudo darkxray production-gate --json-only
 - Kernel CI رفتار nftables DARK را ثابت می‌کند، نه routing/provider خاص VPS مشتری.
 - systemd recovery CI reboot واقعی ماشین نیست.
 - Ledger فعلی سیستم حسابداری عملیاتی پنل است، نه فروشگاه/درگاه/تسویه جامع.
-- Multi-node اکنون Traffic accounting، verified global IP/device blockers و client-side subscription failover را در Central همگرا می‌کند؛ packet-level nftables همچنان Host-local است و transparent server-side routing/failover برای Clientهای generic URI ادعا نمی‌شود. WAN outage/recovery تا اجرای Gate روی دو VPS واقعی هنوز evidence محیط هدف ندارد.
+- Multi-node اکنون Traffic accounting، verified global IP/device blockers و client-side subscription failover را در Central همگرا می‌کند؛ packet-level nftables همچنان Host-local است و transparent server-side routing/failover برای Clientهای generic URI ادعا نمی‌شود. WAN outage/recovery روی دو VPS واقعی در Stage 4 PASS شده، اما این نتیجه packet-level enforcement سراسری روی نود آفلاین را ثابت نمی‌کند.
 
 ## مسیر بعدی
 
-مرحله بعد، تست **Snapshot دقیق `88e9e5967c3577378f0cca03305b6d127f238176`** روی VPS هدف است؛ نه یک Tag فرضی. بعد از TLS/Node/Reboot/Capacity/Update-Rollback واقعی، Snapshot نهایی باید به یک Tag/Release Candidate تازه با checksumهای جدید ثابت شود و فقط پس از پاس‌شدن گیت‌های محیط هدف می‌تواند برای Stable promotion بررسی شود. هر failure جدید باید قبل از Stable به regression test تبدیل شود.
+Stage 5 exact-artifact rehearsal روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` PASS شده است: source/release checksum، build reproducible، fresh install، successful update و automatic rollback. مرحله بعد بستن provider fresh install، production certificate، global enforcement و انتشار tag/GitHub Release برای همین snapshot ثابت است.
+
+جزئیات Stage 5: [`docs/stage5-release-preparation.md`](docs/stage5-release-preparation.md)
 
 جزئیات ماتریس evidence: [`docs/VALIDATION.md`](docs/VALIDATION.md)

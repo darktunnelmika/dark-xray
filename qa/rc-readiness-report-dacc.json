@@ -1,0 +1,89 @@
+{
+  "current_release": {
+    "manifest_sha256": "1214a2beaa0facc39334dbbeeb650f45f8f165c6076b64056f486497a2ba657b",
+    "release_commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+    "release_tag": "v0.9.0-rc7-stage6-rollbackfix",
+    "release_tree": "b901a28e358d1e498b29851bf4ab4ee78ab24cde",
+    "release_url": "https://github.com/darktunnelmika/dark-xray/releases/tag/v0.9.0-rc7-stage6-rollbackfix",
+    "sha256sums_sha256": "777659bb25677b9841d34f5e586e9da5b1a5b01807754a088c3661d6cb3211fa",
+    "tar_sha256": "42f359c9162fd8ef85be3b7c76e7fbbe54c522745cd116733f02ab6c269f17c4",
+    "zip_sha256": "ecda6811d13d7a8da234909889fb920cfc4b243cbc13ba116af627744acd9489"
+  },
+  "generated_at": 1790275343.8757637,
+  "notes": [
+    "RC is suitable as a validated prerelease candidate based on current gates.",
+    "Do not label as Stable/Production Ready until the remaining stable items are completed.",
+    "Production CA renewal was completed against the real Let's Encrypt production endpoint on Sep 24 2026.",
+    "Provider capacity/SLA sizing was completed for the current small-production RC profile; larger fleet or bandwidth claims require retesting."
+  ],
+  "passed_gates": {
+    "production_ca_real_renewal": true,
+    "production_sync": true,
+    "provider_capacity_sla": true,
+    "public_release_full_gate": true,
+    "stage4_replay": true,
+    "stage6_provider_enforcement": true
+  },
+  "production_ca_real_renewal": {
+    "domain": "newdark.darkvpn.info",
+    "evidence": "/var/lib/dark-xray/qa/production-ca-renewal-dacc.json",
+    "fingerprint": "DA:DC:E4:DD:11:AF:4E:CA:DA:10:4A:15:F8:82:54:63:A7:68:29:38:2A:05:7F:5D:BC:A9:E9:2B:7C:01:A6:8A",
+    "not_after": "Dec 23 17:53:07 2026 GMT",
+    "passed": true
+  },
+  "production_sync": {
+    "evidence": "/var/lib/dark-xray/qa/prod-rollbackfix-sync-dacc.json",
+    "hub_commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+    "hub_darkxray_check": "ok",
+    "nodes_expected_commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+    "passed": true,
+    "target_commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9"
+  },
+  "project": "DARK XRAY",
+  "provider_capacity_sla": {
+    "evidence": "/var/lib/dark-xray/qa/provider-capacity-sla-dacc.json",
+    "passed": true,
+    "scope": "current small-production RC profile only",
+    "stable_blocker_closed": true
+  },
+  "public_release_full_gate": {
+    "download_verify": true,
+    "evidence": "/var/lib/dark-xray/qa/public-release-rollbackfix-full-gate-dacc.json",
+    "fresh_install": true,
+    "passed": true,
+    "release_install_verify": true,
+    "rollback_injection": true,
+    "rollback_injection_note": "passed in final public-release rollbackfix full gate; update intentionally failed and automatic rollback restored previous source/database without CRITICAL",
+    "update_happy_path": true
+  },
+  "rc_readiness": "passed_for_prerelease_rc",
+  "remaining_for_stable": [],
+  "rollback_fix_evidence": {
+    "evidence": "/var/lib/dark-xray/qa/public-release-update-rollback-fix-d4f263.json",
+    "passed": true
+  },
+  "schema": 1,
+  "stable_not_claimed": true,
+  "stable_status": "stable_promotion_ready_pending_stable_tag",
+  "stage4_replay": {
+    "domain_tls_required": true,
+    "evidence": "/var/lib/dark-xray/qa/target-vps-gate.json",
+    "load_acceptance": true,
+    "load_runs_completed": 3,
+    "passed": true,
+    "public_acme_staging_rehearsal": true,
+    "reboot_proof": true
+  },
+  "stage6_provider_enforcement": {
+    "evidence": [
+      "/var/lib/dark-xray/qa/stage6-provider-node1.json",
+      "/var/lib/dark-xray/qa/stage6-provider-node2.json",
+      "/var/lib/dark-xray/qa/stage6-offline-convergence.json"
+    ],
+    "node1_provider": true,
+    "node2_provider": true,
+    "offline_reconnect_convergence": true,
+    "passed": true
+  },
+  "version": "0.9.0-rc7"
+}

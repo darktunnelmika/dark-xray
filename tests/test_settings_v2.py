@@ -247,3 +247,17 @@ def test_runtime_stage_supports_port_address_and_path(tmp_path):
     with pytest.raises(SystemExit):mod.apply_overrides(base,panel_path='/sub')
     with pytest.raises(SystemExit):mod.apply_overrides(base,bind_port=80)
     with pytest.raises(SystemExit):mod.apply_overrides(base,public_address='https://bad.example')
+
+
+def test_ipguard_legacy_mode_hydrates_node_mode_and_independent_node_enforce_is_allowed(env):
+    store,engine,c=env
+    legacy={'mode':'observe','window_seconds':120,'ban_seconds':1800,'exempt_ips':[]}
+    with store.transaction() as db:
+        db.execute("INSERT INTO core_sections(name,body) VALUES('ipguard',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",(json.dumps(legacy),))
+    hydrated=c.get('/api/settings/ipguard').json()['value']
+    assert hydrated['mode']=='observe' and hydrated['node_mode']=='observe'
+    hydrated['node_mode']='enforce'
+    out=c.put('/api/settings/ipguard',json={'value':hydrated})
+    assert out.status_code==200,out.text
+    saved=engine.section('ipguard')
+    assert saved['mode']=='observe' and saved['node_mode']=='enforce'

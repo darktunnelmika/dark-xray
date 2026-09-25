@@ -1,0 +1,144 @@
+{
+  "capacity_claim": {
+    "control_plane_current_profile": {
+      "max_enabled_nodes_without_retest": 2,
+      "max_managed_client_records_without_retest": 1000,
+      "rationale": "Directly bounded by retained Stage 4 load evidence and current 1 vCPU / 1 GiB Hub profile.",
+      "recommended_admin_users": 1,
+      "validated_bulk_patch_batch_size": 100,
+      "validated_bulk_patch_concurrency": 12,
+      "validated_patch_batch_max_seconds_upper_bound": 10.5
+    },
+    "node_current_profile": {
+      "conservative_allocated_clients_per_node": 100,
+      "conservative_allocated_clients_total_fleet": 200,
+      "max_remote_inbounds_per_node_without_retest": 1,
+      "rationale": "Node health, guard enforcement, and failover were validated, but high-throughput customer traffic capacity was not benchmarked.",
+      "traffic_throughput_note": "No WAN throughput benchmark was run; throughput is provider/network/protocol dependent and must not be marketed as guaranteed from this evidence.",
+      "traffic_throughput_sla_mbps": null
+    }
+  },
+  "gate": "provider-capacity-sla-sizing",
+  "operating_objectives": {
+    "backup_restore_objective": "pre-update snapshots are required before updater changes; public rollback path tested",
+    "certificate_renewal_objective": "certbot.timer enabled; production CA renewal tested successfully",
+    "classification": "RC operational objective, not legal/contractual SLA",
+    "monthly_control_plane_availability_target": "99.0% best-effort on current small profile after monitoring is enabled",
+    "node_offline_detection_objective_seconds": 60,
+    "node_reconnect_convergence_objective_minutes": 5,
+    "service_recovery_objective_minutes": 5
+  },
+  "passed": true,
+  "project": "DARK XRAY",
+  "recorded_at": 1790276397.5185204,
+  "release_commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+  "release_tag": "v0.9.0-rc7-stage6-rollbackfix",
+  "scale_triggers": {
+    "retest_required_for": [
+      "more than 2 enabled nodes",
+      "more than 1000 managed client records",
+      "more than 100 clients per node",
+      "multiple remote inbounds per node",
+      "any public throughput/bandwidth claim"
+    ],
+    "scale_hub_when": [
+      "CPU > 70% for 10 minutes",
+      "RAM available < 200 MiB",
+      "disk usage > 80%",
+      "admin/API latency increases during bulk operations",
+      "client records exceed 1000"
+    ],
+    "scale_node_when": [
+      "CPU > 70% for 10 minutes",
+      "RAM available < 200 MiB",
+      "allocated clients exceed 100 per node",
+      "traffic approaches provider bandwidth cap",
+      "guard state is not applied or source_verified is false"
+    ]
+  },
+  "schema": 1,
+  "scope": "Current small-production profile only; this is not a universal provider SLA for larger fleets.",
+  "stable_blocker_resolution": {
+    "next_step": "Create/approve a stable tag/release if you want to promote from RC to Stable.",
+    "provider_capacity_sla_blocker_closed": true,
+    "stable_not_claimed": true,
+    "stable_release_tag_created": false
+  },
+  "topology": {
+    "hub": {
+      "commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+      "disk_gib": 18.82,
+      "ram_mib": 961,
+      "role": "control-plane",
+      "services": [
+        "dark-xray.service active",
+        "dark-xray-update.service active"
+      ],
+      "vcpus": 1
+    },
+    "node1": {
+      "commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+      "disk_gib": 18.82,
+      "ram_mib": 961,
+      "role": "node-agent+owned-xray+guard",
+      "services": [
+        "dark-xray-node.service active",
+        "dark-xray-node-guard.service active",
+        "dark-xray-node-update.service active"
+      ],
+      "vcpus": 1
+    },
+    "node2": {
+      "commit": "dacc4f1eab2c30dacedb6451d475293be94c98f9",
+      "disk_gib": 18.82,
+      "ram_mib": 961,
+      "role": "node-agent+owned-xray+guard",
+      "services": [
+        "dark-xray-node.service active",
+        "dark-xray-node-guard.service active",
+        "dark-xray-node-update.service active"
+      ],
+      "vcpus": 1
+    }
+  },
+  "validated_evidence": {
+    "production_ca_real_renewal": {
+      "evidence": "/var/lib/dark-xray/qa/production-ca-renewal-dacc.json",
+      "passed": true
+    },
+    "production_sync": {
+      "evidence": "/var/lib/dark-xray/qa/prod-rollbackfix-sync-dacc.json",
+      "passed": true
+    },
+    "public_release_full_gate": {
+      "evidence": "/var/lib/dark-xray/qa/public-release-rollbackfix-full-gate-dacc.json",
+      "passed": true
+    },
+    "stage4_load_acceptance": {
+      "clients_per_run": 1000,
+      "concurrency": 12,
+      "evidence": "/var/lib/dark-xray/qa/target-vps-gate.json",
+      "max_patch_seconds_observed": [
+        10.429,
+        9.885,
+        10.189
+      ],
+      "passed": true,
+      "patch_accepted_per_run": 100,
+      "patch_finished_per_run": 100,
+      "runs_completed": 3,
+      "runs_required": 3
+    },
+    "stage6_provider_enforcement": {
+      "evidence": [
+        "/var/lib/dark-xray/qa/stage6-provider-node1.json",
+        "/var/lib/dark-xray/qa/stage6-provider-node2.json",
+        "/var/lib/dark-xray/qa/stage6-offline-convergence.json"
+      ],
+      "node1_provider": true,
+      "node2_provider": true,
+      "offline_reconnect_convergence": true
+    }
+  },
+  "version": "0.9.0-rc7"
+}

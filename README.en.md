@@ -7,7 +7,7 @@ Independent Xray control panel with a cyber-dark web interface, first-class inbo
 **VPS test candidate:** `0.9.0-rc7`
 
 > [!CAUTION]
-> DARK XRAY is now a **Release Candidate**, not a production-ready declaration. Real Chromium, official Xray, packet-level nftables, systemd crash recovery and a 1000-client/SQLite contention smoke are green in CI; target-VPS install, real machine reboot, provider TLS renewal and two-VPS node validation remain final gates.
+> DARK XRAY remains a **Release Candidate**, not a Stable/Production Ready declaration. Stage 4 has now passed on an independent VPS with the exact candidate source: real reboot, HTTPS/HSTS, two real Nodes, observed Down → Recovery, fresh verified source-IP evidence, public Let's Encrypt staging renewal rehearsal, and three 1000-client / 12-worker load runs. Stable promotion still requires a fresh exact-artifact install on the final image/provider, production certificate issue/renewal, exact release-artifact update/rollback rehearsal, and the remaining global multi-node enforcement boundaries.
 
 ## Architecture
 
@@ -136,15 +136,17 @@ A server that predates the root update broker needs one final online-installer S
 
 ## Remaining production gates
 
-This `0.9.0-rc7` candidate remains pre-production until the intended deployment environment passes:
+Stage 4 passed on exact candidate `94ae50548f105bea7e79b40a28f7f5ae3704056d`. Stage 5 also passed the exact release-artifact rehearsal on commit `c196207881bdb38e5a40e5f2d0e265061c24dce7`: reproducible archives, exact-source verification, disposable fresh install, successful update and controlled automatic rollback. See [Stage 5 release preparation](docs/stage5-release-preparation.md).
 
-- fresh install on the actual target VPS image/provider;
-- real machine reboot/power-cycle recovery;
-- Let's Encrypt issuance and renewal on the target DNS/provider path, including Secure Cookie/HSTS behavior;
-- IP Guard validation on the actual tunnel/CDN/source-IP topology;
-- two real VPS nodes over valid public HTTPS, including `darkxray node-wan-gate`, Traffic/Security sync, failover readiness, reset coordination, and a real observed network-loss → recovery transition;
-- capacity validation on the intended VPS plan; CI already passes a 1000-client and SQLite-contention smoke, but that is not a provider capacity guarantee;
-- final update/rollback rehearsal with the exact release artifact to be deployed.
+The remaining **Stable / Production Ready** gates are:
+
+- fresh install from the **exact release artifact** on the final target image/provider;
+- real **production-certificate** issuance and renewal on the final DNS/provider path; Stage 4 proved public Let's Encrypt staging HTTP-01 and the deploy-hook restart without replacing the production certificate;
+- complete IP Guard / global multi-node enforcement semantics on the final topology, especially unreachable-node behavior and host-local packet enforcement;
+- provider-plan capacity/SLA sizing beyond the Stage 4 correctness workload; three 1000-client / concurrency-12 runs prove acceptance behavior, not an unlimited SLA;
+- publish the final tag/GitHub Release only for this fixed snapshot; any later source change invalidates the artifact rehearsal.
+
+`0.9.0-rc7` is therefore a **Stage-5 artifact-rehearsed Release Candidate**, not Stable.
 
 ## Documentation
 

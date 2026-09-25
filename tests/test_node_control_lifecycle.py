@@ -176,3 +176,17 @@ def test_control_is_visible_to_authenticated_hub(tmp_path):
         result=client.get('/node/api/v1/state').json()
         assert result['run_control']['persisted'] is True
         assert result['run_control']['effective_running'] is False
+
+
+def test_agent_health_exposes_guard_state_without_claiming_enforcement(tmp_path):
+    with rebooted_agent(tmp_path/'node') as (_,engine,_,client,_):
+        response=client.get('/node/api/health')
+        assert response.status_code==200,response.text
+        doc=response.json();guard=doc['guard']
+        assert doc['capabilities']['guard_status']==1
+        assert guard['mode']=='observe'
+        assert guard['requested_mode']=='observe'
+        assert guard['applied'] is False
+        assert guard['state']=='observing'
+        assert guard['source_verified'] is False
+        assert doc['direct_source_verified'] is False

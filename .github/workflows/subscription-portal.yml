@@ -1,7 +1,7 @@
 name: Subscription portal acceptance
 on:
   push:
-    branches: [main]
+    branches: [main, feature/sub-cyber-portal-stable]
   pull_request:
   workflow_dispatch:
 permissions:

@@ -185,13 +185,18 @@ class CoreEngine:
                   'subscription':{'enabled':True,'default_format':'base64','auto_detect':True,'profile_update_interval_hours':6,
                                   'remark_template':'{remark} | {email}','support_url':'','profile_title':'DARK XRAY',
                                   'profile_url':'','announce':'','path':'/sub'},
-                  'ipguard':{'mode':'observe','window_seconds':self.config.ip_window_seconds,
+                  'ipguard':{'mode':'observe','node_mode':'observe','window_seconds':self.config.ip_window_seconds,
                              'ban_seconds':self.config.ip_ban_seconds,'exempt_ips':self.config.ip_exempt_ips}}
         with self.store.lock:r=self.store.db.execute('SELECT body FROM core_sections WHERE name=?',(name,)).fetchone()
         if not r:return copy.deepcopy(defaults[name])
         saved=json.loads(r[0])
         if name in {'panel','runtime','subscription','ipguard'} and isinstance(saved,dict):
-            base=copy.deepcopy(defaults[name]);base.update(saved);return base
+            base=copy.deepcopy(defaults[name])
+            # Preserve pre-node_mode behavior for existing saved policies: before
+            # this field existed, one mode was propagated to Local and Nodes.
+            if name=='ipguard' and 'node_mode' not in saved:
+                base['node_mode']=saved.get('mode',base['node_mode'])
+            base.update(saved);return base
         return saved
 
     @serialized
@@ -275,8 +280,9 @@ class CoreEngine:
             if not isinstance(value['announce'],str) or len(value['announce'])>2000:raise CoreError('Invalid subscription announcement')
             if any(ch in value['announce'] for ch in ('\r','\n')) and len(value['announce'].splitlines())>100:raise CoreError('Subscription announcement has too many lines')
         if name=='ipguard':
-            if set(value)-{'mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
+            if set(value)-{'mode','node_mode','window_seconds','ban_seconds','exempt_ips'}: raise CoreError('Unknown IP Guard setting')
             if value.get('mode') not in ('observe','enforce'): raise CoreError('Invalid IP Guard mode')
+            if value.get('node_mode',value.get('mode')) not in ('observe','enforce'): raise CoreError('Invalid Node IP Guard mode')
             for key,low,high in [('window_seconds',10,3600),('ban_seconds',10,86400)]:
                 if type(value.get(key))is not int or not low<=value[key]<=high: raise CoreError('Invalid '+key)
             exempt=value.get('exempt_ips',[])
@@ -1045,14 +1051,30 @@ class CoreEngine:
         if policy.enforce:
             try:
                 executor=BrokerExecutor(policy,BrokerClient(self.config.guard_socket));info=executor.check()
-                # The broker resets only its own temporary sets on restart. Never
-                # claim that old SQLite ban records are still enforced afterward.
+                # The broker's nftables set is volatile. SQLite is the durable
+                # source for not-yet-expired bans, so a broker restart or lost
+                # lease must replay active bans instead of leaving a false
+                # `applied` row with no packet-level element.
                 with self.store.transaction() as db:
                     db.execute("CREATE TABLE IF NOT EXISTS core_guard_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-                    old=db.execute("SELECT value FROM core_guard_meta WHERE key='boot_id'").fetchone()
-                    if not old or old[0]!=info['boot_id']:
-                        db.execute("UPDATE bans SET state='released',expires_at=? WHERE state='applied'",(time.time(),))
                     db.execute("INSERT INTO core_guard_meta VALUES('boot_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(info['boot_id'],))
+                restored=0;released=0;now=time.time()
+                with self.store.lock:
+                    active=[dict(r) for r in self.store.db.execute(
+                        "SELECT jail,ip,expires_at FROM bans WHERE state='applied' AND expires_at>?",(now,))]
+                for ban in active:
+                    remaining=max(1,int(float(ban['expires_at'])-now))
+                    try:
+                        executor.ban(str(ban['jail']),str(ban['ip']),seconds=remaining);restored+=1
+                    except PolicyError as ex:
+                        if 'Unmanaged data-port group' not in str(ex):raise
+                        with self.store.transaction() as db:
+                            db.execute("UPDATE bans SET state='released',expires_at=? WHERE jail=? AND ip=?",
+                                       (now,ban['jail'],ban['ip']))
+                        released+=1
+                if restored:
+                    info=executor.client.status()
+                info={**info,'restored_active_bans':restored,'released_unmanaged_bans':released}
                 self._guard_executor=executor;status.update(state='applied',applied=True,broker=info)
             except (PolicyError,OSError) as exc:
                 status.update(state='error',error=str(exc)[:500],loaded_policy_hash='')

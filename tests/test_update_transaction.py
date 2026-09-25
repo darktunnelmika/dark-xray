@@ -80,3 +80,46 @@ def test_legacy_doctor_compat_probe_remains_fail_closed(monkeypatch):
     monkeypatch.setattr(UPDATE.subprocess,'run',lambda *a,**k:CP())
     monkeypatch.setattr(UPDATE,'_compat_panel_route',lambda:{'ok':False,'ui_status':200,'asset_status':404,'probe':'legacy-compat'})
     assert UPDATE._doctor_once()[0] is False
+
+
+def test_rollback_reactivation_tolerates_initial_systemd_restart_failure(monkeypatch):
+    calls=[]
+    states={'doctor':0}
+
+    class CP:
+        def __init__(self,returncode=0):self.returncode=returncode
+
+    def fake_quiet(args):
+        args=[str(x) for x in args];calls.append(args)
+        if args[:3]==['systemctl','restart','dark-xray.service']:
+            return CP(1)
+        if args[:4]==['systemctl','is-active','--quiet','dark-xray.service']:
+            return CP(1 if states['doctor']==0 else 0)
+        if args[:2]==['systemctl','start']:
+            states['doctor']=1
+        return CP(0)
+
+    def fake_require_live_panel(timeout=10.0):
+        if states['doctor']==0:
+            states['doctor']=1
+            raise RuntimeError('service still recovering')
+
+    monkeypatch.setattr(UPDATE,'quiet',fake_quiet)
+    monkeypatch.setattr(UPDATE,'require_live_panel',fake_require_live_panel)
+    monkeypatch.setattr(UPDATE.time,'sleep',lambda _seconds:None)
+    UPDATE.reactivate_previous_panel(timeout=2.0)
+    assert ['systemctl','reset-failed','dark-xray.service'] in calls
+    assert ['systemctl','kill','--kill-who=all','dark-xray.service'] in calls
+    assert ['systemctl','stop','--no-block','dark-xray.service'] in calls
+    assert ['systemctl','start','--no-block','dark-xray.service'] in calls
+
+
+def test_status_clears_stale_error_on_successful_rollback(tmp_path,monkeypatch):
+    status=tmp_path/'status.json'
+    status.write_text(json.dumps({'state':'failed','error':'old failure'}))
+    monkeypatch.setattr(UPDATE,'STATUS_FILE',status)
+    monkeypatch.setattr(UPDATE,'JOB_ID','job')
+    UPDATE._status('rolled_back','rollback',100,'ok',rollback_ok=True)
+    doc=json.loads(status.read_text())
+    assert doc['state']=='rolled_back' and doc['rollback_ok'] is True
+    assert 'error' not in doc
