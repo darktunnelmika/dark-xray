@@ -5,11 +5,11 @@ import argparse,fcntl,http.client,json,os,re,shutil,socket,sqlite3,ssl,stat,subp
 from pathlib import Path
 from urllib.parse import urlsplit
 
-APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node')
+APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node');WRAPPER=Path('/usr/local/bin/darknode')
 REPO='https://github.com/darktunnelmika/dark-xray.git'
 SHA_RE=re.compile(r'[0-9a-f]{40}')
 BACKEND=('node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','node_updated.py','update_bridge.py')
-TOOLS=('fetch-core.py','import-core.py','update_node.py')
+TOOLS=('fetch-core.py','import-core.py','update_node.py','node_manager.py')
 DEPLOY=('dark-xray-node.service','dark-xray-node-guard.service','dark-xray-node-update.service')
 ROOT_FILES=('requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md')
 SOURCE_FILES=tuple('backend/'+x for x in BACKEND)+tuple('tools/'+x for x in TOOLS)+tuple('deploy/'+x for x in DEPLOY)+ROOT_FILES
@@ -164,6 +164,18 @@ def install_units():
     run(['systemctl','daemon-reload'],timeout=20)
 
 
+def install_wrapper():
+    if WRAPPER.is_symlink():raise RuntimeError('Unsafe darknode wrapper destination')
+    raw=b'''#!/usr/bin/env bash
+set -Eeuo pipefail
+PY=/opt/dark-xray-node/.venv/bin/python
+MANAGER=/opt/dark-xray-node/tools/node_manager.py
+[[ -x "$PY" && -f "$MANAGER" ]] || { echo "DARK Node Manager is missing; run the Node updater/repair." >&2; exit 1; }
+exec "$PY" "$MANAGER" "$@"
+'''
+    atomic_bytes(WRAPPER,raw,0o755,0,0)
+
+
 def health_probe(timeout:float=20.0,expected_version:str|None=None):
     cfg=json.loads((CONF/'config.json').read_text(encoding='utf-8'));origin=urlsplit(cfg['public_origin'])
     token=(DATA/'token').read_text().strip();deadline=time.monotonic()+timeout;last=''
@@ -206,7 +218,7 @@ def activate_candidate(src:Path,new_venv:Path,commit:str,version:str,ref:str,tra
         mutation_started=True;copy_source(src)
         os.rename(old_venv,saved_venv);moved_venv=True
         shutil.copytree(new_venv,old_venv,symlinks=True)
-        install_units()
+        install_units();install_wrapper()
         run(['systemctl','restart','dark-xray-node-guard.service'],timeout=30)
         run(['systemctl','start','dark-xray-node.service'],timeout=30)
         health_probe(expected_version=version)
@@ -227,6 +239,7 @@ def activate_candidate(src:Path,new_venv:Path,commit:str,version:str,ref:str,tra
         if database_info is not None:attempt('database',lambda:restore_database(database,database_info))
         attempt('source-identity',lambda:atomic_bytes(meta,meta_bytes,0o640,meta_info.st_uid,meta_info.st_gid))
         attempt('units',install_units)
+        attempt('wrapper',install_wrapper)
         attempt('guard',lambda:run(['systemctl','restart','dark-xray-node-guard.service'],timeout=30))
         attempt('start',lambda:run(['systemctl','start','dark-xray-node.service'],timeout=30))
         attempt('health',lambda:health_probe(expected_version=previous['version']))
