@@ -21,6 +21,11 @@ import tempfile
 import threading
 import time
 
+try:
+    _async_timeout=asyncio.timeout
+except AttributeError:
+    from async_timeout import timeout as _async_timeout
+
 from fastapi import Depends,FastAPI,HTTPException,Request
 from fastapi.responses import JSONResponse
 
@@ -185,7 +190,7 @@ class AgentRequestBoundary:
         body = bytearray()
         try:
             # A total deadline prevents an endless trickle of small chunks.
-            async with asyncio.timeout(self.READ_TIMEOUT):
+            async with _async_timeout(self.READ_TIMEOUT):
                 while True:
                     message = await receive()
                     if message['type'] == 'http.disconnect':
