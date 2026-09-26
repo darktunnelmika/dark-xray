@@ -73,7 +73,7 @@ def main():
     APP.mkdir(parents=True,mode=0o755);os.chmod(APP,0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
     needed_backend=['node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','node_updated.py','update_bridge.py']
     for name in needed_backend:shutil.copy2(ROOT/'backend'/name,APP/'backend'/name)
-    for name in ['fetch-core.py','import-core.py','update_node.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
+    for name in ['fetch-core.py','import-core.py','update_node.py','node_manager.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
     shutil.copy2(ROOT/'deploy'/'dark-xray-node.service',APP/'deploy'/'dark-xray-node.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-guard.service',APP/'deploy'/'dark-xray-node-guard.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-update.service',APP/'deploy'/'dark-xray-node-update.service')
@@ -145,14 +145,10 @@ def main():
     os.chmod(SERVICE,0o644);os.chmod(GUARD_SERVICE,0o644);os.chmod(UPDATE_SERVICE,0o644)
     WRAPPER.write_text("""#!/usr/bin/env bash
 set -Eeuo pipefail
-case "${1:-status}" in
-  status) systemctl status dark-xray-node.service --no-pager -l ;;
-  logs) journalctl -u dark-xray-node.service -n "${2:-150}" --no-pager ;;
-  restart) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; systemctl restart dark-xray-node.service ;;
-  pair-info) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; if [[ -f /var/lib/dark-xray-node/pair-consumed ]]; then echo "DARK Node Pair Code has already been consumed."; else cat /var/lib/dark-xray-node/pair.json; fi ;;
-  config) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; cat /etc/dark-xray-node/config.json ;;
-  *) echo "darknode {status|logs [N]|restart|pair-info|config}" ;;
-esac
+PY=/opt/dark-xray-node/.venv/bin/python
+MANAGER=/opt/dark-xray-node/tools/node_manager.py
+[[ -x "$PY" && -f "$MANAGER" ]] || { echo "DARK Node Manager is missing; run the Node updater/repair." >&2; exit 1; }
+exec "$PY" "$MANAGER" "$@"
 """,encoding='utf-8');os.chmod(WRAPPER,0o755)
 
     source_commit=str(a.source_commit or '').lower()
@@ -163,6 +159,9 @@ esac
             'ref':a.source_ref,'installed_at':time.time(),'role':'node-agent'}
     source_path=DATA/'installed-source.json';source_path.write_text(json.dumps(source,indent=2)+'\n')
     os.chmod(source_path,0o640);os.chown(source_path,0,account.pw_gid)
+    profile_path=DATA/'node-profile.json'
+    profile_path.write_text(json.dumps({'name':name,'priority':100,'failoverEnabled':True},indent=2)+'\n',encoding='utf-8')
+    os.chmod(profile_path,0o640);os.chown(profile_path,0,account.pw_gid)
 
     pair={'schema':1,'nodeId':node_id,'name':name,'origin':cfg['public_origin'],'token':token,
           'dataAddress':data_address,'priority':100,'failoverEnabled':True}
