@@ -131,7 +131,7 @@ def require_fresh():
     ok,evidence=fresh_state()
     if not ok:
         values=', '.join(f'{k}={v}' for k,v in evidence.items() if v)
-        raise RuntimeError('Pairing reset refused: Node has managed state ('+values+'). Remove assignments from the Hub first.')
+        raise RuntimeError('Pairing reset refused: Node has managed state ('+values+'). Local Pair reset is only for never-managed Nodes; use Hub replacement/decommissioning and a clean Node reinstall before re-enrolment.')
     return evidence
 
 
