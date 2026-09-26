@@ -285,3 +285,27 @@ test('Routing new rule defaults to a real server and supports preset WARP target
   assert.match(body,/Connect Outbound to Inbound/);
   assert.match(body,/Outbound connected to inbound/);
 });
+
+
+test('Smart Adblock is independent per server and does not require WARP',()=>{
+  assert.match(src,/function adblockProfilesPanel/);
+  assert.match(src,/function adblockProfileRow/);
+  assert.match(src,/\/api\/adblock\/profiles/);
+  assert.match(src,/\/api\/adblock\/status/);
+  assert.match(src,/\/api\/adblock\/mode/);
+  assert.match(src,/xvadblockedit/);
+  assert.match(src,/xvadblockoff/);
+  assert.match(src,/No WARP profile is required/);
+  assert.doesNotMatch(src,/data-warp-adblock/);
+});
+
+test('Smart Adblock activation uses Server + Inbound scope and verification',()=>{
+  const start=src.indexOf('async function configureAdblock');
+  const end=src.indexOf('async function disableAdblock',start);
+  const body=src.slice(start,end);
+  assert.match(body,/pickRuntimeServer/);
+  assert.match(body,/pickRuntimeInbound/);
+  assert.match(body,/inboundIds/);
+  assert.match(body,/verification/);
+  assert.match(body,/enabled:true/);
+});
