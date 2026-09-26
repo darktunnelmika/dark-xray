@@ -250,3 +250,18 @@ test('WARP activation asks for server and inbound scope before apply',()=>{
   assert.match(body,/verification/);
   assert.match(src,/All inbounds on this server/);
 });
+
+
+test('WARP server rows show heartbeat state, real server IP and Direct/Tunnel coverage',()=>{
+  assert.match(src,/function accessPathLabel/);
+  assert.match(src,/DIRECT \+ TUNNEL/);
+  const start=src.indexOf('function warpProfileRow');
+  const end=src.indexOf('function warpProfilesPanel',start);
+  const body=src.slice(start,end);
+  assert.match(body,/p\.server\?\.address/);
+  assert.match(body,/p\.server\?\.online/);
+  assert.match(body,/Online','آنلاین/);
+  assert.match(body,/Offline','آفلاین/);
+  assert.match(body,/accessPathLabel\(p\.accessPaths/);
+  assert.doesNotMatch(body,/\(p\.addresses\|\|\[\]\)\[0\]/);
+});
