@@ -1,0 +1,271 @@
+name: Stage 8 Integrated RC gate
+on:
+  pull_request:
+    paths:
+      - 'VERSION'
+      - 'backend/**'
+      - 'tools/**'
+      - 'web/**'
+      - 'tests/stage8_rc_gate.py'
+      - 'tests/test_backup*.py'
+      - 'tests/test_update*.py'
+      - 'tests/test_node_installations.py'
+      - '.github/workflows/stage8-rc-gate.yml'
+      - 'SHA256SUMS'
+  push:
+    branches: [work/stage8-rc-integration]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: stage8-rc-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrated-rc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      DARK_STAGE8_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Install RC test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Verify exact integrated ancestry
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DARK_STAGE8_SOURCE_SHA"
+          git merge-base --is-ancestor c880c3b2f1e9f039e4a18815784ebb501fe58112 HEAD
+          git merge-base --is-ancestor 282111a7194c4381316f5edb8af7f6972060b0e1 HEAD
+          git merge-base --is-ancestor e9355bd78aaa882faaf727566b3211328b245d8b HEAD
+          test "$(cat VERSION)" = "0.9.1-rc1"
+      - name: Stable and production-line migration plus backup restore
+        run: |
+          python tests/stage8_rc_gate.py --report /tmp/stage8-rc-gate.json
+      - name: Update backup and Node compatibility regressions
+        run: |
+          python -m pytest -q             tests/test_backup_cli.py             tests/test_backup_hardening.py             tests/test_update_transaction.py             tests/test_update_permissions.py             tests/test_node_installations.py             tests/test_node_update_http_timeout.py             tests/test_node_agent_architecture.py
+      - name: Build exact RC snapshot twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/stage8-release-a /tmp/stage8-release-b
+          python tools/release_snapshot.py             --commit "$DARK_STAGE8_SOURCE_SHA"             --stage4-commit 94ae50548f105bea7e79b40a28f7f5ae3704056d             --accepted-runtime-commit "$DARK_STAGE8_SOURCE_SHA"             --accepted-runtime-stage stage8-rc             --output /tmp/stage8-release-a             --json-only > /tmp/stage8-release-a.json
+          python tools/release_snapshot.py             --commit "$DARK_STAGE8_SOURCE_SHA"             --stage4-commit 94ae50548f105bea7e79b40a28f7f5ae3704056d             --accepted-runtime-commit "$DARK_STAGE8_SOURCE_SHA"             --accepted-runtime-stage stage8-rc             --output /tmp/stage8-release-b             --json-only > /tmp/stage8-release-b.json
+          diff -u <(cd /tmp/stage8-release-a && sha256sum dark-xray-0.9.1-rc1-* SHA256SUMS.release | sort)                   <(cd /tmp/stage8-release-b && sha256sum dark-xray-0.9.1-rc1-* SHA256SUMS.release | sort)
+      - name: Verify embedded release installer and metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/stage8-extracted
+          tarball="$(find /tmp/stage8-release-a -maxdepth 1 -name 'dark-xray-0.9.1-rc1-*.tar.gz' -print -quit)"
+          test -n "$tarball"
+          tar -xzf "$tarball" -C /tmp/stage8-extracted
+          root="$(find /tmp/stage8-extracted -mindepth 1 -maxdepth 1 -type d -name 'dark-xray-0.9.1-rc1' -print -quit)"
+          test -n "$root"
+          python "$root/release-install.py" verify | tee /tmp/stage8-artifact-verify.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=next(Path('/tmp/stage8-extracted').glob('dark-xray-0.9.1-rc1'))
+          meta=json.loads((root/'DARK-RELEASE.json').read_text())
+          assert meta['version']=='0.9.1-rc1'
+          assert meta['release_commit']==__import__('os').environ['DARK_STAGE8_SOURCE_SHA']
+          assert meta['accepted_runtime_commit']==meta['release_commit']
+          assert meta['accepted_runtime_stage']=='stage8-rc'
+          print('STAGE8_ARTIFACT_IDENTITY_OK',meta['release_commit'])
+          PY
+      - name: Preserve Stage 8 evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p qa/stage8-rc
+          printf '%s\n' "$DARK_STAGE8_SOURCE_SHA" > qa/stage8-rc/source-commit.txt
+          test ! -f /tmp/stage8-rc-gate.json || cp /tmp/stage8-rc-gate.json qa/stage8-rc/migration-backup.json
+          test ! -f /tmp/stage8-release-a.json || cp /tmp/stage8-release-a.json qa/stage8-rc/release-build.json
+          test ! -f /tmp/stage8-artifact-verify.json || cp /tmp/stage8-artifact-verify.json qa/stage8-rc/artifact-verify.json
+          if test -d /tmp/stage8-release-a; then
+            cp /tmp/stage8-release-a/* qa/stage8-rc/
+          fi
+          sha256sum             VERSION backend/core.py backend/server.py backend/nodes.py backend/node_agent.py             backend/smart_routing.py backend/smart_warp_probe.py             tools/release_snapshot.py tools/update.py tools/update_node.py             tests/stage8_rc_gate.py             > qa/stage8-rc/source-sha256.txt
+      - name: Upload Stage 8 RC evidence and artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-stage8-integrated-rc
+          path: |
+            qa/stage8-rc/
+            tests/stage8_rc_gate.py
+          if-no-files-found: error
+          retention-days: 14
+
+  fresh-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      DARK_STAGE8_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install fresh-install driver
+        run: sudo apt-get update -qq && sudo apt-get install -y -q expect >/dev/null
+      - name: Fresh exact RC install on disposable Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa/stage8-fresh
+          export DARK_CI_PASSWORD="DkRc-${GITHUB_RUN_ID}-Aa!9"
+          echo "::add-mask::$DARK_CI_PASSWORD"
+          cat > /tmp/stage8-fresh.exp <<'EOF'
+          set timeout 1200
+          set ref $env(DARK_STAGE8_SOURCE_SHA)
+          set pass $env(DARK_CI_PASSWORD)
+          log_file -noappend qa/stage8-fresh/install.log
+          spawn sudo env DARK_XRAY_REF=$ref NO_COLOR=1 bash ./install-online.sh
+          expect {
+            -re {Choose profile \[1\]: $} { send "2\r"; exp_continue }
+            -re {Owner username \[dark\]: $} { send "darkrc\r"; exp_continue }
+            -re {Panel URI path \[/\]: $} { send "/rc\r"; exp_continue }
+            -re {Panel port \[2087\]: $} { send "2087\r"; exp_continue }
+            -re {Public proxy IP/DNS \[[^]]+\]: $} { send "127.0.0.1\r"; exp_continue }
+            -re {Start installation\? \[Y/n\]: $} { send "y\r"; exp_continue }
+            -re {DARK owner password \([0-9]+-[0-9]+ characters\): $} { send "$pass\r"; exp_continue }
+            -re {Repeat owner password: $} { send "$pass\r"; exp_continue }
+            -re {Enable BBR congestion control\? \[Y/n\]: $} { send "n\r"; exp_continue }
+            timeout { exit 124 }
+            eof
+          }
+          catch wait result
+          exit [lindex $result 3]
+          EOF
+          expect /tmp/stage8-fresh.exp
+      - name: Verify fresh RC runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          systemctl is-active --quiet dark-xray.service
+          systemctl is-active --quiet dark-xray-update.service
+          sudo darkxray check
+          sudo darkxray vps-verify | tee qa/stage8-fresh/vps-verify.txt
+          sudo darkxray production-gate --json-only | tee qa/stage8-fresh/production-gate.json
+          sudo python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads(Path('/var/lib/dark-xray/installed-source.json').read_text())
+          assert d['commit'].lower()==os.environ['DARK_STAGE8_SOURCE_SHA'].lower(),d
+          assert d['version']=='0.9.1-rc1',d
+          PY
+      - name: Capture fresh-install diagnostics
+        if: failure()
+        run: |
+          systemctl status dark-xray.service dark-xray-update.service --no-pager -l > qa/stage8-fresh/systemd.txt 2>&1 || true
+          journalctl -u dark-xray.service -u dark-xray-update.service --no-pager -n 300 > qa/stage8-fresh/journal.txt 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dark-stage8-fresh-install
+          path: qa/stage8-fresh/
+          if-no-files-found: warn
+          retention-days: 14
+
+  stable-upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DARK_STAGE8_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      DARK_STAGE8_STABLE_SHA: c880c3b2f1e9f039e4a18815784ebb501fe58112
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install upgrade driver
+        run: sudo apt-get update -qq && sudo apt-get install -y -q expect >/dev/null
+      - name: Prepare exact Stable source
+        run: git worktree add --detach /tmp/dark-stage8-stable "$DARK_STAGE8_STABLE_SHA"
+      - name: Install Stable 0.9.0 on disposable Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa/stage8-upgrade
+          export DARK_CI_PASSWORD="DkUp-${GITHUB_RUN_ID}-Aa!9"
+          echo "::add-mask::$DARK_CI_PASSWORD"
+          cat > /tmp/stage8-stable.exp <<'EOF'
+          set timeout 1200
+          set ref $env(DARK_STAGE8_STABLE_SHA)
+          set pass $env(DARK_CI_PASSWORD)
+          log_file -noappend qa/stage8-upgrade/stable-install.log
+          spawn sudo env DARK_XRAY_REF=$ref NO_COLOR=1 bash /tmp/dark-stage8-stable/install-online.sh
+          expect {
+            -re {Choose profile \[1\]: $} { send "2\r"; exp_continue }
+            -re {Owner username \[dark\]: $} { send "darkupgrade\r"; exp_continue }
+            -re {Panel URI path \[/\]: $} { send "/upgrade\r"; exp_continue }
+            -re {Panel port \[2087\]: $} { send "2087\r"; exp_continue }
+            -re {Public proxy IP/DNS \[[^]]+\]: $} { send "127.0.0.1\r"; exp_continue }
+            -re {Start installation\? \[Y/n\]: $} { send "y\r"; exp_continue }
+            -re {DARK owner password \([0-9]+-[0-9]+ characters\): $} { send "$pass\r"; exp_continue }
+            -re {Repeat owner password: $} { send "$pass\r"; exp_continue }
+            -re {Enable BBR congestion control\? \[Y/n\]: $} { send "n\r"; exp_continue }
+            timeout { exit 124 }
+            eof
+          }
+          catch wait result
+          exit [lindex $result 3]
+          EOF
+          expect /tmp/stage8-stable.exp
+          sudo python3 - <<'PY'
+          import json,os,sqlite3
+          from pathlib import Path
+          d=json.loads(Path('/var/lib/dark-xray/installed-source.json').read_text())
+          assert d['commit'].lower()==os.environ['DARK_STAGE8_STABLE_SHA'].lower(),d
+          with sqlite3.connect('/var/lib/dark-xray/dark.sqlite3') as db:
+              assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
+          PY
+          sudo cp /var/lib/dark-xray/dark.sqlite3 qa/stage8-upgrade/pre-upgrade.sqlite3
+          sudo chown "$USER:$USER" qa/stage8-upgrade/pre-upgrade.sqlite3
+      - name: Upgrade Stable to exact RC candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /opt/dark-xray/.venv/bin/python tools/update.py             --source "$GITHUB_WORKSPACE"             --non-interactive             --status-file /tmp/stage8-update-state.json             --job-id stage8-stable-to-rc
+          sudo darkxray check
+          sudo darkxray production-gate --json-only | tee qa/stage8-upgrade/production-gate.json
+          sudo cp /tmp/stage8-update-state.json qa/stage8-upgrade/update-state.json
+          sudo chown "$USER:$USER" qa/stage8-upgrade/update-state.json
+          sudo python3 - <<'PY'
+          import json,os,sqlite3
+          from pathlib import Path
+          source=json.loads(Path('/var/lib/dark-xray/installed-source.json').read_text())
+          assert source['commit'].lower()==os.environ['DARK_STAGE8_SOURCE_SHA'].lower(),source
+          assert source['version']=='0.9.1-rc1',source
+          state=json.loads(Path('/tmp/stage8-update-state.json').read_text())
+          assert state['state']=='success' and state['phase']=='complete',state
+          with sqlite3.connect('/var/lib/dark-xray/dark.sqlite3') as db:
+              assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
+              tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+              assert {'smart_routing_rollouts','smart_routing_rollout_events',
+                      'customer_wallets','customer_support_tickets'} <= tables
+          PY
+      - name: Capture upgrade diagnostics
+        if: failure()
+        run: |
+          systemctl status dark-xray.service dark-xray-update.service --no-pager -l > qa/stage8-upgrade/systemd.txt 2>&1 || true
+          journalctl -u dark-xray.service -u dark-xray-update.service --no-pager -n 300 > qa/stage8-upgrade/journal.txt 2>&1 || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dark-stage8-stable-upgrade
+          path: qa/stage8-upgrade/
+          if-no-files-found: warn
+          retention-days: 14

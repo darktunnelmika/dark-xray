@@ -387,7 +387,7 @@ def test_real_request_rejects_identity_headers_before_accepting_traffic(hub,monk
             return value
         http_transport(reg,client,monkeypatch,header_hook=corrupt)
         with pytest.raises(PolicyError,match='identity mismatch'):reg.sync_traffic(NODE)
-        assert reg.get(NODE)['last_error'] and not reg.list()[0]['online']
+        assert reg.get(NODE)['last_error'] and reg.list()[0]['online'] is True
         assert reg.installations.public_status(NODE)['installation_id']==runtime.installation_id
 
 

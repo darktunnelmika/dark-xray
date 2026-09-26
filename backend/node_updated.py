@@ -48,7 +48,7 @@ def inspect(commit:str):
         cp=run(['git','-C',root,'rev-parse','FETCH_HEAD'],10);sha=cp.stdout.strip().lower()
         if sha!=commit:raise UpdateError('Candidate SHA mismatch')
         required=['VERSION','requirements-node.txt','install-node.sh','backend/node_agent.py','backend/node_runtime.py',
-                  'backend/node_updated.py','backend/update_bridge.py','tools/update_node.py',
+                  'backend/smart_routing.py','backend/smart_warp_probe.py','backend/node_updated.py','backend/update_bridge.py','tools/update_node.py',
                   'deploy/dark-xray-node.service','deploy/dark-xray-node-guard.service','deploy/dark-xray-node-update.service']
         for name in required:
             cp=run(['git','-C',root,'cat-file','-e','FETCH_HEAD:'+name],8)

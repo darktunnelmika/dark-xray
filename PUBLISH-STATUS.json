@@ -2,9 +2,9 @@
   "project": "DARK XRAY",
   "repository": "darktunnelmika/dark-xray",
   "branch": "main",
-  "date": "2026-09-23",
-  "status": "release_candidate_stage5_artifact_rehearsal_passed",
-  "current_version": "0.9.0-rc7",
+  "date": "2026-09-25",
+  "status": "stage8_integrated_rc_gate_in_progress",
+  "current_version": "0.9.1-rc1",
   "production_ready": false,
   "installable_from_repository_for_lab_testing": true,
   "runtime_independent_of_other_panels": true,
@@ -222,6 +222,19 @@
       "production certificate issuance/renewal",
       "stable tag/release publication",
       "complete global multi-node enforcement"
+    ]
+  },
+  "stage8": {
+    "integration_base_main": "282111a7194c4381316f5edb8af7f6972060b0e1",
+    "stable_upgrade_base": "c880c3b2f1e9f039e4a18815784ebb501fe58112",
+    "stage7_head": "e9355bd78aaa882faaf727566b3211328b245d8b",
+    "required_gates": [
+      "migration",
+      "backup_restore",
+      "release_snapshot",
+      "fresh_install",
+      "safe_update",
+      "node_compatibility"
     ]
   }
 }

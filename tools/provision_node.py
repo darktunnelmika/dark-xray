@@ -71,7 +71,7 @@ def main():
     if account.pw_uid==0:raise SystemExit('Service account must not be root')
 
     APP.mkdir(parents=True,mode=0o755);os.chmod(APP,0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
-    needed_backend=['node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','node_updated.py','update_bridge.py']
+    needed_backend=['node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','smart_routing.py','smart_warp_probe.py','outbound_probe.py','warp_paths.py','node_updated.py','update_bridge.py']
     for name in needed_backend:shutil.copy2(ROOT/'backend'/name,APP/'backend'/name)
     for name in ['fetch-core.py','import-core.py','update_node.py','node_manager.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
     shutil.copy2(ROOT/'deploy'/'dark-xray-node.service',APP/'deploy'/'dark-xray-node.service')

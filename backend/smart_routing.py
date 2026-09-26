@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""Safe Smart WARP / Adblock routing planner for DARK XRAY.
+
+Stage 7 deliberately starts with preview-only helpers.  The functions below do
+not touch a live Xray process, do not create WireGuard credentials, and do not
+make network calls.  They prepare deterministic routing patches that can be
+shown in the UI and reviewed before a later apply step.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import statistics
+from typing import Any
+
+
+class SmartRoutingError(ValueError):
+    """Raised when a requested smart-routing preview would be unsafe."""
+
+
+WARP_AI_REGION_HINTS = {
+    "us", "usa", "united states", "america", "united-states", "united_states",
+    "de", "deu", "germany", "deutschland",
+}
+ADBLOCK_REGION_HINTS = {
+    "fr", "fra", "france",
+    "gb", "gbr", "uk", "united kingdom", "united-kingdom", "united_kingdom", "england",
+}
+
+AI_DOMAIN_MATCHERS = [
+    "domain:openai.com",
+    "domain:chatgpt.com",
+    "domain:oaiusercontent.com",
+    "domain:oaistatic.com",
+    "domain:openaiapi-site.azureedge.net",
+]
+
+ADBLOCK_DOMAIN_MATCHERS = [
+    "geosite:category-ads-all",
+    "domain:doubleclick.net",
+    "domain:googleadservices.com",
+    "domain:googlesyndication.com",
+    "domain:adservice.google.com",
+    "domain:ads-twitter.com",
+]
+
+STAGE7_RULE_TAGS = {"dark-smart-adblock", "dark-smart-warp-ai"}
+STAGE7_BALANCER_TAG = "dark-smart-warp-ai-balancer"
+DEFAULT_WARP_SCAN_TARGETS = ["1.1.1.1:443", "1.0.0.1:443", "www.gstatic.com:443"]
+DEFAULT_SAFETY_THRESHOLDS = {"maxLossPercent": 20.0, "maxLatencyMs": 1200.0, "maxJitterMs": 350.0}
+STAGE7_SAFETY_TTL_SECONDS = 300
+
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float)):
+        return str(value).lower()
+    return ""
+
+
+def _node_text(node: dict[str, Any]) -> str:
+    fields = [
+        "id", "name", "remark", "region", "country", "country_code", "countryCode",
+        "location", "data_address", "dataAddress", "origin",
+    ]
+    return " ".join(_as_text(node.get(k)) for k in fields)
+
+
+def _matches_hint(text: str, hints: set[str]) -> list[str]:
+    normalized = text.replace("_", " ").replace("-", " ")
+    matched = []
+    for hint in sorted(hints):
+        h = hint.replace("_", " ").replace("-", " ")
+        if f" {h} " in f" {normalized} " or normalized.startswith(h + " ") or normalized.endswith(" " + h):
+            matched.append(hint)
+    return matched
+
+
+def classify_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify existing nodes into Smart WARP and Smart Adblock candidate groups."""
+    warp_nodes: list[dict[str, Any]] = []
+    adblock_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if node.get("enabled") is False or node.get("online") is False:
+            continue
+        text = _node_text(node)
+        warp_hits = _matches_hint(text, WARP_AI_REGION_HINTS)
+        ad_hits = _matches_hint(text, ADBLOCK_REGION_HINTS)
+        row = {
+            "id": str(node.get("id", "")),
+            "name": str(node.get("name") or node.get("id") or ""),
+            "data_address": str(node.get("data_address") or node.get("dataAddress") or ""),
+        }
+        if warp_hits:
+            warp_nodes.append({**row, "matched": warp_hits})
+        if ad_hits:
+            adblock_nodes.append({**row, "matched": ad_hits})
+    return {
+        "warp_ai": {"ready": bool(warp_nodes), "nodes": warp_nodes, "region_hints": ["US", "DE"]},
+        "adblock": {"ready": bool(adblock_nodes), "nodes": adblock_nodes, "region_hints": ["FR", "UK"]},
+    }
+
+
+def _known_tags(outbounds: list[dict[str, Any]]) -> set[str]:
+    return {str(o.get("tag")) for o in outbounds if isinstance(o, dict) and o.get("tag")}
+
+
+def _warp_candidate_meta(outbound: dict[str, Any]) -> dict[str, Any]:
+    tag = str(outbound.get("tag") or "")
+    meta = outbound.get("panelMeta") if isinstance(outbound.get("panelMeta"), dict) else {}
+    explicit_region = str(meta.get("region") or outbound.get("region") or "").strip()
+    text = " ".join([tag, str(outbound.get("remark") or ""), explicit_region]).lower()
+    region = explicit_region
+    if not region:
+        if _matches_hint(text, {"us", "usa", "united states", "america"}):
+            region = "USA"
+        elif _matches_hint(text, {"de", "deu", "germany", "deutschland"}):
+            region = "Germany"
+        elif _matches_hint(text, {"fr", "fra", "france"}):
+            region = "France"
+        elif _matches_hint(text, {"gb", "gbr", "uk", "united kingdom", "england"}):
+            region = "UK"
+    node = str(meta.get("nodeName") or meta.get("nodeId") or outbound.get("nodeName") or outbound.get("nodeId") or tag)
+    return {
+        "tag": tag,
+        "node": node,
+        "region": region or "—",
+        "protocol": str(outbound.get("protocol") or ""),
+        "likelyWarp": tag.startswith(("warp", "wg-warp", "dark-warp")) or bool(meta.get("smartWarp")),
+    }
+
+
+def _dedupe_tags(tags: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        if not isinstance(tag, str) or not tag:
+            raise SmartRoutingError("Outbound tag must be a nonempty string")
+        if tag not in seen:
+            out.append(tag)
+            seen.add(tag)
+    return out
+
+
+def _clean_stage7_routing(routing: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(routing) if isinstance(routing, dict) else {"domainStrategy": "AsIs", "rules": []}
+    rules = result.get("rules", [])
+    if not isinstance(rules, list):
+        rules = []
+    result["rules"] = [r for r in rules if not (isinstance(r, dict) and r.get("ruleTag") in STAGE7_RULE_TAGS)]
+    balancers = result.get("balancers", [])
+    if isinstance(balancers, list):
+        result["balancers"] = [b for b in balancers if not (isinstance(b, dict) and b.get("tag") == STAGE7_BALANCER_TAG)]
+    return result
+
+
+def build_stage7_patch(
+    outbounds: list[dict[str, Any]],
+    routing: dict[str, Any],
+    *,
+    current_observatory: dict[str, Any] | None = None,
+    warp_outbound_tags: list[str] | None = None,
+    enable_warp_ai: bool = True,
+    enable_adblock: bool = True,
+) -> dict[str, Any]:
+    """Return preview-only Xray settings for Stage 7 smart routing.
+
+    The returned outbounds/routing can be validated by CoreEngine.save_section in
+    a later apply flow.  This function never mutates input values.
+    """
+    if not isinstance(outbounds, list) or not all(isinstance(o, dict) for o in outbounds):
+        raise SmartRoutingError("outbounds must be a list of objects")
+    known = _known_tags(outbounds)
+    by_tag = {str(o.get("tag")): o for o in outbounds if isinstance(o, dict) and o.get("tag")}
+    if enable_adblock:
+        block = by_tag.get("block")
+        if not block or str(block.get("protocol") or "").lower() != "blackhole":
+            raise SmartRoutingError("Adblock requires a blackhole outbound tagged 'block'")
+
+    routing_patch = _clean_stage7_routing(routing)
+    rules_to_prepend: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    balancer: dict[str, Any] | None = None
+    warp_tags = _dedupe_tags(warp_outbound_tags or [])
+
+    if enable_adblock:
+        rules_to_prepend.append({
+            "type": "field",
+            "ruleTag": "dark-smart-adblock",
+            "domain": ADBLOCK_DOMAIN_MATCHERS[:],
+            "outboundTag": "block",
+        })
+
+    if enable_warp_ai:
+        if not warp_tags:
+            warnings.append("Smart WARP AI is enabled in preview but no WARP outbound tags were selected yet.")
+        else:
+            missing = [tag for tag in warp_tags if tag not in known]
+            if missing:
+                raise SmartRoutingError("Unknown WARP outbound tag(s): " + ", ".join(missing))
+            by_tag = {str(o.get("tag")): o for o in outbounds if isinstance(o, dict) and o.get("tag")}
+            not_wireguard = [tag for tag in warp_tags if str(by_tag[tag].get("protocol") or "").lower() != "wireguard"]
+            if not_wireguard:
+                raise SmartRoutingError("Smart WARP requires WireGuard outbound tag(s): " + ", ".join(not_wireguard))
+            if len(warp_tags) == 1:
+                target = {"outboundTag": warp_tags[0]}
+            else:
+                balancer = {
+                    "tag": STAGE7_BALANCER_TAG,
+                    "selector": warp_tags[:],
+                    "fallbackTag": warp_tags[0],
+                    "strategy": {"type": "leastPing"},
+                }
+                target = {"balancerTag": STAGE7_BALANCER_TAG}
+            rules_to_prepend.append({
+                "type": "field",
+                "ruleTag": "dark-smart-warp-ai",
+                "domain": AI_DOMAIN_MATCHERS[:],
+                **target,
+            })
+
+    if balancer:
+        routing_patch.setdefault("balancers", [])
+        routing_patch["balancers"].append(balancer)
+    routing_patch["rules"] = rules_to_prepend + list(routing_patch.get("rules", []))
+
+    observatory_patch = copy.deepcopy(current_observatory) if isinstance(current_observatory, dict) and current_observatory else None
+    if enable_warp_ai and len(warp_tags) > 1:
+        observatory_patch = observatory_patch or {}
+        selectors = observatory_patch.get("subjectSelector", [])
+        if not isinstance(selectors, list):
+            raise SmartRoutingError("Existing Observatory subjectSelector is invalid")
+        observatory_patch["subjectSelector"] = _dedupe_tags([
+            *[str(x) for x in selectors if isinstance(x, str) and x],
+            *warp_tags,
+        ])
+        observatory_patch.setdefault("probeURL", "https://www.gstatic.com/generate_204")
+        observatory_patch.setdefault("probeInterval", "1m")
+        observatory_patch.setdefault("enableConcurrency", True)
+
+    return {
+        "previewOnly": True,
+        "changed": bool(rules_to_prepend or balancer),
+        "warnings": warnings,
+        "outbounds": copy.deepcopy(outbounds),
+        "routing": routing_patch,
+        "observatory": observatory_patch,
+        "scanPlan": {"targets": DEFAULT_WARP_SCAN_TARGETS[:], "mode": "review_before_apply"},
+        "notes": [
+            "Preview only: no live Xray restart and no customer traffic change.",
+            "WARP outbounds must already exist before Smart WARP AI can be applied.",
+            "Adblock uses the existing blackhole outbound tagged block.",
+        ],
+    }
+
+
+
+def stage7_state_hash(
+    outbounds: list[dict[str, Any]],
+    routing: dict[str, Any],
+    observatory: dict[str, Any] | None,
+    node_roles: dict[str, Any] | None = None,
+) -> str:
+    """Stable hash used to fence reviewed Stage 7 changes against concurrent edits."""
+    roles = copy.deepcopy(node_roles) if isinstance(node_roles, dict) else {}
+    canonical_roles = {
+        "warpNodeIds": sorted({str(x) for x in roles.get("warpNodeIds", []) if str(x)}),
+        "adblockNodeIds": sorted({str(x) for x in roles.get("adblockNodeIds", []) if str(x)}),
+    } if roles else {}
+    payload = {
+        "outbounds": copy.deepcopy(outbounds),
+        "routing": copy.deepcopy(routing),
+        "observatory": copy.deepcopy(observatory) if isinstance(observatory, dict) else {},
+        "nodeRoles": canonical_roles,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def build_stage7_candidate_config(base_config: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Overlay a reviewed Stage 7 patch onto a compiled Xray config without touching storage."""
+    cfg = copy.deepcopy(base_config)
+    cfg["outbounds"] = copy.deepcopy(patch["outbounds"])
+    cfg["routing"] = copy.deepcopy(patch["routing"])
+    observatory = patch.get("observatory")
+    if observatory:
+        cfg["observatory"] = copy.deepcopy(observatory)
+    else:
+        cfg.pop("observatory", None)
+    return cfg
+
+
+def filter_stage7_routing_for_node(
+    routing: dict[str, Any], *, warp_ai: bool, adblock: bool,
+) -> dict[str, Any]:
+    """Return a Node-specific Routing view without changing non-Stage7 rules."""
+    result = copy.deepcopy(routing) if isinstance(routing, dict) else {"domainStrategy": "AsIs", "rules": []}
+    rules = result.get("rules", []) if isinstance(result.get("rules", []), list) else []
+    allowed = set()
+    if warp_ai:
+        allowed.add("dark-smart-warp-ai")
+    if adblock:
+        allowed.add("dark-smart-adblock")
+    result["rules"] = [r for r in rules if not isinstance(r, dict) or
+                       r.get("ruleTag") not in STAGE7_RULE_TAGS or r.get("ruleTag") in allowed]
+    if not warp_ai:
+        balancers = result.get("balancers", [])
+        if isinstance(balancers, list):
+            result["balancers"] = [b for b in balancers if not isinstance(b, dict) or
+                                   b.get("tag") != STAGE7_BALANCER_TAG]
+    return result
+
+
+def evaluate_stage7_node_readiness(nodes: list[dict[str, Any]], *, warp_node_ids: list[str], adblock_node_ids: list[str]) -> dict[str, Any]:
+    by_id = {str(n.get("id")): n for n in nodes if isinstance(n, dict) and n.get("id")}
+    roles = {"warp": _dedupe_tags(warp_node_ids), "adblock": _dedupe_tags(adblock_node_ids)}
+    checks: list[dict[str, Any]] = []
+    issues: list[str] = []
+    for role, node_ids in roles.items():
+        for node_id in node_ids:
+            node = by_id.get(node_id)
+            reasons: list[str] = []
+            if not node:
+                reasons.append("missing")
+            else:
+                if node.get("enabled") is False: reasons.append("disabled")
+                if not node.get("online"): reasons.append("offline")
+                desired = node.get("desired_state") if isinstance(node.get("desired_state"), dict) else {}
+                if desired.get("pending"): reasons.append("desired_state_pending")
+                if desired.get("last_error"): reasons.append("desired_state_error")
+                health = node.get("health") if isinstance(node.get("health"), dict) else {}
+                core = health.get("core") if isinstance(health.get("core"), dict) else {}
+                if core.get("state") and core.get("state") != "running": reasons.append("core_not_running")
+                if core.get("dirty") is True: reasons.append("runtime_dirty")
+                if core.get("last_error"): reasons.append("core_error")
+            ready = not reasons
+            checks.append({"nodeId": node_id, "role": role, "ready": ready, "reasons": reasons,
+                           "name": str((node or {}).get("name") or node_id)})
+            if not ready:
+                issues.append(f"{role} Node {node_id} is not ready: {', '.join(reasons)}")
+    return {"passed": not issues, "checks": checks, "issues": issues}
+
+
+def evaluate_warp_safety(ranked: list[dict[str, Any]], selected_tags: list[str], *,
+                         max_loss_percent: float = 20.0, max_latency_ms: float = 1200.0,
+                         max_jitter_ms: float = 350.0) -> dict[str, Any]:
+    tags = _dedupe_tags(selected_tags)
+    by_tag = {str(x.get("tag")): x for x in ranked if isinstance(x, dict) and x.get("tag")}
+    items: list[dict[str, Any]] = []
+    issues: list[str] = []
+    for tag in tags:
+        row = by_tag.get(tag, {})
+        reasons: list[str] = []
+        latency = row.get("latencyMs")
+        loss = float(row.get("lossPercent", 100.0)) if row else 100.0
+        jitter = float(row.get("jitterMs", 0.0)) if row else 0.0
+        if not row or not row.get("ok"): reasons.append("probe_failed")
+        if loss > max_loss_percent: reasons.append("loss_above_limit")
+        if latency is None or float(latency) > max_latency_ms: reasons.append("latency_above_limit")
+        if jitter > max_jitter_ms: reasons.append("jitter_above_limit")
+        ready = not reasons
+        items.append({"tag": tag, "ready": ready, "reasons": reasons, "latencyMs": latency,
+                      "lossPercent": loss, "jitterMs": jitter})
+        if not ready:
+            issues.append(f"WARP path {tag} is not ready: {', '.join(reasons)}")
+    return {"passed": bool(tags) and not issues, "items": items, "issues": issues,
+            "thresholds": {"maxLossPercent": float(max_loss_percent), "maxLatencyMs": float(max_latency_ms),
+                           "maxJitterMs": float(max_jitter_ms)}}
+
+
+def rank_warp_paths(observations: list[dict[str, Any]], *, max_results: int = 8) -> list[dict[str, Any]]:
+    """Rank pre-collected WARP path observations by health, latency and loss."""
+    ranked: list[dict[str, Any]] = []
+    for raw in observations:
+        if not isinstance(raw, dict):
+            continue
+        tag = str(raw.get("tag") or raw.get("outboundTag") or raw.get("nodeId") or "")
+        if not tag:
+            continue
+        samples = raw.get("latencyMs", raw.get("latenciesMs", []))
+        if isinstance(samples, (int, float)):
+            samples = [float(samples)]
+        if not isinstance(samples, list):
+            samples = []
+        nums = [float(x) for x in samples if isinstance(x, (int, float)) and x >= 0]
+        ok = bool(raw.get("ok", bool(nums)))
+        loss = float(raw.get("lossPercent", 0 if nums else 100))
+        latency = statistics.median(nums) if nums else 999999.0
+        jitter = (max(nums) - min(nums)) if len(nums) > 1 else 0.0
+        score = (0 if ok else 1, loss, latency, jitter, tag)
+        ranked.append({
+            "tag": tag,
+            "ok": ok,
+            "latencyMs": round(latency, 3) if latency < 999999 else None,
+            "jitterMs": round(jitter, 3),
+            "lossPercent": loss,
+            "score": list(score[:-1]),
+        })
+    ranked.sort(key=lambda x: (0 if x["ok"] else 1, x["lossPercent"], x["latencyMs"] if x["latencyMs"] is not None else 999999, x["jitterMs"], x["tag"]))
+    return ranked[:max(1, min(max_results, 50))]
+
+
+def build_stage7_plan(nodes: list[dict[str, Any]], outbounds: list[dict[str, Any]], routing: dict[str, Any]) -> dict[str, Any]:
+    tags = sorted(_known_tags(outbounds))
+    warp_candidates = [_warp_candidate_meta(o) for o in outbounds
+                       if isinstance(o, dict) and str(o.get("protocol") or "").lower() == "wireguard"]
+    stage7_rules = [r for r in routing.get("rules", []) if isinstance(r, dict) and r.get("ruleTag") in STAGE7_RULE_TAGS]
+    node_candidates=[{
+        "id":str(n.get("id") or ""),"name":str(n.get("name") or n.get("id") or ""),
+        "online":bool(n.get("online")),"enabled":bool(n.get("enabled",True)),
+        "data_address":str(n.get("data_address") or n.get("dataAddress") or ""),
+    } for n in nodes if isinstance(n,dict) and n.get("id") and n.get("enabled",True)]
+    return {
+        "stage": "stage7-smart-routing",
+        "safeDefault": "preview_only",
+        "nodes": classify_nodes(nodes),
+        "nodeCandidates": node_candidates,
+        "outboundTags": tags,
+        "configuredWarpCandidates": [t for t in tags if t.startswith(("warp", "wg-warp", "dark-warp"))],
+        "warpCandidates": warp_candidates,
+        "activeStage7Rules": stage7_rules,
+        "scanPlan": {"targets": DEFAULT_WARP_SCAN_TARGETS[:], "mode": "manual_or_scheduled_probe"},
+        "capabilities": {
+            "smartWarpAiPreview": True,
+            "smartAdblockPreview": True,
+            "automaticApply": False,
+            "productionTrafficMutation": False,
+        },
+    }

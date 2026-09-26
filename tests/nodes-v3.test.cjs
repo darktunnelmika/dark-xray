@@ -38,3 +38,20 @@ test('Detailed orchestration remains available but is no longer the main surface
 test('Node editor can still manage inbound assignments for recovery/admin use',()=>{
   for(const token of ['Inbound deployments','name="inboundIds"',"getAll('inboundIds')"])assert.ok(src.includes(token),token);
 });
+
+test('Node editor stores a human-readable location for ping/routing labels',()=>{
+  assert.match(src,/Location','لوکیشن/);
+  assert.match(src,/\'location\',n\.location/);
+  assert.match(src,/location:fd\.get\('location'\)/);
+  assert.match(src,/n\.location/);
+});
+
+
+test('Node updater and fresh installer include outbound probe dependencies',()=>{
+  const updater=fs.readFileSync(path.join(__dirname,'..','tools','update_node.py'),'utf8');
+  const provision=fs.readFileSync(path.join(__dirname,'..','tools','provision_node.py'),'utf8');
+  for(const token of ['outbound_probe.py','warp_paths.py']){
+    assert.ok(updater.includes(token),`updater missing ${token}`);
+    assert.ok(provision.includes(token),`provision missing ${token}`);
+  }
+});

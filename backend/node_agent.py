@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import argparse
 import asyncio
 import contextlib
+import copy
 import hmac
 import functools
 import json
@@ -32,6 +33,10 @@ from fastapi.responses import JSONResponse
 from core import Config,CoreEngine,CoreError
 from dark_policy import Store,PolicyError
 from node_runtime import NodeRuntime
+from smart_routing import rank_warp_paths
+from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
+from outbound_probe import OutboundProbeError,probe_outbounds
+from warp_paths import WarpPathError,validate_warp_endpoint,warp_endpoint_candidates
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -318,7 +323,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'outbound_probe':1,'warp_endpoint_probe':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},
                 'direct_source_verified':bool(engine.config.direct_source_verified),'guard':guard}
 
@@ -333,6 +338,86 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         try:result=runtime.apply(body)
         except (PolicyError,CoreError,ValueError) as ex:raise HTTPException(422,str(ex))
         return {'service':'DARK XRAY NODE',**result}
+
+    @app.post('/node/api/v1/smart-warp/probe')
+    def smart_warp_probe(body:dict,_scope:str=Depends(auth)):
+        tags=body.get('outboundTags',[]) if isinstance(body,dict) else []
+        attempts=body.get('attempts',2) if isinstance(body,dict) else 2
+        timeout=body.get('timeoutSeconds',5) if isinstance(body,dict) else 5
+        if not isinstance(tags,list) or not 1<=len(tags)<=8 or any(not isinstance(x,str) or not x for x in tags):
+            raise HTTPException(400,'Select 1-8 WARP outbound tags')
+        if type(attempts) is not int or not 1<=attempts<=3 or type(timeout) is not int or not 1<=timeout<=10:
+            raise HTTPException(400,'Invalid WARP probe limits')
+        outbounds=engine.section('outbounds');by={str(x.get('tag','')):x for x in outbounds if isinstance(x,dict)}
+        selected=[]
+        for tag in dict.fromkeys(tags):
+            row=by.get(tag)
+            if not row or str(row.get('protocol','')).lower()!='wireguard':
+                raise HTTPException(400,'Unknown or non-WireGuard WARP outbound: '+tag)
+            selected.append(row)
+        try:observations=scan_warp_outbounds(engine._binary(),engine.config.xray_assets,selected,
+                                             attempts=attempts,timeout=float(timeout))
+        except SmartWarpProbeError as ex:raise HTTPException(422,str(ex))
+        ranked=rank_warp_paths(observations,max_results=len(selected))
+        return {'service':'DARK XRAY NODE','nodeId':node_id,'items':ranked,
+                'previewOnly':True,'productionTrafficMutation':False}
+
+    @app.post('/node/api/v1/outbounds/probe')
+    def outbound_probe(body:dict,_scope:str=Depends(auth)):
+        tags=body.get('tags',[]) if isinstance(body,dict) else []
+        attempts=body.get('attempts',1) if isinstance(body,dict) else 1
+        timeout=body.get('timeoutSeconds',5) if isinstance(body,dict) else 5
+        if not isinstance(tags,list) or len(tags)>32 or any(not isinstance(x,str) or not x or len(x)>128 for x in tags):
+            raise HTTPException(400,'Invalid outbound probe tags')
+        if type(attempts) is not int or not 1<=attempts<=3 or type(timeout) is not int or not 1<=timeout<=10:
+            raise HTTPException(400,'Invalid outbound probe limits')
+        outbounds=engine.section('outbounds')
+        selected=tags or [str(x.get('tag')) for x in outbounds if isinstance(x,dict) and x.get('tag')]
+        try:
+            items=probe_outbounds(engine._binary(),engine.config.xray_assets,outbounds,tags=selected,
+                                  attempts=attempts,timeout=float(timeout))
+        except OutboundProbeError as ex:
+            raise HTTPException(422,str(ex))
+        return {'service':'DARK XRAY NODE','nodeId':node_id,'items':items,
+                'productionTrafficMutation':False}
+
+    @app.post('/node/api/v1/warp/endpoints/probe')
+    def warp_endpoint_probe(body:dict,_scope:str=Depends(auth)):
+        tag=str(body.get('tag') or 'warp') if isinstance(body,dict) else 'warp'
+        endpoints=body.get('endpoints') if isinstance(body,dict) else None
+        attempts=body.get('attempts',2) if isinstance(body,dict) else 2
+        timeout=body.get('timeoutSeconds',4) if isinstance(body,dict) else 4
+        if not tag or len(tag)>128 or type(attempts)is not int or not 1<=attempts<=3 or type(timeout)is not int or not 1<=timeout<=10:
+            raise HTTPException(400,'Invalid WARP endpoint probe request')
+        outbounds=engine.section('outbounds');outbound=next((x for x in outbounds if isinstance(x,dict) and x.get('tag')==tag),None)
+        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
+            raise HTTPException(400,'Unknown WARP outbound')
+        peers=((outbound.get('settings') or {}).get('peers') or [{}])
+        current=str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
+        raw_endpoints=endpoints if endpoints is not None else warp_endpoint_candidates(current)
+        if not isinstance(raw_endpoints,list) or not 1<=len(raw_endpoints)<=20:
+            raise HTTPException(400,'Select 1-20 WARP endpoints')
+        clean=[]
+        try:
+            for value in raw_endpoints:
+                if not isinstance(value,str):raise WarpPathError('Invalid WARP endpoint')
+                endpoint=validate_warp_endpoint(value)
+                if endpoint not in clean:clean.append(endpoint)
+        except WarpPathError as ex:
+            raise HTTPException(400,str(ex))
+        clones=[];mapping={}
+        for index,endpoint in enumerate(clean):
+            item=copy.deepcopy(outbound);probe_tag=f'dark-node-warp-{index}'
+            item['tag']=probe_tag;item['settings']['peers'][0]['endpoint']=endpoint
+            clones.append(item);mapping[probe_tag]=endpoint
+        try:
+            rows=probe_outbounds(engine._binary(),engine.config.xray_assets,clones,
+                                 tags=[x['tag'] for x in clones],attempts=attempts,timeout=float(timeout),trace=True)
+        except OutboundProbeError as ex:
+            raise HTTPException(422,str(ex))
+        for row in rows:row['endpoint']=mapping.get(str(row.get('tag') or ''),'')
+        return {'service':'DARK XRAY NODE','nodeId':node_id,'current':current,'items':rows,
+                'productionTrafficMutation':False}
 
     @app.get('/node/api/inbounds')
     def inbounds(_scope:str=Depends(auth)):

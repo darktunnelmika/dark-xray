@@ -1,3 +1,9 @@
+# تست Release Candidate فعلی DARK XRAY
+
+نسخهٔ کاندید یکپارچه: **`0.9.1-rc1`**
+
+> Stage 8 روی integration branch انجام می‌شود. RC باید هم `main` فعلی و هم Stage 7 Smart Routing را در ancestry داشته باشد. هیچ نصب/آپدیت Production بخشی از Gate نیست؛ fresh/update تست‌ها فقط روی runner/disposable target اجرا می‌شوند.
+
 # تست Snapshot فعلی DARK XRAY
 
 نسخهٔ سورس فعلی: **`0.9.0-rc7`**

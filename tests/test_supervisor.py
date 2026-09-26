@@ -116,3 +116,20 @@ def test_persisted_core_counters_continue_across_owned_restart(engine,monkeypatc
     raw['value']=20
     engine.collect_stats(force=True)
     assert engine.clients()[0]['traffic']['up']==120
+
+def test_apply_config_callback_failure_restores_previous_generation(engine):
+    engine.command('start')
+    previous_hash=engine.applied_hash
+    previous=json.loads((engine.runtime/'active.json').read_text())
+    candidate=engine.build_config()
+    candidate['dns']={'servers':['8.8.8.8']}
+    def refuse_commit():
+        raise CoreError('review baseline became stale',status=409)
+    with pytest.raises(CoreError) as exc:
+        engine.apply_config(candidate,force=True,after_success=refuse_commit)
+    assert exc.value.status==409
+    assert engine.running
+    assert engine.applied_hash==previous_hash
+    restored=json.loads((engine.runtime/'active.json').read_text())
+    assert restored==previous
+    assert 'previous process configuration restored' in engine.last_error

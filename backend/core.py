@@ -148,13 +148,76 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_clients(email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS core_sections(name TEXT PRIMARY KEY,body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS routing_rule_scopes(rule_tag TEXT PRIMARY KEY,scope TEXT NOT NULL DEFAULT 'all',updated_at REAL NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS warp_profiles(scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS warp_assignments(scope TEXT PRIMARY KEY,mode TEXT NOT NULL DEFAULT 'off',adblock INTEGER NOT NULL DEFAULT 0,inbound_ids TEXT NOT NULL DEFAULT '[]',updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS adblock_assignments(scope TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 0,inbound_ids TEXT NOT NULL DEFAULT '[]',updated_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS core_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,
               digest TEXT NOT NULL,device_os TEXT NOT NULL,model TEXT NOT NULL,first_seen REAL NOT NULL,last_seen REAL NOT NULL,
               UNIQUE(email,digest));
             CREATE TABLE IF NOT EXISTS core_client_tombstones(
               email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL,down INTEGER NOT NULL,deleted_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS smart_routing_revisions(
+              id TEXT PRIMARY KEY,actor TEXT NOT NULL,created_at REAL NOT NULL,
+              baseline_hash TEXT NOT NULL,candidate_hash TEXT NOT NULL,
+              before_routing TEXT NOT NULL,before_observatory TEXT NOT NULL,
+              after_routing TEXT NOT NULL,after_observatory TEXT NOT NULL,
+              before_node_roles TEXT NOT NULL DEFAULT '{}',after_node_roles TEXT NOT NULL DEFAULT '{}',
+              request_body TEXT NOT NULL,state TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',
+              safety_report TEXT NOT NULL DEFAULT '{}',safety_hash TEXT NOT NULL DEFAULT '',
+              safety_checked_at REAL NOT NULL DEFAULT 0,safety_passed INTEGER NOT NULL DEFAULT 0,
+              applied_at REAL NOT NULL DEFAULT 0,rolled_back_at REAL NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS smart_routing_revisions_created
+              ON smart_routing_revisions(created_at DESC);
+            CREATE TABLE IF NOT EXISTS smart_routing_node_roles(
+              node_id TEXT PRIMARY KEY,warp_ai INTEGER NOT NULL DEFAULT 0,
+              adblock INTEGER NOT NULL DEFAULT 0,updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollouts(
+              id TEXT PRIMARY KEY,revision_id TEXT NOT NULL,actor TEXT NOT NULL,created_at REAL NOT NULL,
+              state TEXT NOT NULL,phase TEXT NOT NULL DEFAULT 'nodes',current_index INTEGER NOT NULL DEFAULT 0,
+              observation_seconds REAL NOT NULL DEFAULT 5,control_state TEXT NOT NULL DEFAULT 'run',
+              detail TEXT NOT NULL DEFAULT '',started_at REAL NOT NULL DEFAULT 0,paused_at REAL NOT NULL DEFAULT 0,
+              resumed_at REAL NOT NULL DEFAULT 0,aborted_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0,
+              rolled_back_at REAL NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS smart_routing_rollouts_created ON smart_routing_rollouts(created_at DESC);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollout_nodes(
+              rollout_id TEXT NOT NULL,node_id TEXT NOT NULL,ord INTEGER NOT NULL,role TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT 'pending',detail TEXT NOT NULL DEFAULT '',
+              desired_revision INTEGER NOT NULL DEFAULT 0,desired_hash TEXT NOT NULL DEFAULT '',
+              verified_at REAL NOT NULL DEFAULT 0,updated_at REAL NOT NULL DEFAULT 0,
+              PRIMARY KEY(rollout_id,node_id));
+            CREATE INDEX IF NOT EXISTS smart_routing_rollout_nodes_order ON smart_routing_rollout_nodes(rollout_id,ord);
+            CREATE TABLE IF NOT EXISTS smart_routing_rollout_events(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,rollout_id TEXT NOT NULL,node_id TEXT NOT NULL DEFAULT '',
+              phase TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '',
+              metrics TEXT NOT NULL DEFAULT '{}',at REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS smart_routing_rollout_events_rollout ON smart_routing_rollout_events(rollout_id,id);
             ''')
+            revision_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_revisions)')}
+            if 'before_node_roles' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN before_node_roles TEXT NOT NULL DEFAULT '{}'")
+            if 'after_node_roles' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN after_node_roles TEXT NOT NULL DEFAULT '{}'")
+            if 'safety_report' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_report TEXT NOT NULL DEFAULT '{}'")
+            if 'safety_hash' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_hash TEXT NOT NULL DEFAULT ''")
+            if 'safety_checked_at' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_checked_at REAL NOT NULL DEFAULT 0")
+            if 'safety_passed' not in revision_cols:
+                store.db.execute("ALTER TABLE smart_routing_revisions ADD COLUMN safety_passed INTEGER NOT NULL DEFAULT 0")
+            rollout_cols={r[1] for r in store.db.execute('PRAGMA table_info(smart_routing_rollouts)')}
+            if 'observation_seconds' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN observation_seconds REAL NOT NULL DEFAULT 5")
+            if 'control_state' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN control_state TEXT NOT NULL DEFAULT 'run'")
+            if 'paused_at' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN paused_at REAL NOT NULL DEFAULT 0")
+            if 'resumed_at' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN resumed_at REAL NOT NULL DEFAULT 0")
+            if 'aborted_at' not in rollout_cols:
+                store.db.execute("ALTER TABLE smart_routing_rollouts ADD COLUMN aborted_at REAL NOT NULL DEFAULT 0")
         self.validate_schema_only=True
 
     def _write(self):
@@ -766,6 +829,17 @@ class CoreEngine:
             self._observed_exit_pid=p.pid;self.last_exit_code=code;self.last_exit_at=time.time()
         return False
 
+    def filter_routing_for_scope(self,routing:dict,scope:str)->dict:
+        result=copy.deepcopy(routing) if isinstance(routing,dict) else {'domainStrategy':'AsIs','rules':[]}
+        with self.store.lock:
+            scopes={str(r['rule_tag']):str(r['scope']) for r in self.store.db.execute('SELECT rule_tag,scope FROM routing_rule_scopes')}
+        rules=result.get('rules',[]) if isinstance(result.get('rules',[]),list) else []
+        result['rules']=[r for r in rules if not isinstance(r,dict) or scopes.get(str(r.get('ruleTag') or ''),'all') in {'all',scope}]
+        return result
+
+    def routing_for_scope(self,scope:str)->dict:
+        return self.filter_routing_for_scope(self.section('routing'),scope)
+
     def build_config(self)->dict:
         # Read local tables directly; compiling never queries an external panel.
         with self.store.lock:rows=self.store.db.execute('SELECT body,inbounds FROM core_clients').fetchall()
@@ -806,7 +880,7 @@ class CoreEngine:
         cfg={'log':{'access':str(self.runtime/'access.log'),'error':str(self.runtime/'error.log'),'loglevel':'warning'},
              'api':{'tag':'dark-api','listen':'127.0.0.1:'+str(self.config.xray_api_port),'services':['StatsService','HandlerService','LoggerService']},
              'stats':{},'policy':policy,'inbounds':result,'outbounds':self.section('outbounds'),
-             'routing':self.section('routing'),'dns':self.section('dns')}
+             'routing':self.routing_for_scope('hub'),'dns':self.section('dns')}
         if self.section('observatory'):cfg['observatory']=self.section('observatory')
         return cfg
 
@@ -864,43 +938,58 @@ class CoreEngine:
         self.process=None
         if self.log_handle:self.log_handle.close();self.log_handle=None
 
+    def _apply_config_locked(self,cfg:dict,*,start:bool=False,force:bool=False,after_success=None)->dict:
+        newhash=self.config_hash(cfg)
+        if not force and self.running and newhash==self.applied_hash:
+            if after_success:after_success()
+            return self.runtime_state()
+        self.validate(cfg)
+        old=(self.runtime/'active.json').read_text() if (self.runtime/'active.json').exists() else None
+        oldhash=self.applied_hash;was=self.running
+        self.collect_stats(force=True,strict=was)
+        if was:self._stop_child()
+        else:
+            # Avoid attaching to an unrelated process on the control API port.
+            s=socket.socket()
+            try:
+                # A closed API connection may retain TIME_WAIT after a crash.
+                # Reuse that address, not a live listener; never use SO_REUSEPORT.
+                s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                s.bind(('127.0.0.1',self.config.xray_api_port))
+            except OSError:raise CoreError('Core API port already occupied by another process',status=409)
+            finally:s.close()
+        if old:self._atomic(self.runtime/'previous.json',old)
+        self._atomic(self.runtime/'active.json',json.dumps(cfg,indent=2))
+        try:
+            if start or was or self.wants_running:self._spawn()
+            if after_success:after_success()
+        except Exception as e:
+            self._stop_child()
+            rollback='no previous running generation'
+            if old:
+                self._atomic(self.runtime/'active.json',old)
+                if was:
+                    try:self._spawn();rollback='previous process configuration restored'
+                    except Exception:rollback='previous configuration written, restart failed'
+            self.applied_hash=oldhash if self.running else '';self.last_error=str(e)+'; '+rollback
+            status=e.status if isinstance(e,CoreError) else 503
+            uncertain=e.uncertain if isinstance(e,CoreError) else False
+            raise CoreError(self.last_error,status=status,uncertain=uncertain)
+        self.applied_hash=newhash if self.running else ''
+        self.last_apply=time.time();self.last_error='';self.wants_running=self.running
+        return self.runtime_state()
+
+    def apply_config(self,cfg:dict,*,start:bool=False,force:bool=False,after_success=None)->dict:
+        """Apply an already-built config and commit reviewed state under the same engine lock."""
+        self._write()
+        if not isinstance(cfg,dict):raise CoreError('Candidate configuration must be an object')
+        with self.lock:
+            return self._apply_config_locked(copy.deepcopy(cfg),start=start,force=force,after_success=after_success)
+
     def apply(self,*,start:bool=False,force:bool=False)->dict:
         self._write()
         with self.lock:
-            cfg=self.build_config();newhash=self.config_hash(cfg)
-            if not force and self.running and newhash==self.applied_hash:return self.runtime_state()
-            self.validate(cfg)
-            old=(self.runtime/'active.json').read_text() if (self.runtime/'active.json').exists() else None
-            oldhash=self.applied_hash;was=self.running
-            self.collect_stats(force=True,strict=was)
-            if was:self._stop_child()
-            else:
-                # Avoid attaching to an unrelated process on the control API port.
-                s=socket.socket()
-                try:
-                    # A closed API connection may retain TIME_WAIT after a crash.
-                    # Reuse that address, not a live listener; never use SO_REUSEPORT.
-                    s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-                    s.bind(('127.0.0.1',self.config.xray_api_port))
-                except OSError:raise CoreError('Core API port already occupied by another process',status=409)
-                finally:s.close()
-            if old:self._atomic(self.runtime/'previous.json',old)
-            self._atomic(self.runtime/'active.json',json.dumps(cfg,indent=2))
-            try:
-                if start or was or self.wants_running:self._spawn()
-            except Exception as e:
-                self._stop_child()
-                rollback='no previous running generation'
-                if old:
-                    self._atomic(self.runtime/'active.json',old)
-                    if was:
-                        try:self._spawn();rollback='previous process configuration restored'
-                        except Exception:rollback='previous configuration written, restart failed'
-                self.applied_hash=oldhash if self.running else '';self.last_error=str(e)+'; '+rollback
-                raise CoreError(self.last_error,status=503)
-            self.applied_hash=newhash if self.running else ''
-            self.last_apply=time.time();self.last_error='';self.wants_running=self.running
-            return self.runtime_state()
+            return self._apply_config_locked(self.build_config(),start=start,force=force)
 
     def command(self,action:str)->dict:
         self._write()
