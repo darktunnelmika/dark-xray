@@ -35,7 +35,7 @@ def defaults(config:dict)->dict:
             'panel_path':str(config.get('panel_path','/')),'poll_seconds':int(config.get('poll_seconds',5)),
             'core_autostart':bool(config.get('core_autostart',False)),'domain':(origin.hostname or '') if mode=='domain_tls' else '','acme_email':''}
 
-def apply_overrides(value:dict,*,panel_path=None,bind_port=None,public_address=None,subscription_path='/sub')->dict:
+def apply_overrides(value:dict,*,panel_path=None,bind_port=None,public_address=None,core_autostart=None,subscription_path='/sub')->dict:
     value=dict(value);changed={};subscription_path=normalize_subscription_path(subscription_path)
     if panel_path is not None:
         value['panel_path']=normalize(panel_path);changed['panel_path']=value['panel_path']
@@ -47,6 +47,9 @@ def apply_overrides(value:dict,*,panel_path=None,bind_port=None,public_address=N
         if not address or len(address)>253 or any(c in address for c in '/?#@ \r\n\t'):
             raise SystemExit('Public proxy address must be a plain IP or DNS name')
         value['public_address']=address;changed['public_address']=address
+    if core_autostart is not None:
+        if type(core_autostart) is not bool:raise SystemExit('core_autostart must be boolean')
+        value['core_autostart']=core_autostart;changed['core_autostart']=core_autostart
     if not changed:raise SystemExit('No runtime field was requested for staging')
     if paths_overlap(str(value.get('panel_path','/')),subscription_path):
         raise SystemExit('Panel URI path overlaps the subscription path')
@@ -56,6 +59,7 @@ def apply_overrides(value:dict,*,panel_path=None,bind_port=None,public_address=N
 def main():
     p=argparse.ArgumentParser();p.add_argument('--config',type=Path,required=True);p.add_argument('--data',type=Path,required=True)
     p.add_argument('--panel-path');p.add_argument('--bind-port',type=int);p.add_argument('--public-address')
+    p.add_argument('--core-autostart',action=argparse.BooleanOptionalAction,default=None)
     a=p.parse_args();config=json.loads(a.config.read_text());value=defaults(config);dbpath=a.data/'dark.sqlite3'
     if dbpath.is_symlink() or not dbpath.is_file():raise SystemExit('DARK database is missing or unsafe')
     with sqlite3.connect(str(dbpath),timeout=30) as db:
@@ -71,7 +75,8 @@ def main():
             except Exception as ex:raise SystemExit('Saved subscription settings are invalid') from ex
             if not isinstance(sub,dict):raise SystemExit('Saved subscription settings are invalid')
             subscription_path=normalize_subscription_path(sub.get('path','/sub'))
-        value,changed=apply_overrides(value,panel_path=a.panel_path,bind_port=a.bind_port,public_address=a.public_address,subscription_path=subscription_path)
+        value,changed=apply_overrides(value,panel_path=a.panel_path,bind_port=a.bind_port,public_address=a.public_address,
+                                      core_autostart=a.core_autostart,subscription_path=subscription_path)
         db.execute("INSERT INTO core_sections(name,body) VALUES('runtime',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",(json.dumps(value),))
         db.commit()
     print('Runtime settings staged:',json.dumps(changed,ensure_ascii=False))
