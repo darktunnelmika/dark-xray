@@ -91,6 +91,25 @@ def test_change_port_updates_config_guard_and_pair_code(tmp_path,monkeypatch):
     assert json.loads(m.PAIR.read_text())['pairCode']==code
 
 
+def test_restart_waits_for_authenticated_health(tmp_path,monkeypatch):
+    m=setup_manager(tmp_path,monkeypatch)
+    calls=[]
+    def run(args,**kwargs):
+        calls.append(tuple(map(str,args)))
+        return SimpleNamespace(returncode=0,stdout='',stderr='')
+    states=iter([ConnectionRefusedError('warming up'),{'service':'DARK XRAY NODE','agent_only':True}])
+    def health():
+        state=next(states)
+        if isinstance(state,Exception):raise state
+        return state
+    monkeypatch.setattr(m,'run',run)
+    monkeypatch.setattr(m,'local_health',health)
+    monkeypatch.setattr(m.time,'sleep',lambda _:None)
+    result=m.restart_agent()
+    assert result['agent_only'] is True
+    assert calls==[('systemctl','restart',m.SERVICE)]
+
+
 def test_repair_restores_core_traversal_permissions(tmp_path,monkeypatch):
     m=setup_manager(tmp_path,monkeypatch)
     assert (m.CORE_ROOT.stat().st_mode & 0o777)==0o700
