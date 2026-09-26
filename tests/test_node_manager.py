@@ -51,6 +51,8 @@ def decode(code):
 
 def test_new_pair_invalidates_old_token_and_preserves_identity(tmp_path,monkeypatch):
     m=setup_manager(tmp_path,monkeypatch)
+    ready=[]
+    monkeypatch.setattr(m,'start_agent_ready',lambda:ready.append(True))
     old=m.TOKEN.read_text().strip()
     code=m.issue_pair('turkey')
     doc=decode(code)
@@ -62,6 +64,10 @@ def test_new_pair_invalidates_old_token_and_preserves_identity(tmp_path,monkeypa
     assert json.loads(m.PAIR.read_text())['pairCode']==code
     assert not m.PAIR_CONSUMED.exists()
     assert json.loads(m.PROFILE.read_text())['name']=='turkey'
+    assert ready==[True]
+    m.invalidate_pair()
+    assert ready==[True,True]
+    assert not m.PAIR.exists() and m.PAIR_CONSUMED.exists()
 
 
 def test_managed_state_blocks_pair_reset(tmp_path,monkeypatch):
@@ -82,6 +88,8 @@ def test_managed_state_blocks_pair_reset(tmp_path,monkeypatch):
 
 def test_change_port_updates_config_guard_and_pair_code(tmp_path,monkeypatch):
     m=setup_manager(tmp_path,monkeypatch)
+    ready=[]
+    monkeypatch.setattr(m,'start_agent_ready',lambda:ready.append(True))
     code=m.change_port(8443)
     conf=json.loads(m.CONFIG.read_text());guard=json.loads(m.GUARD.read_text());doc=decode(code)
     assert conf['bind_port']==8443
@@ -90,6 +98,7 @@ def test_change_port_updates_config_guard_and_pair_code(tmp_path,monkeypatch):
     assert 8443 in guard['protected_ports'] and 9443 not in guard['protected_ports']
     assert doc['origin']=='https://node.example.test:8443'
     assert json.loads(m.PAIR.read_text())['pairCode']==code
+    assert ready==[True]
 
 
 def test_restart_waits_for_authenticated_health(tmp_path,monkeypatch):
