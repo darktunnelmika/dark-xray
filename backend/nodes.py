@@ -287,7 +287,7 @@ class NodeRegistry:
         sync_error=str(assignment.get('last_error') or '')
         runtime_block=NodeRegistry._runtime_block_reason(node)
         deployed=bool(remote_id and not sync_error and not runtime_block)
-        online=bool(node.get('enabled') and node.get('last_seen') and now-float(node.get('last_seen') or 0)<180 and not node.get('last_error'))
+        online=bool(node.get('enabled') and node.get('last_seen') and now-float(node.get('last_seen') or 0)<180)
         if sync_error:deployment_state='sync_error'
         elif runtime_block:deployment_state=runtime_block
         elif remote_id:deployment_state='deployed'
@@ -299,6 +299,7 @@ class NodeRegistry:
         elif not node.get('failover_enabled'):reason='failover_disabled'
         elif not node.get('data_address'):reason='data_address_missing'
         elif not online:reason='node_offline'
+        elif node.get('last_error'):reason='node_error'
         else:reason='ready'
         return {**assignment,'remote_inbound_id':remote_id,'deployment_state':deployment_state,
                 'deployed':deployed,'failover_ready':reason=='ready','failover_reason':reason}
@@ -313,7 +314,7 @@ class NodeRegistry:
             with self.store.lock:
                 assigned=[dict(x) for x in self.store.db.execute(
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
-            r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180 and not r['last_error'])
+            r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180)
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
@@ -1192,8 +1193,8 @@ class NodeRegistry:
         payload={'tag':tag,'attempts':attempts,'timeoutSeconds':timeout_seconds}
         if endpoints is not None:payload['endpoints']=endpoints
         count=len(endpoints) if isinstance(endpoints,list) else 15
-        doc,ms=self._request(node_id,'/node/api/v1/warp/endpoints/probe','POST',payload,
-                             min(40.0,float(max(1,count)*timeout_seconds+8)))
+        transport_timeout=min(30.0,max(8.0,float(max(1,count)*timeout_seconds+8)))
+        doc,ms=self._request(node_id,'/node/api/v1/warp/endpoints/probe','POST',payload,transport_timeout)
         if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
             raise PolicyError('Invalid Node WARP endpoint probe response')
         return {'node_id':node_id,'latency_ms':ms,'current':doc.get('current',''),'items':doc['items'],
