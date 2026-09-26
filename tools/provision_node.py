@@ -43,7 +43,7 @@ def main():
     p.add_argument('--exempt',action='append',default=[])
     a=p.parse_args()
     if os.geteuid()!=0 or sys.platform!='linux':raise SystemExit('Linux root is required')
-    if sys.version_info<(3,11):raise SystemExit('Python 3.11+ required')
+    if sys.version_info<(3,10):raise SystemExit('Python 3.10+ required')
     if not Path('/run/systemd/system').exists():raise SystemExit('systemd host required')
     domain=str(a.domain).strip().lower()
     if not re.fullmatch(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}',domain):
