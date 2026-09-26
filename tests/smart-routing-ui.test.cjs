@@ -207,3 +207,25 @@ test('WARP scanner shows multiple endpoint routes and lets operator select one',
   assert.doesNotMatch(body,/\/api\/smart-routing\/warp-scan/);
   assert.match(src,/\/api\/warp\/endpoint/);
 });
+
+
+test('Outbound and WARP tests require an explicit runtime server target',()=>{
+  assert.match(src,/function serverLabel/);
+  assert.match(src,/async function pickRuntimeServer/);
+  assert.match(src,/Run test on/);
+  assert.match(src,/server\}\)/);
+  assert.match(src,/\/api\/runtime-targets/);
+  assert.match(src,/\/api\/outbounds\/test/);
+  assert.match(src,/\/api\/warp\/scan/);
+  assert.match(src,/\/api\/warp\/endpoints\/scan/);
+  assert.match(src,/server-test-badge/);
+});
+
+test('Routing editor exposes real server scope and rows display it',()=>{
+  assert.match(src,/routingServerLabel/);
+  assert.match(src,/\/api\/routing\/scopes/);
+  assert.match(src,/serverScope/);
+  assert.match(src,/Server','سرور/);
+  assert.match(src,/route-server/);
+  assert.match(src,/dark-user-/);
+});

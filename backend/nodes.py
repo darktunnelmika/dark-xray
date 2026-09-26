@@ -177,7 +177,7 @@ class NodeRegistry:
               last_health TEXT NOT NULL DEFAULT '{}',failure_count INTEGER NOT NULL DEFAULT 0,
               recovery_count INTEGER NOT NULL DEFAULT 0,last_offline_at REAL NOT NULL DEFAULT 0,
               last_recovered_at REAL NOT NULL DEFAULT 0,
-              data_address TEXT NOT NULL DEFAULT '',priority INTEGER NOT NULL DEFAULT 100,
+              data_address TEXT NOT NULL DEFAULT '',location TEXT NOT NULL DEFAULT '',priority INTEGER NOT NULL DEFAULT 100,
               failover_enabled INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS node_agent_tokens(
               id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT NOT NULL UNIQUE,
@@ -235,6 +235,7 @@ class NodeRegistry:
                 ('last_offline_at',"ALTER TABLE remote_nodes ADD COLUMN last_offline_at REAL NOT NULL DEFAULT 0"),
                 ('last_recovered_at',"ALTER TABLE remote_nodes ADD COLUMN last_recovered_at REAL NOT NULL DEFAULT 0"),
                 ('data_address',"ALTER TABLE remote_nodes ADD COLUMN data_address TEXT NOT NULL DEFAULT ''"),
+                ('location',"ALTER TABLE remote_nodes ADD COLUMN location TEXT NOT NULL DEFAULT ''"),
                 ('priority',"ALTER TABLE remote_nodes ADD COLUMN priority INTEGER NOT NULL DEFAULT 100"),
                 ('failover_enabled',"ALTER TABLE remote_nodes ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1"),
             ):
@@ -356,9 +357,11 @@ class NodeRegistry:
         return out
 
     def put(self,node_id:str,name:str,origin:str,token:str,enabled:bool=True,inbound_ids:list[int]|None=None,
-            data_address:str='',priority:int=100,failover_enabled:bool=True)->dict:
+            data_address:str='',priority:int=100,failover_enabled:bool=True,location:str='')->dict:
         if not NAME_RE.fullmatch(node_id) or not isinstance(name,str) or not 1<=len(name)<=128:raise PolicyError('Invalid node identity')
         origin=validate_origin(origin);data_address=validate_data_address(data_address,origin)
+        if not isinstance(location,str) or len(location)>80 or any(ch in location for ch in '\r\n\t'):raise PolicyError('Invalid node location')
+        location=location.strip()
         if not isinstance(token,str) or not token.startswith('dkn_') or not 40<=len(token)<=256:raise PolicyError('Invalid DARK node token')
         if type(enabled)is not bool:raise PolicyError('enabled must be boolean')
         if type(failover_enabled)is not bool:raise PolicyError('failover_enabled must be boolean')
@@ -383,15 +386,15 @@ class NodeRegistry:
             if (db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_replacements'").fetchone()
                     and db.execute('SELECT 1 FROM remote_node_replacements WHERE target_origin=?',(origin,)).fetchone()):
                 raise PolicyError('Node endpoint is reserved by a replacement preparation')
-            db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health,data_address,priority,failover_enabled)
-              VALUES(?,?,?,?,?,?,?,0,0,'','{}',?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
+            db.execute('''INSERT INTO remote_nodes(id,name,origin,token_enc,enabled,created_at,updated_at,last_seen,last_latency_ms,last_error,last_health,data_address,location,priority,failover_enabled)
+              VALUES(?,?,?,?,?,?,?,0,0,'','{}',?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,origin=excluded.origin,
               token_enc=excluded.token_enc,enabled=excluded.enabled,updated_at=excluded.updated_at,
-              data_address=excluded.data_address,priority=excluded.priority,failover_enabled=excluded.failover_enabled,
+              data_address=excluded.data_address,location=excluded.location,priority=excluded.priority,failover_enabled=excluded.failover_enabled,
               last_seen=CASE WHEN ? THEN 0 ELSE remote_nodes.last_seen END,
               last_latency_ms=CASE WHEN ? THEN 0 ELSE remote_nodes.last_latency_ms END,
               last_error=CASE WHEN ? THEN '' ELSE remote_nodes.last_error END,
               last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
-              (node_id,name,origin,enc,int(enabled),now,now,data_address,priority,int(failover_enabled),
+              (node_id,name,origin,enc,int(enabled),now,now,data_address,location,priority,int(failover_enabled),
                int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
             binding=self.installations.ensure(db,node_id)
             if old and old['origin']!=origin and not binding['installation_id']:
@@ -1171,6 +1174,30 @@ class NodeRegistry:
         if any(tag not in by_tag for tag in unique):raise PolicyError('Node Smart WARP probe omitted a requested path')
         return {'node_id':node_id,'latency_ms':sum(latencies),'items':[by_tag[tag] for tag in unique],
                 'productionTrafficMutation':False,'batches':len(latencies)}
+
+    @installation_operation
+    def outbound_probe(self,node_id:str,tags:list[str],*,attempts:int=1,timeout_seconds:int=5)->dict:
+        if not isinstance(tags,list) or len(tags)>32 or any(not isinstance(x,str) or not x for x in tags):
+            raise PolicyError('Invalid outbound probe tags')
+        payload={'tags':list(dict.fromkeys(tags)),'attempts':attempts,'timeoutSeconds':timeout_seconds}
+        doc,ms=self._request(node_id,'/node/api/v1/outbounds/probe','POST',payload,
+                             min(30.0,float(max(1,len(tags))*timeout_seconds+6)))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
+            raise PolicyError('Invalid Node outbound probe response')
+        return {'node_id':node_id,'latency_ms':ms,'items':doc['items'],
+                'productionTrafficMutation':False}
+
+    @installation_operation
+    def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4)->dict:
+        payload={'tag':tag,'attempts':attempts,'timeoutSeconds':timeout_seconds}
+        if endpoints is not None:payload['endpoints']=endpoints
+        count=len(endpoints) if isinstance(endpoints,list) else 15
+        doc,ms=self._request(node_id,'/node/api/v1/warp/endpoints/probe','POST',payload,
+                             min(40.0,float(max(1,count)*timeout_seconds+8)))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
+            raise PolicyError('Invalid Node WARP endpoint probe response')
+        return {'node_id':node_id,'latency_ms':ms,'current':doc.get('current',''),'items':doc['items'],
+                'productionTrafficMutation':False}
 
     @installation_operation
     def deploy_inbound(self,node_id:str,payload:dict)->dict:

@@ -148,6 +148,7 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_clients(email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS core_sections(name TEXT PRIMARY KEY,body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS routing_rule_scopes(rule_tag TEXT PRIMARY KEY,scope TEXT NOT NULL DEFAULT 'all',updated_at REAL NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS core_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,
               digest TEXT NOT NULL,device_os TEXT NOT NULL,model TEXT NOT NULL,first_seen REAL NOT NULL,last_seen REAL NOT NULL,
               UNIQUE(email,digest));
@@ -825,6 +826,17 @@ class CoreEngine:
             self._observed_exit_pid=p.pid;self.last_exit_code=code;self.last_exit_at=time.time()
         return False
 
+    def filter_routing_for_scope(self,routing:dict,scope:str)->dict:
+        result=copy.deepcopy(routing) if isinstance(routing,dict) else {'domainStrategy':'AsIs','rules':[]}
+        with self.store.lock:
+            scopes={str(r['rule_tag']):str(r['scope']) for r in self.store.db.execute('SELECT rule_tag,scope FROM routing_rule_scopes')}
+        rules=result.get('rules',[]) if isinstance(result.get('rules',[]),list) else []
+        result['rules']=[r for r in rules if not isinstance(r,dict) or scopes.get(str(r.get('ruleTag') or ''),'all') in {'all',scope}]
+        return result
+
+    def routing_for_scope(self,scope:str)->dict:
+        return self.filter_routing_for_scope(self.section('routing'),scope)
+
     def build_config(self)->dict:
         # Read local tables directly; compiling never queries an external panel.
         with self.store.lock:rows=self.store.db.execute('SELECT body,inbounds FROM core_clients').fetchall()
@@ -865,7 +877,7 @@ class CoreEngine:
         cfg={'log':{'access':str(self.runtime/'access.log'),'error':str(self.runtime/'error.log'),'loglevel':'warning'},
              'api':{'tag':'dark-api','listen':'127.0.0.1:'+str(self.config.xray_api_port),'services':['StatsService','HandlerService','LoggerService']},
              'stats':{},'policy':policy,'inbounds':result,'outbounds':self.section('outbounds'),
-             'routing':self.section('routing'),'dns':self.section('dns')}
+             'routing':self.routing_for_scope('hub'),'dns':self.section('dns')}
         if self.section('observatory'):cfg['observatory']=self.section('observatory')
         return cfg
 

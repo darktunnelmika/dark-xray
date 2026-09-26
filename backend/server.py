@@ -232,13 +232,22 @@ class WarpMode(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
     mode:Literal['off','ai','all']='ai'
     adblock:bool=False
+    server:str=Field(default='hub',min_length=1,max_length=160)
+class WarpProbeRequest(Model):
+    tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
+    server:str=Field(default='hub',min_length=1,max_length=160)
 class WarpEndpointSelect(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
     endpoint:str=Field(min_length=3,max_length=160)
+    server:str=Field(default='hub',min_length=1,max_length=160)
 class OutboundProbeRequest(Model):
     tags:list[str]=Field(default_factory=list,max_length=32)
     attempts:StrictInt=Field(default=1,ge=1,le=3)
     timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
+    server:str=Field(default='hub',min_length=1,max_length=160)
+class RoutingScopeBody(Model):
+    ruleTag:str=Field(min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
+    scope:str=Field(default='all',min_length=1,max_length=160)
 
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
@@ -251,6 +260,7 @@ class NodeCreate(Model):
     token:str=Field(min_length=40,max_length=256)
     enabled:bool=True
     dataAddress:str=Field(default='',max_length=253)
+    location:str=Field(default='',max_length=80)
     priority:StrictInt=Field(default=100,ge=1,le=1000)
     failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
@@ -261,6 +271,7 @@ class NodePatch(Model):
     keep_token:bool=False
     enabled:bool=True
     dataAddress:str=Field(default='',max_length=253)
+    location:str=Field(default='',max_length=80)
     priority:StrictInt=Field(default=100,ge=1,le=1000)
     failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
@@ -964,6 +975,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             sections['observatory']=copy.deepcopy(override['observatory'])
             warp_nodes={node_id} if override['warp_ai'] else set()
             adblock_nodes={node_id} if override['adblock'] else set()
+        sections['routing']=engine.filter_routing_for_scope(sections['routing'],'node:'+node_id)
         sections['routing']=filter_stage7_routing_for_node(
             sections['routing'],warp_ai=node_id in warp_nodes,adblock=node_id in adblock_nodes)
         # Local and Node packet-source trust are separate boundaries. A Central
@@ -1368,7 +1380,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
         result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds,
-                         body.dataAddress,body.priority,body.failoverEnabled)
+                         body.dataAddress,body.priority,body.failoverEnabled,body.location)
         manager.audit(p.actor,p.actor.id,'node.create',body.id)
         return result
     @app.patch('/api/nodes/{node_id}')
@@ -1381,7 +1393,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             # first, then discover that the requested metadata is invalid.
             current_node=nodes.get(node_id)
             expected={'name':current_node['name'],'origin':current_node['origin'],
-                'dataAddress':current_node['data_address'],'enabled':current_node['enabled'],
+                'dataAddress':current_node['data_address'],'location':current_node.get('location',''),'enabled':current_node['enabled'],
                 'priority':current_node['priority'],'failoverEnabled':current_node['failover_enabled'],
                 'inboundIds':sorted(current_node['inboundIds'])}
             supplied=body.model_dump(include=set(expected));supplied['inboundIds']=sorted(set(body.inboundIds))
@@ -1392,7 +1404,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
         token=nodes.get(node_id,secret=True)['token']
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
-                         body.dataAddress,body.priority,body.failoverEnabled)
+                         body.dataAddress,body.priority,body.failoverEnabled,body.location)
         for target in {node_id}:ensure_node_desired_state(target)
         apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.update',node_id);return result
@@ -1795,18 +1807,69 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/traffic-engine/preview')
     def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
 
+    def _runtime_targets()->list[dict]:
+        hub_location=str(os.environ.get('DARK_HUB_LOCATION','')).strip()[:80]
+        rows=[{'id':'hub','kind':'hub','name':'HUB','location':hub_location,'address':str(config.public_address),
+               'online':True,'latencyMs':0}]
+        for node in nodes.list():
+            rows.append({'id':'node:'+str(node.get('id')),'nodeId':str(node.get('id')),'kind':'node',
+                         'name':str(node.get('name') or node.get('id') or 'Node'),
+                         'location':str(node.get('location') or ''),
+                         'address':str(node.get('data_address') or ''),
+                         'online':bool(node.get('online')),
+                         'latencyMs':int(node.get('last_latency_ms') or 0)})
+        return rows
+
+    def _runtime_target(scope:str,*,require_online:bool=True)->dict:
+        value=str(scope or 'hub').strip()
+        row=next((x for x in _runtime_targets() if x['id']==value),None)
+        if not row:raise HTTPException(400,'Unknown runtime server target')
+        if require_online and not row.get('online'):raise HTTPException(409,'Selected Node is offline')
+        return row
+
+    @app.get('/api/runtime-targets')
+    def runtime_targets(p:Principal=Depends(owner)):
+        return {'items':_runtime_targets()}
+
+    @app.get('/api/routing/scopes')
+    def routing_scopes(p:Principal=Depends(owner)):
+        with store.lock:
+            rows={str(r['rule_tag']):str(r['scope']) for r in store.db.execute('SELECT rule_tag,scope FROM routing_rule_scopes')}
+        return {'items':rows,'targets':[{'id':'all','kind':'all','name':'All servers','location':'All'}]+_runtime_targets()}
+
+    @app.post('/api/routing/scopes')
+    def routing_scope_set(body:RoutingScopeBody,p:Principal=Depends(owner)):
+        writable();scope=str(body.scope)
+        if scope!='all':_runtime_target(scope,require_online=False)
+        with store.transaction() as db:
+            db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?) '
+                       'ON CONFLICT(rule_tag) DO UPDATE SET scope=excluded.scope,updated_at=excluded.updated_at',
+                       (body.ruleTag,scope,time.time()))
+        for node in nodes.list():
+            try:ensure_node_desired_state(str(node['id']))
+            except Exception:pass
+        manager.audit(p.actor,p.actor.id,'routing.scope',body.ruleTag,scope)
+        return {'ruleTag':body.ruleTag,'scope':scope,'targets':_runtime_targets()}
+
     @app.post('/api/outbounds/test')
     def outbound_test(body:OutboundProbeRequest,p:Principal=Depends(owner)):
+        target=_runtime_target(body.server)
         outbounds=engine.section('outbounds')
         tags=body.tags or [str(o.get('tag')) for o in outbounds if isinstance(o,dict) and o.get('tag')]
         try:
-            items=probe_outbounds(engine._binary(),config.xray_assets,outbounds,tags=tags,
-                                  attempts=int(body.attempts),timeout=float(body.timeoutSeconds))
-        except OutboundProbeError as ex:
+            if target['kind']=='hub':
+                items=probe_outbounds(engine._binary(),config.xray_assets,outbounds,tags=tags,
+                                      attempts=int(body.attempts),timeout=float(body.timeoutSeconds))
+            else:
+                remote=nodes.outbound_probe(target['nodeId'],tags,attempts=int(body.attempts),timeout_seconds=int(body.timeoutSeconds))
+                items=remote['items']
+        except (OutboundProbeError,PolicyError) as ex:
             raise HTTPException(409,'Outbound test failed: '+str(ex))
+        for item in items:
+            if isinstance(item,dict):item['server']=target
         manager.audit(p.actor,p.actor.id,'outbound.test',','.join(tags[:16]),
-                      'isolated temporary Xray; production traffic unchanged')
-        return {'items':items,'productionTrafficMutation':False}
+                      'server='+target['id']+'; isolated temporary Xray; production traffic unchanged')
+        return {'items':items,'server':target,'productionTrafficMutation':False}
 
     def _warp_outbound(tag:str)->dict|None:
         for item in engine.section('outbounds'):
@@ -1826,8 +1889,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if rt=='dark-smart-adblock' and rule.get('outboundTag')=='block':adblock=True
         settings=outbound.get('settings',{}) if isinstance(outbound,dict) and isinstance(outbound.get('settings'),dict) else {}
         peer=(settings.get('peers') or [{}])[0] if isinstance(settings.get('peers'),list) else {}
+        scope_tag='dark-warp-all' if mode=='all' else 'dark-warp-ai' if mode=='ai' else 'dark-smart-adblock' if adblock else ''
+        scope='hub'
+        if scope_tag:
+            with store.lock:
+                row=store.db.execute('SELECT scope FROM routing_rule_scopes WHERE rule_tag=?',(scope_tag,)).fetchone()
+            if row:scope=str(row['scope'])
         return {'registered':bool(outbound and str(outbound.get('protocol','')).lower()=='wireguard'),
-                'tag':tag,'mode':mode,'adblock':adblock,'endpoint':str(peer.get('endpoint') or '') if isinstance(peer,dict) else '',
+                'tag':tag,'mode':mode,'adblock':adblock,'server':scope,'endpoint':str(peer.get('endpoint') or '') if isinstance(peer,dict) else '',
                 'addresses':[str(x) for x in settings.get('address',[]) if isinstance(x,str)],
                 'runtimeDirty':bool(engine.runtime_state().get('dirty')),'secretExposed':False}
 
@@ -1845,6 +1914,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not replaced:updated.append(replacement)
         candidate=engine.build_config();candidate['outbounds']=copy.deepcopy(updated);engine.validate(candidate)
         engine.save_section('outbounds',updated)
+        for node in nodes.list():
+            try:ensure_node_desired_state(str(node['id']))
+            except Exception:pass
         return registered
 
     @app.get('/api/warp/status')
@@ -1870,48 +1942,54 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                        'runtimeMutation':False,'activationRequired':True}
 
     @app.post('/api/warp/scan')
-    def warp_scan(body:WarpCreate,p:Principal=Depends(owner)):
-        outbound=_warp_outbound(body.tag)
+    def warp_scan(body:WarpProbeRequest,p:Principal=Depends(owner)):
+        target=_runtime_target(body.server);outbound=_warp_outbound(body.tag)
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
             raise HTTPException(409,'Create the WARP outbound first')
-        try:observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
-        except SmartWarpProbeError as ex:raise HTTPException(409,'WARP scan failed: '+str(ex))
-        ranked=rank_warp_paths(observations,max_results=1)
+        try:
+            if target['kind']=='hub':
+                observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
+                ranked=rank_warp_paths(observations,max_results=1)
+            else:
+                ranked=nodes.smart_warp_probe(target['nodeId'],[body.tag],attempts=3,timeout_seconds=5)['items']
+        except (SmartWarpProbeError,PolicyError) as ex:raise HTTPException(409,'WARP scan failed: '+str(ex))
         safety=evaluate_warp_safety(ranked,[body.tag],
             max_loss_percent=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),
             max_latency_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),
             max_jitter_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs']))
-        manager.audit(p.actor,p.actor.id,'warp.scan',body.tag,'isolated temporary Xray; production traffic unchanged')
-        return {'passed':safety['passed'],'items':ranked,'issues':safety['issues'],
+        manager.audit(p.actor,p.actor.id,'warp.scan',body.tag,'server='+target['id']+'; production traffic unchanged')
+        return {'passed':safety['passed'],'items':ranked,'issues':safety['issues'],'server':target,
                 'thresholds':safety['thresholds'],'productionTrafficMutation':False}
 
     @app.post('/api/warp/endpoints/scan')
-    def warp_endpoint_scan(body:WarpCreate,p:Principal=Depends(owner)):
-        outbound=_warp_outbound(body.tag)
+    def warp_endpoint_scan(body:WarpProbeRequest,p:Principal=Depends(owner)):
+        target=_runtime_target(body.server);outbound=_warp_outbound(body.tag)
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
             raise HTTPException(409,'Create the WARP outbound first')
         settings=outbound.get('settings') if isinstance(outbound.get('settings'),dict) else {}
         peers=settings.get('peers') if isinstance(settings,dict) else []
-        current=str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
-        endpoints=warp_endpoint_candidates(current)
-        clones=[];tag_to_endpoint={}
-        for index,endpoint in enumerate(endpoints):
-            candidate=copy.deepcopy(outbound)
-            probe_tag=f'dark-warp-path-{index}'
-            candidate['tag']=probe_tag
-            candidate['settings']['peers'][0]['endpoint']=endpoint
-            clones.append(candidate);tag_to_endpoint[probe_tag]=endpoint
+        local_current=str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
         try:
-            raw=probe_outbounds(engine._binary(),config.xray_assets,clones,
-                                tags=[x['tag'] for x in clones],attempts=2,timeout=4.0,trace=True)
-        except OutboundProbeError as ex:
+            if target['kind']=='hub':
+                current=local_current;endpoints=warp_endpoint_candidates(current);clones=[];tag_to_endpoint={}
+                for index,endpoint in enumerate(endpoints):
+                    candidate=copy.deepcopy(outbound);probe_tag=f'dark-warp-path-{index}'
+                    candidate['tag']=probe_tag;candidate['settings']['peers'][0]['endpoint']=endpoint
+                    clones.append(candidate);tag_to_endpoint[probe_tag]=endpoint
+                raw=probe_outbounds(engine._binary(),config.xray_assets,clones,
+                                    tags=[x['tag'] for x in clones],attempts=2,timeout=4.0,trace=True)
+                for row in raw:row['endpoint']=tag_to_endpoint.get(str(row.get('tag') or ''),'')
+            else:
+                remote=nodes.warp_endpoint_probe(target['nodeId'],body.tag,None,attempts=2,timeout_seconds=4)
+                current=str(remote.get('current') or local_current);raw=remote['items']
+        except (OutboundProbeError,PolicyError) as ex:
             raise HTTPException(409,'WARP endpoint scan failed: '+str(ex))
         items=[]
         max_loss=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent'])
         max_latency=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs'])
         max_jitter=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs'])
         for row in raw:
-            endpoint=tag_to_endpoint.get(str(row.get('tag') or ''),'')
+            endpoint=str(row.get('endpoint') or '')
             egress=row.get('egress') if isinstance(row.get('egress'),dict) else {}
             loss=float(row['lossPercent']) if row.get('lossPercent') is not None else 100.0
             latency=float(row['delayMs']) if row.get('delayMs') is not None else 10**9
@@ -1927,8 +2005,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                  float(x['delayMs']) if x['delayMs'] is not None else 10**9,
                                  float(x['jitterMs']) if x['jitterMs'] is not None else 10**9))
         manager.audit(p.actor,p.actor.id,'warp.endpoint_scan',body.tag,
-                      f'{len(items)} Cloudflare consumer WARP paths tested; production unchanged')
-        return {'selected':current,'items':items,'productionTrafficMutation':False}
+                      f"server={target['id']}; {len(items)} Cloudflare consumer WARP paths tested; production unchanged")
+        return {'selected':current,'items':items,'server':target,'productionTrafficMutation':False}
 
     @app.post('/api/warp/endpoint')
     def warp_endpoint_select(body:WarpEndpointSelect,p:Principal=Depends(owner)):
@@ -1937,12 +2015,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             raise HTTPException(409,'Create the WARP outbound first')
         try:endpoint=validate_warp_endpoint(body.endpoint)
         except WarpRegistrationError as ex:raise HTTPException(400,str(ex))
-        candidate_out=copy.deepcopy(outbound)
+        target=_runtime_target(body.server);candidate_out=copy.deepcopy(outbound)
         candidate_out['settings']['peers'][0]['endpoint']=endpoint
         try:
-            checked=probe_outbounds(engine._binary(),config.xray_assets,[candidate_out],
-                                    tags=[body.tag],attempts=2,timeout=5.0,trace=True)[0]
-        except OutboundProbeError as ex:
+            if target['kind']=='hub':
+                checked=probe_outbounds(engine._binary(),config.xray_assets,[candidate_out],
+                                        tags=[body.tag],attempts=2,timeout=5.0,trace=True)[0]
+            else:
+                remote=nodes.warp_endpoint_probe(target['nodeId'],body.tag,[endpoint],attempts=2,timeout_seconds=5)
+                checked=remote['items'][0]
+        except (OutboundProbeError,PolicyError) as ex:
             raise HTTPException(409,'Selected WARP endpoint test failed: '+str(ex))
         loss=float(checked['lossPercent']) if checked.get('lossPercent') is not None else 100.0
         latency=float(checked['delayMs']) if checked.get('delayMs') is not None else 10**9
@@ -1965,14 +2047,22 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             engine.apply_config(cfg,start=True,force=True,after_success=commit)
         else:
             engine.save_section('outbounds',updated)
+        for node in nodes.list():
+            try:ensure_node_desired_state(str(node['id']))
+            except Exception:pass
+        active_scope=str(current.get('server') or '')
+        node_sync=None
+        if current.get('mode')!='off' and active_scope.startswith('node:'):
+            try:node_sync=sync_node_assignments(active_scope[5:])
+            except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP endpoint saved but active Node sync failed: '+str(ex))
         manager.audit(p.actor,p.actor.id,'warp.endpoint',body.tag,
-                      endpoint+'; verified with isolated temporary Xray')
-        return _warp_status(body.tag)|{'selected':endpoint,'test':checked,
+                      endpoint+'; tested_on='+target['id']+'; verified with isolated temporary Xray')
+        return _warp_status(body.tag)|{'selected':endpoint,'test':checked,'server':target,'nodeSync':node_sync,
                                        'runtimeMutation':current.get('mode')!='off'}
 
     @app.post('/api/warp/mode')
     def warp_mode(body:WarpMode,p:Principal=Depends(owner)):
-        writable();outbound=_warp_outbound(body.tag)
+        writable();target=_runtime_target(body.server);outbound=_warp_outbound(body.tag);previous=_warp_status(body.tag)
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
             raise HTTPException(409,'Create the WARP outbound first')
         with store.lock:
@@ -1981,9 +2071,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         safety=None
         if body.mode!='off':
             try:
-                observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
-            except SmartWarpProbeError as ex:raise HTTPException(409,'WARP safety scan failed: '+str(ex))
-            ranked=rank_warp_paths(observations,max_results=1)
+                if target['kind']=='hub':
+                    observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
+                    ranked=rank_warp_paths(observations,max_results=1)
+                else:
+                    ranked=nodes.smart_warp_probe(target['nodeId'],[body.tag],attempts=3,timeout_seconds=5)['items']
+            except (SmartWarpProbeError,PolicyError) as ex:
+                raise HTTPException(409,'WARP safety scan failed: '+str(ex))
             safety=evaluate_warp_safety(ranked,[body.tag],
                 max_loss_percent=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),
                 max_latency_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),
@@ -2005,14 +2099,36 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         elif body.mode=='all':
             prepend.append({'type':'field','ruleTag':'dark-warp-all','network':'tcp,udp','outboundTag':body.tag})
         routing['rules']=prepend+base
-        candidate=engine.build_config();candidate['routing']=routing;engine.validate(candidate)
+        planned_scope=target['id']
+        hub_routing=engine.filter_routing_for_scope(routing,'hub')
+        if planned_scope!='hub':
+            hub_routing['rules']=[r for r in hub_routing.get('rules',[]) if not isinstance(r,dict) or r.get('ruleTag') not in {str(x.get('ruleTag')) for x in prepend}]
+        candidate=engine.build_config();candidate['routing']=hub_routing;engine.validate(candidate)
         def commit():
             with store.transaction() as db:
                 db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
                            ('routing',json.dumps(routing)))
-        runtime=engine.apply_config(candidate,start=True,force=True,after_success=commit)
-        manager.audit(p.actor,p.actor.id,'warp.mode',body.tag,'mode='+body.mode+'; adblock='+str(body.adblock))
-        return _warp_status(body.tag)|{'applied':True,'safety':safety,'runtime':runtime}
+                for tag in managed:db.execute('DELETE FROM routing_rule_scopes WHERE rule_tag=?',(tag,))
+                for rule in prepend:
+                    tag=str(rule.get('ruleTag') or '')
+                    if tag:db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?)',
+                                      (tag,planned_scope,time.time()))
+        runtime=engine.apply_config(candidate,start=True,force=False,after_success=commit)
+        sync_result={}
+        for node in nodes.list():
+            try:ensure_node_desired_state(str(node['id']))
+            except Exception:pass
+        sync_ids=set()
+        if target['kind']=='node':sync_ids.add(target['nodeId'])
+        old_scope=str(previous.get('server') or '')
+        if previous.get('mode')!='off' and old_scope.startswith('node:'):sync_ids.add(old_scope[5:])
+        for node_id in sorted(sync_ids):
+            try:sync_result[node_id]=sync_node_assignments(node_id)
+            except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP routing saved but Node sync failed: '+str(ex))
+        manager.audit(p.actor,p.actor.id,'warp.mode',body.tag,
+                      'mode='+body.mode+'; adblock='+str(body.adblock)+'; server='+planned_scope)
+        return _warp_status(body.tag)|{'applied':True,'safety':safety,'runtime':runtime,
+                                       'nodeSync':sync_result,'server':target}
 
     @app.get('/api/smart-routing/plan')
     def smart_routing_plan(p:Principal=Depends(owner)):
@@ -2939,7 +3055,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         if set(body)!={'value'}:raise HTTPException(400,'Expected one value field')
         result=engine.save_section(section,body['value'])
+        if section=='routing':
+            tags={str(r.get('ruleTag')) for r in body['value'].get('rules',[]) if isinstance(r,dict) and r.get('ruleTag')}
+            with store.transaction() as db:
+                for row in db.execute('SELECT rule_tag FROM routing_rule_scopes').fetchall():
+                    if str(row['rule_tag']) not in tags:db.execute('DELETE FROM routing_rule_scopes WHERE rule_tag=?',(row['rule_tag'],))
         if section in {'outbounds','routing','dns','policy','observatory','hosts','ipguard'}:manager.tick(suppress=True)
+        if section in {'outbounds','routing','dns','policy','observatory','ipguard'}:
+            for node in nodes.list():
+                try:ensure_node_desired_state(str(node['id']))
+                except Exception:pass
         manager.audit(p.actor,p.actor.id,'settings.update',section);return result
 
     @app.get('/api/runtime-config')

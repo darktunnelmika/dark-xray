@@ -38,3 +38,10 @@ test('Detailed orchestration remains available but is no longer the main surface
 test('Node editor can still manage inbound assignments for recovery/admin use',()=>{
   for(const token of ['Inbound deployments','name="inboundIds"',"getAll('inboundIds')"])assert.ok(src.includes(token),token);
 });
+
+test('Node editor stores a human-readable location for ping/routing labels',()=>{
+  assert.match(src,/Location','لوکیشن/);
+  assert.match(src,/\'location\',n\.location/);
+  assert.match(src,/location:fd\.get\('location'\)/);
+  assert.match(src,/n\.location/);
+});

@@ -385,3 +385,42 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
     assert off.status_code==200,off.text
     assert off.json()['mode']=='off'
     assert not [r for r in engine.section('routing')['rules'] if r.get('ruleTag') in {'dark-warp-ai','dark-warp-all'}]
+
+
+def test_runtime_targeted_ping_warp_and_routing_scope(stage7_env,monkeypatch):
+    _store,engine,client=stage7_env
+    app=client.app
+    rows=ready_nodes()
+    rows[0]['location']='🇺🇸 USA'
+    monkeypatch.setattr(app.state.nodes,'list',lambda: rows)
+
+    monkeypatch.setattr(app.state.nodes,'outbound_probe',lambda node_id,tags,attempts=1,timeout_seconds=5:{
+        'node_id':node_id,'items':[{'tag':tag,'testable':True,'success':True,'delayMs':17.0,
+                                    'lossPercent':0.0,'jitterMs':0.0,'error':'',
+                                    'productionTrafficMutation':False} for tag in tags],
+        'productionTrafficMutation':False})
+    ping=client.post('/api/outbounds/test',json={'tags':['warp-us'],'server':'node:node-us','attempts':1,'timeoutSeconds':5})
+    assert ping.status_code==200,ping.text
+    doc=ping.json()
+    assert doc['server']['id']=='node:node-us'
+    assert doc['server']['location']=='🇺🇸 USA'
+    assert doc['items'][0]['server']['id']=='node:node-us'
+    assert doc['items'][0]['delayMs']==17.0
+
+    monkeypatch.setattr(app.state.nodes,'smart_warp_probe',lambda node_id,tags,attempts=3,timeout_seconds=5:{
+        'node_id':node_id,'items':[{'tag':tag,'ok':True,'latencyMs':22.0,'lossPercent':0.0,'jitterMs':2.0,
+                                    'score':[0,0,22,2]} for tag in tags],
+        'productionTrafficMutation':False})
+    warp=client.post('/api/warp/scan',json={'tag':'warp-us','server':'node:node-us'})
+    assert warp.status_code==200,warp.text
+    assert warp.json()['server']['id']=='node:node-us'
+    assert warp.json()['passed'] is True
+
+    routing={'domainStrategy':'AsIs','rules':[{'type':'field','ruleTag':'user-us-only',
+        'domain':['domain:example.test'],'outboundTag':'direct'}]}
+    saved=client.put('/api/settings/routing',json={'value':routing})
+    assert saved.status_code==200,saved.text
+    scoped=client.post('/api/routing/scopes',json={'ruleTag':'user-us-only','scope':'node:node-us'})
+    assert scoped.status_code==200,scoped.text
+    assert engine.routing_for_scope('hub')['rules']==[]
+    assert engine.routing_for_scope('node:node-us')['rules'][0]['ruleTag']=='user-us-only'
