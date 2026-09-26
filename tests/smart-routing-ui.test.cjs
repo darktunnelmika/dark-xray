@@ -128,13 +128,14 @@ test('Stage 7.3 live rollout modal keeps control and telemetry visible',()=>{
 });
 
 
-test('WARP lives inside Xray Outbounds with simple one-click controls',()=>{
-  assert.match(src,/function warpSimpleCard/);
+test('WARP lives inside Xray Outbounds as independent per-server profiles',()=>{
+  assert.match(src,/function warpProfilesPanel/);
+  assert.match(src,/function warpProfileRow/);
+  assert.match(src,/\/api\/warp\/profiles/);
   assert.match(src,/Create WARP/);
-  assert.match(src,/AI Only/);
-  assert.match(src,/All Traffic/);
-  assert.match(src,/Rotate IP/);
+  assert.match(src,/data-server/);
   assert.match(src,/xvwarpcreate/);
+  assert.match(src,/xvwarpedit/);
   assert.match(src,/xvwarptest/);
   assert.match(src,/xvwarpmode/);
   assert.match(src,/\/api\/warp\/status/);
@@ -142,6 +143,7 @@ test('WARP lives inside Xray Outbounds with simple one-click controls',()=>{
   assert.match(src,/\/api\/warp\/scan/);
   assert.match(src,/\/api\/warp\/rotate/);
   assert.match(src,/\/api\/warp\/mode/);
+  assert.match(src,/filter\(o=>String\(o\.tag\|\|''\)!=='warp'\)/);
   assert.doesNotMatch(src,/state\.page==='smart'/);
   const tabs=src.slice(src.indexOf('function xtabs()'),src.indexOf('function xcard'));
   assert.match(tabs,/Outbounds/);
@@ -149,14 +151,19 @@ test('WARP lives inside Xray Outbounds with simple one-click controls',()=>{
   assert.doesNotMatch(tabs,/Smart WARP/);
 });
 
-
-test('WARP Outbounds exposes compact Scan and Ping controls',()=>{
-  assert.match(src,/function warpSimpleCard/);
-  assert.match(src,/Scan WARP/);
-  assert.match(src,/Ping Test/);
-  assert.match(src,/warp-mode-compact/);
-  assert.match(src,/xv7warpscan/);
+test('WARP path scan lives inside Create/Edit for exactly one server',()=>{
+  assert.match(src,/async function scanSmartWarpPage/);
+  assert.match(src,/\/api\/warp\/endpoints\/scan/);
+  assert.match(src,/Only this server profile is scanned/);
+  assert.match(src,/xvwarpedit/);
   assert.match(src,/xvwarptest/);
+  assert.match(src,/xvwarprotate/);
+  assert.match(src,/await scanSmartWarpPage\(server\)/);
+  const rowStart=src.indexOf('function warpProfileRow');
+  const rowEnd=src.indexOf('function warpProfilesPanel',rowStart);
+  const rowBody=src.slice(rowStart,rowEnd);
+  assert.doesNotMatch(rowBody,/xv7warpscan/);
+  assert.doesNotMatch(rowBody,/Scan WARP/);
 });
 
 test('Routing main view is compact and keeps smart rollout cards out of sight',()=>{
