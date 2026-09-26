@@ -29,7 +29,7 @@ def b64url(raw:bytes)->str:return base64.urlsafe_b64encode(raw).decode().rstrip(
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--domain',required=True)
-    p.add_argument('--port',type=int,default=9443)
+    p.add_argument('--port',type=int,default=8443)
     p.add_argument('--data-address',default='')
     p.add_argument('--name',default='')
     p.add_argument('--node-id',default='')
@@ -43,7 +43,7 @@ def main():
     p.add_argument('--exempt',action='append',default=[])
     a=p.parse_args()
     if os.geteuid()!=0 or sys.platform!='linux':raise SystemExit('Linux root is required')
-    if sys.version_info<(3,11):raise SystemExit('Python 3.11+ required')
+    if sys.version_info<(3,10):raise SystemExit('Python 3.10+ required')
     if not Path('/run/systemd/system').exists():raise SystemExit('systemd host required')
     domain=str(a.domain).strip().lower()
     if not re.fullmatch(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}',domain):
@@ -70,10 +70,10 @@ def main():
         account=pwd.getpwnam('darkxray')
     if account.pw_uid==0:raise SystemExit('Service account must not be root')
 
-    APP.mkdir(parents=True,mode=0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
+    APP.mkdir(parents=True,mode=0o755);os.chmod(APP,0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
     needed_backend=['node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','smart_routing.py','smart_warp_probe.py','outbound_probe.py','warp_paths.py','node_updated.py','update_bridge.py']
     for name in needed_backend:shutil.copy2(ROOT/'backend'/name,APP/'backend'/name)
-    for name in ['fetch-core.py','import-core.py','update_node.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
+    for name in ['fetch-core.py','import-core.py','update_node.py','node_manager.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
     shutil.copy2(ROOT/'deploy'/'dark-xray-node.service',APP/'deploy'/'dark-xray-node.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-guard.service',APP/'deploy'/'dark-xray-node-guard.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-update.service',APP/'deploy'/'dark-xray-node-update.service')
@@ -95,9 +95,9 @@ def main():
             run([py,APP/'tools/fetch-core.py','--version',a.core_version,'--destination',core])
     run([core/'xray','version'])
 
-    CONF.mkdir(mode=0o750);os.chown(CONF,0,account.pw_gid)
-    DATA.mkdir(mode=0o700);os.chown(DATA,account.pw_uid,account.pw_gid)
-    tls=CONF/'tls';tls.mkdir(mode=0o750);os.chown(tls,0,account.pw_gid)
+    CONF.mkdir(mode=0o750);os.chmod(CONF,0o750);os.chown(CONF,0,account.pw_gid)
+    DATA.mkdir(mode=0o700);os.chmod(DATA,0o700);os.chown(DATA,account.pw_uid,account.pw_gid)
+    tls=CONF/'tls';tls.mkdir(mode=0o750);os.chmod(tls,0o750);os.chown(tls,0,account.pw_gid)
     cert=tls/'cert.pem';key=tls/'key.pem'
     cert.write_bytes(a.cert.resolve().read_bytes());key.write_bytes(a.key.resolve().read_bytes())
     os.chmod(cert,0o640);os.chmod(key,0o640);os.chown(cert,0,account.pw_gid);os.chown(key,0,account.pw_gid)
@@ -145,14 +145,10 @@ def main():
     os.chmod(SERVICE,0o644);os.chmod(GUARD_SERVICE,0o644);os.chmod(UPDATE_SERVICE,0o644)
     WRAPPER.write_text("""#!/usr/bin/env bash
 set -Eeuo pipefail
-case "${1:-status}" in
-  status) systemctl status dark-xray-node.service --no-pager -l ;;
-  logs) journalctl -u dark-xray-node.service -n "${2:-150}" --no-pager ;;
-  restart) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; systemctl restart dark-xray-node.service ;;
-  pair-info) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; if [[ -f /var/lib/dark-xray-node/pair-consumed ]]; then echo "DARK Node Pair Code has already been consumed."; else cat /var/lib/dark-xray-node/pair.json; fi ;;
-  config) [[ $EUID -eq 0 ]] || { echo "root required" >&2; exit 1; }; cat /etc/dark-xray-node/config.json ;;
-  *) echo "darknode {status|logs [N]|restart|pair-info|config}" ;;
-esac
+PY=/opt/dark-xray-node/.venv/bin/python
+MANAGER=/opt/dark-xray-node/tools/node_manager.py
+[[ -x "$PY" && -f "$MANAGER" ]] || { echo "DARK Node Manager is missing; run the Node updater/repair." >&2; exit 1; }
+exec "$PY" "$MANAGER" "$@"
 """,encoding='utf-8');os.chmod(WRAPPER,0o755)
 
     source_commit=str(a.source_commit or '').lower()
@@ -163,6 +159,9 @@ esac
             'ref':a.source_ref,'installed_at':time.time(),'role':'node-agent'}
     source_path=DATA/'installed-source.json';source_path.write_text(json.dumps(source,indent=2)+'\n')
     os.chmod(source_path,0o640);os.chown(source_path,0,account.pw_gid)
+    profile_path=DATA/'node-profile.json'
+    profile_path.write_text(json.dumps({'name':name,'priority':100,'failoverEnabled':True},indent=2)+'\n',encoding='utf-8')
+    os.chmod(profile_path,0o640);os.chown(profile_path,0,account.pw_gid)
 
     pair={'schema':1,'nodeId':node_id,'name':name,'origin':cfg['public_origin'],'token':token,
           'dataAddress':data_address,'priority':100,'failoverEnabled':True}

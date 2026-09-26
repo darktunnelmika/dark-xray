@@ -494,6 +494,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.replacements=replacements
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
+    from dark_restore import DarkRestore
+    dark_restore=DarkRestore(store,engine,nodes)
+    app.state.dark_restore=dark_restore
     public=urlsplit(config.public_origin);panel_path=config.panel_path
 
     @app.middleware('http')
@@ -501,7 +504,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         raw_path=request.scope.get('path','/') or '/'
         try:subscription_path=str(engine.section('subscription').get('path','/sub'))
         except Exception:subscription_path='/sub'
-        subscription_request=raw_path.startswith(subscription_path+'/')
+        raw_query=(request.scope.get('query_string') or b'').decode('latin1')
+        restore_match=dark_restore.match_request(request.headers.get('host',''),raw_path,raw_query)
+        if restore_match:
+            request.scope['path']='/restore/sub/'+restore_match['public_token']
+            raw_path=request.scope['path']
+        subscription_request=raw_path.startswith(subscription_path+'/') or raw_path.startswith('/restore/sub/')
         if subscription_path!='/sub' and raw_path.startswith('/sub/'):
             return JSONResponse({'detail':'Not Found'},404)
         stable_public=(raw_path=='/health' or subscription_request or raw_path.startswith('/node/api/'))
@@ -515,7 +523,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if not raw_path.startswith(panel_path+'/'):
                 return JSONResponse({'detail':'Not Found'},404)
             request.scope['path']=raw_path[len(panel_path):] or '/'
-        if request.headers.get('host','').lower()!=public.netloc.lower():
+        if not restore_match and request.headers.get('host','').lower()!=public.netloc.lower():
             return JSONResponse({'detail':'Unexpected Host'},400)
         origin=request.headers.get('origin')
         if origin and origin!=config.public_origin:
@@ -569,6 +577,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     from telegram_commerce import install_telegram_commerce
     install_telegram_commerce(app,store,auth,current,writable,manager.audit,manager)
+
+    from dark_restore import install_dark_restore
+    install_dark_restore(app,dark_restore,current,owner,writable,manager.audit)
 
     @app.get('/health')
     def health():return {'service':'DARK XRAY','version':VERSION,'mode':'standalone','test_engine':config.test_engine}
@@ -1679,7 +1690,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/unmanaged')
     def unmanaged(p:Principal=Depends(owner)):
         with store.lock:managed={r[0] for r in store.db.execute('SELECT email FROM managed_clients')}
-        return [{'email':r['email'],'inboundIds':r.get('inboundIds',[]),'enable':r.get('enable',False)} for r in engine.clients() if r['email'] not in managed]
+        return [{'email':r['email'],'inboundIds':r.get('inboundIds',[]),'enable':r.get('enable',False)} for r in engine.clients() if r['email'] not in managed and not str(r['email']).endswith('@dark.restore')]
     @app.get('/api/system')
     def system(p:Principal=Depends(current)):
         p.actor.require('system','read')
