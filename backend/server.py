@@ -1000,5 +1000,3 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 for row in old_client_rows:counts[int(row['source_inbound_id'])]=counts.get(int(row['source_inbound_id']),0)+1
                 items=[{'sourceInboundId':source,'remoteInboundId':int(row['remote_inbound_id']),'clients':counts.get(source,0)}
                        for source,row in sorted(old_mirrors.items())]
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
