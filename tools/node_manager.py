@@ -29,6 +29,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 APP=Path('/opt/dark-xray-node')
+CORE_ROOT=Path('/usr/local/lib/dark-xray')
 CONF=Path('/etc/dark-xray-node')
 DATA=Path('/var/lib/dark-xray-node')
 CONFIG=CONF/'config.json'
@@ -370,6 +371,13 @@ def diagnose():
 def repair():
     root();uid,gid=account()
     os.chmod(APP,0o755)
+    if CORE_ROOT.is_dir() and not CORE_ROOT.is_symlink():
+        os.chmod(CORE_ROOT,0o755)
+        for version_dir in CORE_ROOT.iterdir():
+            if version_dir.is_dir() and not version_dir.is_symlink():
+                os.chmod(version_dir,0o755)
+                binary=version_dir/'xray'
+                if binary.is_file() and not binary.is_symlink():os.chmod(binary,0o755)
     os.chmod(CONF,0o750);os.chown(CONF,0,gid)
     tls=CONF/'tls'
     if tls.exists():os.chmod(tls,0o750);os.chown(tls,0,gid)
