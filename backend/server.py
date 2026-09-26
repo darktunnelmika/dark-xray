@@ -1907,16 +1907,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         except OutboundProbeError as ex:
             raise HTTPException(409,'WARP endpoint scan failed: '+str(ex))
         items=[]
+        max_loss=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent'])
+        max_latency=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs'])
+        max_jitter=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs'])
         for row in raw:
             endpoint=tag_to_endpoint.get(str(row.get('tag') or ''),'')
             egress=row.get('egress') if isinstance(row.get('egress'),dict) else {}
-            ready=bool(row.get('success')) and bool(row.get('warpVerified'))
+            loss=float(row['lossPercent']) if row.get('lossPercent') is not None else 100.0
+            latency=float(row['delayMs']) if row.get('delayMs') is not None else 10**9
+            jitter=float(row['jitterMs']) if row.get('jitterMs') is not None else 10**9
+            ready=bool(row.get('success')) and bool(row.get('warpVerified')) and loss<=max_loss and latency<=max_latency and jitter<=max_jitter
             items.append({'endpoint':endpoint,'ready':ready,'delayMs':row.get('delayMs'),
                           'lossPercent':row.get('lossPercent'),'jitterMs':row.get('jitterMs'),
                           'country':egress.get('country',''),'colo':egress.get('colo',''),
                           'egressIp':egress.get('ip',''),'warp':egress.get('warp',''),
                           'error':row.get('error',''),'selected':endpoint==current})
-        items.sort(key=lambda x:(not x['ready'],float(x['lossPercent'] or 100),
+        items.sort(key=lambda x:(not x['ready'],
+                                 float(x['lossPercent']) if x['lossPercent'] is not None else 100.0,
                                  float(x['delayMs']) if x['delayMs'] is not None else 10**9,
                                  float(x['jitterMs']) if x['jitterMs'] is not None else 10**9))
         manager.audit(p.actor,p.actor.id,'warp.endpoint_scan',body.tag,
@@ -1937,8 +1944,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                     tags=[body.tag],attempts=2,timeout=5.0,trace=True)[0]
         except OutboundProbeError as ex:
             raise HTTPException(409,'Selected WARP endpoint test failed: '+str(ex))
-        if not checked.get('success') or not checked.get('warpVerified'):
-            raise HTTPException(409,'Selected endpoint did not verify as a working Cloudflare WARP path')
+        loss=float(checked['lossPercent']) if checked.get('lossPercent') is not None else 100.0
+        latency=float(checked['delayMs']) if checked.get('delayMs') is not None else 10**9
+        jitter=float(checked['jitterMs']) if checked.get('jitterMs') is not None else 10**9
+        if (not checked.get('success') or not checked.get('warpVerified')
+                or loss>float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent'])
+                or latency>float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs'])
+                or jitter>float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs'])):
+            raise HTTPException(409,'Selected endpoint did not pass the WARP safety gate')
         outbounds=engine.section('outbounds');updated=[]
         for item in outbounds:
             updated.append(candidate_out if isinstance(item,dict) and item.get('tag')==body.tag else item)
