@@ -1,5 +1,3 @@
-[Reading 1000 lines from start (total: 2161 lines, 1161 remaining)]
-
 #!/usr/bin/env python3
 """DARK XRAY standalone server. Own database, API, UI and direct Xray process.
 No proxy-panel installation or token is required. The default listener is loopback.
