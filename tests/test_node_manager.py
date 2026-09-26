@@ -70,8 +70,12 @@ def test_managed_state_blocks_pair_reset(tmp_path,monkeypatch):
     db.execute('INSERT INTO core_clients VALUES(1)')
     db.commit();db.close()
     old=m.TOKEN.read_text()
-    with pytest.raises(RuntimeError,match='managed state'):
+    with pytest.raises(RuntimeError) as caught:
         m.issue_pair('turkey')
+    message=str(caught.value)
+    assert 'managed state' in message
+    assert 'clean Node reinstall' in message
+    assert 'Remove assignments from the Hub first' not in message
     assert m.TOKEN.read_text()==old
 
 
