@@ -31,7 +31,7 @@ from node_runtime import NodeRuntime
 from smart_routing import rank_warp_paths
 from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
 from outbound_probe import OutboundProbeError,probe_outbounds
-from warp_cloudflare import WarpRegistrationError,validate_warp_endpoint,warp_endpoint_candidates
+from warp_paths import WarpPathError,validate_warp_endpoint,warp_endpoint_candidates
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -395,10 +395,10 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         clean=[]
         try:
             for value in raw_endpoints:
-                if not isinstance(value,str):raise WarpRegistrationError('Invalid WARP endpoint')
+                if not isinstance(value,str):raise WarpPathError('Invalid WARP endpoint')
                 endpoint=validate_warp_endpoint(value)
                 if endpoint not in clean:clean.append(endpoint)
-        except WarpRegistrationError as ex:
+        except WarpPathError as ex:
             raise HTTPException(400,str(ex))
         clones=[];mapping={}
         for index,endpoint in enumerate(clean):
