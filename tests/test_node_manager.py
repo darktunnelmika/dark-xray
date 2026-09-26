@@ -29,6 +29,7 @@ def setup_manager(tmp_path,monkeypatch):
     monkeypatch.setattr(nm,'root',lambda:None)
     monkeypatch.setattr(nm,'open_firewall',lambda port:None)
     monkeypatch.setattr(nm,'run',lambda *a,**k:SimpleNamespace(returncode=0,stdout='',stderr=''))
+    monkeypatch.setattr(nm,'local_health',lambda:{'service':'DARK XRAY NODE','agent_only':True})
     nm.CONFIG.write_text(json.dumps({
         'public_origin':'https://node.example.test:9443','public_address':'203.0.113.5',
         'bind_port':9443,'protected_ports':[22,9443,10085],
