@@ -273,7 +273,11 @@ def update_fixture(tmp_path,monkeypatch):
     def run(args,**kwargs):
         calls.append(tuple(map(str,args)));return SimpleNamespace(returncode=0,stdout='',stderr='')
     monkeypatch.setattr(updater,'run',run)
+    # Transaction tests run as the unprivileged CI user. The production wrapper
+    # installer is separately covered by root/install tests and intentionally
+    # enforces root:root ownership, so do not let this fixture touch /usr/local.
     monkeypatch.setattr(updater,'install_units',lambda:None)
+    monkeypatch.setattr(updater,'install_wrapper',lambda:None)
     return updater,app,data,src,tmp_path/'candidate-venv',transaction,calls
 
 
