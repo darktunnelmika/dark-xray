@@ -1,5 +1,3 @@
-[Reading 37 lines from start (total: 37 lines, 0 remaining)]
-
 import base64,json
 from test_standalone import env,IB
 
