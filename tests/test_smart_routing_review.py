@@ -336,8 +336,9 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
             tag=str(out.get('tag') or '')
             if selected and tag not in selected:continue
             endpoint=((out.get('settings') or {}).get('peers') or [{}])[0].get('endpoint','')
+            bad_loss=50.0 if endpoint=='162.159.192.5:4500' else 0.0
             rows.append({'tag':tag,'testable':True,'success':True,'delayMs':40.0,
-                         'lossPercent':0.0,'jitterMs':3.0,'error':'',
+                         'lossPercent':bad_loss,'jitterMs':3.0,'error':'',
                          'productionTrafficMutation':False,
                          'egress':{'ip':'104.28.1.1','country':'DE','colo':'FRA','warp':'on'} if trace else {},
                          'warpVerified':bool(trace)})
@@ -353,7 +354,11 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
     path_rows=paths.json()['items']
     assert len(path_rows)>=12
     assert len({x['endpoint'] for x in path_rows})==len(path_rows)
-    assert all(x['ready'] for x in path_rows)
+    assert path_rows[0]['lossPercent']==0.0
+    bad=next(x for x in path_rows if x['endpoint']=='162.159.192.5:4500')
+    assert bad['ready'] is False and bad['lossPercent']==50.0
+    rejected=client.post('/api/warp/endpoint',json={'tag':'warp','endpoint':bad['endpoint']})
+    assert rejected.status_code==409,rejected.text
     chosen=next(x['endpoint'] for x in path_rows if x['endpoint']=='162.159.192.5:500')
     selected=client.post('/api/warp/endpoint',json={'tag':'warp','endpoint':chosen})
     assert selected.status_code==200,selected.text
