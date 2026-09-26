@@ -70,7 +70,7 @@ def main():
         account=pwd.getpwnam('darkxray')
     if account.pw_uid==0:raise SystemExit('Service account must not be root')
 
-    APP.mkdir(parents=True,mode=0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
+    APP.mkdir(parents=True,mode=0o755);os.chmod(APP,0o755);(APP/'backend').mkdir();(APP/'tools').mkdir();(APP/'deploy').mkdir()
     needed_backend=['node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','guard_bridge.py','guardd.py','reality_scan.py','node_updated.py','update_bridge.py']
     for name in needed_backend:shutil.copy2(ROOT/'backend'/name,APP/'backend'/name)
     for name in ['fetch-core.py','import-core.py','update_node.py']:shutil.copy2(ROOT/'tools'/name,APP/'tools'/name)
@@ -95,9 +95,9 @@ def main():
             run([py,APP/'tools/fetch-core.py','--version',a.core_version,'--destination',core])
     run([core/'xray','version'])
 
-    CONF.mkdir(mode=0o750);os.chown(CONF,0,account.pw_gid)
-    DATA.mkdir(mode=0o700);os.chown(DATA,account.pw_uid,account.pw_gid)
-    tls=CONF/'tls';tls.mkdir(mode=0o750);os.chown(tls,0,account.pw_gid)
+    CONF.mkdir(mode=0o750);os.chmod(CONF,0o750);os.chown(CONF,0,account.pw_gid)
+    DATA.mkdir(mode=0o700);os.chmod(DATA,0o700);os.chown(DATA,account.pw_uid,account.pw_gid)
+    tls=CONF/'tls';tls.mkdir(mode=0o750);os.chmod(tls,0o750);os.chown(tls,0,account.pw_gid)
     cert=tls/'cert.pem';key=tls/'key.pem'
     cert.write_bytes(a.cert.resolve().read_bytes());key.write_bytes(a.key.resolve().read_bytes())
     os.chmod(cert,0o640);os.chmod(key,0o640);os.chown(cert,0,account.pw_gid);os.chown(key,0,account.pw_gid)
