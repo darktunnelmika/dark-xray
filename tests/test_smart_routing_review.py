@@ -388,10 +388,10 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
 
     all_=client.post('/api/warp/mode',json={'tag':'warp','mode':'all','adblock':True,'inboundIds':[inbound_id]})
     assert all_.status_code==200,all_.text
-    assert all_.json()['mode']=='all' and all_.json()['adblock'] is True
+    assert all_.json()['mode']=='all' and all_.json()['adblock'] is False
     rules=engine.section('routing')['rules']
-    assert rules[0]['ruleTag'].startswith('dark-smart-adblock-')
-    assert rules[1]['ruleTag'].startswith('dark-warp-all-')
+    assert rules[0]['ruleTag'].startswith('dark-warp-all-')
+    assert not [r for r in rules if str(r.get('ruleTag') or '').startswith('dark-smart-adblock-')]
 
     off=client.post('/api/warp/mode',json={'tag':'warp','mode':'off','adblock':False})
     assert off.status_code==200,off.text
@@ -687,3 +687,42 @@ def test_runtime_inbound_reports_direct_and_tunnel_coverage(stage7_env):
     node_profile=next(x for x in profiles.json()['items'] if x['serverId']=='node:node-us')
     assert node_profile['accessPaths']==['direct','tunnel']
     assert node_profile['availableInbounds'][0]['accessPaths']==['direct','tunnel']
+
+
+def test_adblock_is_independent_from_warp_profile_and_scope(stage7_env):
+    _store,engine,client=stage7_env
+    app=client.app
+    inbound_id=int(client.get('/api/inbounds').json()[0]['id'])
+    before=client.get('/api/warp/status',params={'server':'node:node-fr'}).json()
+    assert before['registered'] is False
+
+    enabled=client.post('/api/adblock/mode',json={
+        'enabled':True,'server':'node:node-fr','inboundIds':[inbound_id],
+    })
+    assert enabled.status_code==200,enabled.text
+    doc=enabled.json()
+    assert doc['enabled'] is True
+    assert doc['inboundIds']==[inbound_id]
+    assert doc['server']['id']=='node:node-fr'
+    assert doc['verification']['nodes']['node-fr']['ok'] is True
+
+    rules=engine.section('routing')['rules']
+    ad=next(r for r in rules if str(r.get('ruleTag') or '').startswith('dark-smart-adblock-'))
+    assert ad['outboundTag']=='block'
+    assert ad['inboundTag']==['stage7-in']
+    assert any(str(r.get('ruleTag') or '').startswith('dark-smart-adblock-')
+               for r in engine.routing_for_scope('node:node-fr')['rules'])
+    assert not any(str(r.get('ruleTag') or '').startswith('dark-smart-adblock-')
+                   for r in engine.routing_for_scope('node:node-us')['rules'])
+
+    after=client.get('/api/warp/status',params={'server':'node:node-fr'}).json()
+    assert after['registered'] is False
+    assert after['mode']=='off'
+
+    disabled=client.post('/api/adblock/mode',json={
+        'enabled':False,'server':'node:node-fr','inboundIds':[],
+    })
+    assert disabled.status_code==200,disabled.text
+    assert disabled.json()['enabled'] is False
+    assert not [r for r in engine.section('routing')['rules']
+                if str(r.get('ruleTag') or '').startswith('dark-smart-adblock-')]
