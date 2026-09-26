@@ -265,3 +265,23 @@ test('WARP server rows show heartbeat state, real server IP and Direct/Tunnel co
   assert.match(body,/accessPathLabel\(p\.accessPaths/);
   assert.doesNotMatch(body,/\(p\.addresses\|\|\[\]\)\[0\]/);
 });
+
+
+test('WARP row can connect its outbound directly to an inbound',()=>{
+  assert.match(src,/xvwarproute/);
+  assert.match(src,/L\('Route','روتینگ'\)/);
+  assert.match(src,/editRule\(null,String\(el\.dataset\.server\|\|''\),'out:warp'\)/);
+});
+
+test('Routing new rule defaults to a real server and supports preset WARP target',()=>{
+  const start=src.indexOf('async function editRule');
+  const end=src.indexOf('async function mutateRule',start);
+  const body=src.slice(start,end);
+  assert.match(body,/presetServer/);
+  assert.match(body,/presetTarget/);
+  assert.match(body,/defaultServer=profiles\.find\(x=>x\.registered\)\?\.serverId/);
+  assert.match(body,/currentScope=index==null\?\(presetServer\|\|defaultServer\)/);
+  assert.match(body,/currentTarget=presetTarget/);
+  assert.match(body,/Connect Outbound to Inbound/);
+  assert.match(body,/Outbound connected to inbound/);
+});
