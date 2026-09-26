@@ -233,6 +233,7 @@ class WarpMode(Model):
     mode:Literal['off','ai','all']='ai'
     adblock:bool=False
     server:str=Field(default='hub',min_length=1,max_length=160)
+    inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
 class WarpProbeRequest(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
     server:str=Field(default='hub',min_length=1,max_length=160)
@@ -1831,6 +1832,35 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def runtime_targets(p:Principal=Depends(owner)):
         return {'items':_runtime_targets()}
 
+    def _runtime_inbound_rows(scope:str)->list[dict]:
+        value=str(scope or 'hub').strip()
+        target=None if value=='all' else _runtime_target(value,require_online=False)
+        fleet=nodes.list()
+        node_ids=[str(n.get('id')) for n in fleet if n.get('id')]
+        rows=[]
+        for inbound in engine.inbounds():
+            if not inbound.get('enable',True):continue
+            inbound_id=int(inbound['id']);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+            deployed=[]
+            if meta.get('deployLocal',True) is not False:deployed.append('hub')
+            assigned=set(nodes.inbound_assignments(inbound_id))
+            deployed.extend('node:'+node_id for node_id in node_ids if node_id in assigned)
+            if target is not None and target['id'] not in deployed:continue
+            if target is None and not deployed:continue
+            rows.append({'id':inbound_id,'tag':str(inbound.get('tag') or ''),
+                         'remark':str(inbound.get('remark') or inbound.get('tag') or ('Inbound '+str(inbound_id))),
+                         'protocol':str(inbound.get('protocol') or ''),
+                         'port':int(inbound.get('port') or 0),
+                         'servers':deployed})
+        return rows
+
+    @app.get('/api/runtime-inbounds')
+    def runtime_inbounds(server:str='hub',p:Principal=Depends(owner)):
+        value=str(server or 'hub').strip()
+        if value!='all':target=_runtime_target(value,require_online=False)
+        else:target={'id':'all','kind':'all','name':'All servers','location':'All','online':True}
+        return {'server':target,'items':_runtime_inbound_rows(value)}
+
     @app.get('/api/routing/scopes')
     def routing_scopes(p:Principal=Depends(owner)):
         with store.lock:
@@ -1877,16 +1907,39 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 return item
         return None
 
+    def _warp_inbound_scope(target:dict,inbound_ids:list[int])->tuple[list[int],list[str]]:
+        rows=_runtime_inbound_rows(str(target['id']))
+        if not rows:raise HTTPException(409,'Selected server has no enabled deployed inbounds')
+        by_id={int(row['id']):row for row in rows}
+        clean=[]
+        for raw in inbound_ids or []:
+            inbound_id=int(raw)
+            if inbound_id not in clean:clean.append(inbound_id)
+        if clean:
+            missing=[x for x in clean if x not in by_id]
+            if missing:raise HTTPException(409,'Selected inbound is not deployed on the selected server: '+','.join(map(str,missing)))
+            selected=[by_id[x] for x in clean]
+        else:
+            selected=rows
+            clean=[int(row['id']) for row in selected]
+        tags=[str(row['tag']) for row in selected if str(row.get('tag') or '')]
+        if not tags:raise HTTPException(409,'Selected server inbounds have no Xray tags')
+        return clean,tags
+
     def _warp_status(tag:str='warp')->dict:
         outbound=_warp_outbound(tag)
         routing=engine.section('routing');rules=routing.get('rules',[]) if isinstance(routing,dict) else []
-        mode='off';adblock=False
+        mode='off';adblock=False;active_rule=None
         for rule in rules if isinstance(rules,list) else []:
             if not isinstance(rule,dict):continue
             rt=str(rule.get('ruleTag') or '')
-            if rt=='dark-warp-all' and rule.get('outboundTag')==tag:mode='all'
-            elif rt in {'dark-warp-ai','dark-smart-warp-ai'} and rule.get('outboundTag')==tag and mode!='all':mode='ai'
-            if rt=='dark-smart-adblock' and rule.get('outboundTag')=='block':adblock=True
+            if rt=='dark-warp-all' and rule.get('outboundTag')==tag:
+                mode='all';active_rule=rule
+            elif rt in {'dark-warp-ai','dark-smart-warp-ai'} and rule.get('outboundTag')==tag and mode!='all':
+                mode='ai';active_rule=rule
+            if rt=='dark-smart-adblock' and rule.get('outboundTag')=='block':
+                adblock=True
+                if active_rule is None:active_rule=rule
         settings=outbound.get('settings',{}) if isinstance(outbound,dict) and isinstance(outbound.get('settings'),dict) else {}
         peer=(settings.get('peers') or [{}])[0] if isinstance(settings.get('peers'),list) else {}
         scope_tag='dark-warp-all' if mode=='all' else 'dark-warp-ai' if mode=='ai' else 'dark-smart-adblock' if adblock else ''
@@ -1895,8 +1948,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             with store.lock:
                 row=store.db.execute('SELECT scope FROM routing_rule_scopes WHERE rule_tag=?',(scope_tag,)).fetchone()
             if row:scope=str(row['scope'])
+        inbound_tags=[str(x) for x in (active_rule or {}).get('inboundTag',[]) if isinstance(x,str) and x]
+        by_tag={str(x.get('tag') or ''):int(x['id']) for x in engine.inbounds() if isinstance(x,dict) and x.get('tag')}
+        inbound_ids=[by_tag[x] for x in inbound_tags if x in by_tag]
+        available=_runtime_inbound_rows(scope) if scope in {x['id'] for x in _runtime_targets()} else []
+        available_ids=[int(x['id']) for x in available]
+        all_inbounds=bool(inbound_ids and set(inbound_ids)==set(available_ids)) if available_ids else False
         return {'registered':bool(outbound and str(outbound.get('protocol','')).lower()=='wireguard'),
-                'tag':tag,'mode':mode,'adblock':adblock,'server':scope,'endpoint':str(peer.get('endpoint') or '') if isinstance(peer,dict) else '',
+                'tag':tag,'mode':mode,'adblock':adblock,'server':scope,
+                'inboundIds':inbound_ids,'inboundTags':inbound_tags,'allInbounds':all_inbounds,
+                'endpoint':str(peer.get('endpoint') or '') if isinstance(peer,dict) else '',
                 'addresses':[str(x) for x in settings.get('address',[]) if isinstance(x,str)],
                 'runtimeDirty':bool(engine.runtime_state().get('dirty')),'secretExposed':False}
 
@@ -2068,7 +2129,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:
             active=store.db.execute("SELECT id FROM smart_routing_rollouts WHERE state='running' LIMIT 1").fetchone()
         if active:raise HTTPException(409,'A Smart Routing rollout is running; finish or abort it first')
-        safety=None
+        safety=None;selected_inbound_ids=[];inbound_tags=[]
+        if body.mode!='off' or body.adblock:
+            selected_inbound_ids,inbound_tags=_warp_inbound_scope(target,body.inboundIds)
         if body.mode!='off':
             try:
                 if target['kind']=='hub':
@@ -2093,11 +2156,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if not block or str(block.get('protocol','')).lower()!='blackhole':
                 raise HTTPException(409,"Smart Adblock requires blackhole outbound 'block'")
             from smart_routing import ADBLOCK_DOMAIN_MATCHERS
-            prepend.append({'type':'field','ruleTag':'dark-smart-adblock','domain':ADBLOCK_DOMAIN_MATCHERS[:],'outboundTag':'block'})
+            prepend.append({'type':'field','ruleTag':'dark-smart-adblock','domain':ADBLOCK_DOMAIN_MATCHERS[:],'inboundTag':inbound_tags[:],'outboundTag':'block'})
         if body.mode=='ai':
-            prepend.append({'type':'field','ruleTag':'dark-warp-ai','domain':AI_DOMAIN_MATCHERS[:],'outboundTag':body.tag})
+            prepend.append({'type':'field','ruleTag':'dark-warp-ai','domain':AI_DOMAIN_MATCHERS[:],'inboundTag':inbound_tags[:],'outboundTag':body.tag})
         elif body.mode=='all':
-            prepend.append({'type':'field','ruleTag':'dark-warp-all','network':'tcp,udp','outboundTag':body.tag})
+            prepend.append({'type':'field','ruleTag':'dark-warp-all','network':'tcp,udp','inboundTag':inbound_tags[:],'outboundTag':body.tag})
         routing['rules']=prepend+base
         planned_scope=target['id']
         hub_routing=engine.filter_routing_for_scope(routing,'hub')
@@ -2122,13 +2185,32 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if target['kind']=='node':sync_ids.add(target['nodeId'])
         old_scope=str(previous.get('server') or '')
         if previous.get('mode')!='off' and old_scope.startswith('node:'):sync_ids.add(old_scope[5:])
+        verification={'hub':None,'nodes':{}}
         for node_id in sorted(sync_ids):
             try:sync_result[node_id]=sync_node_assignments(node_id)
             except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP routing saved but Node sync failed: '+str(ex))
+            desired=nodes.desired_state(node_id,include_payload=False)
+            try:remote=nodes.probe(node_id,timeout=8.0)
+            except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP routing sync completed but Node verification failed: '+str(ex))
+            core=(remote.get('health') or {}).get('core') or {}
+            ok=not desired.get('pending') and not desired.get('last_error') and core.get('state')=='running' and not core.get('dirty')
+            verification['nodes'][node_id]={'ok':ok,'pending':bool(desired.get('pending')),
+                'lastError':str(desired.get('last_error') or ''),'coreState':str(core.get('state') or ''),
+                'coreDirty':bool(core.get('dirty')),'latencyMs':remote.get('latency_ms')}
+            if not ok:raise HTTPException(409,'WARP routing did not verify on Node '+node_id)
+        hub_state=engine.runtime_state()
+        hub_ok=hub_state.get('state')=='running' and not hub_state.get('dirty') and not hub_state.get('last_error')
+        verification['hub']={'ok':hub_ok,'state':hub_state.get('state'),'dirty':bool(hub_state.get('dirty')),
+                             'lastError':str(hub_state.get('last_error') or '')}
+        if target['kind']=='hub' and not hub_ok:raise HTTPException(409,'WARP routing did not verify on Hub')
         manager.audit(p.actor,p.actor.id,'warp.mode',body.tag,
-                      'mode='+body.mode+'; adblock='+str(body.adblock)+'; server='+planned_scope)
-        return _warp_status(body.tag)|{'applied':True,'safety':safety,'runtime':runtime,
-                                       'nodeSync':sync_result,'server':target}
+                      'mode='+body.mode+'; adblock='+str(body.adblock)+'; server='+planned_scope+
+                      '; inboundIds='+','.join(map(str,selected_inbound_ids)))
+        status=_warp_status(body.tag)
+        if body.mode!='off' and set(status.get('inboundIds') or [])!=set(selected_inbound_ids):
+            raise HTTPException(409,'WARP routing saved but inbound scope verification failed')
+        return status|{'applied':True,'safety':safety,'runtime':runtime,
+                       'nodeSync':sync_result,'server':target,'verification':verification}
 
     @app.get('/api/smart-routing/plan')
     def smart_routing_plan(p:Principal=Depends(owner)):
