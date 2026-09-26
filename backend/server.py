@@ -228,6 +228,7 @@ class SmartWarpScan(Model):
     timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
 class WarpCreate(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
+    server:str=Field(default='hub',min_length=1,max_length=160)
 class WarpMode(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
     mode:Literal['off','ai','all']='ai'
@@ -299,6 +300,87 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     node_reset_lock=threading.RLock()
     stage7_rollout_lock=threading.RLock();stage7_rollout_threads={}
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
+    def _warp_profile(scope:str)->dict|None:
+        value=str(scope or 'hub').strip()
+        with store.lock:
+            row=store.db.execute('SELECT outbound_json FROM warp_profiles WHERE scope=?',(value,)).fetchone()
+        if not row:return None
+        try:outbound=json.loads(row['outbound_json'])
+        except Exception:return None
+        return outbound if isinstance(outbound,dict) else None
+
+    def _warp_profile_save(scope:str,outbound:dict,device_id:str=''):
+        value=str(scope or 'hub').strip();now=time.time()
+        body=copy.deepcopy(outbound);body['tag']='warp'
+        with store.transaction() as db:
+            db.execute('''INSERT INTO warp_profiles(scope,outbound_json,device_id,updated_at) VALUES(?,?,?,?)
+                          ON CONFLICT(scope) DO UPDATE SET outbound_json=excluded.outbound_json,
+                          device_id=excluded.device_id,updated_at=excluded.updated_at''',
+                       (value,json.dumps(body,separators=(',',':')),str(device_id or '')[:256],now))
+        return body
+
+    def _warp_assignment(scope:str)->dict:
+        value=str(scope or 'hub').strip()
+        with store.lock:row=store.db.execute('SELECT * FROM warp_assignments WHERE scope=?',(value,)).fetchone()
+        if not row:return {'scope':value,'mode':'off','adblock':False,'inboundIds':[],'updatedAt':0.0}
+        try:ids=[int(x) for x in json.loads(row['inbound_ids'] or '[]')]
+        except Exception:ids=[]
+        return {'scope':value,'mode':str(row['mode'] or 'off'),'adblock':bool(row['adblock']),
+                'inboundIds':ids,'updatedAt':float(row['updated_at'] or 0)}
+
+    def _warp_assignments()->list[dict]:
+        with store.lock:rows=store.db.execute('SELECT * FROM warp_assignments ORDER BY scope').fetchall()
+        out=[]
+        for row in rows:
+            try:ids=[int(x) for x in json.loads(row['inbound_ids'] or '[]')]
+            except Exception:ids=[]
+            out.append({'scope':str(row['scope']),'mode':str(row['mode'] or 'off'),
+                        'adblock':bool(row['adblock']),'inboundIds':ids,'updatedAt':float(row['updated_at'] or 0)})
+        return out
+
+    def _warp_assignment_save(scope:str,mode:str,adblock:bool,inbound_ids:list[int]):
+        value=str(scope or 'hub').strip();ids=list(dict.fromkeys(int(x) for x in inbound_ids))
+        with store.transaction() as db:
+            db.execute('''INSERT INTO warp_assignments(scope,mode,adblock,inbound_ids,updated_at) VALUES(?,?,?,?,?)
+                          ON CONFLICT(scope) DO UPDATE SET mode=excluded.mode,adblock=excluded.adblock,
+                          inbound_ids=excluded.inbound_ids,updated_at=excluded.updated_at''',
+                       (value,str(mode),int(bool(adblock)),json.dumps(ids),time.time()))
+        return _warp_assignment(value)
+
+    def _warp_rule_tag(kind:str,scope:str)->str:
+        digest=hashlib.sha256(str(scope).encode()).hexdigest()[:10]
+        return 'dark-warp-'+kind+'-'+digest if kind in {'ai','all'} else 'dark-smart-adblock-'+digest
+
+    def _warp_migrate_legacy():
+        hub_profile=_warp_profile('hub')
+        global_warp=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='warp'
+                          and str(x.get('protocol','')).lower()=='wireguard'),None)
+        if hub_profile is None and global_warp is not None:
+            _warp_profile_save('hub',global_warp,'legacy-hub')
+        with store.lock:
+            count=store.db.execute('SELECT COUNT(*) FROM warp_assignments').fetchone()[0]
+        if count:return
+        routing=engine.section('routing');rules=routing.get('rules',[]) if isinstance(routing,dict) else []
+        by_tag={str(x.get('tag') or ''):int(x['id']) for x in engine.inbounds() if isinstance(x,dict) and x.get('tag')}
+        merged={}
+        for rule in rules if isinstance(rules,list) else []:
+            if not isinstance(rule,dict):continue
+            rt=str(rule.get('ruleTag') or '')
+            if rt not in {'dark-warp-ai','dark-warp-all','dark-smart-warp-ai','dark-smart-adblock'}:continue
+            with store.lock:sr=store.db.execute('SELECT scope FROM routing_rule_scopes WHERE rule_tag=?',(rt,)).fetchone()
+            scope=str(sr['scope']) if sr else 'hub'
+            row=merged.setdefault(scope,{'mode':'off','adblock':False,'inboundIds':[]})
+            if rt=='dark-warp-all':row['mode']='all'
+            elif rt in {'dark-warp-ai','dark-smart-warp-ai'} and row['mode']!='all':row['mode']='ai'
+            elif rt=='dark-smart-adblock':row['adblock']=True
+            for tag in rule.get('inboundTag',[]) if isinstance(rule.get('inboundTag'),list) else []:
+                if str(tag) in by_tag and by_tag[str(tag)] not in row['inboundIds']:row['inboundIds'].append(by_tag[str(tag)])
+        for scope,row in merged.items():
+            _warp_assignment_save(scope,row['mode'],row['adblock'],row['inboundIds'])
+            if scope.startswith('node:') and _warp_profile(scope) is None and global_warp is not None:
+                _warp_profile_save(scope,global_warp,'legacy-clone')
+    _warp_migrate_legacy()
+
     def apply_global_security(_node_id:str='',_result:dict|None=None):
         result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified))
         changed=list(result.get('changed') or [])
@@ -969,6 +1051,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                              'globalIpBlocked':bool(row.get('global_ip_block')),
                              'globalDeviceBlocked':bool(row.get('global_device_block'))})
         sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
+        sections['outbounds']=[copy.deepcopy(x) for x in sections['outbounds']
+                               if not (isinstance(x,dict) and str(x.get('tag') or '')=='warp')]
+        node_warp=_warp_profile('node:'+node_id)
+        if node_warp is not None:sections['outbounds'].append(copy.deepcopy(node_warp))
         override=_stage7_rollout_override(node_id)
         roles=stage7_node_roles();warp_nodes=set(roles['warpNodeIds']);adblock_nodes=set(roles['adblockNodeIds'])
         if override:
@@ -1901,12 +1987,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                       'server='+target['id']+'; isolated temporary Xray; production traffic unchanged')
         return {'items':items,'server':target,'productionTrafficMutation':False}
 
-    def _warp_outbound(tag:str)->dict|None:
-        for item in engine.section('outbounds'):
-            if isinstance(item,dict) and str(item.get('tag') or '')==tag:
-                return item
-        return None
-
     def _warp_inbound_scope(target:dict,inbound_ids:list[int])->tuple[list[int],list[str]]:
         rows=_runtime_inbound_rows(str(target['id']))
         if not rows:raise HTTPException(409,'Selected server has no enabled deployed inbounds')
@@ -1926,105 +2006,191 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not tags:raise HTTPException(409,'Selected server inbounds have no Xray tags')
         return clean,tags
 
-    def _warp_status(tag:str='warp')->dict:
-        outbound=_warp_outbound(tag)
-        routing=engine.section('routing');rules=routing.get('rules',[]) if isinstance(routing,dict) else []
-        mode='off';adblock=False;active_rule=None
-        for rule in rules if isinstance(rules,list) else []:
-            if not isinstance(rule,dict):continue
-            rt=str(rule.get('ruleTag') or '')
-            if rt=='dark-warp-all' and rule.get('outboundTag')==tag:
-                mode='all';active_rule=rule
-            elif rt in {'dark-warp-ai','dark-smart-warp-ai'} and rule.get('outboundTag')==tag and mode!='all':
-                mode='ai';active_rule=rule
-            if rt=='dark-smart-adblock' and rule.get('outboundTag')=='block':
-                adblock=True
-                if active_rule is None:active_rule=rule
-        settings=outbound.get('settings',{}) if isinstance(outbound,dict) and isinstance(outbound.get('settings'),dict) else {}
-        peer=(settings.get('peers') or [{}])[0] if isinstance(settings.get('peers'),list) else {}
-        scope_tag='dark-warp-all' if mode=='all' else 'dark-warp-ai' if mode=='ai' else 'dark-smart-adblock' if adblock else ''
-        scope='hub'
-        if scope_tag:
-            with store.lock:
-                row=store.db.execute('SELECT scope FROM routing_rule_scopes WHERE rule_tag=?',(scope_tag,)).fetchone()
-            if row:scope=str(row['scope'])
-        inbound_tags=[str(x) for x in (active_rule or {}).get('inboundTag',[]) if isinstance(x,str) and x]
-        by_tag={str(x.get('tag') or ''):int(x['id']) for x in engine.inbounds() if isinstance(x,dict) and x.get('tag')}
-        inbound_ids=[by_tag[x] for x in inbound_tags if x in by_tag]
-        available=_runtime_inbound_rows(scope) if scope in {x['id'] for x in _runtime_targets()} else []
-        available_ids=[int(x['id']) for x in available]
-        all_inbounds=bool(inbound_ids and set(inbound_ids)==set(available_ids)) if available_ids else False
-        return {'registered':bool(outbound and str(outbound.get('protocol','')).lower()=='wireguard'),
-                'tag':tag,'mode':mode,'adblock':adblock,'server':scope,
-                'inboundIds':inbound_ids,'inboundTags':inbound_tags,'allInbounds':all_inbounds,
-                'endpoint':str(peer.get('endpoint') or '') if isinstance(peer,dict) else '',
-                'addresses':[str(x) for x in settings.get('address',[]) if isinstance(x,str)],
-                'runtimeDirty':bool(engine.runtime_state().get('dirty')),'secretExposed':False}
+    def _warp_managed_tag(tag:str)->bool:
+        value=str(tag or '')
+        return (value in {'dark-warp-ai','dark-warp-all','dark-smart-warp-ai','dark-smart-adblock'}
+                or value.startswith('dark-warp-ai-') or value.startswith('dark-warp-all-')
+                or value.startswith('dark-smart-adblock-'))
 
-    def _warp_register_saved(tag:str)->dict:
-        outbounds=engine.section('outbounds');existing=next((x for x in outbounds if isinstance(x,dict) and x.get('tag')==tag),None)
-        if existing and str(existing.get('protocol','')).lower()!='wireguard':
-            raise HTTPException(409,'The selected WARP tag is already used by a non-WireGuard outbound')
-        try:registered=register_cloudflare_warp(tag=tag)
-        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
-        replacement=registered['outbound'];updated=[];replaced=False
-        for item in outbounds:
-            if isinstance(item,dict) and item.get('tag')==tag:
-                updated.append(replacement);replaced=True
-            else:updated.append(item)
-        if not replaced:updated.append(replacement)
-        candidate=engine.build_config();candidate['outbounds']=copy.deepcopy(updated);engine.validate(candidate)
-        engine.save_section('outbounds',updated)
-        for node in nodes.list():
-            try:ensure_node_desired_state(str(node['id']))
+    def _warp_assignment_rules(override:dict|None=None)->tuple[dict,dict]:
+        assignments={str(x['scope']):x for x in _warp_assignments()}
+        if override is not None:assignments[str(override['scope'])]=copy.deepcopy(override)
+        routing=copy.deepcopy(engine.section('routing'));rules=routing.get('rules',[])
+        if not isinstance(rules,list):rules=[]
+        base=[r for r in rules if not (isinstance(r,dict) and _warp_managed_tag(str(r.get('ruleTag') or '')))]
+        generated=[];scopes={}
+        from smart_routing import ADBLOCK_DOMAIN_MATCHERS
+        for scope,row in sorted(assignments.items()):
+            mode=str(row.get('mode') or 'off');adblock=bool(row.get('adblock'))
+            if mode=='off' and not adblock:continue
+            available={int(x['id']):x for x in _runtime_inbound_rows(scope)}
+            ids=[int(x) for x in row.get('inboundIds',[]) if int(x) in available]
+            tags=[str(available[x].get('tag') or '') for x in ids if str(available[x].get('tag') or '')]
+            if not tags:continue
+            if adblock:
+                rt=_warp_rule_tag('adblock',scope)
+                generated.append({'type':'field','ruleTag':rt,'domain':ADBLOCK_DOMAIN_MATCHERS[:],
+                                  'inboundTag':tags[:],'outboundTag':'block'});scopes[rt]=scope
+            if mode=='ai':
+                rt=_warp_rule_tag('ai',scope)
+                generated.append({'type':'field','ruleTag':rt,'domain':AI_DOMAIN_MATCHERS[:],
+                                  'inboundTag':tags[:],'outboundTag':'warp'});scopes[rt]=scope
+            elif mode=='all':
+                rt=_warp_rule_tag('all',scope)
+                generated.append({'type':'field','ruleTag':rt,'network':'tcp,udp',
+                                  'inboundTag':tags[:],'outboundTag':'warp'});scopes[rt]=scope
+        routing['rules']=generated+base
+        return routing,scopes
+
+    def _warp_commit_assignment(row:dict,routing:dict,scopes:dict):
+        with store.transaction() as db:
+            db.execute("""INSERT INTO warp_assignments(scope,mode,adblock,inbound_ids,updated_at)
+                          VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
+                          mode=excluded.mode,adblock=excluded.adblock,
+                          inbound_ids=excluded.inbound_ids,updated_at=excluded.updated_at""",
+                       (str(row['scope']),str(row.get('mode') or 'off'),int(bool(row.get('adblock'))),
+                        json.dumps([int(x) for x in row.get('inboundIds',[])]),time.time()))
+            db.execute("INSERT INTO core_sections(name,body) VALUES('routing',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",
+                       (json.dumps(routing),))
+            for old in db.execute('SELECT rule_tag FROM routing_rule_scopes').fetchall():
+                if _warp_managed_tag(str(old['rule_tag'])):
+                    db.execute('DELETE FROM routing_rule_scopes WHERE rule_tag=?',(old['rule_tag'],))
+            for tag,scope in scopes.items():
+                db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?)',
+                           (tag,scope,time.time()))
+
+    def _warp_profile_public(scope:str)->dict:
+        target=_runtime_target(scope,require_online=False)
+        outbound=_warp_profile(scope);assignment=_warp_assignment(scope)
+        settings=outbound.get('settings',{}) if isinstance(outbound,dict) and isinstance(outbound.get('settings'),dict) else {}
+        peers=settings.get('peers') if isinstance(settings,dict) else []
+        peer=peers[0] if isinstance(peers,list) and peers and isinstance(peers[0],dict) else {}
+        available=_runtime_inbound_rows(scope)
+        available_ids=[int(x['id']) for x in available]
+        selected=[int(x) for x in assignment.get('inboundIds',[])]
+        return {'registered':bool(outbound and str(outbound.get('protocol','')).lower()=='wireguard'),
+                'tag':'warp','mode':str(assignment.get('mode') or 'off'),'adblock':bool(assignment.get('adblock')),
+                'server':target,'serverId':scope,'inboundIds':selected,
+                'allInbounds':bool(available_ids and set(selected)==set(available_ids)),
+                'endpoint':str(peer.get('endpoint') or ''),
+                'addresses':[str(x) for x in settings.get('address',[]) if isinstance(x,str)],
+                'availableInbounds':available,'secretExposed':False}
+
+    def _warp_profiles_public()->list[dict]:
+        return [_warp_profile_public(str(t['id'])) for t in _runtime_targets()]
+
+    def _warp_install_profile(scope:str,outbound:dict,device_id:str='')->dict:
+        target=_runtime_target(scope);profile=copy.deepcopy(outbound);profile['tag']='warp'
+        if target['kind']=='hub':
+            current=engine.section('outbounds')
+            updated=[copy.deepcopy(x) for x in current if not (isinstance(x,dict) and str(x.get('tag') or '')=='warp')]
+            updated.append(profile)
+            candidate=engine.build_config();candidate['outbounds']=copy.deepcopy(updated);engine.validate(candidate)
+            def commit():
+                with store.transaction() as db:
+                    db.execute("""INSERT INTO warp_profiles(scope,outbound_json,device_id,updated_at) VALUES(?,?,?,?)
+                                  ON CONFLICT(scope) DO UPDATE SET outbound_json=excluded.outbound_json,
+                                  device_id=excluded.device_id,updated_at=excluded.updated_at""",
+                               ('hub',json.dumps(profile,separators=(',',':')),str(device_id or '')[:256],time.time()))
+                    db.execute("INSERT INTO core_sections(name,body) VALUES('outbounds',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",
+                               (json.dumps(updated),))
+            runtime=engine.apply_config(candidate,start=True,force=True,after_success=commit)
+            state=engine.runtime_state()
+            if state.get('state')!='running' or state.get('dirty') or state.get('last_error'):
+                raise HTTPException(409,'Hub WARP profile installed but runtime verification failed')
+            return {'server':target,'runtime':runtime,'verification':{'ok':True,'state':'running','dirty':False}}
+        old=_warp_profile(scope)
+        _warp_profile_save(scope,profile,device_id)
+        try:
+            state=ensure_node_desired_state(target['nodeId'])
+            sync=sync_node_assignments(target['nodeId'])
+            desired=nodes.desired_state(target['nodeId'],include_payload=False)
+            remote=nodes.probe(target['nodeId'],timeout=8.0);core=(remote.get('health') or {}).get('core') or {}
+            ok=not desired.get('pending') and not desired.get('last_error') and core.get('state')=='running' and not core.get('dirty')
+            if not ok:raise PolicyError('Node WARP profile verification failed')
+            return {'server':target,'nodeSync':sync,'verification':{'ok':True,'pending':False,
+                    'coreState':'running','coreDirty':False,'latencyMs':remote.get('latency_ms')}}
+        except Exception as ex:
+            try:
+                if old is None:
+                    with store.transaction() as db:db.execute('DELETE FROM warp_profiles WHERE scope=?',(scope,))
+                else:_warp_profile_save(scope,old,'rollback')
+                ensure_node_desired_state(target['nodeId']);sync_node_assignments(target['nodeId'])
             except Exception:pass
-        return registered
+            if isinstance(ex,HTTPException):raise
+            raise HTTPException(409,'Node WARP profile install failed: '+str(ex)) from ex
+
+    def _warp_status(tag:str='warp',server:str='hub')->dict:
+        if tag!='warp':raise HTTPException(400,'Managed WARP tag must be warp')
+        return _warp_profile_public(str(server or 'hub'))
 
     @app.get('/api/warp/status')
-    def warp_status(tag:str='warp',p:Principal=Depends(owner)):
+    def warp_status(tag:str='warp',server:str='hub',p:Principal=Depends(owner)):
         if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',tag):raise HTTPException(400,'Invalid WARP tag')
-        return _warp_status(tag)
+        return _warp_status(tag,server)
+
+    @app.get('/api/warp/profiles')
+    def warp_profiles(p:Principal=Depends(owner)):
+        return {'items':_warp_profiles_public()}
 
     @app.post('/api/warp/create')
     def warp_create(body:WarpCreate,p:Principal=Depends(owner)):
-        writable();before=bool(_warp_outbound(body.tag));result=_warp_register_saved(body.tag)
-        manager.audit(p.actor,p.actor.id,'warp.rotate' if before else 'warp.create',body.tag,
-                      'Cloudflare WARP WireGuard profile saved; runtime unchanged until activation')
-        return _warp_status(body.tag)|{'created':not before,'rotated':before,'deviceId':result['deviceId'],
-                                       'runtimeMutation':False,'activationRequired':True}
+        writable();target=_runtime_target(body.server);before=bool(_warp_profile(target['id']))
+        try:registered=register_cloudflare_warp(tag='warp')
+        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
+        installed=_warp_install_profile(target['id'],registered['outbound'],registered['deviceId'])
+        manager.audit(p.actor,p.actor.id,'warp.rotate' if before else 'warp.create',target['id'],
+                      'Independent Cloudflare WARP profile installed on selected runtime')
+        return _warp_profile_public(target['id'])|{'created':not before,'rotated':before,
+               'deviceId':registered['deviceId'],'runtimeMutation':True,'installation':installed}
 
     @app.post('/api/warp/rotate')
     def warp_rotate(body:WarpCreate,p:Principal=Depends(owner)):
-        writable()
-        if not _warp_outbound(body.tag):raise HTTPException(404,'WARP outbound not found')
-        result=_warp_register_saved(body.tag)
-        manager.audit(p.actor,p.actor.id,'warp.rotate',body.tag,'New Cloudflare WARP profile saved; activation required')
-        return _warp_status(body.tag)|{'rotated':True,'deviceId':result['deviceId'],
-                                       'runtimeMutation':False,'activationRequired':True}
+        writable();target=_runtime_target(body.server)
+        if not _warp_profile(target['id']):raise HTTPException(404,'WARP profile not found on selected server')
+        try:registered=register_cloudflare_warp(tag='warp')
+        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
+        installed=_warp_install_profile(target['id'],registered['outbound'],registered['deviceId'])
+        manager.audit(p.actor,p.actor.id,'warp.rotate',target['id'],'Independent WARP profile rotated on selected runtime')
+        return _warp_profile_public(target['id'])|{'rotated':True,'deviceId':registered['deviceId'],
+                                                   'runtimeMutation':True,'installation':installed}
 
     @app.post('/api/warp/scan')
     def warp_scan(body:WarpProbeRequest,p:Principal=Depends(owner)):
-        target=_runtime_target(body.server);outbound=_warp_outbound(body.tag)
+        target=_runtime_target(body.server);outbound=_warp_profile(target['id'])
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
-            raise HTTPException(409,'Create the WARP outbound first')
+            raise HTTPException(409,'Create the WARP profile on the selected server first')
+        settings=outbound.get('settings') if isinstance(outbound.get('settings'),dict) else {}
+        peers=settings.get('peers') if isinstance(settings,dict) else []
+        current=str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
         try:
             if target['kind']=='hub':
-                observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
-                ranked=rank_warp_paths(observations,max_results=1)
+                raw=probe_outbounds(engine._binary(),config.xray_assets,[outbound],
+                                    tags=['warp'],attempts=3,timeout=5.0,trace=True)[0]
             else:
-                ranked=nodes.smart_warp_probe(target['nodeId'],[body.tag],attempts=3,timeout_seconds=5)['items']
-        except (SmartWarpProbeError,PolicyError) as ex:raise HTTPException(409,'WARP scan failed: '+str(ex))
-        safety=evaluate_warp_safety(ranked,[body.tag],
+                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',[current],attempts=3,timeout_seconds=5)
+                raw=remote['items'][0]
+        except (OutboundProbeError,PolicyError) as ex:
+            raise HTTPException(409,'WARP ping failed: '+str(ex))
+        egress=raw.get('egress') if isinstance(raw.get('egress'),dict) else {}
+        normalized={'tag':'warp','ok':bool(raw.get('success')) and bool(raw.get('warpVerified')),
+                    'latencyMs':raw.get('delayMs'),'lossPercent':raw.get('lossPercent'),
+                    'jitterMs':raw.get('jitterMs'),'error':raw.get('error',''),
+                    'egress':{'ip':egress.get('ip',''),'country':egress.get('country',''),
+                              'colo':egress.get('colo',''),'warp':egress.get('warp','')}}
+        safety=evaluate_warp_safety([normalized],['warp'],
             max_loss_percent=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),
             max_latency_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),
             max_jitter_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs']))
-        manager.audit(p.actor,p.actor.id,'warp.scan',body.tag,'server='+target['id']+'; production traffic unchanged')
-        return {'passed':safety['passed'],'items':ranked,'issues':safety['issues'],'server':target,
-                'thresholds':safety['thresholds'],'productionTrafficMutation':False}
+        if not raw.get('warpVerified'):
+            safety['passed']=False;safety.setdefault('issues',[]).append('Cloudflare trace did not verify warp=on')
+        manager.audit(p.actor,p.actor.id,'warp.scan',target['id'],'current endpoint trace; production traffic unchanged')
+        return {'passed':safety['passed'],'items':[normalized],'issues':safety['issues'],'server':target,
+                'egress':normalized['egress'],'thresholds':safety['thresholds'],'productionTrafficMutation':False}
 
     @app.post('/api/warp/endpoints/scan')
     def warp_endpoint_scan(body:WarpProbeRequest,p:Principal=Depends(owner)):
-        target=_runtime_target(body.server);outbound=_warp_outbound(body.tag)
+        target=_runtime_target(body.server);outbound=_warp_profile(target['id'])
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
             raise HTTPException(409,'Create the WARP outbound first')
         settings=outbound.get('settings') if isinstance(outbound.get('settings'),dict) else {}
@@ -2071,7 +2237,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/warp/endpoint')
     def warp_endpoint_select(body:WarpEndpointSelect,p:Principal=Depends(owner)):
-        writable();outbound=_warp_outbound(body.tag)
+        writable();target=_runtime_target(body.server);outbound=_warp_profile(target['id'])
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
             raise HTTPException(409,'Create the WARP outbound first')
         try:endpoint=validate_warp_endpoint(body.endpoint)
@@ -2095,119 +2261,70 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 or latency>float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs'])
                 or jitter>float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs'])):
             raise HTTPException(409,'Selected endpoint did not pass the WARP safety gate')
-        outbounds=engine.section('outbounds');updated=[]
-        for item in outbounds:
-            updated.append(candidate_out if isinstance(item,dict) and item.get('tag')==body.tag else item)
-        current=_warp_status(body.tag)
-        cfg=engine.build_config();cfg['outbounds']=copy.deepcopy(updated);engine.validate(cfg)
-        if current.get('mode')!='off':
-            def commit():
-                with store.transaction() as db:
-                    db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
-                               ('outbounds',json.dumps(updated)))
-            engine.apply_config(cfg,start=True,force=True,after_success=commit)
-        else:
-            engine.save_section('outbounds',updated)
-        for node in nodes.list():
-            try:ensure_node_desired_state(str(node['id']))
-            except Exception:pass
-        active_scope=str(current.get('server') or '')
-        node_sync=None
-        if current.get('mode')!='off' and active_scope.startswith('node:'):
-            try:node_sync=sync_node_assignments(active_scope[5:])
-            except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP endpoint saved but active Node sync failed: '+str(ex))
-        manager.audit(p.actor,p.actor.id,'warp.endpoint',body.tag,
-                      endpoint+'; tested_on='+target['id']+'; verified with isolated temporary Xray')
-        return _warp_status(body.tag)|{'selected':endpoint,'test':checked,'server':target,'nodeSync':node_sync,
-                                       'runtimeMutation':current.get('mode')!='off'}
+        installed=_warp_install_profile(target['id'],candidate_out,'endpoint-change')
+        manager.audit(p.actor,p.actor.id,'warp.endpoint',target['id'],
+                      endpoint+'; verified and installed only on selected runtime')
+        return _warp_profile_public(target['id'])|{'selected':endpoint,'test':checked,
+               'server':target,'installation':installed,'runtimeMutation':True}
 
     @app.post('/api/warp/mode')
     def warp_mode(body:WarpMode,p:Principal=Depends(owner)):
-        writable();target=_runtime_target(body.server);outbound=_warp_outbound(body.tag);previous=_warp_status(body.tag)
-        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
-            raise HTTPException(409,'Create the WARP outbound first')
+        writable();target=_runtime_target(body.server);scope=str(target['id']);outbound=_warp_profile(scope)
+        if (body.mode!='off') and (not outbound or str(outbound.get('protocol','')).lower()!='wireguard'):
+            raise HTTPException(409,'Create the WARP profile on the selected server first')
         with store.lock:
             active=store.db.execute("SELECT id FROM smart_routing_rollouts WHERE state='running' LIMIT 1").fetchone()
         if active:raise HTTPException(409,'A Smart Routing rollout is running; finish or abort it first')
-        safety=None;selected_inbound_ids=[];inbound_tags=[]
+        selected_inbound_ids=[];inbound_tags=[];safety=None
         if body.mode!='off' or body.adblock:
             selected_inbound_ids,inbound_tags=_warp_inbound_scope(target,body.inboundIds)
+        if body.adblock:
+            block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
+            if not block or str(block.get('protocol','')).lower()!='blackhole':
+                raise HTTPException(409,"Smart Adblock requires blackhole outbound 'block'")
         if body.mode!='off':
             try:
                 if target['kind']=='hub':
                     observations=scan_warp_outbounds(engine._binary(),config.xray_assets,[outbound],attempts=3,timeout=5.0)
                     ranked=rank_warp_paths(observations,max_results=1)
                 else:
-                    ranked=nodes.smart_warp_probe(target['nodeId'],[body.tag],attempts=3,timeout_seconds=5)['items']
+                    ranked=nodes.smart_warp_probe(target['nodeId'],['warp'],attempts=3,timeout_seconds=5)['items']
             except (SmartWarpProbeError,PolicyError) as ex:
                 raise HTTPException(409,'WARP safety scan failed: '+str(ex))
-            safety=evaluate_warp_safety(ranked,[body.tag],
+            safety=evaluate_warp_safety(ranked,['warp'],
                 max_loss_percent=float(DEFAULT_SAFETY_THRESHOLDS['maxLossPercent']),
                 max_latency_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxLatencyMs']),
                 max_jitter_ms=float(DEFAULT_SAFETY_THRESHOLDS['maxJitterMs']))
-            if not safety['passed']:raise HTTPException(409,'WARP safety scan blocked activation: '+'; '.join(safety['issues']))
-        routing=copy.deepcopy(engine.section('routing'));rules=routing.get('rules',[])
-        if not isinstance(rules,list):rules=[]
-        managed={'dark-warp-ai','dark-warp-all','dark-smart-warp-ai','dark-smart-adblock'}
-        base=[r for r in rules if not (isinstance(r,dict) and r.get('ruleTag') in managed)]
-        prepend=[]
-        if body.adblock:
-            block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
-            if not block or str(block.get('protocol','')).lower()!='blackhole':
-                raise HTTPException(409,"Smart Adblock requires blackhole outbound 'block'")
-            from smart_routing import ADBLOCK_DOMAIN_MATCHERS
-            prepend.append({'type':'field','ruleTag':'dark-smart-adblock','domain':ADBLOCK_DOMAIN_MATCHERS[:],'inboundTag':inbound_tags[:],'outboundTag':'block'})
-        if body.mode=='ai':
-            prepend.append({'type':'field','ruleTag':'dark-warp-ai','domain':AI_DOMAIN_MATCHERS[:],'inboundTag':inbound_tags[:],'outboundTag':body.tag})
-        elif body.mode=='all':
-            prepend.append({'type':'field','ruleTag':'dark-warp-all','network':'tcp,udp','inboundTag':inbound_tags[:],'outboundTag':body.tag})
-        routing['rules']=prepend+base
-        planned_scope=target['id']
-        hub_routing=engine.filter_routing_for_scope(routing,'hub')
-        if planned_scope!='hub':
-            hub_routing['rules']=[r for r in hub_routing.get('rules',[]) if not isinstance(r,dict) or r.get('ruleTag') not in {str(x.get('ruleTag')) for x in prepend}]
-        candidate=engine.build_config();candidate['routing']=hub_routing;engine.validate(candidate)
-        def commit():
-            with store.transaction() as db:
-                db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
-                           ('routing',json.dumps(routing)))
-                for tag in managed:db.execute('DELETE FROM routing_rule_scopes WHERE rule_tag=?',(tag,))
-                for rule in prepend:
-                    tag=str(rule.get('ruleTag') or '')
-                    if tag:db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?)',
-                                      (tag,planned_scope,time.time()))
-        runtime=engine.apply_config(candidate,start=True,force=False,after_success=commit)
-        sync_result={}
-        for node in nodes.list():
-            try:ensure_node_desired_state(str(node['id']))
-            except Exception:pass
-        sync_ids=set()
-        if target['kind']=='node':sync_ids.add(target['nodeId'])
-        old_scope=str(previous.get('server') or '')
-        if previous.get('mode')!='off' and old_scope.startswith('node:'):sync_ids.add(old_scope[5:])
-        verification={'hub':None,'nodes':{}}
-        for node_id in sorted(sync_ids):
-            try:sync_result[node_id]=sync_node_assignments(node_id)
-            except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP routing saved but Node sync failed: '+str(ex))
-            desired=nodes.desired_state(node_id,include_payload=False)
-            try:remote=nodes.probe(node_id,timeout=8.0)
-            except (PolicyError,OSError) as ex:raise HTTPException(409,'WARP routing sync completed but Node verification failed: '+str(ex))
-            core=(remote.get('health') or {}).get('core') or {}
-            ok=not desired.get('pending') and not desired.get('last_error') and core.get('state')=='running' and not core.get('dirty')
-            verification['nodes'][node_id]={'ok':ok,'pending':bool(desired.get('pending')),
-                'lastError':str(desired.get('last_error') or ''),'coreState':str(core.get('state') or ''),
-                'coreDirty':bool(core.get('dirty')),'latencyMs':remote.get('latency_ms')}
-            if not ok:raise HTTPException(409,'WARP routing did not verify on Node '+node_id)
-        hub_state=engine.runtime_state()
-        hub_ok=hub_state.get('state')=='running' and not hub_state.get('dirty') and not hub_state.get('last_error')
+            if not safety['passed']:
+                raise HTTPException(409,'WARP safety scan blocked activation: '+'; '.join(safety['issues']))
+        assignment={'scope':scope,'mode':body.mode,'adblock':bool(body.adblock),
+                    'inboundIds':selected_inbound_ids,'updatedAt':time.time()}
+        routing,scopes=_warp_assignment_rules(assignment)
+        hub_candidate=engine.build_config();hub_candidate['routing']=engine.filter_routing_for_scope(routing,'hub')
+        def commit():_warp_commit_assignment(assignment,routing,scopes)
+        runtime=engine.apply_config(hub_candidate,start=True,force=False,after_success=commit)
+        sync_result={};verification={'hub':None,'nodes':{}}
+        hub_state=engine.runtime_state();hub_ok=hub_state.get('state')=='running' and not hub_state.get('dirty') and not hub_state.get('last_error')
         verification['hub']={'ok':hub_ok,'state':hub_state.get('state'),'dirty':bool(hub_state.get('dirty')),
                              'lastError':str(hub_state.get('last_error') or '')}
         if target['kind']=='hub' and not hub_ok:raise HTTPException(409,'WARP routing did not verify on Hub')
-        manager.audit(p.actor,p.actor.id,'warp.mode',body.tag,
-                      'mode='+body.mode+'; adblock='+str(body.adblock)+'; server='+planned_scope+
-                      '; inboundIds='+','.join(map(str,selected_inbound_ids)))
-        status=_warp_status(body.tag)
-        if body.mode!='off' and set(status.get('inboundIds') or [])!=set(selected_inbound_ids):
+        if target['kind']=='node':
+            try:
+                ensure_node_desired_state(target['nodeId'])
+                sync_result[target['nodeId']]=sync_node_assignments(target['nodeId'])
+                desired=nodes.desired_state(target['nodeId'],include_payload=False)
+                remote=nodes.probe(target['nodeId'],timeout=8.0);core=(remote.get('health') or {}).get('core') or {}
+            except (PolicyError,OSError) as ex:
+                raise HTTPException(409,'WARP routing saved but Node sync/verification failed: '+str(ex))
+            ok=not desired.get('pending') and not desired.get('last_error') and core.get('state')=='running' and not core.get('dirty')
+            verification['nodes'][target['nodeId']]={'ok':ok,'pending':bool(desired.get('pending')),
+                'lastError':str(desired.get('last_error') or ''),'coreState':str(core.get('state') or ''),
+                'coreDirty':bool(core.get('dirty')),'latencyMs':remote.get('latency_ms')}
+            if not ok:raise HTTPException(409,'WARP routing did not verify on Node '+target['nodeId'])
+        manager.audit(p.actor,p.actor.id,'warp.mode',scope,
+                      'mode='+body.mode+'; adblock='+str(body.adblock)+'; inboundIds='+','.join(map(str,selected_inbound_ids)))
+        status=_warp_profile_public(scope)
+        if (body.mode!='off' or body.adblock) and set(status.get('inboundIds') or [])!=set(selected_inbound_ids):
             raise HTTPException(409,'WARP routing saved but inbound scope verification failed')
         return status|{'applied':True,'safety':safety,'runtime':runtime,
                        'nodeSync':sync_result,'server':target,'verification':verification}
