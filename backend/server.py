@@ -357,10 +357,22 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                           and str(x.get('protocol','')).lower()=='wireguard'),None)
         if hub_profile is None and global_warp is not None:
             _warp_profile_save('hub',global_warp,'legacy-hub')
+        routing=copy.deepcopy(engine.section('routing'));rules=routing.get('rules',[]) if isinstance(routing,dict) else []
+        if not isinstance(rules,list):rules=[]
+        def unscoped_legacy_warp(rule):
+            if not isinstance(rule,dict) or str(rule.get('ruleTag') or '')!='warp' or str(rule.get('outboundTag') or '')!='warp':
+                return False
+            match_keys=('domain','ip','inboundTag','port','sourcePort','localPort','network','protocol','user','process','attrs')
+            return not any(rule.get(key) not in (None,'',[],{}) for key in match_keys)
+        cleaned=[rule for rule in rules if not unscoped_legacy_warp(rule)]
+        if len(cleaned)!=len(rules):
+            routing['rules']=cleaned
+            engine.save_section('routing',routing)
+            with store.transaction() as db:db.execute("DELETE FROM routing_rule_scopes WHERE rule_tag='warp'")
+            rules=cleaned
         with store.lock:
             count=store.db.execute('SELECT COUNT(*) FROM warp_assignments').fetchone()[0]
         if count:return
-        routing=engine.section('routing');rules=routing.get('rules',[]) if isinstance(routing,dict) else []
         by_tag={str(x.get('tag') or ''):int(x['id']) for x in engine.inbounds() if isinstance(x,dict) and x.get('tag')}
         merged={}
         for rule in rules if isinstance(rules,list) else []:
