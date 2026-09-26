@@ -57,10 +57,14 @@ def stage7_env(tmp_path,monkeypatch):
     engine.save_section('outbounds',warp_outbounds())
     engine.save_section('observatory',{'subjectSelector':['direct'],'probeURL':'https://example.test/204',
                                        'probeInterval':'30s','enableConcurrency':False})
+    inbound=engine.save_inbound({'remark':'Stage7 Inbound','listen':'127.0.0.1','port':19443,'protocol':'vless','enable':True,
+        'tag':'stage7-in','settings':{'decryption':'none'},'streamSettings':{'network':'tcp','security':'none'},'sniffing':{}})
+    inbound_id=int(inbound['id'])
     app=make_app(manager,auth,background=False)
     node_store={};counter={'n':0}
     monkeypatch.setattr(app.state.nodes,'list',lambda: ready_nodes())
-    monkeypatch.setattr(app.state.nodes,'assignments',lambda node_id: [])
+    monkeypatch.setattr(app.state.nodes,'assignments',lambda node_id:[{'local_inbound_id':inbound_id,'remote_inbound_id':inbound_id,'last_sync':0,'last_error':''}])
+    monkeypatch.setattr(app.state.nodes,'inbound_assignments',lambda iid:[n['id'] for n in ready_nodes()] if int(iid)==inbound_id else [])
     def fake_set(node_id,value):
         raw=json.dumps(value,sort_keys=True,separators=(',',':')).encode();digest=hashlib.sha256(raw).hexdigest()
         old=node_store.get(node_id);counter['n']+=0 if old and old['hash']==digest else 1
@@ -82,6 +86,9 @@ def stage7_env(tmp_path,monkeypatch):
     monkeypatch.setattr(app.state.nodes,'set_desired_state',fake_set)
     monkeypatch.setattr(app.state.nodes,'desired_state',fake_desired)
     monkeypatch.setattr(app.state.nodes,'sync_desired_state',fake_sync)
+    monkeypatch.setattr(app.state.nodes,'sync_traffic',lambda node_id:{'charged_bytes':0,'charged_up':0,'charged_down':0,'baselined':0,'ignored_clients':0})
+    monkeypatch.setattr(app.state.nodes,'sync_security',lambda node_id:{'source_verified':True,'last_sync':time.time(),'last_error':'','items':[]})
+    monkeypatch.setattr(app.state.nodes,'reconcile_global_security',lambda local_source_verified=False:{'changed':[],'local_source_verified':local_source_verified})
     monkeypatch.setattr(app.state.nodes,'probe',fake_probe)
     monkeypatch.setattr(app.state.nodes,'smart_warp_probe',lambda node_id,tags,attempts=2,timeout_seconds=5:{
         'node_id':node_id,'latency_ms':10,'productionTrafficMutation':False,
@@ -328,6 +335,7 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
 
     status=client.get('/api/warp/status').json()
     assert status['mode']=='off' and status['endpoint']=='162.159.192.1:2408'
+    inbound_id=client.get('/api/inbounds').json()[0]['id']
 
     def fake_probe(_binary,_assets,outbounds,*,tags=None,attempts=1,timeout=5.0,trace=False):
         selected=set(tags or [])
@@ -369,13 +377,16 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
     assert scan.status_code==200,scan.text
     assert scan.json()['passed'] is True and scan.json()['productionTrafficMutation'] is False
 
-    ai=client.post('/api/warp/mode',json={'tag':'warp','mode':'ai','adblock':False})
+    ai=client.post('/api/warp/mode',json={'tag':'warp','mode':'ai','adblock':False,'inboundIds':[]})
     assert ai.status_code==200,ai.text
     assert ai.json()['mode']=='ai' and ai.json()['applied'] is True
+    assert ai.json()['inboundIds']==[inbound_id] and ai.json()['allInbounds'] is True
+    assert ai.json()['verification']['hub']['ok'] is True
     rules=engine.section('routing')['rules']
     assert rules[0]['ruleTag']=='dark-warp-ai' and rules[0]['outboundTag']=='warp'
+    assert rules[0]['inboundTag']==['stage7-in']
 
-    all_=client.post('/api/warp/mode',json={'tag':'warp','mode':'all','adblock':True})
+    all_=client.post('/api/warp/mode',json={'tag':'warp','mode':'all','adblock':True,'inboundIds':[inbound_id]})
     assert all_.status_code==200,all_.text
     assert all_.json()['mode']=='all' and all_.json()['adblock'] is True
     rules=engine.section('routing')['rules']
@@ -424,3 +435,57 @@ def test_runtime_targeted_ping_warp_and_routing_scope(stage7_env,monkeypatch):
     assert scoped.status_code==200,scoped.text
     assert engine.routing_for_scope('hub')['rules']==[]
     assert engine.routing_for_scope('node:node-us')['rules'][0]['ruleTag']=='user-us-only'
+
+
+def test_warp_activation_scopes_to_selected_node_and_inbound(stage7_env):
+    _store,engine,client=stage7_env
+    app=client.app
+    inbound_id=int(client.get('/api/inbounds').json()[0]['id'])
+
+    runtime=client.get('/api/runtime-inbounds',params={'server':'node:node-us'})
+    assert runtime.status_code==200,runtime.text
+    assert [x['id'] for x in runtime.json()['items']]==[inbound_id]
+
+    activated=client.post('/api/warp/mode',json={
+        'tag':'warp-us','mode':'ai','adblock':False,
+        'server':'node:node-us','inboundIds':[inbound_id],
+    })
+    assert activated.status_code==200,activated.text
+    doc=activated.json()
+    assert doc['mode']=='ai' and doc['server']['id']=='node:node-us'
+    assert doc['inboundIds']==[inbound_id]
+    assert doc['verification']['nodes']['node-us']['ok'] is True
+
+    stored=next(r for r in engine.section('routing')['rules'] if r.get('ruleTag')=='dark-warp-ai')
+    assert stored['inboundTag']==['stage7-in']
+    assert stored['outboundTag']=='warp-us'
+    assert not any(r.get('ruleTag')=='dark-warp-ai' for r in engine.routing_for_scope('hub')['rules'])
+    assert any(r.get('ruleTag')=='dark-warp-ai' for r in engine.routing_for_scope('node:node-us')['rules'])
+    assert not any(r.get('ruleTag')=='dark-warp-ai' for r in engine.routing_for_scope('node:node-de')['rules'])
+
+    desired_us=app.state.nodes.desired_state('node-us')['payload']['sections']['routing']['rules']
+    desired_de=app.state.nodes.desired_state('node-de')['payload']['sections']['routing']['rules']
+    assert any(r.get('ruleTag')=='dark-warp-ai' for r in desired_us)
+    assert not any(r.get('ruleTag')=='dark-warp-ai' for r in desired_de)
+
+    extra=client.post('/api/inbounds',json={
+        'remark':'Hub only','listen':'127.0.0.1','port':19444,'protocol':'vless','enable':True,'tag':'hub-only',
+        'settings':{'decryption':'none'},'streamSettings':{'network':'tcp','security':'none'},'sniffing':{},
+    })
+    assert extra.status_code==200,extra.text
+    rejected=client.post('/api/warp/mode',json={
+        'tag':'warp-us','mode':'ai','adblock':False,
+        'server':'node:node-us','inboundIds':[extra.json()['id']],
+    })
+    assert rejected.status_code==409,rejected.text
+    assert 'not deployed' in rejected.text
+
+    node_only=client.post('/api/warp/mode',json={
+        'tag':'warp-us','mode':'all','adblock':False,
+        'server':'node:node-us','inboundIds':[],
+    })
+    assert node_only.status_code==200,node_only.text
+    assert node_only.json()['inboundIds']==[inbound_id]
+    assert node_only.json()['allInbounds'] is True
+    all_rule=next(r for r in engine.section('routing')['rules'] if r.get('ruleTag')=='dark-warp-all')
+    assert all_rule['inboundTag']==['stage7-in']
