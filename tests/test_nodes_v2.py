@@ -681,3 +681,29 @@ def test_smart_warp_probe_chunks_multi_path_requests_under_transport_timeout(env
  assert out['batches']==4 and [x['tag'] for x in out['items']]==tags
  assert [batch for batch,_ in calls]==[tags[0:2],tags[2:4],tags[4:6],tags[6:8]]
  assert all(.2<=timeout<=30 for _,timeout in calls)
+
+
+def test_fresh_heartbeat_stays_online_even_with_operation_error(env):
+ store,_,app,c=env;token='dkn_'+('H'*60)
+ assert c.post('/api/nodes',json={'id':'heartbeat','name':'Heartbeat','origin':'https://node.example.com','token':token,'enabled':True}).status_code==200
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_latency_ms=11,last_error=?,last_health=? WHERE id='heartbeat'",
+             (time.time(),'old operation error','{"service":"DARK XRAY NODE","core":{"state":"running"}}'))
+ node=app.state.nodes.list()[0]
+ assert node['online'] is True
+ assert node['last_error']=='old operation error'
+
+
+def test_warp_endpoint_probe_transport_timeout_never_exceeds_node_limit(env,monkeypatch):
+ _,_,app,c=env;token='dkn_'+('T'*60)
+ assert c.post('/api/nodes',json={'id':'warp-timeout','name':'Warp Timeout','origin':'https://node.example.com','token':token,'enabled':True}).status_code==200
+ captured={}
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  captured.update(node_id=node_id,path=path,body=body,timeout=timeout)
+  return {'service':'DARK XRAY NODE','current':'engage.cloudflareclient.com:2408','items':[]},7
+ monkeypatch.setattr(app.state.nodes,'_request',fake_request)
+ out=app.state.nodes.warp_endpoint_probe('warp-timeout','warp',None,attempts=2,timeout_seconds=4)
+ assert out['items']==[]
+ assert captured['path']=='/node/api/v1/warp/endpoints/probe'
+ assert captured['body']['timeoutSeconds']==4
+ assert 8.0<=captured['timeout']<=30.0
