@@ -299,5 +299,3 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
         if fmt not in ('raw','base64','json','clash'):fmt='clash' if ('clash' in ua or 'mihomo' in ua) else 'base64'
         body,headers=restore.subscription(token,fmt)
         return Response(content=body,headers=headers,media_type=None)
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
