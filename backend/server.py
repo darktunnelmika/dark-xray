@@ -41,7 +41,9 @@ from smart_routing import (AI_DOMAIN_MATCHERS,DEFAULT_SAFETY_THRESHOLDS,STAGE7_S
                            evaluate_stage7_node_readiness,evaluate_warp_safety,filter_stage7_routing_for_node,
                            rank_warp_paths,stage7_state_hash)
 from smart_warp_probe import SmartWarpProbeError,scan_warp_outbounds
-from warp_cloudflare import WarpRegistrationError,register_cloudflare_warp
+from outbound_probe import OutboundProbeError,probe_outbounds
+from warp_cloudflare import (WarpRegistrationError,register_cloudflare_warp,
+                             validate_warp_endpoint,warp_endpoint_candidates)
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
@@ -230,6 +232,13 @@ class WarpMode(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
     mode:Literal['off','ai','all']='ai'
     adblock:bool=False
+class WarpEndpointSelect(Model):
+    tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
+    endpoint:str=Field(min_length=3,max_length=160)
+class OutboundProbeRequest(Model):
+    tags:list[str]=Field(default_factory=list,max_length=32)
+    attempts:StrictInt=Field(default=1,ge=1,le=3)
+    timeoutSeconds:StrictInt=Field(default=5,ge=1,le=10)
 
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
@@ -1786,6 +1795,19 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/traffic-engine/preview')
     def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
 
+    @app.post('/api/outbounds/test')
+    def outbound_test(body:OutboundProbeRequest,p:Principal=Depends(owner)):
+        outbounds=engine.section('outbounds')
+        tags=body.tags or [str(o.get('tag')) for o in outbounds if isinstance(o,dict) and o.get('tag')]
+        try:
+            items=probe_outbounds(engine._binary(),config.xray_assets,outbounds,tags=tags,
+                                  attempts=int(body.attempts),timeout=float(body.timeoutSeconds))
+        except OutboundProbeError as ex:
+            raise HTTPException(409,'Outbound test failed: '+str(ex))
+        manager.audit(p.actor,p.actor.id,'outbound.test',','.join(tags[:16]),
+                      'isolated temporary Xray; production traffic unchanged')
+        return {'items':items,'productionTrafficMutation':False}
+
     def _warp_outbound(tag:str)->dict|None:
         for item in engine.section('outbounds'):
             if isinstance(item,dict) and str(item.get('tag') or '')==tag:
@@ -1862,6 +1884,78 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.audit(p.actor,p.actor.id,'warp.scan',body.tag,'isolated temporary Xray; production traffic unchanged')
         return {'passed':safety['passed'],'items':ranked,'issues':safety['issues'],
                 'thresholds':safety['thresholds'],'productionTrafficMutation':False}
+
+    @app.post('/api/warp/endpoints/scan')
+    def warp_endpoint_scan(body:WarpCreate,p:Principal=Depends(owner)):
+        outbound=_warp_outbound(body.tag)
+        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
+            raise HTTPException(409,'Create the WARP outbound first')
+        settings=outbound.get('settings') if isinstance(outbound.get('settings'),dict) else {}
+        peers=settings.get('peers') if isinstance(settings,dict) else []
+        current=str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
+        endpoints=warp_endpoint_candidates(current)
+        clones=[];tag_to_endpoint={}
+        for index,endpoint in enumerate(endpoints):
+            candidate=copy.deepcopy(outbound)
+            probe_tag=f'dark-warp-path-{index}'
+            candidate['tag']=probe_tag
+            candidate['settings']['peers'][0]['endpoint']=endpoint
+            clones.append(candidate);tag_to_endpoint[probe_tag]=endpoint
+        try:
+            raw=probe_outbounds(engine._binary(),config.xray_assets,clones,
+                                tags=[x['tag'] for x in clones],attempts=2,timeout=4.0,trace=True)
+        except OutboundProbeError as ex:
+            raise HTTPException(409,'WARP endpoint scan failed: '+str(ex))
+        items=[]
+        for row in raw:
+            endpoint=tag_to_endpoint.get(str(row.get('tag') or ''),'')
+            egress=row.get('egress') if isinstance(row.get('egress'),dict) else {}
+            ready=bool(row.get('success')) and bool(row.get('warpVerified'))
+            items.append({'endpoint':endpoint,'ready':ready,'delayMs':row.get('delayMs'),
+                          'lossPercent':row.get('lossPercent'),'jitterMs':row.get('jitterMs'),
+                          'country':egress.get('country',''),'colo':egress.get('colo',''),
+                          'egressIp':egress.get('ip',''),'warp':egress.get('warp',''),
+                          'error':row.get('error',''),'selected':endpoint==current})
+        items.sort(key=lambda x:(not x['ready'],float(x['lossPercent'] or 100),
+                                 float(x['delayMs']) if x['delayMs'] is not None else 10**9,
+                                 float(x['jitterMs']) if x['jitterMs'] is not None else 10**9))
+        manager.audit(p.actor,p.actor.id,'warp.endpoint_scan',body.tag,
+                      f'{len(items)} Cloudflare consumer WARP paths tested; production unchanged')
+        return {'selected':current,'items':items,'productionTrafficMutation':False}
+
+    @app.post('/api/warp/endpoint')
+    def warp_endpoint_select(body:WarpEndpointSelect,p:Principal=Depends(owner)):
+        writable();outbound=_warp_outbound(body.tag)
+        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':
+            raise HTTPException(409,'Create the WARP outbound first')
+        try:endpoint=validate_warp_endpoint(body.endpoint)
+        except WarpRegistrationError as ex:raise HTTPException(400,str(ex))
+        candidate_out=copy.deepcopy(outbound)
+        candidate_out['settings']['peers'][0]['endpoint']=endpoint
+        try:
+            checked=probe_outbounds(engine._binary(),config.xray_assets,[candidate_out],
+                                    tags=[body.tag],attempts=2,timeout=5.0,trace=True)[0]
+        except OutboundProbeError as ex:
+            raise HTTPException(409,'Selected WARP endpoint test failed: '+str(ex))
+        if not checked.get('success') or not checked.get('warpVerified'):
+            raise HTTPException(409,'Selected endpoint did not verify as a working Cloudflare WARP path')
+        outbounds=engine.section('outbounds');updated=[]
+        for item in outbounds:
+            updated.append(candidate_out if isinstance(item,dict) and item.get('tag')==body.tag else item)
+        current=_warp_status(body.tag)
+        cfg=engine.build_config();cfg['outbounds']=copy.deepcopy(updated);engine.validate(cfg)
+        if current.get('mode')!='off':
+            def commit():
+                with store.transaction() as db:
+                    db.execute('INSERT INTO core_sections(name,body) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET body=excluded.body',
+                               ('outbounds',json.dumps(updated)))
+            engine.apply_config(cfg,start=True,force=True,after_success=commit)
+        else:
+            engine.save_section('outbounds',updated)
+        manager.audit(p.actor,p.actor.id,'warp.endpoint',body.tag,
+                      endpoint+'; verified with isolated temporary Xray')
+        return _warp_status(body.tag)|{'selected':endpoint,'test':checked,
+                                       'runtimeMutation':current.get('mode')!='off'}
 
     @app.post('/api/warp/mode')
     def warp_mode(body:WarpMode,p:Principal=Depends(owner)):
