@@ -68,3 +68,21 @@ def test_incomplete_warp_response_is_rejected():
     bad["config"]["peers"] = []
     with pytest.raises(WarpRegistrationError, match="incomplete"):
         build_warp_outbound(bad, "private-secret")
+
+
+def test_warp_endpoint_candidates_are_multiple_and_allowlisted():
+    from warp_cloudflare import warp_endpoint_candidates, validate_warp_endpoint
+    rows = warp_endpoint_candidates('engage.cloudflareclient.com:2408')
+    assert len(rows) >= 12
+    assert len(set(rows)) == len(rows)
+    assert any(x.endswith(':500') for x in rows)
+    assert any(x.endswith(':1701') for x in rows)
+    assert any(x.endswith(':4500') for x in rows)
+    assert validate_warp_endpoint('162.159.192.200:2408') == '162.159.192.200:2408'
+    assert validate_warp_endpoint('engage.cloudflareclient.com:500') == 'engage.cloudflareclient.com:500'
+
+
+def test_warp_endpoint_rejects_outside_cloudflare_consumer_range():
+    from warp_cloudflare import validate_warp_endpoint
+    with pytest.raises(WarpRegistrationError):
+        validate_warp_endpoint('8.8.8.8:2408')
