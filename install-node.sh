@@ -5,7 +5,7 @@ umask 077
 REPO="https://github.com/darktunnelmika/dark-xray.git"
 REF="${DARK_XRAY_REF:-main}"
 CORE_VERSION="${DARK_XRAY_CORE_VERSION:-v26.3.27}"
-NODE_PORT="${DARK_NODE_PORT:-9443}"
+NODE_PORT="${DARK_NODE_PORT:-8443}"
 
 fail(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 ask(){ local q="$1" d="${2:-}" v; read -r -p "$q${d:+ [$d]}: " v; printf '%s' "${v:-$d}"; }
@@ -46,7 +46,7 @@ NODE_PORT="$(ask 'Node Agent HTTPS port' "$NODE_PORT")"
 VERIFY_SOURCE=0
 if yesno 'Does Xray on this Node see the real client packet source IP directly? Enable packet-level IP enforcement only if verified'; then VERIFY_SOURCE=1; fi
 SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2;exit}' || true)"; SSH_PORT="${SSH_PORT:-22}"
-[[ "$NODE_PORT" =~ ^[0-9]+$ ]] && ((NODE_PORT>=1024 && NODE_PORT<=65535)) || fail "Invalid node port: use 1024-65535 (recommended: 9443)"
+[[ "$NODE_PORT" =~ ^[0-9]+$ ]] && ((NODE_PORT>=1024 && NODE_PORT<=65535)) || fail "Invalid node port: use 1024-65535 (recommended: 8443)"
 [[ "$NODE_PORT" != "$SSH_PORT" && "$NODE_PORT" != "10085" ]] || fail "Node port conflicts with SSH/Xray API"
 [[ "$DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || fail "Invalid domain"
 [[ "$EMAIL" == *@*.* ]] || fail "Invalid email"
