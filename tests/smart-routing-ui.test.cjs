@@ -183,3 +183,27 @@ test('Routing editor keeps common fields simple and advanced match collapsed',()
   assert.match(body,/Advanced match/);
   assert.match(body,/\.\.\.r,type:'field'/);
 });
+
+
+test('Outbound list exposes Sanaei-style ping per row and Ping All',()=>{
+  assert.match(src,/function outboundPingCell/);
+  assert.match(src,/xvoutping/);
+  assert.match(src,/xvoutpingall/);
+  assert.match(src,/Ping All/);
+  assert.match(src,/\/api\/outbounds\/test/);
+  assert.match(src,/outbound-ping-slot/);
+});
+
+test('WARP scanner shows multiple endpoint routes and lets operator select one',()=>{
+  const start=src.indexOf('async function scanSmartWarpPage');
+  const end=src.indexOf('async function smartRoutingOutboundPreview',start);
+  const body=src.slice(start,end);
+  assert.match(body,/\/api\/warp\/endpoints\/scan/);
+  assert.match(body,/warp-path-row/);
+  assert.match(body,/Ping/);
+  assert.match(body,/Loss/);
+  assert.match(body,/Jitter/);
+  assert.match(body,/xvwarpuse/);
+  assert.doesNotMatch(body,/\/api\/smart-routing\/warp-scan/);
+  assert.match(src,/\/api\/warp\/endpoint/);
+});
