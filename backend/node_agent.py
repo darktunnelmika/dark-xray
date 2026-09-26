@@ -189,23 +189,26 @@ class AgentRequestBoundary:
 
         body = bytearray()
         try:
-            # A total deadline prevents an endless trickle of small chunks.
-            async with asyncio.timeout(self.READ_TIMEOUT):
-                while True:
-                    message = await receive()
-                    if message['type'] == 'http.disconnect':
-                        return
-                    if message['type'] != 'http.request':
-                        await reject(400, 'Invalid request body')
-                        return
-                    chunk = message.get('body', b'')
-                    if len(body) + len(chunk) > self.MAX_BODY:
-                        await reject(413, 'Request too large')
-                        return
-                    body.extend(chunk)
-                    if not message.get('more_body', False):
-                        break
-        except TimeoutError:
+            # Keep one total deadline without asyncio.timeout(), so the Node
+            # runtime remains compatible with Python 3.10 on Ubuntu 22.04.
+            loop=asyncio.get_running_loop();deadline=loop.time()+self.READ_TIMEOUT
+            while True:
+                remaining=deadline-loop.time()
+                if remaining<=0:raise asyncio.TimeoutError
+                message=await asyncio.wait_for(receive(),timeout=remaining)
+                if message['type'] == 'http.disconnect':
+                    return
+                if message['type'] != 'http.request':
+                    await reject(400, 'Invalid request body')
+                    return
+                chunk = message.get('body', b'')
+                if len(body) + len(chunk) > self.MAX_BODY:
+                    await reject(413, 'Request too large')
+                    return
+                body.extend(chunk)
+                if not message.get('more_body', False):
+                    break
+        except asyncio.TimeoutError:
             await reject(408, 'Request body timed out')
             return
         if declared is not None and len(body) != declared:
