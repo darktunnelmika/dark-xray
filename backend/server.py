@@ -235,6 +235,10 @@ class WarpMode(Model):
     adblock:bool=False
     server:str=Field(default='hub',min_length=1,max_length=160)
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
+class AdblockMode(Model):
+    enabled:bool=True
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
 class WarpProbeRequest(Model):
     tag:str=Field(default='warp',min_length=1,max_length=128,pattern=r'^[A-Za-z0-9_.-]+$')
     server:str=Field(default='hub',min_length=1,max_length=160)
@@ -347,6 +351,34 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                        (value,str(mode),int(bool(adblock)),json.dumps(ids),time.time()))
         return _warp_assignment(value)
 
+    def _adblock_assignment(scope:str)->dict:
+        value=str(scope or 'hub').strip()
+        with store.lock:row=store.db.execute('SELECT * FROM adblock_assignments WHERE scope=?',(value,)).fetchone()
+        if not row:return {'scope':value,'enabled':False,'inboundIds':[],'updatedAt':0.0}
+        try:ids=[int(x) for x in json.loads(row['inbound_ids'] or '[]')]
+        except Exception:ids=[]
+        return {'scope':value,'enabled':bool(row['enabled']),'inboundIds':ids,
+                'updatedAt':float(row['updated_at'] or 0)}
+
+    def _adblock_assignments()->list[dict]:
+        with store.lock:rows=store.db.execute('SELECT * FROM adblock_assignments ORDER BY scope').fetchall()
+        out=[]
+        for row in rows:
+            try:ids=[int(x) for x in json.loads(row['inbound_ids'] or '[]')]
+            except Exception:ids=[]
+            out.append({'scope':str(row['scope']),'enabled':bool(row['enabled']),
+                        'inboundIds':ids,'updatedAt':float(row['updated_at'] or 0)})
+        return out
+
+    def _adblock_assignment_save(scope:str,enabled:bool,inbound_ids:list[int]):
+        value=str(scope or 'hub').strip();ids=list(dict.fromkeys(int(x) for x in inbound_ids))
+        with store.transaction() as db:
+            db.execute('''INSERT INTO adblock_assignments(scope,enabled,inbound_ids,updated_at) VALUES(?,?,?,?)
+                          ON CONFLICT(scope) DO UPDATE SET enabled=excluded.enabled,
+                          inbound_ids=excluded.inbound_ids,updated_at=excluded.updated_at''',
+                       (value,int(bool(enabled)),json.dumps(ids),time.time()))
+        return _adblock_assignment(value)
+
     def _warp_rule_tag(kind:str,scope:str)->str:
         digest=hashlib.sha256(str(scope).encode()).hexdigest()[:10]
         return 'dark-warp-'+kind+'-'+digest if kind in {'ai','all'} else 'dark-smart-adblock-'+digest
@@ -392,6 +424,35 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if scope.startswith('node:') and _warp_profile(scope) is None and global_warp is not None:
                 _warp_profile_save(scope,global_warp,'legacy-clone')
     _warp_migrate_legacy()
+    def _adblock_migrate_legacy():
+        # Older releases stored Adblock inside warp_assignments. Split it once,
+        # preserving the exact server + inbound scope, then clear the legacy bit.
+        with store.transaction() as db:
+            rows=db.execute("SELECT scope,adblock,inbound_ids FROM warp_assignments WHERE adblock!=0").fetchall()
+            for row in rows:
+                existing=db.execute("SELECT 1 FROM adblock_assignments WHERE scope=?",(str(row['scope']),)).fetchone()
+                if not existing:
+                    db.execute("INSERT INTO adblock_assignments(scope,enabled,inbound_ids,updated_at) VALUES(?,?,?,?)",
+                               (str(row['scope']),1,str(row['inbound_ids'] or '[]'),time.time()))
+                db.execute("UPDATE warp_assignments SET adblock=0 WHERE scope=?",(str(row['scope']),))
+        # Also recover a managed legacy Adblock rule if it predates the assignment row.
+        routing=engine.section('routing');rules=routing.get('rules',[]) if isinstance(routing,dict) else []
+        by_tag={str(x.get('tag') or ''):int(x['id']) for x in engine.inbounds() if isinstance(x,dict) and x.get('tag')}
+        for rule in rules if isinstance(rules,list) else []:
+            if not isinstance(rule,dict):continue
+            rt=str(rule.get('ruleTag') or '')
+            if not (rt=='dark-smart-adblock' or rt.startswith('dark-smart-adblock-')):continue
+            with store.lock:
+                sr=store.db.execute('SELECT scope FROM routing_rule_scopes WHERE rule_tag=?',(rt,)).fetchone()
+            scope=str(sr['scope']) if sr else 'hub'
+            ids=[]
+            for tag in rule.get('inboundTag',[]) if isinstance(rule.get('inboundTag'),list) else []:
+                if str(tag) in by_tag and by_tag[str(tag)] not in ids:ids.append(by_tag[str(tag)])
+            with store.lock:
+                exists=store.db.execute('SELECT 1 FROM adblock_assignments WHERE scope=?',(scope,)).fetchone()
+            if not exists and ids:_adblock_assignment_save(scope,True,ids)
+
+    _adblock_migrate_legacy()
 
     def apply_global_security(_node_id:str='',_result:dict|None=None):
         result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified))
@@ -2047,25 +2108,32 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 or value.startswith('dark-warp-ai-') or value.startswith('dark-warp-all-')
                 or value.startswith('dark-smart-adblock-'))
 
-    def _warp_assignment_rules(override:dict|None=None)->tuple[dict,dict]:
-        assignments={str(x['scope']):x for x in _warp_assignments()}
-        if override is not None:assignments[str(override['scope'])]=copy.deepcopy(override)
+    def _warp_assignment_rules(warp_override:dict|None=None,adblock_override:dict|None=None)->tuple[dict,dict]:
+        warp_rows={str(x['scope']):x for x in _warp_assignments()}
+        ad_rows={str(x['scope']):x for x in _adblock_assignments()}
+        if warp_override is not None:warp_rows[str(warp_override['scope'])]=copy.deepcopy(warp_override)
+        if adblock_override is not None:ad_rows[str(adblock_override['scope'])]=copy.deepcopy(adblock_override)
         routing=copy.deepcopy(engine.section('routing'));rules=routing.get('rules',[])
         if not isinstance(rules,list):rules=[]
         base=[r for r in rules if not (isinstance(r,dict) and _warp_managed_tag(str(r.get('ruleTag') or '')))]
         generated=[];scopes={}
         from smart_routing import ADBLOCK_DOMAIN_MATCHERS
-        for scope,row in sorted(assignments.items()):
-            mode=str(row.get('mode') or 'off');adblock=bool(row.get('adblock'))
-            if mode=='off' and not adblock:continue
+        for scope,row in sorted(ad_rows.items()):
+            if not bool(row.get('enabled')):continue
             available={int(x['id']):x for x in _runtime_inbound_rows(scope)}
             ids=[int(x) for x in row.get('inboundIds',[]) if int(x) in available]
             tags=[str(available[x].get('tag') or '') for x in ids if str(available[x].get('tag') or '')]
             if not tags:continue
-            if adblock:
-                rt=_warp_rule_tag('adblock',scope)
-                generated.append({'type':'field','ruleTag':rt,'domain':ADBLOCK_DOMAIN_MATCHERS[:],
-                                  'inboundTag':tags[:],'outboundTag':'block'});scopes[rt]=scope
+            rt=_warp_rule_tag('adblock',scope)
+            generated.append({'type':'field','ruleTag':rt,'domain':ADBLOCK_DOMAIN_MATCHERS[:],
+                              'inboundTag':tags[:],'outboundTag':'block'});scopes[rt]=scope
+        for scope,row in sorted(warp_rows.items()):
+            mode=str(row.get('mode') or 'off')
+            if mode=='off':continue
+            available={int(x['id']):x for x in _runtime_inbound_rows(scope)}
+            ids=[int(x) for x in row.get('inboundIds',[]) if int(x) in available]
+            tags=[str(available[x].get('tag') or '') for x in ids if str(available[x].get('tag') or '')]
+            if not tags:continue
             if mode=='ai':
                 rt=_warp_rule_tag('ai',scope)
                 generated.append({'type':'field','ruleTag':rt,'domain':AI_DOMAIN_MATCHERS[:],
@@ -2077,22 +2145,34 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         routing['rules']=generated+base
         return routing,scopes
 
+    def _commit_managed_routing(db,routing:dict,scopes:dict):
+        db.execute("INSERT INTO core_sections(name,body) VALUES('routing',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",
+                   (json.dumps(routing),))
+        for old in db.execute('SELECT rule_tag FROM routing_rule_scopes').fetchall():
+            if _warp_managed_tag(str(old['rule_tag'])):
+                db.execute('DELETE FROM routing_rule_scopes WHERE rule_tag=?',(old['rule_tag'],))
+        for tag,scope in scopes.items():
+            db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?)',
+                       (tag,scope,time.time()))
+
     def _warp_commit_assignment(row:dict,routing:dict,scopes:dict):
         with store.transaction() as db:
             db.execute("""INSERT INTO warp_assignments(scope,mode,adblock,inbound_ids,updated_at)
                           VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
-                          mode=excluded.mode,adblock=excluded.adblock,
+                          mode=excluded.mode,adblock=0,
                           inbound_ids=excluded.inbound_ids,updated_at=excluded.updated_at""",
-                       (str(row['scope']),str(row.get('mode') or 'off'),int(bool(row.get('adblock'))),
+                       (str(row['scope']),str(row.get('mode') or 'off'),0,
                         json.dumps([int(x) for x in row.get('inboundIds',[])]),time.time()))
-            db.execute("INSERT INTO core_sections(name,body) VALUES('routing',?) ON CONFLICT(name) DO UPDATE SET body=excluded.body",
-                       (json.dumps(routing),))
-            for old in db.execute('SELECT rule_tag FROM routing_rule_scopes').fetchall():
-                if _warp_managed_tag(str(old['rule_tag'])):
-                    db.execute('DELETE FROM routing_rule_scopes WHERE rule_tag=?',(old['rule_tag'],))
-            for tag,scope in scopes.items():
-                db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?)',
-                           (tag,scope,time.time()))
+            _commit_managed_routing(db,routing,scopes)
+
+    def _adblock_commit_assignment(row:dict,routing:dict,scopes:dict):
+        with store.transaction() as db:
+            db.execute("""INSERT INTO adblock_assignments(scope,enabled,inbound_ids,updated_at)
+                          VALUES(?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
+                          enabled=excluded.enabled,inbound_ids=excluded.inbound_ids,updated_at=excluded.updated_at""",
+                       (str(row['scope']),int(bool(row.get('enabled'))),
+                        json.dumps([int(x) for x in row.get('inboundIds',[])]),time.time()))
+            _commit_managed_routing(db,routing,scopes)
 
     def _warp_profile_public(scope:str)->dict:
         target=_runtime_target(scope,require_online=False)
@@ -2368,6 +2448,67 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             raise HTTPException(409,'WARP routing saved but inbound scope verification failed')
         return status|{'applied':True,'safety':safety,'runtime':runtime,
                        'nodeSync':sync_result,'server':target,'verification':verification}
+
+    def _adblock_profile_public(scope:str)->dict:
+        target=_runtime_target(scope,require_online=False);assignment=_adblock_assignment(scope)
+        available=_runtime_inbound_rows(scope);available_ids=[int(x['id']) for x in available]
+        selected=[int(x) for x in assignment.get('inboundIds',[])]
+        rows=[x for x in available if not selected or int(x['id']) in set(selected)]
+        access=[]
+        for row in rows:
+            for kind in row.get('accessPaths',[]):
+                if kind not in access:access.append(kind)
+        return {'enabled':bool(assignment.get('enabled')),'server':target,'serverId':scope,
+                'inboundIds':selected,'allInbounds':bool(available_ids and set(selected)==set(available_ids)),
+                'availableInbounds':available,'accessPaths':access,
+                'blockReady':any(isinstance(x,dict) and x.get('tag')=='block' and str(x.get('protocol','')).lower()=='blackhole'
+                                 for x in engine.section('outbounds'))}
+
+    @app.get('/api/adblock/profiles')
+    def adblock_profiles(p:Principal=Depends(owner)):
+        return {'items':[_adblock_profile_public(str(t['id'])) for t in _runtime_targets()]}
+
+    @app.get('/api/adblock/status')
+    def adblock_status(server:str='hub',p:Principal=Depends(owner)):
+        return _adblock_profile_public(str(server or 'hub'))
+
+    @app.post('/api/adblock/mode')
+    def adblock_mode(body:AdblockMode,p:Principal=Depends(owner)):
+        writable();target=_runtime_target(body.server);scope=str(target['id'])
+        block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
+        if body.enabled and (not block or str(block.get('protocol','')).lower()!='blackhole'):
+            raise HTTPException(409,"Smart Adblock requires blackhole outbound 'block'")
+        with store.lock:
+            active=store.db.execute("SELECT id FROM smart_routing_rollouts WHERE state='running' LIMIT 1").fetchone()
+        if active:raise HTTPException(409,'A Smart Routing rollout is running; finish or abort it first')
+        ids=[]
+        if body.enabled:ids,_=_warp_inbound_scope(target,body.inboundIds)
+        assignment={'scope':scope,'enabled':bool(body.enabled),'inboundIds':ids,'updatedAt':time.time()}
+        routing,scopes=_warp_assignment_rules(adblock_override=assignment)
+        hub_candidate=engine.build_config();hub_candidate['routing']=engine.filter_routing_for_scope(routing,'hub')
+        def commit():_adblock_commit_assignment(assignment,routing,scopes)
+        runtime=engine.apply_config(hub_candidate,start=True,force=False,after_success=commit)
+        sync_result={};verification={'hub':None,'nodes':{}}
+        hub_state=engine.runtime_state();hub_ok=hub_state.get('state')=='running' and not hub_state.get('dirty') and not hub_state.get('last_error')
+        verification['hub']={'ok':hub_ok,'state':hub_state.get('state'),'dirty':bool(hub_state.get('dirty')),
+                             'lastError':str(hub_state.get('last_error') or '')}
+        if target['kind']=='hub' and not hub_ok:raise HTTPException(409,'Adblock routing did not verify on Hub')
+        if target['kind']=='node':
+            try:
+                ensure_node_desired_state(target['nodeId']);sync_result[target['nodeId']]=sync_node_assignments(target['nodeId'])
+                desired=nodes.desired_state(target['nodeId'],include_payload=False)
+                remote=nodes.probe(target['nodeId'],timeout=8.0);core=(remote.get('health') or {}).get('core') or {}
+            except (PolicyError,OSError) as ex:raise HTTPException(409,'Adblock Node sync/verification failed: '+str(ex))
+            ok=not desired.get('pending') and not desired.get('last_error') and core.get('state')=='running' and not core.get('dirty')
+            verification['nodes'][target['nodeId']]={'ok':ok,'pending':bool(desired.get('pending')),
+                'lastError':str(desired.get('last_error') or ''),'coreState':str(core.get('state') or ''),
+                'coreDirty':bool(core.get('dirty')),'latencyMs':remote.get('latency_ms')}
+            if not ok:raise HTTPException(409,'Adblock routing did not verify on Node '+target['nodeId'])
+        manager.audit(p.actor,p.actor.id,'adblock.mode',scope,'enabled='+str(body.enabled)+'; inboundIds='+','.join(map(str,ids)))
+        status=_adblock_profile_public(scope)
+        if body.enabled and set(status.get('inboundIds') or [])!=set(ids):
+            raise HTTPException(409,'Adblock routing saved but inbound scope verification failed')
+        return status|{'applied':True,'runtime':runtime,'nodeSync':sync_result,'verification':verification}
 
     @app.get('/api/smart-routing/plan')
     def smart_routing_plan(p:Principal=Depends(owner)):
