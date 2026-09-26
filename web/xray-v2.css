@@ -34,3 +34,14 @@
 .routing-compact .route-line{grid-template-columns:34px minmax(145px,1fr) minmax(105px,.58fr) minmax(105px,.58fr) 20px minmax(80px,.42fr) auto}
 .route-inbound{font:9px var(--mono);color:#b7d9ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid rgba(96,165,250,.14);border-radius:6px;padding:4px 6px;background:rgba(96,165,250,.04)}
 @media(max-width:980px){.routing-compact .route-line{grid-template-columns:30px minmax(120px,1fr) minmax(90px,.6fr) minmax(90px,.6fr)}.routing-compact .route-arrow{display:none}.routing-compact .route-target{grid-column:2/4}.routing-compact .route-actions{grid-column:2/-1}}
+
+/* Per-server WARP profiles */
+.warp-servers{padding:11px 12px}.warp-servers .xv2-toolbar{margin-bottom:9px}.warp-servers .xv2-toolbar h3{margin:0}.warp-servers .xv2-toolbar p{margin:2px 0 0;font-size:10px}
+.warp-server-head,.warp-server-row{display:grid;grid-template-columns:minmax(150px,1fr) 62px minmax(145px,1fr) 96px minmax(105px,.7fr) minmax(270px,auto);gap:8px;align-items:center}
+.warp-server-head{padding:0 8px 6px;color:#526d77;font-size:9px}.warp-server-row{padding:8px;border-top:1px solid rgba(255,255,255,.045);min-height:48px}.warp-server-row:first-child{border-top:0}
+.warp-server-name{display:grid;min-width:0}.warp-server-name b{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.warp-server-name small{font-size:9px;color:#607983;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.warp-server-endpoint,.warp-server-scope{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8fb4bd}.warp-row-test{display:grid;gap:1px}.warp-row-test small{font-size:8px;color:#6e8a93;white-space:nowrap}.warp-row-test b{font:10px var(--mono)}.warp-row-test.good b{color:#9af0cd}.warp-row-test.bad b{color:#ff9f9f}.warp-row-test.testing,.warp-row-test.muted{color:#607983;font:10px var(--mono)}
+.warp-server-actions{display:flex;justify-content:flex-end;align-items:center;gap:4px;flex-wrap:wrap}.warp-server-actions>button{border:1px solid rgba(255,255,255,.07);background:#061015;color:#78909a;border-radius:7px;padding:5px 7px;cursor:pointer;font-size:9px}.warp-server-actions>button.active{color:#dffff4;border-color:rgba(45,212,191,.36);background:rgba(45,212,191,.08)}.warp-server-actions .btn{padding:5px 7px;font-size:9px;min-height:0}.warp-server-actions .warp-adblock{margin-right:2px}
+.warp-edit-actions{margin:0 0 9px}
+@media(max-width:1050px){.warp-server-head{display:none}.warp-server-row{grid-template-columns:minmax(140px,1fr) 60px minmax(120px,.9fr) 85px}.warp-server-scope{grid-column:1/3}.warp-server-actions{grid-column:3/5;justify-content:flex-start}}
+@media(max-width:650px){.warp-server-row{grid-template-columns:1fr auto}.warp-server-endpoint,.warp-row-test,.warp-server-scope,.warp-server-actions{grid-column:1/-1}.warp-server-actions{justify-content:flex-start}}
