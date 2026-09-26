@@ -149,6 +149,8 @@ class CoreEngine:
               up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS core_sections(name TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS routing_rule_scopes(rule_tag TEXT PRIMARY KEY,scope TEXT NOT NULL DEFAULT 'all',updated_at REAL NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS warp_profiles(scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS warp_assignments(scope TEXT PRIMARY KEY,mode TEXT NOT NULL DEFAULT 'off',adblock INTEGER NOT NULL DEFAULT 0,inbound_ids TEXT NOT NULL DEFAULT '[]',updated_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS core_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,
               digest TEXT NOT NULL,device_os TEXT NOT NULL,model TEXT NOT NULL,first_seen REAL NOT NULL,last_seen REAL NOT NULL,
               UNIQUE(email,digest));
