@@ -152,7 +152,12 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
     data,config,output=data.resolve(),config.resolve(),output.absolute()
     if not data.is_dir() or not config.is_file() or config.stat().st_size>1024*1024:
         raise PolicyError('DARK data/config paths are missing or unsafe')
-    if output.exists() or output.is_symlink():
+    try:
+        target_exists=output.exists()
+        target_symlink=output.is_symlink()
+    except OSError as ex:
+        raise PolicyError('Backup target path is not accessible') from ex
+    if target_exists or target_symlink:
         raise PolicyError('Backup target already exists')
     dbfile, secret = data/'dark.sqlite3', data/'secret.key'
     if dbfile.is_symlink() or secret.is_symlink() or not dbfile.is_file() or not secret.is_file():
@@ -204,8 +209,11 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
     salt, nonce = os.urandom(16), os.urandom(12)
     encrypted = AESGCM(derive(password, salt)).encrypt(nonce, stream.getvalue(), MAGIC)
     if len(MAGIC)+28+len(encrypted)>LIMIT:raise PolicyError('Encrypted archive exceeds the 256 MiB restore limit')
-    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    private_write(output, MAGIC + salt + nonce + encrypted)
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private_write(output, MAGIC + salt + nonce + encrypted)
+    except OSError as ex:
+        raise PolicyError('Backup archive could not be written to target path') from ex
     return manifest
 
 def restore_backup(archive: Path, destination: Path, password: str) -> dict:

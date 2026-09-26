@@ -169,3 +169,15 @@ def test_full_backup_preserves_customer_wallet_referral_and_support_state(tmp_pa
         assert db.execute("SELECT code FROM customer_referrals WHERE owner='dark' AND telegram_id=55").fetchone()[0]=='REFCODE'
         assert db.execute("SELECT status FROM customer_support_tickets WHERE id='t1'").fetchone()[0]=='open'
         assert db.execute("SELECT text FROM customer_support_messages WHERE id='m1'").fetchone()[0]=='hello'
+
+def test_backup_refuses_inaccessible_output_path_as_policy_error(tmp_path,monkeypatch):
+    data,config=minimal_source(tmp_path)
+    archive=tmp_path/'restricted'/'full.darkbackup'
+    original_exists=Path.exists
+    def denied_exists(path):
+        if path==archive:
+            raise PermissionError('simulated inaccessible backup target')
+        return original_exists(path)
+    monkeypatch.setattr(Path,'exists',denied_exists)
+    with pytest.raises(PolicyError,match='Backup target path is not accessible'):
+        create_backup(data,config,archive,PASS)
