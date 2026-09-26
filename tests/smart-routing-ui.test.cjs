@@ -212,7 +212,7 @@ test('WARP scanner shows multiple endpoint routes and lets operator select one',
 test('Outbound and WARP tests require an explicit runtime server target',()=>{
   assert.match(src,/function serverLabel/);
   assert.match(src,/async function pickRuntimeServer/);
-  assert.match(src,/Run test on/);
+  assert.match(src,/The test or WARP action runs physically on the selected Hub\/Node/);
   assert.match(src,/server\}\)/);
   assert.match(src,/\/api\/runtime-targets/);
   assert.match(src,/\/api\/outbounds\/test/);
@@ -221,11 +221,25 @@ test('Outbound and WARP tests require an explicit runtime server target',()=>{
   assert.match(src,/server-test-badge/);
 });
 
-test('Routing editor exposes real server scope and rows display it',()=>{
+test('Routing editor exposes real Server + Inbound scope and rows display both',()=>{
   assert.match(src,/routingServerLabel/);
+  assert.match(src,/routingInboundLabel/);
   assert.match(src,/\/api\/routing\/scopes/);
-  assert.match(src,/serverScope/);
-  assert.match(src,/Server','سرور/);
+  assert.match(src,/\/api\/runtime-inbounds/);
+  assert.match(src,/pickRuntimeServer/);
+  assert.match(src,/inboundScope/);
   assert.match(src,/route-server/);
+  assert.match(src,/route-inbound/);
   assert.match(src,/dark-user-/);
+});
+
+test('WARP activation asks for server and inbound scope before apply',()=>{
+  const start=src.indexOf('async function setWarpSimpleMode');
+  const end=src.indexOf('async function rotateWarpSimple',start);
+  const body=src.slice(start,end);
+  assert.match(body,/pickRuntimeServer/);
+  assert.match(body,/pickRuntimeInbound/);
+  assert.match(body,/inboundIds/);
+  assert.match(body,/verification/);
+  assert.match(src,/All inbounds on this server/);
 });
