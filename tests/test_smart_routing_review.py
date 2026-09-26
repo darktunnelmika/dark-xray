@@ -625,3 +625,39 @@ def test_legacy_global_warp_migrates_to_hub_profile_and_assignment(tmp_path):
     assert assignment['mode']=='ai'
     assert json.loads(assignment['inbound_ids'])==[int(inbound['id'])]
     manager.close();engine.close();store.close()
+
+
+def test_legacy_global_warp_rule_is_removed_during_per_server_migration(tmp_path):
+    fake=tmp_path/'fake-xray'
+    shutil.copy2(ROOT/'tests/fixtures/fake_xray.py',fake);fake.chmod(0o755)
+    store=Store(tmp_path/'dark.sqlite3')
+    config=Config(xray_binary=str(fake),xray_assets=str(tmp_path),xray_api_port=free_port(),
+                  public_address='vpn.example.test',test_engine=True,core_autostart=False)
+    engine=CoreEngine(config,store,tmp_path/'runtime')
+    manager=Manager(store,engine);auth=Auth(store,tmp_path/'secret.key')
+    auth.bootstrap('dark','Test!OnlyPassword123')
+    manager.owner_put(OWNER,'dark',name='DARK',allowed=[])
+    engine.save_section('outbounds',[
+        {'tag':'direct','protocol':'freedom','settings':{}},
+        {'tag':'warp','protocol':'wireguard','settings':{
+            'secretKey':'legacy-secret','address':['172.16.0.2/32'],
+            'peers':[{'publicKey':'legacy-peer','endpoint':'162.159.192.5:2408'}]}},
+    ])
+    engine.save_section('routing',{'domainStrategy':'AsIs','rules':[
+        {'type':'field','ruleTag':'warp','attrs':{},'outboundTag':'warp'},
+        {'type':'field','ruleTag':'keep-me','domain':['domain:example.test'],'outboundTag':'direct'},
+    ]})
+    with store.transaction() as db:
+        db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,?)',
+                   ('warp','all',time.time()))
+    app=make_app(manager,auth,background=False)
+    routing=engine.section('routing')
+    assert [r.get('ruleTag') for r in routing['rules']]==['keep-me']
+    with store.lock:
+        profile=store.db.execute("SELECT outbound_json,device_id FROM warp_profiles WHERE scope='hub'").fetchone()
+        assignment_count=store.db.execute('SELECT COUNT(*) FROM warp_assignments').fetchone()[0]
+        legacy_scope=store.db.execute("SELECT 1 FROM routing_rule_scopes WHERE rule_tag='warp'").fetchone()
+    assert profile is not None and json.loads(profile['outbound_json'])['tag']=='warp'
+    assert assignment_count==0
+    assert legacy_scope is None
+    app.state.nodes.close();manager.close();engine.close();store.close()
