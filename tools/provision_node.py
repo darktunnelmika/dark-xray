@@ -29,7 +29,7 @@ def b64url(raw:bytes)->str:return base64.urlsafe_b64encode(raw).decode().rstrip(
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--domain',required=True)
-    p.add_argument('--port',type=int,default=9443)
+    p.add_argument('--port',type=int,default=8443)
     p.add_argument('--data-address',default='')
     p.add_argument('--name',default='')
     p.add_argument('--node-id',default='')
