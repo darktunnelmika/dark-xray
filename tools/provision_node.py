@@ -84,7 +84,7 @@ def main():
     run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',APP/'requirements-node.txt'])
 
     core=Path('/usr/local/lib/dark-xray')/a.core_version
-    core.parent.mkdir(parents=True,exist_ok=True,mode=0o755)
+    core.parent.mkdir(parents=True,exist_ok=True,mode=0o755);os.chmod(core.parent,0o755)
     if core.exists() and core_is_usable(core,a.core_version):
         pass
     else:
