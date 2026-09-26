@@ -863,7 +863,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
             if meta.get('deployLocal',True) is not False:ready['local'].add(inbound_id)
         for node in nodes.list():
-            if not node.get('enabled') or not node.get('online') or node.get('last_error'):continue
+            if not node.get('enabled') or not node.get('online'):continue
             key='node:'+str(node['id'])
             for assignment in node.get('assignments',[]):
                 inbound_id=int(assignment.get('local_inbound_id') or 0)
@@ -1930,6 +1930,28 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def runtime_targets(p:Principal=Depends(owner)):
         return {'items':_runtime_targets()}
 
+    def _runtime_inbound_access_paths(scope:str,inbound_id:int,deployed:list[str])->list[str]:
+        hosts=engine.section('hosts')
+        def runtime_key(raw):
+            value=str(raw or 'local')
+            return 'hub' if value=='local' else value
+        if scope=='all':
+            scopes=set(deployed)
+        else:
+            scopes={str(scope)}
+        kinds=set()
+        for host in hosts if isinstance(hosts,list) else []:
+            if not isinstance(host,dict) or not host.get('enable',True):continue
+            if int(host.get('inboundId') or 0)!=int(inbound_id):continue
+            if runtime_key(host.get('runtime')) not in scopes:continue
+            kind=str(host.get('endpointType') or 'direct').lower()
+            if kind in {'direct','tunnel'}:kinds.add(kind)
+        if not kinds and scopes.intersection(set(deployed)):
+            # A deployed runtime without an explicit Public Endpoint still has
+            # the Node/Hub data-address path used by direct/failover links.
+            kinds.add('direct')
+        return [x for x in ('direct','tunnel') if x in kinds]
+
     def _runtime_inbound_rows(scope:str)->list[dict]:
         value=str(scope or 'hub').strip()
         target=None if value=='all' else _runtime_target(value,require_online=False)
@@ -1945,11 +1967,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             deployed.extend('node:'+node_id for node_id in node_ids if node_id in assigned)
             if target is not None and target['id'] not in deployed:continue
             if target is None and not deployed:continue
+            access_paths=_runtime_inbound_access_paths(value,inbound_id,deployed)
             rows.append({'id':inbound_id,'tag':str(inbound.get('tag') or ''),
                          'remark':str(inbound.get('remark') or inbound.get('tag') or ('Inbound '+str(inbound_id))),
                          'protocol':str(inbound.get('protocol') or ''),
                          'port':int(inbound.get('port') or 0),
-                         'servers':deployed})
+                         'servers':deployed,'accessPaths':access_paths})
         return rows
 
     @app.get('/api/runtime-inbounds')
@@ -2080,13 +2103,18 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         available=_runtime_inbound_rows(scope)
         available_ids=[int(x['id']) for x in available]
         selected=[int(x) for x in assignment.get('inboundIds',[])]
+        coverage_rows=[x for x in available if not selected or int(x['id']) in set(selected)]
+        access_paths=[]
+        for row in coverage_rows:
+            for kind in row.get('accessPaths',[]):
+                if kind not in access_paths:access_paths.append(kind)
         return {'registered':bool(outbound and str(outbound.get('protocol','')).lower()=='wireguard'),
                 'tag':'warp','mode':str(assignment.get('mode') or 'off'),'adblock':bool(assignment.get('adblock')),
                 'server':target,'serverId':scope,'inboundIds':selected,
                 'allInbounds':bool(available_ids and set(selected)==set(available_ids)),
                 'endpoint':str(peer.get('endpoint') or ''),
                 'addresses':[str(x) for x in settings.get('address',[]) if isinstance(x,str)],
-                'availableInbounds':available,'secretExposed':False}
+                'availableInbounds':available,'accessPaths':access_paths,'secretExposed':False}
 
     def _warp_profiles_public()->list[dict]:
         return [_warp_profile_public(str(t['id'])) for t in _runtime_targets()]
