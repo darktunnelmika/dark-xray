@@ -15,10 +15,11 @@ nm=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(nm)
 
 
 def setup_manager(tmp_path,monkeypatch):
-    app=tmp_path/'app';conf=tmp_path/'etc';data=tmp_path/'data'
-    app.mkdir();conf.mkdir();data.mkdir();(conf/'tls').mkdir()
+    app=tmp_path/'app';conf=tmp_path/'etc';data=tmp_path/'data';core=tmp_path/'core'
+    app.mkdir();conf.mkdir();data.mkdir();core.mkdir(mode=0o700);(conf/'tls').mkdir()
+    version=core/'v26.3.27';version.mkdir(mode=0o700);binary=version/'xray';binary.write_text('x');binary.chmod(0o700)
     values={
-        'APP':app,'CONF':conf,'DATA':data,'CONFIG':conf/'config.json','GUARD':conf/'guard.json',
+        'APP':app,'CORE_ROOT':core,'CONF':conf,'DATA':data,'CONFIG':conf/'config.json','GUARD':conf/'guard.json',
         'TOKEN':data/'token','NODE_ID':data/'node-id','PAIR':data/'pair.json',
         'PAIR_CONSUMED':data/'pair-consumed','PROFILE':data/'node-profile.json',
         'DB':data/'node.sqlite3','SOURCE':data/'installed-source.json',
@@ -84,3 +85,14 @@ def test_change_port_updates_config_guard_and_pair_code(tmp_path,monkeypatch):
     assert 8443 in guard['protected_ports'] and 9443 not in guard['protected_ports']
     assert doc['origin']=='https://node.example.test:8443'
     assert json.loads(m.PAIR.read_text())['pairCode']==code
+
+
+def test_repair_restores_core_traversal_permissions(tmp_path,monkeypatch):
+    m=setup_manager(tmp_path,monkeypatch)
+    assert (m.CORE_ROOT.stat().st_mode & 0o777)==0o700
+    assert ((m.CORE_ROOT/'v26.3.27').stat().st_mode & 0o777)==0o700
+    assert ((m.CORE_ROOT/'v26.3.27'/'xray').stat().st_mode & 0o777)==0o700
+    m.repair()
+    assert (m.CORE_ROOT.stat().st_mode & 0o777)==0o755
+    assert ((m.CORE_ROOT/'v26.3.27').stat().st_mode & 0o777)==0o755
+    assert ((m.CORE_ROOT/'v26.3.27'/'xray').stat().st_mode & 0o777)==0o755
