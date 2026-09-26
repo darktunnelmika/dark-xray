@@ -182,7 +182,7 @@ def issue_pair(name:str|None=None):
     root();require_fresh()
     run(['systemctl','stop',SERVICE],check=True,timeout=30)
     try:code=_issue_pair_stopped(name)
-    finally:run(['systemctl','start',SERVICE],check=True,timeout=30)
+    finally:start_agent_ready()
     return code
 
 
@@ -194,7 +194,7 @@ def invalidate_pair():
         atomic_text(TOKEN,token+'\n',0o600,uid,gid)
         PAIR.unlink(missing_ok=True)
         atomic_text(PAIR_CONSUMED,str(time.time())+'\n',0o600,uid,gid)
-    finally:run(['systemctl','start',SERVICE],check=True,timeout=30)
+    finally:start_agent_ready()
 
 
 def local_health():
@@ -227,6 +227,11 @@ def wait_local_health(timeout:float=20.0):
 def restart_agent():
     root()
     run(['systemctl','restart',SERVICE],check=True,timeout=30)
+    return wait_local_health()
+
+
+def start_agent_ready():
+    run(['systemctl','start',SERVICE],check=True,timeout=30)
     return wait_local_health()
 
 
@@ -322,7 +327,7 @@ def change_port(port:int):
         open_firewall(port)
     finally:
         run(['systemctl','start',GUARD_SERVICE],check=True,timeout=30)
-        run(['systemctl','start',SERVICE],check=True,timeout=30)
+        start_agent_ready()
     return code
 
 
@@ -364,7 +369,7 @@ systemctl try-restart dark-xray-node.service
 '''
         atomic_text(hook,script,0o750,0,0)
         code=_issue_pair_stopped()
-    finally:run(['systemctl','start',SERVICE],check=True,timeout=30)
+    finally:start_agent_ready()
     return code
 
 
