@@ -328,6 +328,38 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
 
     status=client.get('/api/warp/status').json()
     assert status['mode']=='off' and status['endpoint']=='162.159.192.1:2408'
+
+    def fake_probe(_binary,_assets,outbounds,*,tags=None,attempts=1,timeout=5.0,trace=False):
+        selected=set(tags or [])
+        rows=[]
+        for i,out in enumerate(outbounds):
+            tag=str(out.get('tag') or '')
+            if selected and tag not in selected:continue
+            endpoint=((out.get('settings') or {}).get('peers') or [{}])[0].get('endpoint','')
+            rows.append({'tag':tag,'testable':True,'success':True,'delayMs':40.0,
+                         'lossPercent':0.0,'jitterMs':3.0,'error':'',
+                         'productionTrafficMutation':False,
+                         'egress':{'ip':'104.28.1.1','country':'DE','colo':'FRA','warp':'on'} if trace else {},
+                         'warpVerified':bool(trace)})
+        return rows
+    monkeypatch.setattr(server_module,'probe_outbounds',fake_probe)
+
+    batch=client.post('/api/outbounds/test',json={'tags':['warp'],'attempts':1,'timeoutSeconds':5})
+    assert batch.status_code==200,batch.text
+    assert batch.json()['items'][0]['delayMs']==40.0
+
+    paths=client.post('/api/warp/endpoints/scan',json={'tag':'warp'})
+    assert paths.status_code==200,paths.text
+    path_rows=paths.json()['items']
+    assert len(path_rows)>=12
+    assert len({x['endpoint'] for x in path_rows})==len(path_rows)
+    assert all(x['ready'] for x in path_rows)
+    chosen=next(x['endpoint'] for x in path_rows if x['endpoint']=='162.159.192.5:500')
+    selected=client.post('/api/warp/endpoint',json={'tag':'warp','endpoint':chosen})
+    assert selected.status_code==200,selected.text
+    assert selected.json()['endpoint']==chosen
+    assert next(x for x in engine.section('outbounds') if x['tag']=='warp')['settings']['peers'][0]['endpoint']==chosen
+
     scan=client.post('/api/warp/scan',json={'tag':'warp'})
     assert scan.status_code==200,scan.text
     assert scan.json()['passed'] is True and scan.json()['productionTrafficMutation'] is False
