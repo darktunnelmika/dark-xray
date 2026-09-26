@@ -330,7 +330,7 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
     created=client.post('/api/warp/create',json={'tag':'warp'})
     assert created.status_code==200,created.text
     doc=created.json()
-    assert doc['registered'] is True and doc['created'] is True and doc['runtimeMutation'] is False
+    assert doc['registered'] is True and doc['created'] is True and doc['runtimeMutation'] is True
     assert doc['secretExposed'] is False and 'private-do-not-return' not in created.text
 
     status=client.get('/api/warp/status').json()
@@ -383,19 +383,20 @@ def test_simple_warp_api_create_status_and_modes(stage7_env,monkeypatch):
     assert ai.json()['inboundIds']==[inbound_id] and ai.json()['allInbounds'] is True
     assert ai.json()['verification']['hub']['ok'] is True
     rules=engine.section('routing')['rules']
-    assert rules[0]['ruleTag']=='dark-warp-ai' and rules[0]['outboundTag']=='warp'
+    assert rules[0]['ruleTag'].startswith('dark-warp-ai-') and rules[0]['outboundTag']=='warp'
     assert rules[0]['inboundTag']==['stage7-in']
 
     all_=client.post('/api/warp/mode',json={'tag':'warp','mode':'all','adblock':True,'inboundIds':[inbound_id]})
     assert all_.status_code==200,all_.text
     assert all_.json()['mode']=='all' and all_.json()['adblock'] is True
     rules=engine.section('routing')['rules']
-    assert [r['ruleTag'] for r in rules[:2]]==['dark-smart-adblock','dark-warp-all']
+    assert rules[0]['ruleTag'].startswith('dark-smart-adblock-')
+    assert rules[1]['ruleTag'].startswith('dark-warp-all-')
 
     off=client.post('/api/warp/mode',json={'tag':'warp','mode':'off','adblock':False})
     assert off.status_code==200,off.text
     assert off.json()['mode']=='off'
-    assert not [r for r in engine.section('routing')['rules'] if r.get('ruleTag') in {'dark-warp-ai','dark-warp-all'}]
+    assert not [r for r in engine.section('routing')['rules'] if str(r.get('ruleTag') or '').startswith(('dark-warp-ai-','dark-warp-all-'))]
 
 
 def test_runtime_targeted_ping_warp_and_routing_scope(stage7_env,monkeypatch):
@@ -422,7 +423,21 @@ def test_runtime_targeted_ping_warp_and_routing_scope(stage7_env,monkeypatch):
         'node_id':node_id,'items':[{'tag':tag,'ok':True,'latencyMs':22.0,'lossPercent':0.0,'jitterMs':2.0,
                                     'score':[0,0,22,2]} for tag in tags],
         'productionTrafficMutation':False})
-    warp=client.post('/api/warp/scan',json={'tag':'warp-us','server':'node:node-us'})
+    monkeypatch.setattr(app.state.nodes,'warp_endpoint_probe',lambda node_id,tag,endpoints=None,attempts=2,timeout_seconds=5:{
+        'node_id':node_id,'current':'162.159.192.5:2408','items':[{
+            'tag':'warp','endpoint':(endpoints or ['162.159.192.5:2408'])[0],
+            'testable':True,'success':True,'delayMs':24.0,'lossPercent':0.0,'jitterMs':2.0,'error':'',
+            'egress':{'ip':'104.28.1.1','country':'US','colo':'IAD','warp':'on'},'warpVerified':True,
+            'productionTrafficMutation':False}],
+        'productionTrafficMutation':False})
+    monkeypatch.setattr(server_module,'register_cloudflare_warp',lambda tag='warp':{
+        'registered':True,'deviceId':'node-us-device','outbound':{
+            'tag':'warp','protocol':'wireguard','settings':{'secretKey':'node-us-secret',
+            'address':['172.16.60.2/32'],'peers':[{'publicKey':'peer-node-us','endpoint':'162.159.192.5:2408'}]},
+            'streamSettings':{'sockopt':{}}}})
+    created=client.post('/api/warp/create',json={'tag':'warp','server':'node:node-us'})
+    assert created.status_code==200,created.text
+    warp=client.post('/api/warp/scan',json={'tag':'warp','server':'node:node-us'})
     assert warp.status_code==200,warp.text
     assert warp.json()['server']['id']=='node:node-us'
     assert warp.json()['passed'] is True
@@ -437,7 +452,7 @@ def test_runtime_targeted_ping_warp_and_routing_scope(stage7_env,monkeypatch):
     assert engine.routing_for_scope('node:node-us')['rules'][0]['ruleTag']=='user-us-only'
 
 
-def test_warp_activation_scopes_to_selected_node_and_inbound(stage7_env):
+def test_warp_activation_scopes_to_selected_node_and_inbound(stage7_env,monkeypatch):
     _store,engine,client=stage7_env
     app=client.app
     inbound_id=int(client.get('/api/inbounds').json()[0]['id'])
@@ -446,8 +461,16 @@ def test_warp_activation_scopes_to_selected_node_and_inbound(stage7_env):
     assert runtime.status_code==200,runtime.text
     assert [x['id'] for x in runtime.json()['items']]==[inbound_id]
 
+    monkeypatch.setattr(server_module,'register_cloudflare_warp',lambda tag='warp':{
+        'registered':True,'deviceId':'node-us-device','outbound':{
+            'tag':'warp','protocol':'wireguard','settings':{'secretKey':'node-us-secret',
+            'address':['172.16.60.2/32'],'peers':[{'publicKey':'peer-node-us','endpoint':'162.159.192.5:2408'}]},
+            'streamSettings':{'sockopt':{}}}})
+    created=client.post('/api/warp/create',json={'tag':'warp','server':'node:node-us'})
+    assert created.status_code==200,created.text
+
     activated=client.post('/api/warp/mode',json={
-        'tag':'warp-us','mode':'ai','adblock':False,
+        'tag':'warp','mode':'ai','adblock':False,
         'server':'node:node-us','inboundIds':[inbound_id],
     })
     assert activated.status_code==200,activated.text
@@ -456,17 +479,21 @@ def test_warp_activation_scopes_to_selected_node_and_inbound(stage7_env):
     assert doc['inboundIds']==[inbound_id]
     assert doc['verification']['nodes']['node-us']['ok'] is True
 
-    stored=next(r for r in engine.section('routing')['rules'] if r.get('ruleTag')=='dark-warp-ai')
+    stored=next(r for r in engine.section('routing')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-ai-'))
     assert stored['inboundTag']==['stage7-in']
-    assert stored['outboundTag']=='warp-us'
-    assert not any(r.get('ruleTag')=='dark-warp-ai' for r in engine.routing_for_scope('hub')['rules'])
-    assert any(r.get('ruleTag')=='dark-warp-ai' for r in engine.routing_for_scope('node:node-us')['rules'])
-    assert not any(r.get('ruleTag')=='dark-warp-ai' for r in engine.routing_for_scope('node:node-de')['rules'])
+    assert stored['outboundTag']=='warp'
+    assert not any(str(r.get('ruleTag') or '').startswith('dark-warp-ai-') for r in engine.routing_for_scope('hub')['rules'])
+    assert any(str(r.get('ruleTag') or '').startswith('dark-warp-ai-') for r in engine.routing_for_scope('node:node-us')['rules'])
+    assert not any(str(r.get('ruleTag') or '').startswith('dark-warp-ai-') for r in engine.routing_for_scope('node:node-de')['rules'])
 
-    desired_us=app.state.nodes.desired_state('node-us')['payload']['sections']['routing']['rules']
-    desired_de=app.state.nodes.desired_state('node-de')['payload']['sections']['routing']['rules']
-    assert any(r.get('ruleTag')=='dark-warp-ai' for r in desired_us)
-    assert not any(r.get('ruleTag')=='dark-warp-ai' for r in desired_de)
+    desired_us_doc=app.state.nodes.desired_state('node-us')['payload']['sections']
+    assert any(str(r.get('ruleTag') or '').startswith('dark-warp-ai-') for r in desired_us_doc['routing']['rules'])
+    assert next(o for o in desired_us_doc['outbounds'] if o.get('tag')=='warp')['settings']['secretKey']=='node-us-secret'
+    profiles=client.get('/api/warp/profiles').json()['items']
+    node_us=next(x for x in profiles if x['serverId']=='node:node-us')
+    node_de=next(x for x in profiles if x['serverId']=='node:node-de')
+    assert node_us['registered'] is True
+    assert node_de['registered'] is False
 
     extra=client.post('/api/inbounds',json={
         'remark':'Hub only','listen':'127.0.0.1','port':19444,'protocol':'vless','enable':True,'tag':'hub-only',
@@ -474,18 +501,127 @@ def test_warp_activation_scopes_to_selected_node_and_inbound(stage7_env):
     })
     assert extra.status_code==200,extra.text
     rejected=client.post('/api/warp/mode',json={
-        'tag':'warp-us','mode':'ai','adblock':False,
+        'tag':'warp','mode':'ai','adblock':False,
         'server':'node:node-us','inboundIds':[extra.json()['id']],
     })
     assert rejected.status_code==409,rejected.text
     assert 'not deployed' in rejected.text
 
     node_only=client.post('/api/warp/mode',json={
-        'tag':'warp-us','mode':'all','adblock':False,
+        'tag':'warp','mode':'all','adblock':False,
         'server':'node:node-us','inboundIds':[],
     })
     assert node_only.status_code==200,node_only.text
     assert node_only.json()['inboundIds']==[inbound_id]
     assert node_only.json()['allInbounds'] is True
-    all_rule=next(r for r in engine.section('routing')['rules'] if r.get('ruleTag')=='dark-warp-all')
+    all_rule=next(r for r in engine.section('routing')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-all-'))
     assert all_rule['inboundTag']==['stage7-in']
+
+
+def test_warp_profiles_are_independent_per_runtime_and_assignments_coexist(stage7_env,monkeypatch):
+    store,engine,client=stage7_env
+    app=client.app
+    inbound_id=int(client.get('/api/inbounds').json()[0]['id'])
+    issued={'n':0}
+
+    def fake_register(*,tag='warp'):
+        issued['n']+=1
+        n=issued['n']
+        return {'registered':True,'deviceId':f'device-{n}','outbound':{
+            'tag':'warp','protocol':'wireguard','settings':{
+                'secretKey':f'secret-{n}','address':[f'172.16.{n}.2/32'],
+                'peers':[{'publicKey':f'peer-{n}','endpoint':f'162.159.192.{n}:2408'}]},
+            'streamSettings':{'sockopt':{}}}}
+    monkeypatch.setattr(server_module,'register_cloudflare_warp',fake_register)
+
+    hub=client.post('/api/warp/create',json={'tag':'warp','server':'hub'})
+    us=client.post('/api/warp/create',json={'tag':'warp','server':'node:node-us'})
+    assert hub.status_code==200,hub.text
+    assert us.status_code==200,us.text
+
+    with store.lock:
+        rows={r['scope']:json.loads(r['outbound_json']) for r in store.db.execute(
+            'SELECT scope,outbound_json FROM warp_profiles ORDER BY scope')}
+    assert rows['hub']['settings']['secretKey']=='secret-1'
+    assert rows['node:node-us']['settings']['secretKey']=='secret-2'
+    assert 'node:node-de' not in rows
+
+    rotated=client.post('/api/warp/rotate',json={'tag':'warp','server':'node:node-us'})
+    assert rotated.status_code==200,rotated.text
+    with store.lock:
+        rows={r['scope']:json.loads(r['outbound_json']) for r in store.db.execute(
+            'SELECT scope,outbound_json FROM warp_profiles ORDER BY scope')}
+    assert rows['hub']['settings']['secretKey']=='secret-1'
+    assert rows['node:node-us']['settings']['secretKey']=='secret-3'
+
+    hub_on=client.post('/api/warp/mode',json={
+        'tag':'warp','mode':'ai','adblock':False,'server':'hub','inboundIds':[inbound_id]})
+    us_on=client.post('/api/warp/mode',json={
+        'tag':'warp','mode':'ai','adblock':False,'server':'node:node-us','inboundIds':[inbound_id]})
+    assert hub_on.status_code==200,hub_on.text
+    assert us_on.status_code==200,us_on.text
+
+    rules=[r for r in engine.section('routing')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-ai-')]
+    assert len(rules)==2
+    with store.lock:
+        scopes={r['rule_tag']:r['scope'] for r in store.db.execute(
+            "SELECT rule_tag,scope FROM routing_rule_scopes WHERE rule_tag LIKE 'dark-warp-ai-%'")}
+    assert set(scopes.values())=={'hub','node:node-us'}
+    assert len([r for r in engine.routing_for_scope('hub')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-ai-')])==1
+    assert len([r for r in engine.routing_for_scope('node:node-us')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-ai-')])==1
+    assert not [r for r in engine.routing_for_scope('node:node-de')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-ai-')]
+
+    us_off=client.post('/api/warp/mode',json={
+        'tag':'warp','mode':'off','adblock':False,'server':'node:node-us','inboundIds':[]})
+    assert us_off.status_code==200,us_off.text
+    remaining=[r for r in engine.section('routing')['rules'] if str(r.get('ruleTag') or '').startswith('dark-warp-ai-')]
+    assert len(remaining)==1
+    with store.lock:
+        row=store.db.execute("SELECT scope FROM routing_rule_scopes WHERE rule_tag=?",(remaining[0]['ruleTag'],)).fetchone()
+    assert row['scope']=='hub'
+
+    profiles=client.get('/api/warp/profiles')
+    assert profiles.status_code==200,profiles.text
+    by={x['serverId']:x for x in profiles.json()['items']}
+    assert by['hub']['registered'] is True and by['hub']['mode']=='ai'
+    assert by['node:node-us']['registered'] is True and by['node:node-us']['mode']=='off'
+    assert by['node:node-de']['registered'] is False
+
+
+def test_legacy_global_warp_migrates_to_hub_profile_and_assignment(tmp_path):
+    fake=tmp_path/'fake-xray'
+    shutil.copy2(ROOT/'tests/fixtures/fake_xray.py',fake);fake.chmod(0o755)
+    store=Store(tmp_path/'dark.sqlite3')
+    config=Config(xray_binary=str(fake),xray_assets=str(tmp_path),xray_api_port=free_port(),
+                  public_address='vpn.example.test',test_engine=True,core_autostart=False)
+    engine=CoreEngine(config,store,tmp_path/'runtime')
+    manager=Manager(store,engine);auth=Auth(store,tmp_path/'secret.key')
+    auth.bootstrap('dark','Test!OnlyPassword123')
+    manager.owner_put(OWNER,'dark',name='DARK',allowed=[])
+    inbound=engine.save_inbound({
+        'remark':'Legacy','listen':'127.0.0.1','port':19445,'protocol':'vless','enable':True,
+        'tag':'legacy-in','settings':{'decryption':'none'},
+        'streamSettings':{'network':'tcp','security':'none'},'sniffing':{}})
+    legacy={'tag':'warp','protocol':'wireguard','settings':{
+        'secretKey':'legacy-secret','address':['172.16.9.2/32'],
+        'peers':[{'publicKey':'legacy-peer','endpoint':'162.159.192.9:2408'}]},
+        'streamSettings':{'sockopt':{}}}
+    engine.save_section('outbounds',[
+        {'tag':'direct','protocol':'freedom','settings':{}},
+        {'tag':'block','protocol':'blackhole','settings':{}},legacy])
+    engine.save_section('routing',{'domainStrategy':'AsIs','rules':[{
+        'type':'field','ruleTag':'dark-warp-ai','domain':['domain:openai.com'],
+        'inboundTag':['legacy-in'],'outboundTag':'warp'}]})
+    with store.transaction() as db:
+        db.execute('INSERT INTO routing_rule_scopes(rule_tag,scope,updated_at) VALUES(?,?,1)',
+                   ('dark-warp-ai','hub'))
+    app=make_app(manager,auth,background=False)
+    assert app is not None
+    with store.lock:
+        profile=store.db.execute("SELECT outbound_json FROM warp_profiles WHERE scope='hub'").fetchone()
+        assignment=store.db.execute("SELECT mode,inbound_ids FROM warp_assignments WHERE scope='hub'").fetchone()
+    assert profile is not None
+    assert json.loads(profile['outbound_json'])['settings']['secretKey']=='legacy-secret'
+    assert assignment['mode']=='ai'
+    assert json.loads(assignment['inbound_ids'])==[int(inbound['id'])]
+    manager.close();engine.close();store.close()
