@@ -6,6 +6,7 @@ const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
 
 const i18n=read('web/i18n-en.js');
 const live=read('web/live.js');
+const style=read('web/style.css');
 const inbounds=read('web/inbounds-v3.js');
 const webDir=path.join(__dirname,'..','web');
 const html=fs.readFileSync(path.join(webDir,'index.html'),'utf8');
@@ -110,4 +111,13 @@ test('healthy production shell has no redundant live status banner and top bread
   assert.match(live,/:'';\$\('#app'\)\.innerHTML/);
   assert.match(live,/<span class="breadcrumb"><b>\$\{e\(active\)\}<\/b><\/span>/);
   assert.doesNotMatch(live,/حالت متصل · بدون دادهٔ نمونه/);
+});
+
+
+test('mobile sidebar toggle remains clickable above the drawer and exposes expanded state',()=>{
+  assert.match(live,/aria-expanded="false"/);
+  assert.match(live,/function setMobileMenu\(open\)/);
+  assert.match(live,/setAttribute\('aria-expanded',String\(next\)\)/);
+  assert.match(live,/case'menu':setMobileMenu/);
+  assert.ok(style.includes('.mobile-menu{display:grid;position:relative;z-index:60}'));
 });

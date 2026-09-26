@@ -625,6 +625,19 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.evaluate("closeDialog()")
 
             page.set_viewport_size({'width':390,'height':844})
+            mobile_menu=page.locator('.mobile-menu');mobile_menu.wait_for(state='visible',timeout=10000)
+            assert mobile_menu.get_attribute('aria-expanded')=='false'
+            mobile_menu.click()
+            page.wait_for_function("()=>document.querySelector('.sidebar')?.classList.contains('open')",timeout=5000)
+            assert mobile_menu.get_attribute('aria-expanded')=='true'
+            mobile_menu.click()
+            page.wait_for_function("()=>!document.querySelector('.sidebar')?.classList.contains('open')",timeout=5000)
+            assert mobile_menu.get_attribute('aria-expanded')=='false'
+            mobile_menu.click()
+            page.locator('.sidebar .nav-btn[data-page="clients"]').click()
+            page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='clients'",timeout=10000)
+            assert not page.locator('.sidebar').evaluate("e=>e.classList.contains('open')")
+            mark('390px mobile sidebar opens, closes and releases content after navigation')
             page.evaluate("go('inbounds')")
             page.wait_for_function("()=>document.querySelector('.nav-btn.active')?.dataset.page==='inbounds'",timeout=10000)
             page.wait_for_timeout(150)
