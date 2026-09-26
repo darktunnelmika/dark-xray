@@ -661,3 +661,29 @@ def test_legacy_global_warp_rule_is_removed_during_per_server_migration(tmp_path
     assert assignment_count==0
     assert legacy_scope is None
     app.state.nodes.close();manager.close();engine.close();store.close()
+
+
+def test_runtime_inbound_reports_direct_and_tunnel_coverage(stage7_env):
+    _store,engine,client=stage7_env
+    inbound_id=int(client.get('/api/inbounds').json()[0]['id'])
+    common={
+        'inboundId':inbound_id,'security':'same','sni':'','overrideSniFromAddress':False,
+        'keepSniBlank':False,'host':'','path':'','alpn':'','fingerprint':'chrome',
+        'allowInsecure':False,'finalMask':'','mihomoIpVersion':'','excludeFromSubTypes':[],'enable':True,
+        'runtime':'node:node-us',
+    }
+    engine.save_section('hosts',[
+        {**common,'endpointType':'direct','address':'203.0.113.10','port':19443,'remark':'NODE DIRECT'},
+        {**common,'endpointType':'tunnel','address':'iran-tunnel.example.test','port':20001,'remark':'NODE TUNNEL'},
+    ])
+    runtime=client.get('/api/runtime-inbounds',params={'server':'node:node-us'})
+    assert runtime.status_code==200,runtime.text
+    row=runtime.json()['items'][0]
+    assert row['id']==inbound_id
+    assert row['accessPaths']==['direct','tunnel']
+
+    profiles=client.get('/api/warp/profiles')
+    assert profiles.status_code==200,profiles.text
+    node_profile=next(x for x in profiles.json()['items'] if x['serverId']=='node:node-us')
+    assert node_profile['accessPaths']==['direct','tunnel']
+    assert node_profile['availableInbounds'][0]['accessPaths']==['direct','tunnel']
