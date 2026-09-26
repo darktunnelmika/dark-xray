@@ -29,3 +29,8 @@
 .out-ping-result{display:grid;justify-items:end;gap:1px;min-width:104px}.out-ping-result small{max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:8px;color:#607b84}.out-ping-result .out-ping{font-weight:700}
 .routing-compact .route-line{grid-template-columns:36px minmax(150px,1fr) minmax(110px,.65fr) 22px minmax(85px,.45fr) auto}.route-server{font:9px var(--mono);color:#7ed7cb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid rgba(45,212,191,.12);border-radius:6px;padding:4px 6px;background:rgba(45,212,191,.04)}
 @media(max-width:900px){.routing-compact .route-line{grid-template-columns:30px minmax(120px,1fr) minmax(90px,.6fr) 18px}.routing-compact .route-target{grid-column:2/4}.routing-compact .route-actions{grid-column:2/-1}.out-ping-result{justify-items:start}}
+
+/* Runtime + inbound scoped routing */
+.routing-compact .route-line{grid-template-columns:34px minmax(145px,1fr) minmax(105px,.58fr) minmax(105px,.58fr) 20px minmax(80px,.42fr) auto}
+.route-inbound{font:9px var(--mono);color:#b7d9ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid rgba(96,165,250,.14);border-radius:6px;padding:4px 6px;background:rgba(96,165,250,.04)}
+@media(max-width:980px){.routing-compact .route-line{grid-template-columns:30px minmax(120px,1fr) minmax(90px,.6fr) minmax(90px,.6fr)}.routing-compact .route-arrow{display:none}.routing-compact .route-target{grid-column:2/4}.routing-compact .route-actions{grid-column:2/-1}}
