@@ -37,5 +37,3 @@ def test_restore_scan_rejects_private_destination(env,monkeypatch):
     try:restore._validate_fetch_url('https://private.example/sub/x')
     except Exception as ex:assert 'non-public' in str(ex)
     else:raise AssertionError('private destination was accepted')
-
-[executed on device: ubuntu (cf6412b3-aea9-4ff4-bf30-dfe3a0179e70)]
