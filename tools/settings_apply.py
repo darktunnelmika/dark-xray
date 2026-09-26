@@ -97,7 +97,7 @@ def validate_desired(value: dict, current: dict, inbound_ports: set[int], subscr
     domain = str(v.get('domain','')).strip().lower();email = str(v.get('acme_email','')).strip()
     if v['access_mode']=='domain_tls':
         if not DOMAIN_RE.fullmatch(domain): raise ValueError('Domain + TLS mode requires a valid ASCII domain')
-        if not EMAIL_RE.fullmatch(email): raise ValueError('Domain + TLS mode requires a valid ACME email')
+        if email and not EMAIL_RE.fullmatch(email): raise ValueError('Domain + TLS mode requires a valid ACME email')
     else: domain='';email=''
     v['domain']=domain;v['acme_email']=email
     return v
@@ -116,7 +116,10 @@ def build_plan(current: dict, desired: dict) -> dict:
         'domain':current_domain if actual_mode=='domain_tls' else '',
     }
     pending = {k:{'from':actual.get(k),'to':desired.get(k)} for k in actual if actual.get(k)!=desired.get(k)}
-    return {'actual':actual,'desired':desired,'pending':pending,'requires_acme':desired['access_mode']=='domain_tls' and not tls_ready,'tls_ready':tls_ready}
+    requires_acme=desired['access_mode']=='domain_tls' and not tls_ready
+    if requires_acme and not EMAIL_RE.fullmatch(str(desired.get('acme_email','')).strip()):
+        raise ValueError('Domain + TLS mode requires a valid ACME email when certificate issuance is required')
+    return {'actual':actual,'desired':desired,'pending':pending,'requires_acme':requires_acme,'tls_ready':tls_ready}
 
 
 def _atomic_json(path: Path, value: dict, mode: int | None = None) -> None:

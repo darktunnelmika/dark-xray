@@ -195,6 +195,25 @@ def test_settings_apply_plan_is_pure(tmp_path):
     assert plan['requires_acme'] is False
 
 
+
+def test_settings_apply_reuses_existing_tls_without_acme_email(tmp_path):
+    path=Path(__file__).resolve().parents[1]/'tools'/'settings_apply.py'
+    spec=importlib.util.spec_from_file_location('settings_apply_tls_reuse',path);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+    cert=tmp_path/'cert.pem';key=tmp_path/'key.pem';cert.write_text('cert');key.write_text('key')
+    current={'public_origin':'https://panel.example.com:2087','bind_port':2087,'public_address':'1.2.3.4','panel_path':'/','poll_seconds':5,
+             'core_autostart':False,'xray_api_port':10085,'tls_certificate':str(cert),'tls_private_key':str(key)}
+    desired={'access_mode':'domain_tls','bind_port':2087,'public_address':'1.2.3.4','panel_path':'/','poll_seconds':5,
+             'core_autostart':True,'domain':'panel.example.com','acme_email':''}
+    valid=mod.validate_desired(desired,current,set())
+    plan=mod.build_plan(current,valid)
+    assert plan['tls_ready'] is True and plan['requires_acme'] is False
+    assert plan['pending']['core_autostart']=={'from':False,'to':True}
+    first_time=dict(current,public_origin='http://127.0.0.1:2087',tls_certificate='',tls_private_key='')
+    valid=mod.validate_desired(desired,first_time,set())
+    with pytest.raises(ValueError,match='ACME email'):
+        mod.build_plan(first_time,valid)
+
+
 def test_legacy_panel_section_is_hydrated(env):
     store,engine,c=env
     with store.transaction() as db:
