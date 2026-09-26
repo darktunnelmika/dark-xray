@@ -1,5 +1,3 @@
-[Reading 299 lines from start (total: 299 lines, 0 remaining)]
-
 from __future__ import annotations
 import base64, json, ipaddress, re, secrets, socket, ssl, time, uuid
 from typing import Any
