@@ -210,6 +210,26 @@ def local_health():
     finally:con.close()
 
 
+def wait_local_health(timeout:float=20.0):
+    deadline=time.monotonic()+timeout;last='not ready'
+    while time.monotonic()<deadline:
+        try:
+            health=local_health()
+            if health.get('service')=='DARK XRAY NODE' and health.get('agent_only') is True:
+                return health
+            last='unexpected health payload'
+        except Exception as ex:
+            last=type(ex).__name__+': '+str(ex)[:160]
+        time.sleep(.2)
+    raise RuntimeError('Node Agent did not become healthy after restart: '+last)
+
+
+def restart_agent():
+    root()
+    run(['systemctl','restart',SERVICE],check=True,timeout=30)
+    return wait_local_health()
+
+
 def listening(port:int):
     cp=run(['ss','-lnt']);needle=':'+str(port)
     return any(needle in line for line in cp.stdout.splitlines())
@@ -390,7 +410,7 @@ def repair():
     run(['systemctl','daemon-reload'],check=True)
     run(['systemctl','restart',GUARD_SERVICE],check=True,timeout=30)
     run(['systemctl','restart',SERVICE],check=True,timeout=30)
-    time.sleep(1)
+    wait_local_health()
     return diagnose()
 
 
@@ -515,7 +535,7 @@ def menu():
             elif ch=='2':pair_menu()
             elif ch=='3':connection_menu()
             elif ch=='4':diagnose();pause()
-            elif ch=='5':run(['systemctl','restart',SERVICE],check=True);print(f'{G}Restarted.{N}');pause()
+            elif ch=='5':restart_agent();print(f'{G}Restarted and healthy.{N}');pause()
             elif ch=='6':logs(150);pause()
             elif ch=='7':
                 if input('Type UPDATE: ').strip()=='UPDATE':update_latest()
@@ -556,7 +576,7 @@ def main():
         elif cmd=='update':update_latest()
         elif cmd=='backup':backup()
         elif cmd=='logs':logs(a.lines)
-        elif cmd=='restart':root();run(['systemctl','restart',SERVICE],check=True)
+        elif cmd=='restart':restart_agent()
         elif cmd=='config':root();print(CONFIG.read_text())
     except RuntimeError as ex:raise SystemExit('ERROR: '+str(ex))
 
