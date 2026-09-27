@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.4.0-rc4"
+SCRIPT_VER="0.5.0-rc5"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -27,7 +27,7 @@ IPSEC_SECRETS="$SEC_DIR/ipsec.secrets"
 UPDATE_URL_FILE="$BASE_DIR/update.url"
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 
-if [ "${DARK_GRE_LIB_ONLY:-0}" != 1 ] && [ ! -t 0 ] && [ -r /dev/tty ]; then
+if [ "${DARK_GRE_LIB_ONLY:-0}" != 1 ] && [ "${DARK_GRE_REPAIR_ONLY:-0}" != 1 ] && [ ! -t 0 ] && [ -r /dev/tty ]; then
   exec </dev/tty
 fi
 
@@ -1208,6 +1208,40 @@ uninstall_all(){
   ok "DARK GRE uninstalled; strongSwan package was left installed"; pause; exit 0
 }
 
+repair_runtime(){
+  need_root
+  ensure_deps
+  ensure_system
+  migrate_existing_tunnels
+  security_sync_all
+
+  local d n
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*; do
+    [ -r "$d/meta.conf" ] || continue
+    . "$d/meta.conf"
+    n="$NAME"
+
+    # Kill stale RC3/early-RC4 restart loops before rearming with RC5 units.
+    systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
+    systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
+    systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+    systemctl stop "darkgre-watch@$n.service" >/dev/null 2>&1 || true
+
+    systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || true
+    systemctl start "darkgre@$n.service" >/dev/null 2>&1 || true
+    systemctl enable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+    "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
+
+    RESTART_EVERY="${RESTART_EVERY:-off}"
+    set_restart_timer "$n" "$RESTART_EVERY"
+  done
+  shopt -u nullglob
+
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  return 0
+}
+
 main(){
   need_root; ensure_deps; ensure_system; migrate_existing_tunnels; sweep_partials
   trap on_interrupt INT TERM
@@ -1225,6 +1259,11 @@ main(){
     esac
   done
 }
+
+if [ "${DARK_GRE_REPAIR_ONLY:-0}" = 1 ]; then
+  repair_runtime
+  exit $?
+fi
 
 if [ "${DARK_GRE_LIB_ONLY:-0}" != 1 ]; then
   main "$@"
