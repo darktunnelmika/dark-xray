@@ -20,6 +20,7 @@ import libXray.DialerController
 import libXray.LibXray
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -54,6 +55,8 @@ class DarkXrayVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private lateinit var connectivityManager: ConnectivityManager
     private var networkCallbackRegistered = false
+    private val availableUnderlyingNetworks =
+        ConcurrentHashMap.newKeySet<Network>()
     @Volatile private var underlyingNetworkLost = false
 
     @Volatile private var currentRawUri = ""
@@ -67,23 +70,35 @@ class DarkXrayVpnService : VpnService() {
     }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            val wasEmpty = availableUnderlyingNetworks.isEmpty()
+            availableUnderlyingNetworks.add(network)
+
+            if (
+                wasEmpty &&
+                desiredConnected &&
+                currentAutoReconnect &&
+                underlyingNetworkLost
+            ) {
+                underlyingNetworkLost = false
+                executor.execute { reconnectAfterNetworkChange() }
+            }
+        }
+
         override fun onLost(network: Network) {
+            availableUnderlyingNetworks.remove(network)
+            if (availableUnderlyingNetworks.isNotEmpty()) return
             if (!desiredConnected || !currentAutoReconnect) return
+
             underlyingNetworkLost = true
             executor.execute {
                 if (!desiredConnected || !currentAutoReconnect) return@execute
                 reconnecting = true
                 running = false
-                lastError = "Network changed. Waiting to reconnect."
+                lastError = "Network unavailable. Waiting to reconnect."
                 stopXrayOnly()
                 notifyState("Waiting for network…", false)
             }
-        }
-
-        override fun onAvailable(network: Network) {
-            if (!desiredConnected || !currentAutoReconnect || !underlyingNetworkLost) return
-            underlyingNetworkLost = false
-            executor.execute { reconnectAfterNetworkChange() }
         }
     }
 
@@ -580,6 +595,7 @@ class DarkXrayVpnService : VpnService() {
         } catch (_: Throwable) {
         }
         networkCallbackRegistered = false
+        availableUnderlyingNetworks.clear()
     }
 
     private fun safeUidRxBytes(): Long {
