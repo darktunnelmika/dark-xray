@@ -99,6 +99,37 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
+                    "pingProfiles" -> {
+                        if (DarkXrayVpnService.running || DarkXrayVpnService.reconnecting) {
+                            result.error(
+                                "PING_WHILE_CONNECTED",
+                                "Disconnect the VPN for full Xray route testing.",
+                                null,
+                            )
+                            return@setMethodCallHandler
+                        }
+
+                        val rawItems = call.argument<List<String>>("rawUris")
+                            ?: emptyList()
+                        val timeout = (call.argument<Int>("timeoutSeconds") ?: 5)
+                            .coerceIn(1, 15)
+
+                        Thread {
+                            try {
+                                val delays = pingShareLinks(rawItems, timeout)
+                                runOnUiThread { result.success(delays) }
+                            } catch (error: Throwable) {
+                                runOnUiThread {
+                                    result.error(
+                                        "PING_FAILED",
+                                        error.message ?: "Xray ping failed.",
+                                        null,
+                                    )
+                                }
+                            }
+                        }.start()
+                    }
+
                     "convertXrayJsonToShareLinks" -> {
                         val xrayJson = call.argument<String>("xrayJson").orEmpty()
                         try {
@@ -228,6 +259,78 @@ class MainActivity : FlutterActivity() {
         } else {
             startService(intent)
         }
+    }
+
+    private fun pingShareLinks(
+        rawUris: List<String>,
+        timeoutSeconds: Int,
+    ): List<Int> {
+        if (rawUris.isEmpty()) return emptyList()
+
+        val delays = MutableList(rawUris.size) { -1 }
+        val valid = mutableListOf<Pair<Int, String>>()
+
+        rawUris.forEachIndexed { index, rawUri ->
+            try {
+                val converted = invokeCore(
+                    "convertShareLinksToXrayJson",
+                    JSONObject().put("text", rawUri),
+                )
+                if (!converted.optBoolean("success")) return@forEachIndexed
+
+                val outbounds = converted.optJSONObject("data")
+                    ?.optJSONArray("outbounds")
+                    ?: return@forEachIndexed
+
+                if (outbounds.length() == 0) return@forEachIndexed
+
+                val xrayJson = JSONObject()
+                    .put("outbounds", outbounds)
+                    .toString()
+                valid.add(index to xrayJson)
+            } catch (_: Throwable) {
+            }
+        }
+
+        valid.chunked(5).forEach { batch ->
+            val configs = org.json.JSONArray()
+            batch.forEach { (_, xrayJson) ->
+                configs.put(
+                    JSONObject().put("xrayJson", xrayJson),
+                )
+            }
+
+            val response = invokeCore(
+                "pingBatch",
+                JSONObject()
+                    .put("configs", configs)
+                    .put("timeout", timeoutSeconds)
+                    .put("url", "https://cp.cloudflare.com/"),
+            )
+
+            if (!response.optBoolean("success")) return@forEach
+
+            val results = response.optJSONObject("data")
+                ?.optJSONArray("results")
+                ?: return@forEach
+
+            batch.forEachIndexed { localIndex, pair ->
+                if (localIndex >= results.length()) return@forEachIndexed
+                val item = results.optJSONObject(localIndex)
+                    ?: return@forEachIndexed
+                delays[pair.first] = item.optInt("delay", 10000)
+            }
+        }
+
+        return delays
+    }
+
+    private fun invokeCore(method: String, payload: JSONObject): JSONObject {
+        val request = JSONObject()
+            .put("apiVersion", 3)
+            .put("method", method)
+            .put("payload", payload)
+        return JSONObject(LibXray.invoke(request.toString()))
     }
 
     private fun buildStatus(): Map<String, Any> {
