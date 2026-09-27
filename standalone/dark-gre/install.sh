@@ -53,6 +53,16 @@ echo "$RAW" > "$BASE_DIR/update.url"
 chmod 600 "$BASE_DIR/update.url"
 
 ok "installed v${ver:-?} to $DEST"
+
+if [ "${DARK_GRE_INSTALL_ONLY:-0}" != 1 ]; then
+  info "repairing runtime units"
+  if ! DARK_GRE_REPAIR_ONLY=1 "$DEST"; then
+    bad "runtime repair failed"
+    exit 1
+  fi
+  ok "runtime units repaired"
+fi
+
 echo
 printf '  %srun it with:%s  darkgre\n' "$D" "$N"
 echo
