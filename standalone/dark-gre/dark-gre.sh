@@ -11,8 +11,6 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-set -u
-
 SCRIPT_VER="0.1.0-rc1"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
@@ -22,43 +20,99 @@ UNIT_FILE="/etc/systemd/system/darkgre@.service"
 UPDATE_URL_FILE="$BASE_DIR/update.url"
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 
-if [ ! -t 0 ]; then
-  if { exec 3</dev/tty; } 2>/dev/null; then
-    exec 0<&3
-    exec 3<&-
-  fi
+if [ "${DARK_GRE_LIB_ONLY:-0}" != 1 ] && [ ! -t 0 ] && [ -r /dev/tty ]; then
+  exec </dev/tty
 fi
 
+# ================================================================== UI ======
 R=$'\e[38;5;203m'; G=$'\e[38;5;114m'; Y=$'\e[38;5;221m'
 C=$'\e[38;5;81m';  M=$'\e[38;5;177m'; W=$'\e[1;97m'
-D=$'\e[38;5;244m'; N=$'\e[0m'; BD=$'\e[1m'
+D=$'\e[38;5;244m'; N=$'\e[0m';        BD=$'\e[1m'
+L1=$'\e[38;5;33m'; L2=$'\e[38;5;39m'; L3=$'\e[38;5;45m'
+L4=$'\e[38;5;51m'; L5=$'\e[38;5;87m'; L6=$'\e[38;5;123m'
+BG_OK=$'\e[48;5;22m'; BG_ERR=$'\e[48;5;52m'; BG_WARN=$'\e[48;5;58m'
+UIW=62
+
+shopt -s extglob 2>/dev/null
+if ! locale charmap 2>/dev/null | grep -qi 'utf-\?8'; then
+  for L in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    if locale -a 2>/dev/null | grep -qix "${L//./\\.}"; then export LC_ALL="$L"; break; fi
+  done
+fi
+_probe='é'; [ ${#_probe} -eq 1 ] && UTF_OK=1 || UTF_OK=0
+
+vislen() {
+  local s="${1//$'\e['*([0-9;])m/}"
+  if [ "$UTF_OK" = 1 ]; then printf '%s' "${#s}"; return; fi
+  local b c
+  b="$(LC_ALL=C; printf '%s' "$s" | wc -c)"
+  c="$(printf '%s' "$s" | LC_ALL=C grep -o $'[\x80-\xbf]' 2>/dev/null | wc -l)"
+  printf '%s' $(( b - c ))
+}
+rep() { local ch="$1" n="$2"; [ "${n:-0}" -gt 0 ] 2>/dev/null || return 0
+        printf "${ch}%.0s" $(seq 1 "$n"); }
+top()   { printf '  %s╭%s╮%s\n' "$C" "$(rep '─' $((UIW+2)))" "$N"; }
+mid()   { printf '  %s├%s┤%s\n' "$C" "$(rep '─' $((UIW+2)))" "$N"; }
+bot()   { printf '  %s╰%s╯%s\n' "$C" "$(rep '─' $((UIW+2)))" "$N"; }
+row()   { local t="$1" l p; l=$(vislen "$t"); p=$((UIW-l)); ((p<0))&&p=0
+          printf '  %s│%s %s%*s %s│%s\n' "$C" "$N" "$t" "$p" "" "$C" "$N"; }
+blank() { row ""; }
+item()  { row "$(printf '%s%s%s  %s%-22s%s %s%s%s' "$Y" "[$1]" "$N" "$W" "$2" "$N" "$D" "${3:-}" "$N")"; }
+kv()    { row "$(printf '%s%-13s%s %s' "$D" "$1" "$N" "$2")"; }
+sect()  { row "$(printf '%s%s%s' "$M$BD" "$1" "$N")"; }
+badge() { printf '%s %s %s' "$2$BD" "$1" "$N"; }
 
 ok()   { printf '  %s+%s %s\n' "$G" "$N" "$*"; }
 bad()  { printf '  %sx%s %s\n' "$R" "$N" "$*"; }
 warn() { printf '  %s!%s %s\n' "$Y" "$N" "$*"; }
 info() { printf '  %s>%s %s\n' "$C" "$N" "$*"; }
-pause(){ printf '\n  %spress enter%s' "$D" "$N"; read -r _; }
-ask()  { local p="$1" d="${2:-}" v; if [ -n "$d" ]; then read -r -p "  > $p [$d]: " v; else read -r -p "  > $p: " v; fi; ANS="${v:-$d}"; }
+dim()  { printf '    %s%s%s\n' "$D" "$*" "$N"; }
+dot()  { case "$1" in active) printf '%s*%s' "$G" "$N" ;; failed) printf '%s*%s' "$R" "$N" ;;
+                     *) printf '%s*%s' "$D" "$N" ;; esac; }
+
+ask() {
+  local p="$1" d="${2:-}" v
+  if [ -n "$d" ]; then read -r -p "$(printf '  %s>%s %s %s[%s]%s: ' "$C" "$N" "$p" "$D" "$d" "$N")" v
+  else read -r -p "$(printf '  %s>%s %s: ' "$C" "$N" "$p")" v; fi
+  ANS="${v:-$d}"
+}
+yesno() {
+  local p="$1" d="$2" v
+  read -r -p "$(printf '  %s>%s %s %s[%s]%s: ' "$C" "$N" "$p" "$D" \
+      "$([ "$d" = y ] && echo 'Y/n' || echo 'y/N')" "$N")" v
+  v="${v:-$d}"; [[ "$v" =~ ^[Yy]$ ]]
+}
+getkey() { local k; printf '  %s>%s Select: ' "$C" "$N"; read -rsn1 k
+           [ -z "$k" ] && k="_"; printf '%s\n\n' "$k"; KEY="$k"; }
+pause()  { printf '\n  %spress any key%s' "$D" "$N"; read -rsn1 _; echo; }
+
+gre_core_ready() {
+  command -v ip >/dev/null 2>&1 &&
+  command -v iptables >/dev/null 2>&1 &&
+  { [ -d /sys/module/ip_gre ] || modprobe ip_gre >/dev/null 2>&1; }
+}
+core_badge() {
+  if gre_core_ready; then badge "READY" "$BG_OK$W"; else badge "CHECK" "$BG_WARN$W"; fi
+}
 
 header() {
   clear
-  printf '%s' "$C"
-  cat <<'ART'
-  ╭──────────────────────────────────────────────────────────────╮
-  │  ██████╗  █████╗ ██████╗ ██╗  ██╗                          │
-  │  ██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝                          │
-  │  ██║  ██║███████║██████╔╝█████╔╝                           │
-  │  ██║  ██║██╔══██║██╔══██╗██╔═██╗                           │
-  │  ██████╔╝██║  ██║██║  ██║██║  ██╗                          │
-  │  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝                          │
-  │                   G R E   D I R E C T                       │
-  ╰──────────────────────────────────────────────────────────────╯
-ART
-  printf '%s' "$N"
-  printf '  %sv%s%s  ·  %s%s%s\n\n' "$D" "$SCRIPT_VER" "$N" "$M" "$DEV_ID" "$N"
-  [ -n "${1:-}" ] && printf '  %s%s%s\n\n' "$W$BD" "$1" "$N"
+  top
+  row "$(printf '%s██████╗  %s█████╗ %s██████╗ %s██╗  ██╗%s' "$L1" "$L2" "$L3" "$L4" "$N")"
+  row "$(printf '%s██╔══██╗%s██╔══██╗%s██╔══██╗%s██║ ██╔╝%s' "$L1" "$L2" "$L3" "$L4" "$N")"
+  row "$(printf '%s██║  ██║%s███████║%s██████╔╝%s█████╔╝ %s' "$L2" "$L3" "$L4" "$L5" "$N")"
+  row "$(printf '%s██║  ██║%s██╔══██║%s██╔══██╗%s██╔═██╗ %s' "$L2" "$L3" "$L4" "$L5" "$N")"
+  row "$(printf '%s██████╔╝%s██║  ██║%s██║  ██║%s██║  ██╗%s' "$L3" "$L4" "$L5" "$L6" "$N")"
+  row "$(printf '%s╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝%s' "$D" "$N")"
+  row "$(printf '%sG%s R%s E%s   D%s I%s R E C T%s   %sdirect tunnel%s' "$L2" "$L3" "$L4" "$L5" "$L6" "$W$BD" "$N" "$D" "$N")"
+  mid
+  row "$(printf '%s %sGRE core%s   %sv%s%s   %s%s%s' "$(core_badge)" "$D" "$N" "$D" "$SCRIPT_VER" "$N" "$M" "$DEV_ID" "$N")"
+  bot
+  [ -n "${1:-}" ] && { echo; printf '  %s>%s %s%s%s\n' "$L4" "$N" "$W$BD" "$1" "$N"; }
+  echo
 }
 
+# ============================================================== HELPERS ====
 need_root(){ [ "$(id -u)" -eq 0 ] || { bad "run as root"; exit 1; }; }
 valid_name(){ [[ "$1" =~ ^[A-Za-z0-9_-]{1,24}$ ]]; }
 valid_port(){ [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
@@ -482,21 +536,30 @@ uninstall_all(){
 }
 
 main(){
-  need_root; ensure_deps; ensure_system
-  while true; do
+  need_root
+  ensure_deps
+  ensure_system
+  while :; do
     header
-    echo "  [1] Core / GRE check"
-    echo "  [2] New tunnel - IRAN"
-    echo "  [3] New tunnel - KHAREJ"
-    echo "  [4] Manage tunnels"
-    echo "  [5] Dashboard"
-    echo "  [6] Diagnostics"
-    echo "  [7] Update"
-    echo "  [8] Uninstall"
-    echo "  [0] Exit"
-    echo
-    ask "Select" "0"
-    case "$ANS" in
+    local tot run
+    tot="$(find "$TUN_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+    run="$(systemctl list-units 'darkgre@*' --state=running --no-legend 2>/dev/null | grep -c .)"
+    top
+    row "$(printf '%s%s%s tunnels   %s%s%s running   %s%s%s' "$W$BD" "$tot" "$N" "$G$BD" "$run" "$N" "$D" "$(gre_core_ready && echo 'core ready' || echo 'core check')" "$N")"
+    mid; sect "SETUP"
+    item 1 "Core" "GRE kernel / dependencies"
+    item 2 "New tunnel - IRAN" "makes Pair Code"
+    item 3 "New tunnel - KHAREJ" "takes Pair Code"
+    mid; sect "OPERATE"
+    item 4 "Manage tunnels" "ports, profile, endpoint"
+    item 5 "Dashboard" ""
+    item 6 "Diagnostics" "GRE and firewall tests"
+    mid; sect "MAINTENANCE"
+    item 7 "Update" ""
+    item 8 "Uninstall" ""
+    item 0 "Exit" ""
+    bot; echo; getkey
+    case "$KEY" in
       1) diagnostics ;;
       2) new_iran ;;
       3) new_kharej ;;
@@ -505,9 +568,10 @@ main(){
       6) diagnostics ;;
       7) update_self ;;
       8) uninstall_all ;;
-      0) exit 0 ;;
+      0|q|Q) clear; printf '  %sDARK VPN - GRE Direct%s  %s%s%s\n\n' "$C" "$N" "$D" "$DEV_ID" "$N"; exit 0 ;;
     esac
   done
 }
-
-main "$@"
+if [ "${DARK_GRE_LIB_ONLY:-0}" != 1 ]; then
+  main "$@"
+fi
