@@ -7,7 +7,6 @@ void main() {
 
     expect(find.text('READY'), findsOneWidget);
     expect(find.text('DARKXRAY NETWORK'), findsOneWidget);
-    expect(find.text('CLIPBOARD'), findsOneWidget);
-    expect(find.text('QR SCAN'), findsOneWidget);
+    expect(find.text('RED WRAITH · TUNNEL'), findsOneWidget);
   });
 }
