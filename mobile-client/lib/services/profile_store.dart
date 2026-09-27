@@ -6,6 +6,7 @@ class ProfileStore {
   static const _profilesKey = 'darkxray.profiles.v1';
   static const _sourceKey = 'darkxray.subscription.url';
   static const _syncKey = 'darkxray.subscription.syncedAt';
+  static const _selectedProfileKey = 'darkxray.profile.selectedId';
 
   Future<List<ProxyProfile>> loadProfiles() async {
     final prefs = await SharedPreferences.getInstance();
@@ -41,6 +42,21 @@ class ProfileStore {
     await prefs.remove(_profilesKey);
     await prefs.remove(_sourceKey);
     await prefs.remove(_syncKey);
+    await prefs.remove(_selectedProfileKey);
+  }
+
+  Future<void> saveSelectedProfileId(String? id) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (id == null || id.trim().isEmpty) {
+      await prefs.remove(_selectedProfileKey);
+    } else {
+      await prefs.setString(_selectedProfileKey, id.trim());
+    }
+  }
+
+  Future<String?> loadSelectedProfileId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_selectedProfileKey);
   }
 
   Future<String?> loadSourceUrl() async {
