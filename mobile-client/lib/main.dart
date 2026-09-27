@@ -1,10 +1,12 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'models/proxy_profile.dart';
 import 'screens/subscriptions_page.dart';
 import 'services/profile_store.dart';
+import 'services/vpn_bridge.dart';
 
 void main() {
   runApp(const DarkXrayApp());
@@ -60,6 +62,8 @@ class _HomePageState extends State<HomePage>
   late final AnimationController _pulse;
   int _selectedProfile = 0;
   final _store = ProfileStore();
+  final _vpn = VpnBridge();
+  bool _vpnBusy = false;
   String _subscriptionMeta = 'Demo profiles • tap to import';
 
   List<ProxyProfile> _profiles = const [
@@ -105,6 +109,54 @@ class _HomePageState extends State<HomePage>
       upperBound: 1.0,
     )..repeat(reverse: true);
     _loadStoredProfiles();
+    _loadVpnState();
+  }
+
+  Future<void> _loadVpnState() async {
+    try {
+      final status = await _vpn.status();
+      if (!mounted) return;
+      setState(() => _connected = status.running);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleVpn() async {
+    if (_vpnBusy) return;
+    if (!_connected) {
+      if (_profiles.isEmpty ||
+          _selectedProfile >= _profiles.length ||
+          _profiles[_selectedProfile].rawUri.trim().isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Import a real subscription and select a profile first.'),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    setState(() => _vpnBusy = true);
+    try {
+      final status = _connected
+          ? await _vpn.disconnect()
+          : await _vpn.connect(_profiles[_selectedProfile].rawUri);
+      if (!mounted) return;
+      setState(() => _connected = status.running);
+      if (status.error.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(status.error)),
+        );
+      }
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message ?? error.code)),
+      );
+    } finally {
+      if (mounted) setState(() => _vpnBusy = false);
+    }
   }
 
   Future<void> _loadStoredProfiles() async {
@@ -180,7 +232,7 @@ class _HomePageState extends State<HomePage>
                         connected: _connected,
                         accent: _accent,
                         animation: _pulse,
-                        onTap: () => setState(() => _connected = !_connected),
+                        onTap: _toggleVpn,
                       ),
                       const SizedBox(height: 20),
                       CyberFrame(
