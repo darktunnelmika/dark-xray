@@ -213,6 +213,7 @@ class NodePatch(Model):
 class InboundDeployments(Model):
     local:bool=True
     nodeIds:list[str]=Field(default_factory=list,max_length=256)
+    tunnelPorts:dict[str,StrictInt]=Field(default_factory=dict,max_length=257)
 class NodeMirrorSync(Model):
     assignments:list[dict[str,Any]]=Field(default_factory=list,max_length=256)
 class NodeMirrorTrafficReset(Model):
@@ -1393,10 +1394,30 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def inbound_deployments(inbound_id:int,p:Principal=Depends(owner)):
         inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
         selected=set(nodes.inbound_assignments(inbound_id));fleet=nodes.list()
+        raw_ports=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+        tunnel_ports={str(k):int(v) for k,v in raw_ports.items()
+                      if isinstance(k,str) and type(v)is int and 1<=v<=65535}
+        hosts=engine.section('hosts')
+        def tunnel_route(runtime:str)->dict:
+            port=int(tunnel_ports.get(runtime) or 0)
+            configured=[h for h in hosts if int(h.get('inboundId') or 0)==inbound_id
+                        and h.get('enable',True)
+                        and (h.get('runtime','local') or 'local')==runtime
+                        and (h.get('endpointType','direct') or 'direct')=='tunnel']
+            matching=[h for h in configured if port and int(h.get('port') or 0)==port]
+            if not port:state='off'
+            elif matching:state='active'
+            elif configured:state='port_mismatch'
+            else:state='waiting_host'
+            return {'runtime':runtime,'port':port,'enabled':bool(port),'state':state,
+                    'matchingHosts':len(matching),'configuredHosts':len(configured)}
+        routes={'local':tunnel_route('local')}
+        for n in fleet:routes['node:'+str(n['id'])]=tunnel_route('node:'+str(n['id']))
         return {'inboundId':inbound_id,'local':meta.get('deployLocal',True) is not False,
-                'nodeIds':sorted(selected),
+                'nodeIds':sorted(selected),'tunnelPorts':tunnel_ports,'tunnelRoutes':routes,
                 'targets':[{'id':n['id'],'name':n['name'],'online':bool(n.get('online')),'enabled':bool(n.get('enabled')),
-                            'selected':n['id'] in selected,'pending':bool(n.get('desired_state',{}).get('pending'))}
+                            'selected':n['id'] in selected,'pending':bool(n.get('desired_state',{}).get('pending')),
+                            'runtime':'node:'+str(n['id']),'tunnel':routes['node:'+str(n['id'])]}
                            for n in fleet]}
 
     @app.put('/api/inbounds/{inbound_id}/deployments')
@@ -1405,9 +1426,19 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         requested=list(dict.fromkeys(str(x) for x in body.nodeIds))
         if any(not NAME_RE.fullmatch(x) for x in requested) or not set(requested)<=known:
             raise HTTPException(400,'Unknown node deployment target')
+        allowed_runtimes=({'local'} if body.local else set())|{'node:'+x for x in requested}
+        tunnel_ports={}
+        for runtime,port in body.tunnelPorts.items():
+            runtime=str(runtime)
+            if runtime not in allowed_runtimes:
+                raise HTTPException(400,'Tunnel Port requires the same inbound deployment target')
+            if type(port)is not int or not 1<=port<=65535:
+                raise HTTPException(400,'Tunnel Port must be between 1 and 65535')
+            tunnel_ports[runtime]=int(port)
         meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
         inbound=copy.deepcopy(inbound);inbound.pop('id',None);inbound.pop('applied',None)
         meta=copy.deepcopy(meta);meta['deployLocal']=bool(body.local);meta['deploymentTargets']=['local']*int(bool(body.local))+requested
+        meta['tunnelPorts']=dict(sorted(tunnel_ports.items()))
         inbound['panelMeta']=meta;engine.save_inbound(inbound,inbound_id)
         before=set(nodes.inbound_assignments(inbound_id));after=set(requested)
         for node_id in sorted(before|after):
@@ -1416,7 +1447,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             # is offline. The monitor will apply it when connectivity returns.
             ensure_node_desired_state(node_id)
         manager.audit(p.actor,p.actor.id,'inbound.deployments',str(inbound_id),
-                      'local='+str(bool(body.local))+'; nodes='+','.join(sorted(after)))
+                      'local='+str(bool(body.local))+'; nodes='+','.join(sorted(after))+
+                      '; tunnel_ports='+','.join(k+':'+str(v) for k,v in sorted(tunnel_ports.items())))
         return inbound_deployments(inbound_id,p)
 
     @app.get('/api/inbounds')
@@ -1430,6 +1462,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         for r in rows:
             if allowed is not None and r['id'] not in allowed:continue
             item={k:v for k,v in r.items() if k in keys}
+            meta=r.get('panelMeta',{}) if isinstance(r.get('panelMeta',{}),dict) else {}
+            raw_ports=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            item['tunnelPorts']={str(k):int(v) for k,v in raw_ports.items()
+                                 if isinstance(k,str) and type(v)is int and 1<=v<=65535}
             stream=r.get('streamSettings',{}) if isinstance(r.get('streamSettings',{}),dict) else {}
             item['network']=stream.get('network','tcp')
             item['security']=stream.get('security','none')
