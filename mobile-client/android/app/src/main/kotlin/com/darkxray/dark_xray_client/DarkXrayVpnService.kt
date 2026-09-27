@@ -295,7 +295,7 @@ class DarkXrayVpnService : VpnService() {
             .setContentIntent(launchPending)
             .addAction(
                 Notification.Action.Builder(
-                    null,
+                    R.mipmap.ic_launcher,
                     "Disconnect",
                     disconnectPending,
                 ).build()
