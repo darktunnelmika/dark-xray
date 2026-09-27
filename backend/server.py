@@ -725,6 +725,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not targets:return []
         detail=engine.client_detail(email);base=engine.links(email,'raw',runtime_ready={'local':set(map(int,detail.get('inboundIds',[])))});out=[]
         for item in base['links']:
+            # Failover entries are direct Node routes. Never clone a local
+            # Tunnel/CDN endpoint onto a Node data address; doing so creates a
+            # misleading tunnel-labelled link that actually bypasses the tunnel.
+            if (item.get('endpointType','direct') or 'direct')=='tunnel':continue
             inbound_id=int(item.get('inboundId') or 0)
             for target in targets:
                 if inbound_id not in target['inbound_ids']:continue

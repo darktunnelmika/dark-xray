@@ -521,6 +521,31 @@ def test_global_device_hashes_from_two_nodes_enforce_hwid_limit(env,monkeypatch)
   assert store.db.execute("SELECT global_device_block FROM clients WHERE id='device-user'").fetchone()[0]==0
 
 
+def test_failover_does_not_clone_local_tunnel_endpoint(env):
+ store,_,app,c=env
+ a=c.post('/api/inbounds',json=_test_vless('TUNNEL FAILOVER',24102,'tunnel-failover')).json()['id']
+ _managed_client(c,'tunnel-fail-user',a)
+ assert c.put('/api/settings/hosts',json={'value':[{
+   'inboundId':a,'runtime':'local','endpointType':'tunnel',
+   'address':'iran-tunnel.example.com','port':20443,'remark':'TUNNEL ONLY',
+   'security':'same','sni':'','host':'','path':'','alpn':'','fingerprint':'','allowInsecure':False,
+   'overrideSniFromAddress':False,'keepSniBlank':False,'finalMask':'','mihomoIpVersion':'',
+   'excludeFromSubTypes':[],'enable':True}]}).status_code==200
+ r=c.post('/api/nodes',json={'id':'edge-tunnel','name':'EDGE TUNNEL',
+   'origin':'https://control-edge-tunnel.example.com','dataAddress':'data-edge-tunnel.example.com',
+   'priority':10,'failoverEnabled':True,'token':'dkn_'+('N'*60),'enabled':True,'inboundIds':[a]})
+ assert r.status_code==200,r.text
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=29 WHERE node_id='edge-tunnel' AND local_inbound_id=?",(a,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_latency_ms=13 WHERE id='edge-tunnel'",(time.time(),))
+ links=c.get('/api/clients/tunnel-fail-user/links').json()['engine']
+ assert [(x['endpointType'],x['runtime']) for x in links['links']]==[('direct','local'),('tunnel','local')]
+ assert len(links['failover'])==1
+ assert links['failover'][0]['endpointType']=='direct'
+ assert 'data-edge-tunnel.example.com' in links['failover'][0]['uri']
+ assert 'TUNNEL ONLY' not in links['failover'][0]['remark']
+
+
 def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
  store,_,app,c=env
  a=c.post('/api/inbounds',json=_test_vless('FAILOVER',24103,'failover-a')).json()['id']
