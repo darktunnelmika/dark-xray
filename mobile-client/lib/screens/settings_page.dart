@@ -75,6 +75,57 @@ class _SettingsPageState extends State<SettingsPage> {
     await _save(_settings.copyWith(pingTimeoutMs: selected));
   }
 
+  Future<void> _chooseAutoRefresh() async {
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        backgroundColor: CyberPalette.panel,
+        title: const Text(
+          'Subscription auto refresh',
+          style: TextStyle(color: CyberPalette.text),
+        ),
+        children: [
+          for (final value in const [0, 6, 12, 24])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, value),
+              child: Text(
+                value == 0 ? 'Off' : 'Every $value hours',
+                style: TextStyle(
+                  color: value == _settings.autoRefreshHours
+                      ? CyberPalette.red
+                      : CyberPalette.text,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    await _save(_settings.copyWith(autoRefreshHours: selected));
+  }
+
+  Future<void> _openKillSwitchSettings() async {
+    try {
+      await _vpn.openSystemVpnSettings();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open VPN settings: $error')),
+      );
+    }
+  }
+
+  Future<void> _openBatterySettings() async {
+    try {
+      await _vpn.openBatterySettings();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open battery settings: $error')),
+      );
+    }
+  }
+
   Future<void> _editDns() async {
     final controller = TextEditingController(text: _settings.dns);
     final value = await showDialog<String>(
@@ -127,8 +178,11 @@ class _SettingsPageState extends State<SettingsPage> {
             style: TextStyle(color: CyberPalette.text),
           ),
           content: Text(
-            'Status: ${status.running ? 'RUNNING' : 'STOPPED'}\n'
+            'Status: ${status.running ? 'RUNNING' : status.reconnecting ? 'RECONNECTING' : 'STOPPED'}\n'
+            'Wanted: ${status.desiredConnected ? 'CONNECTED' : 'DISCONNECTED'}\n'
             'Version: ${status.version.isEmpty ? 'unknown' : status.version}\n'
+            'RX: ${status.rxBytes} bytes\n'
+            'TX: ${status.txBytes} bytes\n'
             'Error: ${status.error.isEmpty ? 'none' : status.error}',
             style: const TextStyle(
               color: CyberPalette.muted,
@@ -208,6 +262,15 @@ class _SettingsPageState extends State<SettingsPage> {
                             _save(_settings.copyWith(developerMode: value)),
                       ),
                       _SwitchSetting(
+                        icon: Icons.autorenew_rounded,
+                        title: 'Auto Reconnect',
+                        subtitle:
+                            'Reconnect after Wi-Fi/mobile changes or temporary network loss',
+                        value: _settings.autoReconnect,
+                        onChanged: (value) =>
+                            _save(_settings.copyWith(autoReconnect: value)),
+                      ),
+                      _SwitchSetting(
                         icon: Icons.router_outlined,
                         title: 'Bypass Private LAN',
                         subtitle: 'Send local network ranges directly',
@@ -235,6 +298,14 @@ class _SettingsPageState extends State<SettingsPage> {
                         onTap: _openSources,
                       ),
                       CyberMenuTile(
+                        icon: Icons.sync_rounded,
+                        title: 'Auto Refresh Subscription',
+                        subtitle: _settings.autoRefreshHours == 0
+                            ? 'Off'
+                            : 'Every ${_settings.autoRefreshHours} hours',
+                        onTap: _chooseAutoRefresh,
+                      ),
+                      CyberMenuTile(
                         icon: Icons.speed_rounded,
                         title: 'Ping Timeout',
                         subtitle: '${_settings.pingTimeoutMs} ms',
@@ -252,6 +323,20 @@ class _SettingsPageState extends State<SettingsPage> {
                           );
                           await _load();
                         },
+                      ),
+                      CyberMenuTile(
+                        icon: Icons.security_rounded,
+                        title: 'System Kill Switch',
+                        subtitle:
+                            'Open Android Always-on VPN / Block without VPN settings',
+                        onTap: _openKillSwitchSettings,
+                      ),
+                      CyberMenuTile(
+                        icon: Icons.battery_saver_rounded,
+                        title: 'Battery Optimization',
+                        subtitle:
+                            'Open Android battery optimization settings for background stability',
+                        onTap: _openBatterySettings,
                       ),
                       CyberMenuTile(
                         icon: Icons.memory_rounded,
@@ -275,12 +360,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       CyberMenuTile(
                         icon: Icons.info_outline_rounded,
                         title: 'About DarkXray',
-                        subtitle: 'DarkXray Android v0.4.0',
+                        subtitle: 'DarkXray Android v0.5.0 Stability V1',
                         onTap: () {
                           showAboutDialog(
                             context: context,
                             applicationName: 'DarkXray',
-                            applicationVersion: '0.4.0',
+                            applicationVersion: '0.5.0',
                             applicationLegalese:
                                 'Dedicated Xray client • Cyber Red UI',
                           );
