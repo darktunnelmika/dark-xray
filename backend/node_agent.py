@@ -32,8 +32,24 @@ from fastapi import Depends,FastAPI,HTTPException,Request
 from fastapi.responses import JSONResponse
 
 from core import Config,CoreEngine,CoreError
-from outbound_probe import OutboundProbeError,probe_outbounds
-from warp_paths import WarpPathError,warp_endpoint_candidates,validate_warp_endpoint
+_NODE_MATRIX_PROBES=True
+try:
+    from outbound_probe import OutboundProbeError,probe_outbounds
+    from warp_paths import WarpPathError,warp_endpoint_candidates,validate_warp_endpoint
+except ImportError:
+    # A pre-rc8 updater copies only its historical file list on the first pass.
+    # Keep the Agent healthy so rollback is unnecessary; the rc8 updater can
+    # then be rerun at the same SHA to materialize the new probe helpers.
+    _NODE_MATRIX_PROBES=False
+    class OutboundProbeError(RuntimeError):pass
+    class WarpPathError(RuntimeError):pass
+    def _probe_module_missing(*_args,**_kwargs):
+        raise OutboundProbeError("Traffic Matrix probe modules are not materialized; rerun Node update")
+    def _warp_module_missing(*_args,**_kwargs):
+        raise WarpPathError("WARP probe modules are not materialized; rerun Node update")
+    probe_outbounds=_probe_module_missing
+    warp_endpoint_candidates=_warp_module_missing
+    validate_warp_endpoint=_warp_module_missing
 from dark_policy import Store,PolicyError
 from node_runtime import NodeRuntime
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
@@ -322,7 +338,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'traffic_matrix_probe':1,'warp_endpoint_probe':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'traffic_matrix_probe':int(_NODE_MATRIX_PROBES),'warp_endpoint_probe':int(_NODE_MATRIX_PROBES)},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},
                 'direct_source_verified':bool(engine.config.direct_source_verified),'guard':guard}
 
