@@ -24,7 +24,7 @@ export DARK_GRE_LIB_ONLY=1
 # shellcheck disable=SC1090
 source "$SCRIPT"
 
-# Render runtime units in a temp directory and verify the RC5 lifecycle.
+# Render runtime units in a temp directory and verify the RC6 lifecycle.
 runtime="$tmpdir/runtime"
 mkdir -p "$runtime"
 RUNNER="$runtime/darkgre-runner"
@@ -39,8 +39,9 @@ write_unit
 
 grep -q 'ExecStart=.* arm %i' "$UNIT_FILE"
 ! grep -q 'Restart=on-failure' "$UNIT_FILE"
-grep -q 'ExecStart=.* reconcile %i' "$WATCH_UNIT"
-grep -q 'OnUnitActiveSec=5s' "$WATCH_TIMER"
+grep -q 'ExecStart=.* watch %i' "$WATCH_UNIT"
+grep -q 'Restart=always' "$WATCH_UNIT"
+test ! -e "$WATCH_TIMER"
 grep -q 'gre_exists && gre_down' "$RUNNER"
 grep -q 'DARK_GRE_REPAIR_ONLY=1' "$INSTALLER"
 
@@ -94,13 +95,15 @@ grep -q 'item r "Speed responder"' "$SCRIPT"
 grep -q 'item 6 "Path MTU scan"' "$SCRIPT"
 grep -q 'TCPMSS --clamp-mss-to-pmtu' "$SCRIPT"
 grep -q 'aes256gcm16' "$SCRIPT"
-grep -q 'timeout 2 ipsec up' "$SCRIPT"
+grep -q 'IPSEC_DIR="/etc/ipsec.d/dark-gre"' "$SCRIPT"
+grep -q 'IPSEC_SECRETS="/etc/ipsec.dark-gre.secrets"' "$SCRIPT"
+grep -q 'timeout 3 ipsec up' "$SCRIPT"
+! grep -q 'trigger_ipsec()' "$SCRIPT"
 grep -q 'WATCH_UNIT="/etc/systemd/system/darkgre-watch@.service"' "$SCRIPT"
-grep -q 'WATCH_TIMER="/etc/systemd/system/darkgre-watch@.timer"' "$SCRIPT"
-grep -q 'watcher checks every 5s' "$SCRIPT"
+grep -q 'watch_loop()' "$SCRIPT"
 grep -q 'repair_runtime()' "$SCRIPT"
 grep -q 'sect "SETUP"' "$SCRIPT"
 grep -q 'sect "OPERATE"' "$SCRIPT"
 grep -q 'sect "MAINTENANCE"' "$SCRIPT"
 
-echo "dark-gre rc5 runtime migration + watcher + DGR2 + MTU + security smoke: PASS"
+echo "dark-gre rc6 AppArmor-safe IPsec + watcher + DGR2 + MTU + security smoke: PASS"
