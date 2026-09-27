@@ -7,11 +7,11 @@ state.trafficMatrix=state.trafficMatrix||{doc:null,pings:{}};
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 const esc=v=>e(String(v??''));
 function policyLabel(v){
- const map={normal:L('Normal / Direct','عادی / مستقیم'),warp_ai:'WARP AI',warp_all:L('WARP All','WARP همه'),adblock:L('AdBlock','حذف تبلیغ'),warp_ai_adblock:'WARP AI + AdBlock',warp_all_adblock:L('WARP All + AdBlock','WARP همه + حذف تبلیغ')};
+ const map={normal:L('Normal / Direct','عادی / مستقیم'),warp_ai:'WARP AI',warp_all:L('WARP All','WARP همه'),adblock:L('AdBlock','حذف تبلیغ'),warp_ai_adblock:'WARP AI + AdBlock',warp_all_adblock:L('WARP All + AdBlock','WARP همه + حذف تبلیغ'),custom:L('Custom / Advanced Routing','سفارشی / Routing پیشرفته')};
  return map[v]||v;
 }
 function policyOptions(value){
- return ['normal','warp_ai','warp_all','adblock','warp_ai_adblock','warp_all_adblock'].map(function(v){
+ return ['normal','warp_ai','warp_all','adblock','warp_ai_adblock','warp_all_adblock','custom'].map(function(v){
   return '<option value="'+esc(v)+'" '+(v===value?'selected':'')+'>'+esc(policyLabel(v))+'</option>';
  }).join('');
 }
