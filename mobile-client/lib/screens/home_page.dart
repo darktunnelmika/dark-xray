@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -31,6 +32,7 @@ class _HomePageState extends State<HomePage>
   final _subscription = const SubscriptionService();
 
   late final AnimationController _pulse;
+  Timer? _statusTimer;
   List<ProxyProfile> _profiles = const [];
   DarkXraySettings _settings = const DarkXraySettings();
   int _selected = 0;
@@ -56,10 +58,31 @@ class _HomePageState extends State<HomePage>
       duration: const Duration(milliseconds: 1700),
     )..repeat(reverse: true);
     _reloadAll();
+    _statusTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _pollVpnState(),
+    );
+  }
+
+  Future<void> _pollVpnState() async {
+    try {
+      final status = await _vpn.status();
+      if (!mounted) return;
+      if (_connected != status.running ||
+          _coreVersion != status.version ||
+          _coreError != status.error) {
+        setState(() {
+          _connected = status.running;
+          _coreVersion = status.version;
+          _coreError = status.error;
+        });
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    _statusTimer?.cancel();
     _pulse.dispose();
     super.dispose();
   }
