@@ -1,4 +1,5 @@
 import 'package:dark_xray_client/main.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -11,5 +12,7 @@ void main() {
 
     expect(find.text('DarkXray'), findsOneWidget);
     expect(find.byType(DarkXrayApp), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }
