@@ -53,26 +53,40 @@ def test_local_tunnel_adds_direct_sibling_without_replacing_inbound_route(env):
     assert tunnel_link.hostname=='iran.example.test' and tunnel_link.port==20001
 
 
-def test_tunnel_port_keeps_real_direct_even_with_explicit_direct_hosts(env):
-    store,engine,c=env;iid,url=setup_client(c,'local-tunnel-direct-preserve')
+def test_tunnel_port_uses_explicit_direct_without_implicit_duplicate(env):
+    store,engine,c=env;iid,url=setup_client(c,'local-tunnel-direct-dedupe')
     direct=host(iid,runtime='local',endpointType='direct',
-                address='iran-second.example.test',port=20001,remark='HOST ROUTE',
+                address='direct.example.test',port=IB['port'],remark='DIRECT ROUTE',
                 security='same',sni='',host='',path='',alpn='',fingerprint='',
                 allowInsecure=False,finalMask='',mihomoIpVersion='')
     tunnel=host(iid,runtime='local',endpointType='tunnel',
-                address='iran-first.example.test',port=20001,remark='TUNNEL ROUTE',
+                address='iran.example.test',port=20001,remark='TUNNEL ROUTE',
                 security='same',sni='',host='',path='',alpn='',fingerprint='',
                 allowInsecure=False,finalMask='',mihomoIpVersion='')
     dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
     assert dep.status_code==200,dep.text
     assert c.put('/api/settings/hosts',json={'value':[tunnel,direct]}).status_code==200
-    out=engine.links('local-tunnel-direct-preserve',runtime_ready={'local':{iid}})
-    assert [(x['endpointType'],x['runtime']) for x in out['links']]==[
-        ('direct','local'),('tunnel','local'),('direct','local')]
-    parsed=[urlsplit(x['uri']) for x in out['links']]
-    assert parsed[0].hostname=='vpn.example.test' and parsed[0].port==IB['port']
-    assert parsed[1].hostname=='iran-first.example.test' and parsed[1].port==20001
-    assert parsed[2].hostname=='iran-second.example.test' and parsed[2].port==20001
+    out=engine.links('local-tunnel-direct-dedupe',runtime_ready={'local':{iid}})
+    directs=[x for x in out['links'] if x['endpointType']=='direct']
+    tunnels=[x for x in out['links'] if x['endpointType']=='tunnel']
+    assert len(directs)==1 and len(tunnels)==1
+    direct_link=urlsplit(directs[0]['uri']);tunnel_link=urlsplit(tunnels[0]['uri'])
+    assert direct_link.hostname=='direct.example.test' and direct_link.port==IB['port']
+    assert tunnel_link.hostname=='iran.example.test' and tunnel_link.port==20001
+
+
+def test_direct_is_unique_per_inbound_runtime_and_other_runtimes_remain_independent(env):
+    store,engine,c=env;iid,url=setup_client(c,'direct-runtime-dedupe')
+    values=[
+        host(iid,runtime='local',endpointType='direct',address='local-a.example.test',port=IB['port'],remark='LOCAL A'),
+        host(iid,runtime='local',endpointType='direct',address='local-b.example.test',port=IB['port'],remark='LOCAL B'),
+        host(iid,runtime='node:spare',endpointType='direct',address='node.example.test',port=IB['port'],remark='NODE'),
+    ]
+    assert c.put('/api/settings/hosts',json={'value':values}).status_code==200
+    out=engine.links('direct-runtime-dedupe',runtime_ready={'local':{iid},'node:spare':{iid}})
+    directs=[x for x in out['links'] if x['endpointType']=='direct']
+    assert [(x['runtime'],urlsplit(x['uri']).hostname) for x in directs]==[
+        ('local','local-a.example.test'),('node:spare','node.example.test')]
 
 
 def test_hosts_replace_real_direct_only_when_tunnel_port_is_off(env):
@@ -105,7 +119,11 @@ def test_one_tunnel_host_exports_multiple_addresses_on_shared_port(env):
     assert saved[0]['addresses']==['iran-a.example.test','iran-b.example.test','iran-c.example.test']
 
     out=engine.links('multi-address-tunnel-user',runtime_ready={'local':{iid}})
+    directs=[x for x in out['links'] if x['endpointType']=='direct']
     tunnels=[x for x in out['links'] if x['endpointType']=='tunnel']
+    assert len(directs)==1
+    direct_link=urlsplit(directs[0]['uri'])
+    assert direct_link.hostname=='vpn.example.test' and direct_link.port==IB['port']
     assert len(tunnels)==3
     assert [urlsplit(x['uri']).hostname for x in tunnels]==[
         'iran-a.example.test','iran-b.example.test','iran-c.example.test']
