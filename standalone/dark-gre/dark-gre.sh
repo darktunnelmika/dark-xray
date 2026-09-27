@@ -131,21 +131,37 @@ primary_ipv4(){
   printf '%s\n' "${addr:-}"
 }
 public_ipv4(){
-  local v; v="$(curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
-  valid_ip4 "$v" && { echo "$v"; return; }
-  primary_ipv4
+  local loc pub
+  loc="$(primary_ipv4)"
+  if valid_ip4 "$loc"; then
+    echo "$loc"
+    return
+  fi
+  pub="$(curl -4 -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+  valid_ip4 "$pub" && echo "$pub"
 }
 
 ensure_deps(){
-  local missing=() c
-  for c in ip iptables systemctl base64 sha256sum awk sed grep curl; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
-  [ "${#missing[@]}" -eq 0 ] && return 0
-  info "installing dependencies"
+  local need=0 c
+  for c in curl ip iptables systemctl base64 sha256sum awk sed grep; do
+    command -v "$c" >/dev/null 2>&1 || need=1
+  done
+  [ "$need" -eq 0 ] && { modprobe ip_gre >/dev/null 2>&1 || true; return 0; }
+  info "installing GRE dependencies"
   if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2 iptables kmod coreutils curl >/dev/null
+    apt-get update -qq >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl iproute2 iptables kmod coreutils ca-certificates >/dev/null 2>&1
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y curl iproute iptables kmod coreutils ca-certificates >/dev/null 2>&1
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y curl iproute iptables kmod coreutils ca-certificates >/dev/null 2>&1
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache bash curl iproute2 iptables kmod coreutils ca-certificates >/dev/null 2>&1
   else
-    bad "automatic dependency installation currently requires apt"; exit 1
+    bad "supported package manager not found"
+    return 1
   fi
+  modprobe ip_gre >/dev/null 2>&1 || true
 }
 
 iface_for(){ printf 'dgr%s' "$(printf '%s' "$1" | sha256sum | cut -c1-8)"; }
