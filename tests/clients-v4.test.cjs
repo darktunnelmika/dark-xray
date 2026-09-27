@@ -154,7 +154,7 @@ test('Representative quick create uses random prefix-aware IDs and preset-only t
   assert.match(src,/crypto\.getRandomValues/);
   assert.match(src,/name="expiryPreset"/);
   for(const months of ["'1'","'2'","'3'","'6'","'12'"])assert.match(src,new RegExp('\\['+months+',L\\('));
-  assert.match(src,/name="limitIpPreset"/);
+  assert.match(src,/fSelect\(L\('IP limit','محدودیت IP'\),'limitIpPreset'/);
   assert.match(src,/function representativeIpOptions\(owner,current,editing\)/);
   assert.match(src,/Math\.min\(5,cap\|\|5\)/);
   assert.match(src,/data-cv4-random-client/);
