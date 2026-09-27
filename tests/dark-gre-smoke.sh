@@ -82,6 +82,14 @@ decode_pair "$code"
 [ "$P_MTU" = "$MTU" ]
 [ "$P_RESTART" = 6h ]
 
+
+# Pair hash must be identical from IRAN and KHAREJ perspectives.
+h1="$(pair_shared_hash)"
+_tmp_pub="$LOCAL_PUBLIC"; LOCAL_PUBLIC="$REMOTE_PUBLIC"; REMOTE_PUBLIC="$_tmp_pub"
+_tmp_tun="$LOCAL_TUN"; LOCAL_TUN="$REMOTE_TUN"; REMOTE_TUN="$_tmp_tun"
+h2="$(pair_shared_hash)"
+[ "$h1" = "$h2" ]
+
 [ "$(calc_inner_mtu 1500 plain)" = 1472 ]
 [ "$(calc_inner_mtu 1500 ipsec)" = 1400 ]
 
@@ -97,6 +105,8 @@ grep -q 'item p "Apply Pair Code" "re-pair without deleting"' "$SCRIPT"
 grep -q 'item v "Show config"' "$SCRIPT"
 grep -q 'item r "Speed responder"' "$SCRIPT"
 grep -q 'item 6 "Path MTU scan"' "$SCRIPT"
+grep -q 'item 7 "Pair integrity"' "$SCRIPT"
+grep -q 'PAIR_HASH=' "$SCRIPT"
 grep -q 'TCPMSS --clamp-mss-to-pmtu' "$SCRIPT"
 grep -q 'aes256gcm16' "$SCRIPT"
 grep -q 'forceencaps=yes' "$SCRIPT"
