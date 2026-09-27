@@ -22,6 +22,9 @@ class DarkXrayVpnService : VpnService() {
         const val ACTION_CONNECT = "com.darkxray.client.CONNECT"
         const val ACTION_DISCONNECT = "com.darkxray.client.DISCONNECT"
         const val EXTRA_RAW_URI = "rawUri"
+        const val EXTRA_ALLOW_LAN = "allowLan"
+        const val EXTRA_DNS = "dns"
+        const val EXTRA_ROUTING_MODE = "routingMode"
         private const val CHANNEL_ID = "darkxray_vpn"
         private const val NOTIFICATION_ID = 7410
 
@@ -54,7 +57,14 @@ class DarkXrayVpnService : VpnService() {
             ACTION_CONNECT -> {
                 startForegroundCompat(buildNotification("Connecting…", false))
                 val rawUri = intent.getStringExtra(EXTRA_RAW_URI).orEmpty()
-                executor.execute { connectInternal(rawUri) }
+                val allowLan = intent.getBooleanExtra(EXTRA_ALLOW_LAN, true)
+                val dns = sanitizeDns(intent.getStringExtra(EXTRA_DNS).orEmpty())
+                val routingMode = intent.getStringExtra(EXTRA_ROUTING_MODE)
+                    ?.trim()
+                    ?.lowercase()
+                    .orEmpty()
+                    .ifBlank { "global" }
+                executor.execute { connectInternal(rawUri, allowLan, dns, routingMode) }
             }
         }
         return Service.START_NOT_STICKY
@@ -71,7 +81,12 @@ class DarkXrayVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun connectInternal(rawUri: String) {
+    private fun connectInternal(
+        rawUri: String,
+        allowLan: Boolean,
+        dns: String,
+        routingMode: String
+    ) {
         lastError = ""
         try {
             if (rawUri.isBlank()) error("Selected profile is empty.")
@@ -82,7 +97,7 @@ class DarkXrayVpnService : VpnService() {
                 .setMtu(1500)
                 .addAddress("172.19.0.1", 30)
                 .addRoute("0.0.0.0", 0)
-                .addDnsServer("1.1.1.1")
+                .addDnsServer(dns)
                 .apply {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
                 }
@@ -90,9 +105,14 @@ class DarkXrayVpnService : VpnService() {
 
             vpnInterface = descriptor
             LibXray.registerDialerController(controller)
-            LibXray.setDNS(controller, "8.8.8.8:53")
+            LibXray.setDNS(controller, "$dns:53")
 
-            val config = buildXrayConfig(rawUri, descriptor.fd)
+            val config = buildXrayConfig(
+                rawUri,
+                descriptor.fd,
+                allowLan,
+                routingMode
+            )
             val run = invoke(
                 "runXray",
                 JSONObject().put("xrayJson", config.toString())
@@ -129,7 +149,12 @@ class DarkXrayVpnService : VpnService() {
         vpnInterface = null
     }
 
-    private fun buildXrayConfig(rawUri: String, tunFd: Int): JSONObject {
+    private fun buildXrayConfig(
+        rawUri: String,
+        tunFd: Int,
+        allowLan: Boolean,
+        routingMode: String
+    ): JSONObject {
         val proxy = parseOutbound(rawUri)
         proxy.put("tag", "proxy")
 
@@ -151,10 +176,32 @@ class DarkXrayVpnService : VpnService() {
             .put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
             .put(JSONObject().put("tag", "block").put("protocol", "blackhole"))
 
-        val rule = JSONObject()
-            .put("type", "field")
-            .put("inboundTag", JSONArray().put("tun-in"))
-            .put("outboundTag", "proxy")
+        val rules = JSONArray()
+        if (allowLan) {
+            rules.put(
+                JSONObject()
+                    .put("type", "field")
+                    .put(
+                        "ip",
+                        JSONArray()
+                            .put("10.0.0.0/8")
+                            .put("172.16.0.0/12")
+                            .put("192.168.0.0/16")
+                            .put("127.0.0.0/8")
+                            .put("169.254.0.0/16")
+                    )
+                    .put("outboundTag", "direct")
+            )
+        }
+        rules.put(
+            JSONObject()
+                .put("type", "field")
+                .put("inboundTag", JSONArray().put("tun-in"))
+                .put(
+                    "outboundTag",
+                    if (routingMode == "direct") "direct" else "proxy"
+                )
+        )
 
         return JSONObject()
             .put("log", JSONObject().put("loglevel", "warning"))
@@ -165,7 +212,7 @@ class DarkXrayVpnService : VpnService() {
                 "routing",
                 JSONObject()
                     .put("domainStrategy", "AsIs")
-                    .put("rules", JSONArray().put(rule))
+                    .put("rules", rules)
             )
     }
 
@@ -249,6 +296,18 @@ class DarkXrayVpnService : VpnService() {
             .put("method", method)
             .put("payload", payload)
         return JSONObject(LibXray.invoke(request.toString()))
+    }
+
+    private fun sanitizeDns(value: String): String {
+        val candidate = value.trim()
+        if (candidate.isBlank()) return "1.1.1.1"
+        val ipv4 = Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")
+        if (!ipv4.matches(candidate)) return "1.1.1.1"
+        val valid = candidate.split('.').all {
+            val number = it.toIntOrNull() ?: return@all false
+            number in 0..255
+        }
+        return if (valid) candidate else "1.1.1.1"
     }
 
     private fun createNotificationChannel() {
