@@ -1,108 +1,102 @@
 # DARK VPN · GRE Direct
 
-`DARK GRE` یک مدیر مستقل برای ساخت تونل **GRE مستقیم** بین سرور ایران و سرور خارج است. طراحی رابط، Pair Code، مدیریت چند تونل، Dashboard و Update از الگوی Dark Backhaul گرفته شده، ولی Data Plane کاملاً GRE و بدون Core ثالث است.
+مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.1.0-rc1` — توسعه / تست
+> وضعیت: `v0.2.0-rc2` — Draft / Test
 
-## معماری
+## منوی اصلی
 
 ```text
-User
-  |
-  |  TCP / UDP : PORT
-  v
-IRAN Public IP
-  |
-  |  DNAT + MASQUERADE
-  v
-10.77.x.1  ===== GRE protocol 47 =====  10.77.x.2
- IRAN                                      KHAREJ
-                                             |
-                                             v
-                                   Xray inbound : PORT
+SETUP
+[1] Core                 GRE kernel / dependencies
+[2] New tunnel - IRAN    makes Pair Code
+[3] New tunnel - KHAREJ  takes Pair Code
+
+OPERATE
+[4] Manage tunnels       ports, profile, endpoint
+[5] Dashboard
+[6] Diagnostics
+
+MAINTENANCE
+[7] Update
+[8] Uninstall
+[0] Exit
 ```
 
-ساخت از سمت **IRAN** شروع می‌شود. مدیر IP عمومی ایران و خارج، subnet خصوصی `/30`، MTU/Profile و پورت‌های Forward را ذخیره می‌کند و یک Pair Code می‌دهد. همان Pair Code روی KHAREJ Paste می‌شود و سمت دوم با مقادیر معکوس ساخته می‌شود.
+## Pair Code
 
-## ویژگی‌های RC1
+فلو مثل DARK Backhaul است:
 
-- GRE واقعی Linux با `ip tunnel`
-- نقش‌های `IRAN` و `KHAREJ`
-- Pair Code دارای checksum
-- چند تونل همزمان با interface مستقل
-- subnet خودکار از محدوده `10.77.0.0/16`
-- پروفایل‌های `Balanced / Stable / Low Ping / Turbo`
-- Port Forward برای TCP و UDP از ایران به خارج
-- `1185 -> 1185` و Mapping پورت متفاوت
-- systemd و Auto Start پس از reboot
-- Dashboard و Ping داخلی تونل
-- Start / Stop / Restart / Delete
-- Add Port / Remove Port بدون ساخت مجدد تونل
-- Live Log با journalctl
-- Update داخلی
-- نصب مستقل از DARK XRAY
+1. روی **IRAN** تانل ساخته می‌شود.
+2. IP ایران/خارج، subnet داخلی، Profile و تنظیمات GRE ثبت می‌شوند.
+3. یک Pair Code با پیشوند `DGR1-` ساخته و در `pair.code` ذخیره می‌شود.
+4. روی **KHAREJ** فقط Pair Code Paste می‌شود.
+5. Pair Code روی IRAN همیشه از مسیر زیر دوباره قابل مشاهده است:
 
-## پروفایل‌ها
+```text
+Manage tunnels
+  -> TUNNEL
+     -> PAIRING
+        -> Pair code
+```
 
-| Profile | MTU | TX Queue | کاربرد |
-|---|---:|---:|---|
-| Balanced | 1436 | 1000 | پیش‌فرض |
-| Stable | 1380 | 1000 | مسیرهای حساس به Fragment |
-| Low Ping | 1400 | 500 | ترافیک تعاملی |
-| Turbo | 1476 | 2000 | مسیر با MTU کامل 1500 |
+## مدیریت تانل
 
-GRE خودش Encryption یا Authentication ندارد. برای DARK XRAY، ترافیک Xray همچنان امنیت پروتکل خودش را دارد؛ GRE فقط مسیر L3 مستقیم را می‌سازد.
+```text
+CONTROL
+  Start / Stop / Restart
 
-## نصب نسخه توسعه
+PAIRING (IRAN)
+  Pair code
+
+CONFIGURE
+  Ports
+  Tuning
+  Endpoint
+
+INSPECT
+  Ping inner peer
+  Logs + interface
+
+ADVANCED
+  Delete tunnel
+```
+
+پورت‌ها روی IRAN تعریف می‌شوند. حالت پیش‌فرض Same Port است؛ مثلاً `1185 -> 1185`. TCP پیش‌فرض است و در صورت نیاز UDP نیز قابل فعال‌سازی است.
+
+## نصب RC2
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
 ```
 
-بعد:
+بعداً با این دستور دوباره Manager باز می‌شود:
 
 ```bash
 darkgre
 ```
 
-## راه‌اندازی
+Installer مانند DARK Backhaul قبل از نصب، فایل Manager را دانلود، marker را بررسی و `bash -n` اجرا می‌کند و نسخه قبلی `darkgre` را به عنوان backup نگه می‌دارد.
 
-### 1. IRAN
-
-از منو:
+## Data Plane
 
 ```text
-[2] New tunnel - IRAN
+USER
+  |
+  v
+IRAN Public IP : PORT
+  |
+  | DNAT / MASQUERADE
+  v
+IRAN GRE IP  ===== GRE protocol 47 =====  KHAREJ GRE IP
+                                           |
+                                           v
+                                     Xray : PORT
 ```
 
-مقادیر:
-- Tunnel name
-- IRAN public IP
-- KHAREJ public IP
-- Profile
-- Forward ports
+GRE از **IP protocol 47** استفاده می‌کند؛ بنابراین هر دو دیتاسنتر باید GRE را عبور دهند.
 
-مثال:
-
-```text
-Listen port on IRAN: 1185
-Protocol: tcp
-Target port on KHAREJ: 1185
-```
-
-در پایان Pair Code نمایش داده می‌شود.
-
-### 2. KHAREJ
-
-روی سرور خارج:
-
-```text
-[3] New tunnel - KHAREJ
-```
-
-Pair Code را Paste کنید. Manager آدرس‌های Public و Private را معکوس می‌کند، interface GRE را می‌سازد و Ping سمت ایران را تست می‌کند.
-
-## مسیر فایل‌ها
+## فایل‌ها
 
 ```text
 /etc/dark-gre/
@@ -110,7 +104,8 @@ Pair Code را Paste کنید. Manager آدرس‌های Public و Private را 
 └── tunnels/
     └── <name>/
         ├── meta.conf
-        └── ports.list
+        ├── ports.list
+        └── pair.code   # IRAN
 
 /usr/local/bin/darkgre
 /usr/local/libexec/darkgre-runner
@@ -118,43 +113,8 @@ Pair Code را Paste کنید. Manager آدرس‌های Public و Private را 
 /etc/sysctl.d/99-dark-gre.conf
 ```
 
-## مدیریت پورت
+## نکته امنیتی
 
-روی IRAN:
+GRE به تنهایی Encryption یا Authentication ندارد. امنیت Sessionهای Xray همچنان توسط پروتکل Xray تأمین می‌شود؛ GRE فقط مسیر مستقیم L3 را ایجاد می‌کند.
 
-```text
-Manage tunnels
-  -> Add port
-  -> Remove port
-```
-
-فرمت داخلی `ports.list`:
-
-```text
-tcp:1185:1185
-udp:2053:2053
-tcp:443:8443
-```
-
-## تست سلامت
-
-```bash
-systemctl status darkgre@NAME
-ip -d link show dgrXXXXXXXX
-ip -s link show dgrXXXXXXXX
-ping REMOTE_TUN_IP
-journalctl -u darkgre@NAME -n 100 --no-pager
-```
-
-## نکته شبکه
-
-GRE از **IP protocol 47** استفاده می‌کند، نه TCP/UDP port. هر دو دیتاسنتر باید GRE را عبور دهند. در تست واقعی توسعه، مسیر `213.142.132.210 <-> 92.223.2.152` با GRE و subnet موقت `/30`، چهار پکت از چهار پکت و بدون packet loss پاسخ داده است.
-
-## مرحله بعد
-
-بعد از تأیید RC1:
-1. انتقال مدیر مستقل به ریپوی `dark-gre`
-2. Release و SHA256SUMS
-3. اضافه شدن Plugin `Dark GRE Direct` به DARK XRAY
-4. انتخاب IRAN Node و KHAREJ Node از پنل
-5. Create / Delete / Status / Logs / Add Port از UI پنل
+این RC تا قبل از تست کامل **Public Port -> GRE -> Xray** در Draft باقی می‌ماند و به `main` Merge نمی‌شود.
