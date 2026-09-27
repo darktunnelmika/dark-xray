@@ -75,7 +75,7 @@ def test_warp_policy_refuses_unverified_path(env,monkeypatch):
 
 def test_warp_policy_applies_only_after_verified_probe(env,monkeypatch):
  import server
- store,eng,c,iid=env;_seed_warp(store)
+ store,eng,c,iid=env;_seed_warp(store);monkeypatch.setattr(eng,"_binary",lambda:"/bin/true")
  monkeypatch.setattr(server,"probe_outbounds",lambda *a,**k:[{"success":True,"warpVerified":True,"delayMs":45.0,"lossPercent":0.0,"jitterMs":2.0}])
  r=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"warp_ai"})
  assert r.status_code==200,r.text
