@@ -133,7 +133,11 @@ b64enc(){ base64 -w0 2>/dev/null || base64 | tr -d '\n'; }
 b64dec(){ base64 -d 2>/dev/null; }
 sha12(){ printf '%s' "$1" | sha256sum | awk '{print substr($1,1,12)}'; }
 pair_shared_hash(){
-  printf '%s' "$NAME|$LOCAL_TUN|$REMOTE_TUN|$PREFIX|$PROFILE|$MTU|$TXQLEN|$GRE_KEY|${SECURITY:-plain}|${IPSEC_PSK:-}" |
+  local pubs inns pskh
+  pubs="$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | paste -sd, -)"
+  inns="$(printf '%s\n%s\n' "$LOCAL_TUN" "$REMOTE_TUN" | sort | paste -sd, -)"
+  pskh="$(printf '%s' "${IPSEC_PSK:-}" | sha256sum | awk '{print substr($1,1,12)}')"
+  printf '%s' "$NAME|$pubs|$inns|$PREFIX|$PROFILE|$MTU|$TXQLEN|$GRE_KEY|${SECURITY:-plain}|$pskh" |
     sha256sum | awk '{print substr($1,1,16)}'
 }
 
@@ -1190,7 +1194,7 @@ apply_pair_code_existing(){
     [ -z "$oldpsk" ] || [ "$oldpsk" = "$IPSEC_PSK" ] || warn "replacing the shared IPsec key for this peer"
   fi
   PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
-  save_meta "$d" "NAME=$n" "ROLE=KHAREJ" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
+  save_meta "$d" "NAME=$n" "ROLE=KHAREJ" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "PAIR_HASH=$(pair_shared_hash)" "RESTART_EVERY=$RESTART_EVERY"
   security_sync_all; set_restart_timer "$n" "$RESTART_EVERY"
   service_restart "$n" >/dev/null 2>&1 && ok "Pair Code applied and tunnel restarted" || bad "re-pair saved but service did not start"
   pause
