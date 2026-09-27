@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.1.0-rc1"
+SCRIPT_VER="0.2.0-rc2"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -703,6 +703,27 @@ dashboard(){
   pause
 }
 
+screen_core(){
+  while :; do
+    header "GRE CORE"
+    top; sect "STATUS"; blank
+    command -v ip >/dev/null 2>&1 && kv "iproute2" "$G ready$N" || kv "iproute2" "$R missing$N"
+    command -v iptables >/dev/null 2>&1 && kv "iptables" "$G ready$N" || kv "iptables" "$R missing$N"
+    [ -d /sys/module/ip_gre ] && kv "ip_gre" "$G loaded$N" || kv "ip_gre" "$Y not loaded$N"
+    kv "forwarding" "$W$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo '?')$N"
+    mid
+    item 1 "Install / repair" "dependencies"
+    item 2 "Load GRE module" ""
+    item 0 "Back" ""
+    bot; echo; getkey
+    case "$KEY" in
+      1) ensure_deps; ensure_system; ok "GRE core checked"; pause ;;
+      2) modprobe ip_gre >/dev/null 2>&1 && ok "ip_gre loaded" || bad "could not load ip_gre"; pause ;;
+      0|_) return ;;
+    esac
+  done
+}
+
 diagnostics(){
   header "Diagnostics"
   command -v ip >/dev/null && ok "iproute2 available" || bad "ip command missing"
@@ -765,7 +786,7 @@ main(){
     item 0 "Exit" ""
     bot; echo; getkey
     case "$KEY" in
-      1) diagnostics ;;
+      1) screen_core ;;
       2) new_iran ;;
       3) new_kharej ;;
       4) manage ;;
