@@ -2,8 +2,11 @@ package com.darkxray.dark_xray_client
 
 import android.app.Activity
 import android.content.Intent
+import android.net.TrafficStats
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -13,14 +16,17 @@ import org.json.JSONObject
 class MainActivity : FlutterActivity() {
     private val channelName = "com.darkxray.client/vpn"
     private val vpnRequestCode = 7410
+
     private var pendingRawUri: String? = null
     private var pendingAllowLan: Boolean = true
     private var pendingDns: String = "1.1.1.1"
     private var pendingRoutingMode: String = "global"
+    private var pendingAutoReconnect: Boolean = true
     private var pendingResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -30,30 +36,69 @@ class MainActivity : FlutterActivity() {
                             result.error("NO_PROFILE", "No proxy profile selected.", null)
                             return@setMethodCallHandler
                         }
+
                         val allowLan = call.argument<Boolean>("allowLan") ?: true
-                        val dns = call.argument<String>("dns")?.trim().orEmpty().ifBlank { "1.1.1.1" }
-                        val routingMode = call.argument<String>("routingMode")?.trim().orEmpty().ifBlank { "global" }
-                        requestVpnAndConnect(rawUri, allowLan, dns, routingMode, result)
+                        val dns = call.argument<String>("dns")
+                            ?.trim()
+                            .orEmpty()
+                            .ifBlank { "1.1.1.1" }
+                        val routingMode = call.argument<String>("routingMode")
+                            ?.trim()
+                            .orEmpty()
+                            .ifBlank { "global" }
+                        val autoReconnect = call.argument<Boolean>("autoReconnect") ?: true
+
+                        requestVpnAndConnect(
+                            rawUri,
+                            allowLan,
+                            dns,
+                            routingMode,
+                            autoReconnect,
+                            result,
+                        )
                     }
+
                     "disconnect" -> {
                         startVpnService(
                             DarkXrayVpnService.ACTION_DISCONNECT,
                             null,
                             true,
                             "1.1.1.1",
-                            "global"
+                            "global",
+                            true,
                         )
                         result.success(null)
                     }
+
                     "status" -> {
-                        result.success(
-                            mapOf(
-                                "running" to DarkXrayVpnService.running,
-                                "error" to DarkXrayVpnService.lastError,
-                                "version" to DarkXrayVpnService.coreVersion
-                            )
-                        )
+                        result.success(buildStatus())
                     }
+
+                    "openSystemVpnSettings" -> {
+                        openIntentSafe(
+                            Intent(Settings.ACTION_VPN_SETTINGS),
+                            Settings.ACTION_SETTINGS,
+                        )
+                        result.success(null)
+                    }
+
+                    "openBatterySettings" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            openIntentSafe(
+                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            )
+                        } else {
+                            openIntentSafe(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.parse("package:$packageName")
+                                },
+                                Settings.ACTION_SETTINGS,
+                            )
+                        }
+                        result.success(null)
+                    }
+
                     "convertXrayJsonToShareLinks" -> {
                         val xrayJson = call.argument<String>("xrayJson").orEmpty()
                         try {
@@ -61,12 +106,16 @@ class MainActivity : FlutterActivity() {
                                 .put("apiVersion", 3)
                                 .put("method", "convertXrayJsonToShareLinks")
                                 .put("payload", JSONObject().put("xrayJson", xrayJson))
+
                             val response = JSONObject(LibXray.invoke(request.toString()))
                             if (!response.optBoolean("success")) {
                                 result.error(
                                     "CONVERT_FAILED",
-                                    response.optString("error", "Xray JSON conversion failed."),
-                                    null
+                                    response.optString(
+                                        "error",
+                                        "Xray JSON conversion failed.",
+                                    ),
+                                    null,
                                 )
                             } else {
                                 val links = response.optJSONObject("data")
@@ -74,7 +123,8 @@ class MainActivity : FlutterActivity() {
                                 val output = mutableListOf<String>()
                                 if (links != null) {
                                     for (i in 0 until links.length()) {
-                                        output.add(links.optString(i))
+                                        val value = links.optString(i)
+                                        if (value.isNotBlank()) output.add(value)
                                     }
                                 }
                                 result.success(output)
@@ -83,10 +133,11 @@ class MainActivity : FlutterActivity() {
                             result.error(
                                 "CONVERT_FAILED",
                                 error.message ?: "Xray JSON conversion failed.",
-                                null
+                                null,
                             )
                         }
                     }
+
                     else -> result.notImplemented()
                 }
             }
@@ -97,7 +148,8 @@ class MainActivity : FlutterActivity() {
         allowLan: Boolean,
         dns: String,
         routingMode: String,
-        result: MethodChannel.Result
+        autoReconnect: Boolean,
+        result: MethodChannel.Result,
     ) {
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent == null) {
@@ -106,38 +158,48 @@ class MainActivity : FlutterActivity() {
                 rawUri,
                 allowLan,
                 dns,
-                routingMode
+                routingMode,
+                autoReconnect,
             )
             result.success(null)
             return
         }
+
         pendingRawUri = rawUri
         pendingAllowLan = allowLan
         pendingDns = dns
         pendingRoutingMode = routingMode
+        pendingAutoReconnect = autoReconnect
         pendingResult = result
         startActivityForResult(prepareIntent, vpnRequestCode)
     }
 
-    @Deprecated("Deprecated in Android API; retained for VpnService consent compatibility.")
+    @Deprecated("Retained for Android VpnService consent compatibility.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != vpnRequestCode) return
+
         val result = pendingResult
         val rawUri = pendingRawUri
         pendingResult = null
         pendingRawUri = null
+
         if (resultCode == Activity.RESULT_OK && rawUri != null) {
             startVpnService(
                 DarkXrayVpnService.ACTION_CONNECT,
                 rawUri,
                 pendingAllowLan,
                 pendingDns,
-                pendingRoutingMode
+                pendingRoutingMode,
+                pendingAutoReconnect,
             )
             result?.success(null)
         } else {
-            result?.error("VPN_PERMISSION", "VPN permission was not granted.", null)
+            result?.error(
+                "VPN_PERMISSION",
+                "VPN permission was not granted.",
+                null,
+            )
         }
     }
 
@@ -146,7 +208,8 @@ class MainActivity : FlutterActivity() {
         rawUri: String?,
         allowLan: Boolean,
         dns: String,
-        routingMode: String
+        routingMode: String,
+        autoReconnect: Boolean,
     ) {
         val intent = Intent(this, DarkXrayVpnService::class.java).apply {
             this.action = action
@@ -154,12 +217,53 @@ class MainActivity : FlutterActivity() {
             putExtra(DarkXrayVpnService.EXTRA_ALLOW_LAN, allowLan)
             putExtra(DarkXrayVpnService.EXTRA_DNS, dns)
             putExtra(DarkXrayVpnService.EXTRA_ROUTING_MODE, routingMode)
+            putExtra(DarkXrayVpnService.EXTRA_AUTO_RECONNECT, autoReconnect)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            action == DarkXrayVpnService.ACTION_CONNECT) {
+
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            action == DarkXrayVpnService.ACTION_CONNECT
+        ) {
             startForegroundService(intent)
         } else {
             startService(intent)
+        }
+    }
+
+    private fun buildStatus(): Map<String, Any> {
+        val uid = applicationInfo.uid
+        val currentRx = TrafficStats.getUidRxBytes(uid)
+        val currentTx = TrafficStats.getUidTxBytes(uid)
+
+        val rx = sessionBytes(currentRx, DarkXrayVpnService.rxBaseline)
+        val tx = sessionBytes(currentTx, DarkXrayVpnService.txBaseline)
+
+        return mapOf(
+            "running" to DarkXrayVpnService.running,
+            "reconnecting" to DarkXrayVpnService.reconnecting,
+            "desiredConnected" to DarkXrayVpnService.desiredConnected,
+            "error" to DarkXrayVpnService.lastError,
+            "version" to DarkXrayVpnService.coreVersion,
+            "connectedAtMs" to DarkXrayVpnService.connectedAtMs,
+            "rxBytes" to rx,
+            "txBytes" to tx,
+        )
+    }
+
+    private fun sessionBytes(current: Long, baseline: Long): Long {
+        if (current == TrafficStats.UNSUPPORTED.toLong() || baseline <= 0L) return 0L
+        return (current - baseline).coerceAtLeast(0L)
+    }
+
+    private fun openIntentSafe(intent: Intent, fallbackAction: String) {
+        try {
+            startActivity(intent)
+        } catch (_: Throwable) {
+            val fallback = Intent(fallbackAction)
+            if (fallbackAction == Settings.ACTION_APPLICATION_DETAILS_SETTINGS) {
+                fallback.data = Uri.parse("package:$packageName")
+            }
+            startActivity(fallback)
         }
     }
 }
