@@ -1,5 +1,3 @@
-[Reading 365 lines from start (total: 365 lines, 0 remaining)]
-
 e7e42a4c2cbbc6cf3751411e49391515434b9500f0b75a50d45ddc5c8e0b7dfc  .gitattributes
 a154be9aae45ebf0cc45fc021c680aa3eae7b4e668e4cb71b05a43bb9d619a96  .github/workflows/ci.yml
 18c9b954465e14442024219c1c15270b1ba5b933a6243da158ef73e7495de398  .github/workflows/link-delivery-center.yml
@@ -365,5 +363,3 @@ d5e303b1c364e7e90a5024d4727c78eb68595337498745d9943578c57f9dcf26  web/workspace.
 beba66b794b582807c95f626a009e58d3efa24d4385c4b9e0995e8296a899346  web/xray-guided-v3.js
 6e7b90052008db905c27f429a6f906bf46f1bc5657feedfc45fd1a1e430fe53a  web/xray-v2.css
 e508b8ccb163639a37940bb16172d033ddc16ed4e2d00e197614fec39954a6a6  web/xray-v2.js
-
-[executed on device: dark-tr-01 (bfbccdfa-ed4e-4119-90c5-f3796234d6f4)]
