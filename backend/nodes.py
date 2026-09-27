@@ -1159,6 +1159,30 @@ class NodeRegistry:
         return {'latency_ms':ms,'items':doc}
 
     @installation_operation
+    def traffic_matrix_probe(self,node_id:str,port:int,outbound_tag:str,*,attempts:int=2,timeout_seconds:int=5)->dict:
+        if type(port)is not int or not 1<=port<=65535 or not isinstance(outbound_tag,str) or not outbound_tag:
+            raise PolicyError('Invalid Traffic Matrix probe request')
+        payload={'port':port,'outboundTag':outbound_tag,'attempts':attempts,'timeoutSeconds':timeout_seconds}
+        doc,ms=self._request(node_id,'/node/api/v1/traffic-matrix/probe','POST',payload,
+                             min(30.0,float(attempts*timeout_seconds+8)))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('probe'),dict):
+            raise PolicyError('Invalid Node Traffic Matrix probe response')
+        return {'node_id':node_id,'latency_ms':ms,'listenerReady':bool(doc.get('listenerReady')),
+                'probe':doc['probe'],'productionTrafficMutation':False}
+
+    @installation_operation
+    def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4)->dict:
+        payload={'tag':str(tag or 'warp'),'attempts':attempts,'timeoutSeconds':timeout_seconds}
+        if endpoints is not None:payload['endpoints']=endpoints
+        count=len(endpoints) if isinstance(endpoints,list) else 15
+        doc,ms=self._request(node_id,'/node/api/v1/warp/endpoints/probe','POST',payload,
+                             min(30.0,max(8.0,float(max(1,count)*timeout_seconds+8))))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('items'),list):
+            raise PolicyError('Invalid Node WARP endpoint probe response')
+        return {'node_id':node_id,'latency_ms':ms,'current':doc.get('current',''),'items':doc['items'],
+                'productionTrafficMutation':False}
+
+    @installation_operation
     def deploy_inbound(self,node_id:str,payload:dict)->dict:
         if not isinstance(payload,dict):raise PolicyError('Inbound payload must be an object')
         doc,ms=self._request(node_id,'/node/api/inbounds','POST',payload,12.0)
