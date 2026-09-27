@@ -53,19 +53,39 @@ def test_local_tunnel_adds_direct_sibling_without_replacing_inbound_route(env):
     assert tunnel_link.hostname=='iran.example.test' and tunnel_link.port==20001
 
 
-def test_disabled_explicit_local_direct_suppresses_implicit_fallback(env):
-    store,engine,c=env;iid,url=setup_client(c,'local-tunnel-disabled-direct')
+def test_tunnel_port_keeps_real_direct_even_with_explicit_direct_hosts(env):
+    store,engine,c=env;iid,url=setup_client(c,'local-tunnel-direct-preserve')
     direct=host(iid,runtime='local',endpointType='direct',
-                address='direct.example.test',port=IB['port'],remark='DIRECT',enable=False)
+                address='iran-second.example.test',port=20001,remark='HOST ROUTE',
+                security='same',sni='',host='',path='',alpn='',fingerprint='',
+                allowInsecure=False,finalMask='',mihomoIpVersion='')
     tunnel=host(iid,runtime='local',endpointType='tunnel',
-                address='iran.example.test',port=20001,remark='TUNNEL',
+                address='iran-first.example.test',port=20001,remark='TUNNEL ROUTE',
                 security='same',sni='',host='',path='',alpn='',fingerprint='',
                 allowInsecure=False,finalMask='',mihomoIpVersion='')
     dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
     assert dep.status_code==200,dep.text
-    assert c.put('/api/settings/hosts',json={'value':[direct,tunnel]}).status_code==200
-    out=engine.links('local-tunnel-disabled-direct',runtime_ready={'local':{iid}})
-    assert [(x['endpointType'],x['runtime']) for x in out['links']]==[('tunnel','local')]
+    assert c.put('/api/settings/hosts',json={'value':[tunnel,direct]}).status_code==200
+    out=engine.links('local-tunnel-direct-preserve',runtime_ready={'local':{iid}})
+    assert [(x['endpointType'],x['runtime']) for x in out['links']]==[
+        ('direct','local'),('tunnel','local'),('direct','local')]
+    parsed=[urlsplit(x['uri']) for x in out['links']]
+    assert parsed[0].hostname=='vpn.example.test' and parsed[0].port==IB['port']
+    assert parsed[1].hostname=='iran-first.example.test' and parsed[1].port==20001
+    assert parsed[2].hostname=='iran-second.example.test' and parsed[2].port==20001
+
+
+def test_hosts_replace_real_direct_only_when_tunnel_port_is_off(env):
+    store,engine,c=env;iid,url=setup_client(c,'classic-host-replacement')
+    direct=host(iid,runtime='local',endpointType='direct',
+                address='replacement.example.test',port=2443,remark='REPLACEMENT',
+                security='same',sni='',host='',path='',alpn='',fingerprint='',
+                allowInsecure=False,finalMask='',mihomoIpVersion='')
+    assert c.put('/api/settings/hosts',json={'value':[direct]}).status_code==200
+    out=engine.links('classic-host-replacement',runtime_ready={'local':{iid}})
+    assert len(out['links'])==1
+    parsed=urlsplit(out['links'][0]['uri'])
+    assert parsed.hostname=='replacement.example.test' and parsed.port==2443
 
 
 def test_one_tunnel_host_exports_multiple_addresses_on_shared_port(env):
@@ -117,7 +137,7 @@ def test_tunnel_port_contract_waits_for_matching_host_and_allows_multiple_hosts(
     assert c.put('/api/settings/hosts',json={'value':values}).status_code==200
 
     waiting=engine.links('tunnel-contract-user',runtime_ready={'local':{iid}})
-    assert [(x['endpointType'],x['runtime']) for x in waiting['links']]==[('direct','local')]
+    assert waiting['links']==[]
     assert any('waiting for Tunnel Port' in w for w in waiting['warnings'])
 
     dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
