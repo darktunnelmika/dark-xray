@@ -11,12 +11,17 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.2.0-rc2"
+SCRIPT_VER="0.3.0-rc3"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
 RUNNER="/usr/local/libexec/darkgre-runner"
 UNIT_FILE="/etc/systemd/system/darkgre@.service"
+RS_UNIT="/etc/systemd/system/darkgre-restart@.service"
+RS_TIMER="/etc/systemd/system/darkgre-restart@.timer"
+SEC_DIR="$BASE_DIR/security"
+IPSEC_DIR="$SEC_DIR/ipsec.d"
+IPSEC_SECRETS="$SEC_DIR/ipsec.secrets"
 UPDATE_URL_FILE="$BASE_DIR/update.url"
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 
@@ -143,25 +148,41 @@ public_ipv4(){
 
 ensure_deps(){
   local need=0 c
-  for c in curl ip iptables systemctl base64 sha256sum awk sed grep; do
+  for c in curl ip iptables systemctl base64 sha256sum awk sed grep ping openssl; do
     command -v "$c" >/dev/null 2>&1 || need=1
   done
-  [ "$need" -eq 0 ] && { modprobe ip_gre >/dev/null 2>&1 || true; return 0; }
-  info "installing GRE dependencies"
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq >/dev/null 2>&1
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl iproute2 iptables kmod coreutils ca-certificates >/dev/null 2>&1
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y curl iproute iptables kmod coreutils ca-certificates >/dev/null 2>&1
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y curl iproute iptables kmod coreutils ca-certificates >/dev/null 2>&1
-  elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache bash curl iproute2 iptables kmod coreutils ca-certificates >/dev/null 2>&1
-  else
-    bad "supported package manager not found"
-    return 1
+  if [ "$need" -ne 0 ]; then
+    info "installing GRE dependencies"
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -qq >/dev/null 2>&1
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl iproute2 iptables kmod coreutils ca-certificates iputils-ping openssl conntrack >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then dnf install -y curl iproute iptables kmod coreutils ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then yum install -y curl iproute iptables kmod coreutils ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
+    elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash curl iproute2 iptables kmod coreutils ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
+    else bad "supported package manager not found"; return 1; fi
   fi
   modprobe ip_gre >/dev/null 2>&1 || true
+}
+ensure_ipsec_deps(){
+  command -v ipsec >/dev/null 2>&1 && return 0
+  info "installing strongSwan security core"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq strongswan >/dev/null 2>&1
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y strongswan >/dev/null 2>&1
+  elif command -v yum >/dev/null 2>&1; then yum install -y strongswan >/dev/null 2>&1
+  elif command -v apk >/dev/null 2>&1; then apk add --no-cache strongswan >/dev/null 2>&1
+  else bad "cannot install strongSwan automatically"; return 1; fi
+  command -v ipsec >/dev/null 2>&1
+}
+install_iperf3(){
+  command -v iperf3 >/dev/null 2>&1 && return 0
+  info "installing iperf3"
+  if command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iperf3 >/dev/null 2>&1
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y iperf3 >/dev/null 2>&1
+  elif command -v yum >/dev/null 2>&1; then yum install -y iperf3 >/dev/null 2>&1
+  elif command -v apk >/dev/null 2>&1; then apk add --no-cache iperf3 >/dev/null 2>&1
+  else return 1; fi
 }
 
 iface_for(){ printf 'dgr%s' "$(printf '%s' "$1" | sha256sum | cut -c1-8)"; }
@@ -176,12 +197,84 @@ next_pair(){
   return 1
 }
 profile_values(){
-  case "$1" in
-    stable)   MTU=1380; TXQLEN=1000 ;;
-    lowping)  MTU=1400; TXQLEN=500  ;;
-    turbo)    MTU=1476; TXQLEN=2000 ;;
-    *)        PROFILE=balanced; MTU=1436; TXQLEN=1000 ;;
+  case "$1" in stable) TXQLEN=1000 ;; lowping) TXQLEN=500 ;; turbo) TXQLEN=2000 ;; *) PROFILE=balanced; TXQLEN=1000 ;; esac
+}
+gen_gre_key(){
+  local v; v="$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')"
+  [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -gt 0 ] && echo "$v" || echo "$(( (RANDOM<<16) ^ RANDOM ^ 1 ))"
+}
+peer_id_for(){ printf '%s\n%s\n' "$1" "$2" | sort | tr '\n' '|' | sha256sum | cut -c1-12; }
+existing_peer_psk(){
+  local remote="$1" d
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*/meta.conf; do
+    unset SECURITY IPSEC_PSK REMOTE_PUBLIC
+    . "$d" 2>/dev/null || continue
+    if [ "${SECURITY:-plain}" = ipsec ] && [ "${REMOTE_PUBLIC:-}" = "$remote" ] && [ -n "${IPSEC_PSK:-}" ]; then
+      printf '%s\n' "$IPSEC_PSK"; shopt -u nullglob; return 0
+    fi
+  done
+  shopt -u nullglob; return 1
+}
+scan_path_mtu(){
+  local remote="$1" lo=1100 hi=1472 mid best=0
+  ping -4 -c 1 -W 1 "$remote" >/dev/null 2>&1 || { echo 0; return 1; }
+  while [ "$lo" -le "$hi" ]; do
+    mid=$(( (lo+hi)/2 ))
+    if ping -4 -M do -s "$mid" -c 1 -W 1 "$remote" >/dev/null 2>&1; then best="$mid"; lo=$((mid+1)); else hi=$((mid-1)); fi
+  done
+  [ "$best" -gt 0 ] || { echo 0; return 1; }
+  echo $((best+28))
+}
+calc_inner_mtu(){
+  local p="$1" sec="$2" overhead mtu
+  [ "$sec" = ipsec ] && overhead=64 || overhead=28
+  mtu=$((p-overhead))
+  [ "$mtu" -lt 1280 ] && mtu=1280
+  [ "$sec" = ipsec ] && [ "$mtu" -gt 1436 ] && mtu=1436
+  [ "$sec" != ipsec ] && [ "$mtu" -gt 1472 ] && mtu=1472
+  echo "$mtu"
+}
+choose_security(){
+  echo; top; sect "SECURITY"; blank
+  item 1 "GRE + IPsec" "AES-256-GCM / IKEv2 - recommended"
+  item 2 "Plain GRE" "fastest - no encryption"
+  bot; echo; getkey
+  case "$KEY" in
+    2) SECURITY=plain; IPSEC_PSK="" ;;
+    *) SECURITY=ipsec
+       ensure_ipsec_deps || { bad "strongSwan install failed"; return 1; }
+       IPSEC_PSK="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"
+       [ -n "$IPSEC_PSK" ] || IPSEC_PSK="$(openssl rand -hex 32)" ;;
   esac
+}
+choose_mtu(){
+  echo; top; sect "MTU"; blank
+  item 1 "Auto Scan" "Path MTU scan - recommended"
+  item 2 "Safe" "conservative"
+  item 3 "Maximum" "assume clean 1500 path"
+  item 4 "Custom" "manual value"
+  bot; echo; getkey
+  case "$KEY" in
+    2) MTU_MODE=safe; PATH_MTU=1500; [ "$SECURITY" = ipsec ] && MTU=1360 || MTU=1400 ;;
+    3) MTU_MODE=maximum; PATH_MTU=1500; MTU="$(calc_inner_mtu 1500 "$SECURITY")" ;;
+    4) MTU_MODE=custom; PATH_MTU=0
+       ask "inner MTU" "$([ "$SECURITY" = ipsec ] && echo 1400 || echo 1450)"
+       [[ "$ANS" =~ ^[0-9]+$ ]] && [ "$ANS" -ge 1200 ] && [ "$ANS" -le 1472 ] || { bad "invalid MTU"; return 1; }
+       MTU="$ANS" ;;
+    *) MTU_MODE=auto
+       info "scanning Path MTU to $REMOTE_PUBLIC"
+       PATH_MTU="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"
+       if [ "${PATH_MTU:-0}" -ge 1280 ]; then MTU="$(calc_inner_mtu "$PATH_MTU" "$SECURITY")"; ok "Path MTU $PATH_MTU -> GRE MTU $MTU"
+       else PATH_MTU=0; [ "$SECURITY" = ipsec ] && MTU=1360 || MTU=1400; warn "PMTU scan unavailable - safe MTU $MTU selected"; fi ;;
+  esac
+}
+pick_restart(){
+  echo; top; sect "SCHEDULED RESTART"; blank
+  row "$(printf '%sclears a degraded tunnel on a fixed interval%s' "$D" "$N")"
+  item 1 "off" ""; item 2 "1h" "recommended"; item 3 "6h" ""; item 4 "12h" ""; item 5 "24h" ""
+  bot; echo; getkey
+  case "$KEY" in 2) RESTART_EVERY=1h;; 3) RESTART_EVERY=6h;; 4) RESTART_EVERY=12h;; 5) RESTART_EVERY=24h;; *) RESTART_EVERY=off;; esac
 }
 
 write_runner(){
@@ -189,71 +282,54 @@ write_runner(){
   cat >"$RUNNER" <<'RUNNER_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-BASE_DIR="/etc/dark-gre"
-TUN_DIR="$BASE_DIR/tunnels"
-action="${1:-up}"
-name="${2:-}"
+BASE_DIR="/etc/dark-gre"; TUN_DIR="$BASE_DIR/tunnels"
+action="${1:-up}"; name="${2:-}"
 [ -n "$name" ] || { echo "missing tunnel name" >&2; exit 2; }
-conf="$TUN_DIR/$name/meta.conf"
-[ -r "$conf" ] || { echo "missing $conf" >&2; exit 3; }
-# shellcheck disable=SC1090
+conf="$TUN_DIR/$name/meta.conf"; [ -r "$conf" ] || { echo "missing $conf" >&2; exit 3; }
 . "$conf"
-
-nat_chain="DGRN_${ID}"
-post_chain="DGRP_${ID}"
-fw_chain="DGRF_${ID}"
-
-remove_chain(){
-  local table="$1" chain="$2" hook="$3"
-  iptables -t "$table" -D "$hook" -j "$chain" 2>/dev/null || true
-  iptables -t "$table" -F "$chain" 2>/dev/null || true
-  iptables -t "$table" -X "$chain" 2>/dev/null || true
-}
+nat_chain="DGRN_${ID}"; post_chain="DGRP_${ID}"; fw_chain="DGRF_${ID}"; mss_chain="DGRM_${ID}"
+remove_chain(){ local table="$1" chain="$2" hook="$3"; iptables -t "$table" -D "$hook" -j "$chain" 2>/dev/null || true; iptables -t "$table" -F "$chain" 2>/dev/null || true; iptables -t "$table" -X "$chain" 2>/dev/null || true; }
 remove_fw(){
-  remove_chain nat "$nat_chain" PREROUTING
-  remove_chain nat "$post_chain" POSTROUTING
-  remove_chain filter "$fw_chain" FORWARD
+  remove_chain nat "$nat_chain" PREROUTING; remove_chain nat "$post_chain" POSTROUTING; remove_chain filter "$fw_chain" FORWARD
+  iptables -t mangle -D FORWARD -j "$mss_chain" 2>/dev/null || true; iptables -t mangle -D OUTPUT -j "$mss_chain" 2>/dev/null || true
+  iptables -t mangle -F "$mss_chain" 2>/dev/null || true; iptables -t mangle -X "$mss_chain" 2>/dev/null || true
+}
+apply_mss(){
+  iptables -t mangle -N "$mss_chain" 2>/dev/null || true
+  iptables -t mangle -C FORWARD -j "$mss_chain" 2>/dev/null || iptables -t mangle -I FORWARD 1 -j "$mss_chain"
+  iptables -t mangle -C OUTPUT -j "$mss_chain" 2>/dev/null || iptables -t mangle -I OUTPUT 1 -j "$mss_chain"
+  iptables -t mangle -A "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 }
 apply_fw(){
-  [ "$ROLE" = "IRAN" ] || return 0
-  remove_fw
-  iptables -t nat -N "$nat_chain"
-  iptables -t nat -N "$post_chain"
-  iptables -t filter -N "$fw_chain"
-  iptables -t nat -I PREROUTING 1 -j "$nat_chain"
-  iptables -t nat -I POSTROUTING 1 -j "$post_chain"
-  iptables -t filter -I FORWARD 1 -j "$fw_chain"
+  remove_fw; apply_mss
+  [ "$ROLE" = IRAN ] || return 0
+  iptables -t nat -N "$nat_chain"; iptables -t nat -N "$post_chain"; iptables -t filter -N "$fw_chain"
+  iptables -t nat -I PREROUTING 1 -j "$nat_chain"; iptables -t nat -I POSTROUTING 1 -j "$post_chain"; iptables -t filter -I FORWARD 1 -j "$fw_chain"
   iptables -t filter -A "$fw_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   while IFS=: read -r proto listen target; do
     [ -n "${proto:-}" ] || continue
-    case "$proto" in
-      tcp|udp)
-        iptables -t nat -A "$nat_chain" -p "$proto" --dport "$listen" -j DNAT --to-destination "$REMOTE_TUN:$target"
-        iptables -t nat -A "$post_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j MASQUERADE
-        iptables -t filter -A "$fw_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j ACCEPT
-        ;;
-    esac
+    case "$proto" in tcp|udp)
+      iptables -t nat -A "$nat_chain" -p "$proto" --dport "$listen" -j DNAT --to-destination "$REMOTE_TUN:$target"
+      iptables -t nat -A "$post_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j MASQUERADE
+      iptables -t filter -A "$fw_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j ACCEPT ;; esac
   done <"$TUN_DIR/$name/ports.list"
 }
-
+secure_ready(){
+  [ "${SECURITY:-plain}" != ipsec ] && return 0
+  command -v ipsec >/dev/null 2>&1 || { echo "strongSwan missing" >&2; return 1; }
+  local conn="darkgre-${PEER_ID}"
+  ipsec up "$conn" >/dev/null 2>&1 || ipsec status "$conn" 2>/dev/null | grep -qi ESTABLISHED || { echo "IPsec failed: $conn" >&2; return 1; }
+  ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC" || { echo "IPsec policy missing" >&2; return 1; }
+}
 case "$action" in
   up)
-    modprobe ip_gre 2>/dev/null || true
+    modprobe ip_gre 2>/dev/null || true; secure_ready
     ip tunnel del "$IFNAME" 2>/dev/null || true
-    ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64
-    ip addr add "$LOCAL_TUN/$PREFIX" dev "$IFNAME"
-    ip link set dev "$IFNAME" mtu "$MTU" txqueuelen "$TXQLEN" up
-    sysctl -q -w net.ipv4.ip_forward=1 >/dev/null
-    apply_fw
-    ;;
-  down)
-    remove_fw
-    ip link set dev "$IFNAME" down 2>/dev/null || true
-    ip tunnel del "$IFNAME" 2>/dev/null || true
-    ;;
-  reload-fw)
-    apply_fw
-    ;;
+    ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64 key "$GRE_KEY"
+    ip addr add "$LOCAL_TUN/$PREFIX" dev "$IFNAME"; ip link set dev "$IFNAME" mtu "$MTU" txqueuelen "$TXQLEN" up
+    sysctl -q -w net.ipv4.ip_forward=1 >/dev/null; apply_fw ;;
+  down) remove_fw; ip link set dev "$IFNAME" down 2>/dev/null || true; ip tunnel del "$IFNAME" 2>/dev/null || true ;;
+  reload-fw) apply_fw ;;
   *) echo "unknown action: $action" >&2; exit 4 ;;
 esac
 RUNNER_EOF
@@ -264,32 +340,95 @@ write_unit(){
   cat >"$UNIT_FILE" <<UNIT_EOF
 [Unit]
 Description=DARK GRE Direct tunnel %i
-After=network-online.target
+After=network-online.target strongswan-starter.service
 Wants=network-online.target
-
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=$RUNNER up %i
 ExecStop=$RUNNER down %i
-TimeoutStartSec=20
+TimeoutStartSec=30
 TimeoutStopSec=20
-
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF
+  cat >"$RS_UNIT" <<'EOF'
+[Unit]
+Description=Restart DARK GRE tunnel %i
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart darkgre@%i.service
+EOF
+  cat >"$RS_TIMER" <<'EOF'
+[Unit]
+Description=Scheduled restart for DARK GRE tunnel %i
+[Timer]
+OnBootSec=6h
+OnUnitActiveSec=6h
+Persistent=true
+Unit=darkgre-restart@%i.service
+[Install]
+WantedBy=timers.target
+EOF
   systemctl daemon-reload
 }
 
 ensure_system(){
-  mkdir -p "$TUN_DIR" "$BASE_DIR"
-  chmod 700 "$BASE_DIR" "$TUN_DIR"
-  write_runner
-  write_unit
-  cat >/etc/sysctl.d/99-dark-gre.conf <<'SYSCTL_EOF'
-net.ipv4.ip_forward=1
-SYSCTL_EOF
+  mkdir -p "$TUN_DIR" "$BASE_DIR" "$SEC_DIR" "$IPSEC_DIR"; chmod 700 "$BASE_DIR" "$TUN_DIR" "$SEC_DIR" "$IPSEC_DIR"
+  write_runner; write_unit
+  printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-dark-gre.conf
   sysctl -q --system >/dev/null 2>&1 || true
+}
+set_restart_timer(){
+  local name="$1" every="$2" dir="/etc/systemd/system/darkgre-restart@$1.timer.d"
+  if [ "$every" = off ]; then systemctl disable --now "darkgre-restart@$name.timer" >/dev/null 2>&1 || true; rm -rf "$dir"; systemctl daemon-reload >/dev/null 2>&1 || true; return; fi
+  mkdir -p "$dir"; printf '[Timer]\nOnUnitActiveSec=\nOnUnitActiveSec=%s\nOnBootSec=\nOnBootSec=%s\n' "$every" "$every" >"$dir/interval.conf"
+  systemctl daemon-reload >/dev/null 2>&1; systemctl enable --now "darkgre-restart@$name.timer" >/dev/null 2>&1
+}
+security_sync_all(){
+  command -v ipsec >/dev/null 2>&1 || return 0
+  mkdir -p "$IPSEC_DIR" "$SEC_DIR"; chmod 700 "$SEC_DIR" "$IPSEC_DIR"; rm -f "$IPSEC_DIR"/*.conf 2>/dev/null || true
+  : >"$IPSEC_SECRETS"; chmod 600 "$IPSEC_SECRETS"
+  local f pid conn; declare -A done=()
+  shopt -s nullglob
+  for f in "$TUN_DIR"/*/meta.conf; do
+    unset SECURITY IPSEC_PSK LOCAL_PUBLIC REMOTE_PUBLIC PEER_ID
+    . "$f" 2>/dev/null || continue
+    [ "${SECURITY:-plain}" = ipsec ] || continue; [ -n "${IPSEC_PSK:-}" ] || continue
+    pid="${PEER_ID:-$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")}"
+    [ -n "${done[$pid]:-}" ] && continue; done[$pid]=1; conn="darkgre-$pid"
+    cat >"$IPSEC_DIR/$pid.conf" <<EOF
+conn $conn
+  keyexchange=ikev2
+  type=transport
+  authby=psk
+  left=$LOCAL_PUBLIC
+  right=$REMOTE_PUBLIC
+  leftprotoport=47
+  rightprotoport=47
+  ike=aes256gcm16-prfsha256-modp2048!
+  esp=aes256gcm16!
+  dpdaction=restart
+  dpddelay=20s
+  keyingtries=%forever
+  mobike=no
+  auto=start
+EOF
+    printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
+  done
+  shopt -u nullglob
+  grep -qF 'include /etc/dark-gre/security/ipsec.d/*.conf' /etc/ipsec.conf 2>/dev/null || printf '\n# DARK GRE managed\ninclude /etc/dark-gre/security/ipsec.d/*.conf\n' >>/etc/ipsec.conf
+  grep -qF 'include /etc/dark-gre/security/ipsec.secrets' /etc/ipsec.secrets 2>/dev/null || printf '\n# DARK GRE managed\ninclude /etc/dark-gre/security/ipsec.secrets\n' >>/etc/ipsec.secrets
+  systemctl enable --now strongswan-starter >/dev/null 2>&1 || systemctl enable --now strongswan >/dev/null 2>&1 || true
+  ipsec rereadsecrets >/dev/null 2>&1 || true; ipsec reload >/dev/null 2>&1 || true
+}
+PARTIAL_TUNNEL=""
+discard_partial(){ [ -n "$PARTIAL_TUNNEL" ] || return 0; local p="$PARTIAL_TUNNEL"; PARTIAL_TUNNEL=""; [ -s "$TUN_DIR/$p/meta.conf" ] || rm -rf "${TUN_DIR:?}/$p"; }
+on_interrupt(){ trap - INT TERM; echo; discard_partial; warn "cancelled"; exit 130; }
+sweep_partials(){
+  local d; shopt -s nullglob
+  for d in "$TUN_DIR"/*; do [ -d "$d" ] || continue; [ -s "$d/meta.conf" ] || { warn "removing incomplete tunnel $(basename "$d")"; rm -rf "$d"; }; done
+  shopt -u nullglob
 }
 
 save_meta(){
@@ -310,17 +449,10 @@ service_state(){ systemctl is-active "darkgre@$1.service" 2>/dev/null || echo in
 
 choose_profile(){
   echo; top; sect "PROFILE"; blank
-  item 1 "Balanced" "MTU 1436 - recommended"
-  item 2 "Stable" "MTU 1380 - safer"
-  item 3 "Low Ping" "MTU 1400 - interactive"
-  item 4 "Turbo" "MTU 1476 - clean paths"
+  row "$(printf '%sprofile tunes queueing; MTU is selected separately%s' "$D" "$N")"
+  item 1 "Balanced" "recommended"; item 2 "Stable" "lossy paths"; item 3 "Low Ping" "interactive / gaming"; item 4 "Turbo" "high throughput"
   bot; echo; getkey
-  case "$KEY" in
-    2) PROFILE=stable ;;
-    3) PROFILE=lowping ;;
-    4) PROFILE=turbo ;;
-    *) PROFILE=balanced ;;
-  esac
+  case "$KEY" in 2) PROFILE=stable;; 3) PROFILE=lowping;; 4) PROFILE=turbo;; *) PROFILE=balanced;; esac
   profile_values "$PROFILE"
 }
 
@@ -359,28 +491,28 @@ prompt_initial_ports(){
 
 pair_code(){
   local payload sum
-  payload="1|$NAME|$LOCAL_PUBLIC|$REMOTE_PUBLIC|$LOCAL_TUN|$REMOTE_TUN|$PREFIX|$PROFILE|$MTU|$TXQLEN"
-  sum="$(sha12 "$payload")"
-  printf 'DGR1-%s-%s\n' "$sum" "$(printf '%s' "$payload" | b64enc)"
+  payload="2|$NAME|$LOCAL_PUBLIC|$REMOTE_PUBLIC|$LOCAL_TUN|$REMOTE_TUN|$PREFIX|$PROFILE|${MTU_MODE:-auto}|${PATH_MTU:-0}|$MTU|$TXQLEN|$GRE_KEY|${SECURITY:-plain}|${IPSEC_PSK:-}|${RESTART_EVERY:-off}"
+  sum="$(sha12 "$payload")"; printf 'DGR2-%s-%s\n' "$sum" "$(printf '%s' "$payload" | b64enc)"
 }
-
 decode_pair(){
   local code="$1" sum enc payload calc ver
-  [[ "$code" =~ ^DGR1-([0-9a-f]{12})-(.+)$ ]] || return 1
-  sum="${BASH_REMATCH[1]}"; enc="${BASH_REMATCH[2]}"
-  payload="$(printf '%s' "$enc" | b64dec)" || return 1
-  calc="$(sha12 "$payload")"; [ "$calc" = "$sum" ] || return 1
-  IFS='|' read -r ver P_NAME P_IRAN_PUBLIC P_KHAREJ_PUBLIC P_IRAN_TUN P_KHAREJ_TUN P_PREFIX P_PROFILE P_MTU P_TXQLEN <<<"$payload"
-  [ "$ver" = 1 ] &&
-    valid_name "$P_NAME" &&
-    valid_ip4 "$P_IRAN_PUBLIC" &&
-    valid_ip4 "$P_KHAREJ_PUBLIC" &&
-    valid_ip4 "$P_IRAN_TUN" &&
-    valid_ip4 "$P_KHAREJ_TUN" &&
-    [[ "$P_PREFIX" =~ ^[0-9]+$ ]] && [ "$P_PREFIX" -ge 8 ] && [ "$P_PREFIX" -le 32 ] &&
-    [[ "$P_MTU" =~ ^[0-9]+$ ]] && [ "$P_MTU" -ge 576 ] && [ "$P_MTU" -le 1476 ] &&
-    [[ "$P_TXQLEN" =~ ^[0-9]+$ ]] && [ "$P_TXQLEN" -ge 100 ] && [ "$P_TXQLEN" -le 10000 ] &&
-    [[ "$P_PROFILE" =~ ^(balanced|stable|lowping|turbo)$ ]]
+  P_SECURITY=plain; P_IPSEC_PSK=""; P_MTU_MODE=custom; P_PATH_MTU=0; P_RESTART=off; P_GRE_KEY=0
+  if [[ "$code" =~ ^DGR2-([0-9a-f]{12})-(.+)$ ]]; then
+    sum="${BASH_REMATCH[1]}"; enc="${BASH_REMATCH[2]}"; payload="$(printf '%s' "$enc" | b64dec)" || return 1; calc="$(sha12 "$payload")"; [ "$calc" = "$sum" ] || return 1
+    IFS='|' read -r ver P_NAME P_IRAN_PUBLIC P_KHAREJ_PUBLIC P_IRAN_TUN P_KHAREJ_TUN P_PREFIX P_PROFILE P_MTU_MODE P_PATH_MTU P_MTU P_TXQLEN P_GRE_KEY P_SECURITY P_IPSEC_PSK P_RESTART <<<"$payload"
+    [ "$ver" = 2 ] || return 1
+  elif [[ "$code" =~ ^DGR1-([0-9a-f]{12})-(.+)$ ]]; then
+    sum="${BASH_REMATCH[1]}"; enc="${BASH_REMATCH[2]}"; payload="$(printf '%s' "$enc" | b64dec)" || return 1; calc="$(sha12 "$payload")"; [ "$calc" = "$sum" ] || return 1
+    IFS='|' read -r ver P_NAME P_IRAN_PUBLIC P_KHAREJ_PUBLIC P_IRAN_TUN P_KHAREJ_TUN P_PREFIX P_PROFILE P_MTU P_TXQLEN <<<"$payload"
+    [ "$ver" = 1 ] || return 1
+  else return 1; fi
+  valid_name "$P_NAME" && valid_ip4 "$P_IRAN_PUBLIC" && valid_ip4 "$P_KHAREJ_PUBLIC" && valid_ip4 "$P_IRAN_TUN" && valid_ip4 "$P_KHAREJ_TUN" &&
+  [[ "$P_PREFIX" =~ ^[0-9]+$ ]] && [ "$P_PREFIX" -ge 8 ] && [ "$P_PREFIX" -le 32 ] &&
+  [[ "$P_MTU" =~ ^[0-9]+$ ]] && [ "$P_MTU" -ge 1200 ] && [ "$P_MTU" -le 1476 ] &&
+  [[ "$P_TXQLEN" =~ ^[0-9]+$ ]] && [[ "$P_PROFILE" =~ ^(balanced|stable|lowping|turbo)$ ]] &&
+  [[ "$P_MTU_MODE" =~ ^(auto|safe|maximum|custom)$ ]] && [[ "$P_SECURITY" =~ ^(plain|ipsec)$ ]] && [[ "$P_RESTART" =~ ^(off|1h|6h|12h|24h)$ ]] || return 1
+  [ "$P_SECURITY" != ipsec ] || [[ "$P_IPSEC_PSK" =~ ^[0-9a-fA-F]{64}$ ]]
+  [ "$P_GRE_KEY" = 0 ] || [[ "$P_GRE_KEY" =~ ^[0-9]+$ ]]
 }
 
 show_pair_code(){
@@ -400,79 +532,48 @@ show_pair_code(){
 new_iran(){
   header "NEW TUNNEL - IRAN"
   top; sect "ROLE CHECK"; blank
-  row "$(printf '%sIRAN creates the pair and exposes the user-facing ports.%s' "$D" "$N")"
-  row "$(printf '%sthe Pair Code is made here and pasted on KHAREJ.%s' "$D" "$N")"
-  bot; echo
+  row "$(printf '%sIRAN creates the pair and exposes the user-facing ports.%s' "$D" "$N")"; row "$(printf '%sthe Pair Code is made here and pasted on KHAREJ.%s' "$D" "$N")"; bot; echo
   local detected oct dir id
-  while :; do
-    ask "tunnel name"
-    NAME="$ANS"
-    valid_name "$NAME" || { bad "letters, digits, - and _ only"; continue; }
-    [ -e "$TUN_DIR/$NAME" ] && { bad "name already exists"; continue; }
-    break
-  done
-  dir="$TUN_DIR/$NAME"
-  detected="$(public_ipv4)"
-  ask "iran public ip" "$detected"; LOCAL_PUBLIC="$ANS"
-  valid_ip4 "$LOCAL_PUBLIC" || { bad "invalid IPv4"; pause; return; }
-  ask "kharej public ip"; REMOTE_PUBLIC="$ANS"
-  valid_ip4 "$REMOTE_PUBLIC" || { bad "invalid IPv4"; pause; return; }
-  oct="$(next_pair)" || { bad "no free GRE subnet found"; pause; return; }
-  LOCAL_TUN="10.77.$oct.1"; REMOTE_TUN="10.77.$oct.2"; PREFIX=30
-  choose_profile
-  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"
-  IFNAME="$(iface_for "$NAME")"; ROLE="IRAN"; ID="$id"
-  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME"     "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC"     "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX"     "PROFILE=$PROFILE" "MTU=$MTU" "TXQLEN=$TXQLEN"
-  prompt_initial_ports "$NAME"
-  printf '%s\n' "$(pair_code)" >"$dir/pair.code"; chmod 600 "$dir/pair.code"
-  echo
-  top; sect "CREATED - $NAME"; blank
-  kv "role" "$W IRAN / pair owner$N"
-  kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"
-  kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"
-  kv "profile" "$W$PROFILE$N"
-  bot; echo
-  if service_start "$NAME"; then ok "GRE interface is up"; else bad "service failed - config and Pair Code were kept"; fi
-  show_pair_code "$NAME"
-  warn "provider firewall/security-group must allow GRE protocol 47"
+  while :; do ask "tunnel name"; NAME="$ANS"; valid_name "$NAME" || { bad "letters, digits, - and _ only"; continue; }; [ -e "$TUN_DIR/$NAME" ] && { bad "name already exists"; continue; }; break; done
+  dir="$TUN_DIR/$NAME"; detected="$(public_ipv4)"
+  ask "iran public ip" "$detected"; LOCAL_PUBLIC="$ANS"; valid_ip4 "$LOCAL_PUBLIC" || { bad "invalid IPv4"; pause; return; }
+  ask "kharej public ip"; REMOTE_PUBLIC="$ANS"; valid_ip4 "$REMOTE_PUBLIC" || { bad "invalid IPv4"; pause; return; }
+  oct="$(next_pair)" || { bad "no free GRE subnet found"; pause; return; }; LOCAL_TUN="10.77.$oct.1"; REMOTE_TUN="10.77.$oct.2"; PREFIX=30
+  GRE_KEY="$(gen_gre_key)"; choose_security || { pause; return; }; choose_profile; choose_mtu || { pause; return; }; RESTART_EVERY=off; pick_restart
+  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE=IRAN; ID="$id"; PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
+  mkdir -p "$dir"; PARTIAL_TUNNEL="$NAME"; prompt_initial_ports "$NAME"
+  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
+  printf '%s\n' "$(pair_code)" >"$dir/pair.code"; chmod 600 "$dir/pair.code"; PARTIAL_TUNNEL=""
+  [ "$SECURITY" = ipsec ] && security_sync_all
+  echo; top; sect "CREATED - $NAME"; blank
+  kv "role" "$W IRAN / pair owner$N"; kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"; kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"; kv "security" "$W$SECURITY$N"; kv "mtu" "$W$MTU$N $D($MTU_MODE)$N"; kv "profile" "$W$PROFILE$N"; kv "restart" "$W$RESTART_EVERY$N"; bot; echo
+  service_start "$NAME" && ok "GRE interface is up" || bad "service failed - config and Pair Code were kept"
+  set_restart_timer "$NAME" "$RESTART_EVERY"; show_pair_code "$NAME"
+  [ "$SECURITY" = ipsec ] && warn "provider firewall must allow IKE/IPsec (UDP 500/4500 + ESP)" || warn "provider firewall/security-group must allow GRE protocol 47"
   pause
 }
 
 new_kharej(){
   header "NEW TUNNEL - KHAREJ"
   top; sect "ROLE CHECK"; blank
-  row "$(printf '%sKHAREJ takes the Pair Code created on IRAN.%s' "$D" "$N")"
-  row "$(printf '%sGRE settings come from the code - no manual duplicate setup.%s' "$D" "$N")"
-  bot; echo
-  local code dir detected id
-  info "paste the pair code from the IRAN server"
-  ask "pair code"; code="$ANS"
-  if ! decode_pair "$code"; then
-    bad "invalid or unsupported Pair Code"
-    dim "copy the complete DGR1-... code from IRAN"
-    pause; return
-  fi
+  row "$(printf '%sKHAREJ takes the Pair Code created on IRAN.%s' "$D" "$N")"; row "$(printf '%sGRE, MTU, security and restart settings come from the code.%s' "$D" "$N")"; bot; echo
+  local code dir detected id oldpsk
+  info "paste the pair code from the IRAN server"; ask "pair code"; code="$ANS"
+  decode_pair "$code" || { bad "invalid or unsupported Pair Code"; dim "copy the complete DGR2-... code from IRAN"; pause; return; }
   echo; top; sect "PAIRED WITH"; blank
-  kv "iran" "$W$P_IRAN_PUBLIC$N"
-  kv "kharej" "$W$P_KHAREJ_PUBLIC$N"
-  kv "inner" "$W$P_KHAREJ_TUN/$P_PREFIX -> $P_IRAN_TUN$N"
-  kv "profile" "$W$P_PROFILE$N"
-  bot; echo
-  NAME="$P_NAME"; dir="$TUN_DIR/$NAME"
-  [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
-  detected="$(public_ipv4)"
-  [ -n "$detected" ] && [ "$detected" != "$P_KHAREJ_PUBLIC" ] &&
-    warn "Pair Code expects $P_KHAREJ_PUBLIC but this server reports $detected"
-  LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"
-  LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"
-  PREFIX="$P_PREFIX"; PROFILE="$P_PROFILE"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"
-  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"
-  IFNAME="$(iface_for "$NAME")"; ROLE="KHAREJ"; ID="$id"
-  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME"     "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC"     "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX"     "PROFILE=$PROFILE" "MTU=$MTU" "TXQLEN=$TXQLEN"
-  if service_start "$NAME"; then ok "GRE interface is up"; else bad "service failed"; fi
-  ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 &&
-    ok "inner peer responds: $REMOTE_TUN" ||
-    warn "inner peer is not responding yet"
+  kv "iran" "$W$P_IRAN_PUBLIC$N"; kv "kharej" "$W$P_KHAREJ_PUBLIC$N"; kv "inner" "$W$P_KHAREJ_TUN/$P_PREFIX -> $P_IRAN_TUN$N"; kv "security" "$W$P_SECURITY$N"; kv "mtu" "$W$P_MTU$N $D($P_MTU_MODE)$N"; kv "profile" "$W$P_PROFILE$N"; kv "restart" "$W$P_RESTART$N"; bot; echo
+  NAME="$P_NAME"; dir="$TUN_DIR/$NAME"; [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
+  detected="$(public_ipv4)"; [ -n "$detected" ] && [ "$detected" != "$P_KHAREJ_PUBLIC" ] && warn "Pair Code expects $P_KHAREJ_PUBLIC but this server reports $detected"
+  LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"; LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"; PREFIX="$P_PREFIX"
+  PROFILE="$P_PROFILE"; MTU_MODE="$P_MTU_MODE"; PATH_MTU="$P_PATH_MTU"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"; GRE_KEY="$P_GRE_KEY"; SECURITY="$P_SECURITY"; IPSEC_PSK="$P_IPSEC_PSK"; RESTART_EVERY="$P_RESTART"
+  [ "$GRE_KEY" = 0 ] && GRE_KEY="$(gen_gre_key)"
+  if [ "$SECURITY" = ipsec ]; then ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }; oldpsk="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"; [ -z "$oldpsk" ] || [ "$oldpsk" = "$IPSEC_PSK" ] || { bad "this peer already uses a different IPsec key"; pause; return; }; fi
+  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE=KHAREJ; ID="$id"; PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
+  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
+  [ "$SECURITY" = ipsec ] && security_sync_all
+  service_start "$NAME" && ok "GRE interface is up" || bad "service failed"
+  set_restart_timer "$NAME" "$RESTART_EVERY"
+  ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 && ok "inner peer responds: $REMOTE_TUN" || warn "inner peer is not responding yet"
   pause
 }
 
