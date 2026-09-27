@@ -24,6 +24,27 @@ export DARK_GRE_LIB_ONLY=1
 # shellcheck disable=SC1090
 source "$SCRIPT"
 
+# Render runtime units in a temp directory and verify the RC5 lifecycle.
+runtime="$tmpdir/runtime"
+mkdir -p "$runtime"
+RUNNER="$runtime/darkgre-runner"
+UNIT_FILE="$runtime/darkgre@.service"
+WATCH_UNIT="$runtime/darkgre-watch@.service"
+WATCH_TIMER="$runtime/darkgre-watch@.timer"
+RS_UNIT="$runtime/darkgre-restart@.service"
+RS_TIMER="$runtime/darkgre-restart@.timer"
+systemctl(){ :; }
+write_runner
+write_unit
+
+grep -q 'ExecStart=.* arm %i' "$UNIT_FILE"
+! grep -q 'Restart=on-failure' "$UNIT_FILE"
+grep -q 'ExecStart=.* reconcile %i' "$WATCH_UNIT"
+grep -q 'OnUnitActiveSec=5s' "$WATCH_TIMER"
+grep -q 'gre_exists && gre_down' "$RUNNER"
+grep -q 'DARK_GRE_REPAIR_ONLY=1' "$INSTALLER"
+
+
 NAME=testgre
 LOCAL_PUBLIC=1.2.3.4
 REMOTE_PUBLIC=5.6.7.8
@@ -74,15 +95,12 @@ grep -q 'item 6 "Path MTU scan"' "$SCRIPT"
 grep -q 'TCPMSS --clamp-mss-to-pmtu' "$SCRIPT"
 grep -q 'aes256gcm16' "$SCRIPT"
 grep -q 'timeout 2 ipsec up' "$SCRIPT"
-grep -q 'darkgre-watch@.service' "$SCRIPT"
-grep -q 'darkgre-watch@.timer' "$SCRIPT"
-grep -q 'ExecStart=$RUNNER reconcile %i' "$SCRIPT"
-grep -q 'OnUnitActiveSec=5s' "$SCRIPT"
+grep -q 'WATCH_UNIT="/etc/systemd/system/darkgre-watch@.service"' "$SCRIPT"
+grep -q 'WATCH_TIMER="/etc/systemd/system/darkgre-watch@.timer"' "$SCRIPT"
 grep -q 'watcher checks every 5s' "$SCRIPT"
-! grep -q 'Restart=on-failure' "$SCRIPT"
-grep -q 'gre_exists && gre_down' "$SCRIPT"
+grep -q 'repair_runtime()' "$SCRIPT"
 grep -q 'sect "SETUP"' "$SCRIPT"
 grep -q 'sect "OPERATE"' "$SCRIPT"
 grep -q 'sect "MAINTENANCE"' "$SCRIPT"
 
-echo "dark-gre rc4 watcher + DGR2 + MTU + security + menu smoke: PASS"
+echo "dark-gre rc5 runtime migration + watcher + DGR2 + MTU + security smoke: PASS"
