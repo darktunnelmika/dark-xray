@@ -7,7 +7,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const DarkXrayApp());
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('DarkXray'), findsOneWidget);
     expect(find.text('READY'), findsOneWidget);
