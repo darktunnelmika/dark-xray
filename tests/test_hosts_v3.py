@@ -233,3 +233,18 @@ def test_host_v3_endpoint_type_is_persisted_and_exported(env):
     assert ':20001' in out['links'][1]['uri']
     bad=host(iid,endpointType='invalid')
     assert c.put('/api/settings/hosts',json={'value':[bad]}).status_code==422
+
+
+def test_tunnel_subscription_name_gets_visible_tunnel_marker(env):
+    store,engine,c=env;iid,_=setup_client(c,'tunnel-label-user')
+    dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
+    assert dep.status_code==200,dep.text
+    tunnel=host(iid,runtime='local',endpointType='tunnel',
+                address='iran.example.test',port=20001,remark='🇹🇷 Turkey',
+                security='same',sni='',host='',path='',alpn='',fingerprint='',
+                allowInsecure=False,finalMask='',mihomoIpVersion='')
+    assert c.put('/api/settings/hosts',json={'value':[tunnel]}).status_code==200
+    out=engine.links('tunnel-label-user',runtime_ready={'local':{iid}})
+    labels=[x['remark'] for x in out['links'] if x['endpointType']=='tunnel']
+    assert len(labels)==1
+    assert labels[0].split(' | ')[0]=='🇹🇷 Turkey · 🚇 TUNNEL'
