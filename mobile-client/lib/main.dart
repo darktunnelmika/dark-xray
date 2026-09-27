@@ -2,6 +2,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'models/proxy_profile.dart';
+import 'screens/subscriptions_page.dart';
+import 'services/profile_store.dart';
+
 void main() {
   runApp(const DarkXrayApp());
 }
@@ -55,12 +59,40 @@ class _HomePageState extends State<HomePage>
   bool _connected = false;
   late final AnimationController _pulse;
   int _selectedProfile = 0;
+  final _store = ProfileStore();
+  String _subscriptionMeta = 'Demo profiles • tap to import';
 
-  final _profiles = const [
-    _Profile('RED WRAITH · TUNNEL', 'VLESS | gRPC | Reality', '28 ms'),
-    _Profile('VOID PHANTOM · TUNNEL', 'VLESS | gRPC | Reality', '43 ms'),
-    _Profile('NIGHTFALL · DIRECT', 'VLESS | TCP | Reality', 'n/a'),
-    _Profile('CRIMSON VEIL · TUNNEL', 'VLESS | gRPC | Reality', 'n/a'),
+  List<ProxyProfile> _profiles = const [
+    ProxyProfile(
+      id: 'demo-red-wraith',
+      name: 'RED WRAITH · TUNNEL',
+      scheme: 'vless',
+      detail: 'VLESS | gRPC | Reality',
+      rawUri: '',
+      ping: '28 ms',
+    ),
+    ProxyProfile(
+      id: 'demo-void-phantom',
+      name: 'VOID PHANTOM · TUNNEL',
+      scheme: 'vless',
+      detail: 'VLESS | gRPC | Reality',
+      rawUri: '',
+      ping: '43 ms',
+    ),
+    ProxyProfile(
+      id: 'demo-nightfall',
+      name: 'NIGHTFALL · DIRECT',
+      scheme: 'vless',
+      detail: 'VLESS | TCP | Reality',
+      rawUri: '',
+    ),
+    ProxyProfile(
+      id: 'demo-crimson-veil',
+      name: 'CRIMSON VEIL · TUNNEL',
+      scheme: 'vless',
+      detail: 'VLESS | gRPC | Reality',
+      rawUri: '',
+    ),
   ];
 
   @override
@@ -72,6 +104,33 @@ class _HomePageState extends State<HomePage>
       lowerBound: 0.0,
       upperBound: 1.0,
     )..repeat(reverse: true);
+    _loadStoredProfiles();
+  }
+
+  Future<void> _loadStoredProfiles() async {
+    final profiles = await _store.loadProfiles();
+    if (!mounted || profiles.isEmpty) return;
+    setState(() {
+      _profiles = profiles;
+      _selectedProfile = 0;
+      _subscriptionMeta = '${profiles.length} profiles • stored on device';
+    });
+  }
+
+  Future<void> _applyImportedProfiles(List<ProxyProfile>? profiles) async {
+    if (!mounted || profiles == null || profiles.isEmpty) return;
+    setState(() {
+      _profiles = profiles;
+      _selectedProfile = 0;
+      _subscriptionMeta = '${profiles.length} profiles • synced now';
+    });
+  }
+
+  Future<void> _openSubscriptions() async {
+    final profiles = await Navigator.of(context).push<List<ProxyProfile>>(
+      MaterialPageRoute(builder: (_) => const SubscriptionsPage()),
+    );
+    await _applyImportedProfiles(profiles);
   }
 
   @override
@@ -82,10 +141,11 @@ class _HomePageState extends State<HomePage>
 
   Color get _accent => _connected ? CyberPalette.cyan : CyberPalette.red;
 
-  void _openAddConfig() {
-    Navigator.of(context).push(
+  Future<void> _openAddConfig() async {
+    final profiles = await Navigator.of(context).push<List<ProxyProfile>>(
       MaterialPageRoute(builder: (_) => const AddConfigurationPage()),
     );
+    await _applyImportedProfiles(profiles);
   }
 
   void _openSettings() {
@@ -123,7 +183,11 @@ class _HomePageState extends State<HomePage>
                         accent: _accent,
                         child: Column(
                           children: [
-                            _SubscriptionHeader(accent: _accent),
+                            _SubscriptionHeader(
+                              accent: _accent,
+                              subtitle: _subscriptionMeta,
+                              onTap: _openSubscriptions,
+                            ),
                             const SizedBox(height: 12),
                             _UsageBar(accent: _accent),
                             const SizedBox(height: 12),
@@ -361,14 +425,23 @@ class _PowerSection extends StatelessWidget {
 }
 
 class _SubscriptionHeader extends StatelessWidget {
-  const _SubscriptionHeader({required this.accent});
+  const _SubscriptionHeader({
+    required this.accent,
+    required this.subtitle,
+    required this.onTap,
+  });
 
   final Color accent;
+  final String subtitle;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Row(
+        children: [
         Container(
           width: 46,
           height: 46,
@@ -380,11 +453,11 @@ class _SubscriptionHeader extends StatelessWidget {
           child: Icon(Icons.layers_rounded, color: accent),
         ),
         const SizedBox(width: 12),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 'DARKXRAY NETWORK',
                 style: TextStyle(
                   color: CyberPalette.text,
@@ -393,10 +466,10 @@ class _SubscriptionHeader extends StatelessWidget {
                   letterSpacing: 0.6,
                 ),
               ),
-              SizedBox(height: 3),
+              const SizedBox(height: 3),
               Text(
-                'Synced 3m ago | Auto refresh · 12 h',
-                style: TextStyle(
+                subtitle,
+                style: const TextStyle(
                   color: CyberPalette.muted,
                   fontSize: 11,
                 ),
@@ -406,6 +479,7 @@ class _SubscriptionHeader extends StatelessWidget {
         ),
         Icon(Icons.chevron_right_rounded, color: accent),
       ],
+      ),
     );
   }
 }
@@ -467,14 +541,6 @@ class _UsageBar extends StatelessWidget {
   }
 }
 
-class _Profile {
-  const _Profile(this.name, this.detail, this.ping);
-
-  final String name;
-  final String detail;
-  final String ping;
-}
-
 class _ProfileTile extends StatelessWidget {
   const _ProfileTile({
     required this.profile,
@@ -483,7 +549,7 @@ class _ProfileTile extends StatelessWidget {
     required this.onTap,
   });
 
-  final _Profile profile;
+  final ProxyProfile profile;
   final bool selected;
   final Color accent;
   final VoidCallback onTap;
@@ -524,7 +590,7 @@ class _ProfileTile extends StatelessWidget {
                     ),
                   ),
                   child: Icon(
-                    profile.name.contains('DIRECT')
+                    profile.isDirect
                         ? Icons.public_rounded
                         : Icons.shield_outlined,
                     color: accent,
@@ -806,8 +872,18 @@ class AddConfigurationPage extends StatelessWidget {
             _MenuTile(
               icon: Icons.content_paste_rounded,
               title: 'Paste Link',
-              subtitle: 'Import from clipboard',
-              onTap: () {},
+              subtitle: 'Import subscription URL',
+              onTap: () async {
+                final profiles =
+                    await Navigator.of(context).push<List<ProxyProfile>>(
+                  MaterialPageRoute(
+                    builder: (_) => const SubscriptionsPage(),
+                  ),
+                );
+                if (context.mounted && profiles != null && profiles.isNotEmpty) {
+                  Navigator.of(context).pop<List<ProxyProfile>>(profiles);
+                }
+              },
             ),
             _MenuTile(
               icon: Icons.qr_code_scanner_rounded,
