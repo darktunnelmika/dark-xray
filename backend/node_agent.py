@@ -11,11 +11,13 @@ from urllib.parse import urlsplit
 import argparse
 import asyncio
 import contextlib
+import copy
 import hmac
 import functools
 import json
 import os
 import re
+import socket
 import stat
 import tempfile
 import threading
@@ -30,6 +32,8 @@ from fastapi import Depends,FastAPI,HTTPException,Request
 from fastapi.responses import JSONResponse
 
 from core import Config,CoreEngine,CoreError
+from outbound_probe import OutboundProbeError,probe_outbounds
+from warp_paths import WarpPathError,warp_endpoint_candidates,validate_warp_endpoint
 from dark_policy import Store,PolicyError
 from node_runtime import NodeRuntime
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
@@ -318,7 +322,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1},'control_receipt':runtime.command_status(),
+                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'traffic_matrix_probe':1,'warp_endpoint_probe':1},'control_receipt':runtime.command_status(),
                 'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},
                 'direct_source_verified':bool(engine.config.direct_source_verified),'guard':guard}
 
@@ -333,6 +337,58 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         try:result=runtime.apply(body)
         except (PolicyError,CoreError,ValueError) as ex:raise HTTPException(422,str(ex))
         return {'service':'DARK XRAY NODE',**result}
+
+    @app.post('/node/api/v1/traffic-matrix/probe')
+    def traffic_matrix_probe(body:dict,_scope:str=Depends(auth)):
+        port=body.get('port') if isinstance(body,dict) else 0
+        tag=str(body.get('outboundTag') or '') if isinstance(body,dict) else ''
+        attempts=body.get('attempts',2) if isinstance(body,dict) else 2
+        timeout=body.get('timeoutSeconds',5) if isinstance(body,dict) else 5
+        if type(port)is not int or not 1<=port<=65535 or not tag or len(tag)>128:
+            raise HTTPException(400,'Invalid Traffic Matrix probe request')
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout)is not int or not 1<=timeout<=10:
+            raise HTTPException(400,'Invalid Traffic Matrix probe limits')
+        listener=False
+        try:
+            with socket.create_connection(('127.0.0.1',port),timeout=.5):listener=True
+        except OSError:pass
+        outbounds=engine.runtime_outbounds('hub')
+        if not any(isinstance(x,dict) and x.get('tag')==tag for x in outbounds):
+            raise HTTPException(409,'Traffic Matrix outbound is missing on Node')
+        try:probe=probe_outbounds(engine._binary(),engine.config.xray_assets,outbounds,tags=[tag],
+                                  attempts=attempts,timeout=float(timeout),trace=tag=='warp')[0]
+        except OutboundProbeError as ex:raise HTTPException(422,str(ex))
+        return {'service':'DARK XRAY NODE','nodeId':node_id,'listenerReady':listener,'probe':probe,
+                'productionTrafficMutation':False}
+
+    @app.post('/node/api/v1/warp/endpoints/probe')
+    def warp_endpoint_probe(body:dict,_scope:str=Depends(auth)):
+        endpoints=body.get('endpoints') if isinstance(body,dict) else None
+        attempts=body.get('attempts',2) if isinstance(body,dict) else 2
+        timeout=body.get('timeoutSeconds',4) if isinstance(body,dict) else 4
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout)is not int or not 1<=timeout<=10:
+            raise HTTPException(400,'Invalid WARP endpoint probe limits')
+        outbound=next((x for x in engine.runtime_outbounds('hub') if isinstance(x,dict) and x.get('tag')=='warp'),None)
+        if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':raise HTTPException(409,'WARP outbound is missing on Node')
+        peers=((outbound.get('settings') or {}).get('peers') or [{}]);current=str(peers[0].get('endpoint') or '') if peers else ''
+        raw=endpoints if endpoints is not None else warp_endpoint_candidates(current)
+        if not isinstance(raw,list) or not 1<=len(raw)<=20:raise HTTPException(400,'Select 1-20 WARP endpoints')
+        clean=[]
+        try:
+            for value in raw:
+                endpoint=validate_warp_endpoint(str(value))
+                if endpoint not in clean:clean.append(endpoint)
+        except WarpPathError as ex:raise HTTPException(400,str(ex))
+        clones=[];mapping={}
+        for idx,endpoint in enumerate(clean):
+            item=copy.deepcopy(outbound);tag='dark-node-warp-'+str(idx);item['tag']=tag
+            item['settings']['peers'][0]['endpoint']=endpoint;clones.append(item);mapping[tag]=endpoint
+        try:items=probe_outbounds(engine._binary(),engine.config.xray_assets,clones,tags=[x['tag'] for x in clones],
+                                  attempts=attempts,timeout=float(timeout),trace=True)
+        except OutboundProbeError as ex:raise HTTPException(422,str(ex))
+        for row in items:row['endpoint']=mapping.get(str(row.get('tag') or ''),'')
+        return {'service':'DARK XRAY NODE','nodeId':node_id,'current':current,'items':items,
+                'productionTrafficMutation':False}
 
     @app.get('/node/api/inbounds')
     def inbounds(_scope:str=Depends(auth)):
