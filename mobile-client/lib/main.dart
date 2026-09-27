@@ -108,13 +108,17 @@ class _HomePageState extends State<HomePage>
   }
 
   Future<void> _loadStoredProfiles() async {
-    final profiles = await _store.loadProfiles();
-    if (!mounted || profiles.isEmpty) return;
-    setState(() {
-      _profiles = profiles;
-      _selectedProfile = 0;
-      _subscriptionMeta = '${profiles.length} profiles • stored on device';
-    });
+    try {
+      final profiles = await _store.loadProfiles();
+      if (!mounted || profiles.isEmpty) return;
+      setState(() {
+        _profiles = profiles;
+        _selectedProfile = 0;
+        _subscriptionMeta = '${profiles.length} profiles • stored on device';
+      });
+    } catch (_) {
+      // Keep demo profiles if local storage is unavailable during bootstrap/tests.
+    }
   }
 
   Future<void> _applyImportedProfiles(List<ProxyProfile>? profiles) async {
