@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.8.0-rc8"
+SCRIPT_VER="0.9.0-rc9"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -380,6 +380,33 @@ ipsec_ready(){
   ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
   ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"
 }
+ike_state(){
+  [ "${SECURITY:-plain}" = ipsec ] || { echo plain; return; }
+  command -v ipsec >/dev/null 2>&1 || { echo missing; return; }
+  local s
+  s="$(ipsec status "darkgre-${PEER_ID}" 2>/dev/null || true)"
+  if grep -qi 'ESTABLISHED' <<<"$s"; then echo established
+  elif grep -qi 'CONNECTING' <<<"$s"; then echo connecting
+  else echo down
+  fi
+}
+ensure_ike_initiator(){
+  [ "${SECURITY:-plain}" = ipsec ] || return 0
+  [ "${ROLE:-}" = IRAN ] || return 0
+
+  local st now last stamp="/run/darkgre-${ID}.ike-last"
+  st="$(ike_state)"
+  case "$st" in established|connecting) return 0 ;; esac
+
+  now="$(date +%s)"
+  last="$(cat "$stamp" 2>/dev/null || echo 0)"
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  [ $((now-last)) -ge 30 ] || return 0
+
+  printf '%s\n' "$now" >"$stamp"
+  timeout 5 ipsec up "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
+}
+
 gre_exists(){ ip link show "$IFNAME" >/dev/null 2>&1; }
 gre_down(){
   remove_fw
@@ -411,6 +438,7 @@ reconcile(){
 }
 watch_loop(){
   while :; do
+    ensure_ike_initiator || true
     reconcile || true
     sleep 15
   done
@@ -592,10 +620,29 @@ migrate_existing_tunnels(){
     grep -q '^PATH_MTU=' "$f" || printf 'PATH_MTU="0"\n' >>"$f"
     grep -q '^RESTART_EVERY=' "$f" || printf 'RESTART_EVERY="off"\n' >>"$f"
     grep -q '^PAIR_HASH=' "$f" || printf 'PAIR_HASH=""\n' >>"$f"
+
+    # RC9 migration: existing secure auto tunnels from RC7/RC8 used MTU 1436.
+    unset SECURITY MTU_MODE MTU PATH_MTU NAME LOCAL_PUBLIC REMOTE_PUBLIC LOCAL_TUN REMOTE_TUN PREFIX PROFILE TXQLEN GRE_KEY IPSEC_PSK
+    . "$f" 2>/dev/null || continue
+    if [ "${SECURITY:-plain}" = ipsec ] && [ "${MTU_MODE:-custom}" = auto ] && [ "${MTU:-0}" -gt 1400 ] 2>/dev/null; then
+      sed -i 's|^MTU=.*|MTU=1400|' "$f"
+      MTU=1400
+    fi
+
     if ! grep -q '^PEER_ID=' "$f"; then
       unset LOCAL_PUBLIC REMOTE_PUBLIC
       . "$f" 2>/dev/null || continue
       printf 'PEER_ID="%s"\n' "$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")" >>"$f"
+    fi
+
+    # Refresh the local fingerprint; mismatched peers will intentionally show different hashes.
+    . "$f" 2>/dev/null || continue
+    local ph
+    ph="$(pair_shared_hash)"
+    if grep -q '^PAIR_HASH=' "$f"; then
+      sed -i "s|^PAIR_HASH=.*|PAIR_HASH=$(printf %q "$ph")|" "$f"
+    else
+      printf 'PAIR_HASH=%q\n' "$ph" >>"$f"
     fi
   done
   shopt -u nullglob
@@ -1361,6 +1408,7 @@ repair_runtime(){
 
     systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl start "darkgre@$n.service" >/dev/null 2>&1 || true
+    [ "${ROLE:-}" = IRAN ] && "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
     systemctl enable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
     "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
 
