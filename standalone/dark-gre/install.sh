@@ -67,6 +67,10 @@ echo
 printf '  %srun it with:%s  darkgre\n' "$D" "$N"
 echo
 
-if [ "${DARK_GRE_INSTALL_ONLY:-0}" != 1 ] && [ -r /dev/tty ]; then
-  exec "$DEST" </dev/tty
+if [ "${DARK_GRE_INSTALL_ONLY:-0}" != 1 ]; then
+  if [ -t 0 ]; then
+    exec "$DEST"
+  elif { exec 3<>/dev/tty; } 2>/dev/null; then
+    exec "$DEST" <&3 >&3 2>&3
+  fi
 fi
