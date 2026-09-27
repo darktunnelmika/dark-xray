@@ -2,10 +2,14 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.3.0-rc3` — Draft / Test
+> وضعیت: `v0.5.0-rc5` — Draft / Test
 
-## تغییرات RC3
+## تغییرات RC5
 
+- Installer بعد از هر نصب/آپدیت **runtime repair** اجرا می‌کند تا unit/runner قدیمی باقی نماند
+- سرویس اصلی در Secure Mode در حالت **armed/active** می‌ماند و منتظر Peer fail نمی‌شود
+- Watcher جداگانه هر ۵ ثانیه IPsec/GRE را reconcile می‌کند
+- اگر IPsec قطع شود GRE به‌صورت fail-closed پایین می‌آید و plaintext عبور نمی‌کند
 - **DGR2 Pair Code** شامل GRE Key، MTU، Security و Scheduled Restart
 - **Auto PMTU Scan** با DF probe و محاسبه MTU مناسب برای مسیر
 - **TCP MSS Clamp** خودکار برای جلوگیری از مشکل fragmentation/black-hole
@@ -153,7 +157,7 @@ ADVANCED
 - Speed responder
 - IPsec / XFRM status
 
-## نصب RC3
+## نصب RC5
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
@@ -187,4 +191,4 @@ darkgre
 /etc/sysctl.d/99-dark-gre.conf
 ```
 
-RC3 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
+RC5 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
