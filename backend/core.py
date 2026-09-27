@@ -26,7 +26,36 @@ import uuid
 import psutil
 from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line
 from reality_scan import reality_target_policy
-from traffic_matrix import compile_rules as compile_matrix_rules, POLICIES as MATRIX_POLICIES
+try:
+    from traffic_matrix import compile_rules as compile_matrix_rules, POLICIES as MATRIX_POLICIES
+except ImportError:
+    # Bootstrap compatibility for Nodes whose pre-rc8 updater does not yet know
+    # how to copy newly introduced helper modules. The second updater pass will
+    # materialize traffic_matrix.py; until then Core must still start safely.
+    MATRIX_POLICIES={"normal","warp_ai","warp_all","adblock","warp_ai_adblock","warp_all_adblock","custom"}
+    _MATRIX_AI=["domain:openai.com","domain:chatgpt.com","domain:oaiusercontent.com","domain:oaistatic.com","domain:openaiapi-site.azureedge.net"]
+    _MATRIX_ADS=["geosite:category-ads-all","domain:doubleclick.net","domain:googleadservices.com","domain:googlesyndication.com","domain:adservice.google.com","domain:ads-twitter.com"]
+    def compile_matrix_rules(*,scope,inbound_id,access_path,policy,inbound_tag,tunnel_port=0):
+        policy=str(policy or "normal")
+        if policy not in MATRIX_POLICIES:raise ValueError("Unsupported Traffic Matrix policy")
+        if policy=="custom":return []
+        tag=str(inbound_tag or "").strip()
+        if not tag:raise ValueError("Traffic Matrix inbound tag is missing")
+        if access_path=="tunnel":
+            if not 1<=int(tunnel_port or 0)<=65535:raise ValueError("Traffic Matrix tunnel port is missing")
+            tag=f"dark-tunnel-{int(inbound_id)}-{int(tunnel_port)}"
+        elif access_path!="direct":raise ValueError("Unsupported Traffic Matrix access path")
+        digest=lambda kind:"dark-matrix-"+hashlib.sha256((f"{scope}:{int(inbound_id)}:{access_path}|"+kind).encode()).hexdigest()[:16]+"-"+kind
+        match={"type":"field","inboundTag":[tag]};rules=[]
+        adblock="adblock" in policy
+        warp="ai" if policy.startswith("warp_ai") else "all" if policy.startswith("warp_all") else "off"
+        if adblock:rules.append({**match,"ruleTag":digest("adblock"),"domain":_MATRIX_ADS[:],"outboundTag":"block"})
+        if warp=="ai":
+            rules.append({**match,"ruleTag":digest("warp-ai"),"domain":_MATRIX_AI[:],"outboundTag":"warp"})
+            rules.append({**match,"ruleTag":digest("direct"),"outboundTag":"direct"})
+        elif warp=="all":rules.append({**match,"ruleTag":digest("warp-all"),"network":"tcp,udp","outboundTag":"warp"})
+        else:rules.append({**match,"ruleTag":digest("direct"),"outboundTag":"direct"})
+        return rules
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
