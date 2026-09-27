@@ -158,7 +158,9 @@ def _test_vless(remark,port,tag):
 
 def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkeypatch):
  store,eng,app,c=env
- a=c.post('/api/inbounds',json=_test_vless('NODE A',21001,'node-a')).json()['id']
+ ib_a=_test_vless('NODE A',21001,'node-a')
+ ib_a['panelMeta']={'deployLocal':False,'deploymentTargets':['node:tr1'],'tunnelPorts':{'node:tr1':21185}}
+ a=c.post('/api/inbounds',json=ib_a).json()['id']
  b=c.post('/api/inbounds',json=_test_vless('LOCAL B',21002,'local-b')).json()['id']
  eng.create({'email':'alice','id':'11111111-1111-4111-8111-111111111111','enable':True},[a])
  eng.create({'email':'bob','id':'22222222-2222-4222-8222-222222222222','enable':True},[b])
@@ -184,6 +186,9 @@ def test_node_assignment_sync_sends_only_selected_inbound_and_clients(env,monkey
  assignments=desired['payload']['assignments']
  assert [x['sourceInboundId'] for x in assignments]==[a]
  assert assignments[0]['inbound']['tag']=='node-a'
+ assert assignments[0]['inbound']['panelMeta']['tunnelPorts']=={'local':21185}
+ assert 'deployLocal' not in assignments[0]['inbound']['panelMeta']
+ assert 'deploymentTargets' not in assignments[0]['inbound']['panelMeta']
  assert [x['sourceEmail'] for x in assignments[0]['clients']]==['alice']
  assert all(x['sourceEmail']!='bob' for x in assignments[0]['clients'])
  node=c.get('/api/nodes').json()[0]
