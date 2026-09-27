@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.3.0-rc3"
+SCRIPT_VER="0.4.0-rc4"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -19,6 +19,8 @@ RUNNER="/usr/local/libexec/darkgre-runner"
 UNIT_FILE="/etc/systemd/system/darkgre@.service"
 RS_UNIT="/etc/systemd/system/darkgre-restart@.service"
 RS_TIMER="/etc/systemd/system/darkgre-restart@.timer"
+WATCH_UNIT="/etc/systemd/system/darkgre-watch@.service"
+WATCH_TIMER="/etc/systemd/system/darkgre-watch@.timer"
 SEC_DIR="$BASE_DIR/security"
 IPSEC_DIR="$SEC_DIR/ipsec.d"
 IPSEC_SECRETS="$SEC_DIR/ipsec.secrets"
@@ -317,35 +319,55 @@ apply_fw(){
       iptables -t filter -A "$fw_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j ACCEPT ;; esac
   done <"$TUN_DIR/$name/ports.list"
 }
-secure_ready(){
+ipsec_ready(){
   [ "${SECURITY:-plain}" != ipsec ] && return 0
-  command -v ipsec >/dev/null 2>&1 || { echo "strongSwan missing" >&2; return 1; }
-  local conn="darkgre-${PEER_ID}" i
-  # Trigger IKE, but never block the tunnel service waiting for an absent peer.
-  timeout 3 ipsec up "$conn" >/dev/null 2>&1 || true
-  for i in 1 2 3; do
-    if ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
-       ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "IPsec peer not ready yet: $conn" >&2
-  return 75
+  command -v ipsec >/dev/null 2>&1 || return 1
+  ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
+  ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"
 }
-case "$action" in
-  up)
-    modprobe ip_gre 2>/dev/null || true; secure_ready
-    ip tunnel del "$IFNAME" 2>/dev/null || true
+trigger_ipsec(){
+  [ "${SECURITY:-plain}" = ipsec ] || return 0
+  command -v ipsec >/dev/null 2>&1 || return 0
+  timeout 2 ipsec up "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
+}
+gre_exists(){ ip link show "$IFNAME" >/dev/null 2>&1; }
+gre_down(){
+  remove_fw
+  ip link set dev "$IFNAME" down 2>/dev/null || true
+  ip tunnel del "$IFNAME" 2>/dev/null || true
+}
+gre_up(){
+  modprobe ip_gre 2>/dev/null || true
+  if ! gre_exists; then
     if [ "$GRE_KEY" = 0 ] || [ -z "$GRE_KEY" ]; then
       ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64
     else
       ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64 key "$GRE_KEY"
     fi
-    ip addr add "$LOCAL_TUN/$PREFIX" dev "$IFNAME"; ip link set dev "$IFNAME" mtu "$MTU" txqueuelen "$TXQLEN" up
-    sysctl -q -w net.ipv4.ip_forward=1 >/dev/null; apply_fw ;;
-  down) remove_fw; ip link set dev "$IFNAME" down 2>/dev/null || true; ip tunnel del "$IFNAME" 2>/dev/null || true ;;
-  reload-fw) apply_fw ;;
+    ip addr add "$LOCAL_TUN/$PREFIX" dev "$IFNAME"
+  fi
+  ip link set dev "$IFNAME" mtu "$MTU" txqueuelen "$TXQLEN" up
+  sysctl -q -w net.ipv4.ip_forward=1 >/dev/null
+  apply_fw
+}
+reconcile(){
+  if [ "${SECURITY:-plain}" = ipsec ]; then
+    trigger_ipsec
+    if ipsec_ready; then
+      gre_up
+      return 0
+    fi
+    # Fail closed: never leave a GRE interface carrying plaintext when IPsec is down.
+    gre_exists && gre_down
+    return 0
+  fi
+  gre_up
+}
+case "$action" in
+  arm|up) reconcile ;;
+  reconcile) reconcile ;;
+  down) gre_down ;;
+  reload-fw) gre_exists && apply_fw || true ;;
   *) echo "unknown action: $action" >&2; exit 4 ;;
 esac
 RUNNER_EOF
@@ -358,19 +380,45 @@ write_unit(){
 Description=DARK GRE Direct tunnel %i
 After=network-online.target strongswan-starter.service
 Wants=network-online.target
-StartLimitIntervalSec=0
+
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=$RUNNER up %i
+ExecStart=$RUNNER arm %i
 ExecStop=$RUNNER down %i
-TimeoutStartSec=12
+TimeoutStartSec=10
 TimeoutStopSec=20
-Restart=on-failure
-RestartSec=5
+
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF
+
+  cat >"$WATCH_UNIT" <<UNIT_EOF
+[Unit]
+Description=DARK GRE peer/security reconcile %i
+After=network-online.target darkgre@%i.service
+Requires=darkgre@%i.service
+
+[Service]
+Type=oneshot
+ExecStart=$RUNNER reconcile %i
+TimeoutStartSec=8
+UNIT_EOF
+
+  cat >"$WATCH_TIMER" <<'EOF'
+[Unit]
+Description=Watch DARK GRE peer/security state %i
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=darkgre-watch@%i.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
   cat >"$RS_UNIT" <<'EOF'
 [Unit]
 Description=Restart DARK GRE tunnel %i
@@ -482,26 +530,39 @@ save_meta(){
 }
 
 service_start(){
-  local n="$1" st
+  local n="$1"
   systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || return 1
-  systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
-  systemctl --no-block start "darkgre@$n.service" >/dev/null 2>&1 || return 1
-  sleep 1
-  st="$(systemctl is-active "darkgre@$n.service" 2>/dev/null || true)"
-  case "$st" in active|activating) return 0 ;; *) return 1 ;; esac
+  systemctl start "darkgre@$n.service" >/dev/null 2>&1 || return 1
+  systemctl enable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || return 1
+  "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
+  return 0
 }
 service_restart(){
   local n="$1"
-  systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
-  systemctl --no-block restart "darkgre@$n.service" >/dev/null 2>&1
+  systemctl restart "darkgre@$n.service" >/dev/null 2>&1 || return 1
+  systemctl enable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+  "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
 }
-service_stop(){ systemctl stop "darkgre@$1.service" 2>/dev/null || true; }
-
+service_stop(){
+  local n="$1"
+  systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+  systemctl stop "darkgre-watch@$n.service" >/dev/null 2>&1 || true
+  systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
+}
 service_state(){
-  local st
-  st="$(systemctl is-active "darkgre@$1.service" 2>/dev/null || true)"
-  printf '%s\n' "${st:-inactive}"
+  local n="$1" d="$TUN_DIR/$1" st sec
+  st="$(systemctl is-active "darkgre@$n.service" 2>/dev/null || true)"
+  [ "$st" = active ] || { printf '%s\n' "${st:-inactive}"; return; }
+  [ -r "$d/meta.conf" ] || { echo active; return; }
+  . "$d/meta.conf"; sec="${SECURITY:-plain}"
+  if ip link show "$IFNAME" >/dev/null 2>&1; then
+    [ "$sec" = ipsec ] && ! ipsec_state "$n" 2>/dev/null | grep -q encrypted && { echo securing; return; }
+    echo active
+  elif [ "$sec" = ipsec ]; then echo waiting
+  else echo armed
+  fi
 }
+
 svc_uptime_short(){
   local ts t n d
   ts="$(systemctl show "darkgre@$1.service" -p ActiveEnterTimestamp --value 2>/dev/null)"
@@ -660,14 +721,13 @@ new_iran(){
   echo; top; sect "CREATED - $NAME"; blank
   kv "role" "$W IRAN / pair owner$N"; kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"; kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"; kv "security" "$W$SECURITY$N"; kv "mtu" "$W$MTU$N $D($MTU_MODE)$N"; kv "profile" "$W$PROFILE$N"; kv "restart" "$W$RESTART_EVERY$N"; bot; echo
   if service_start "$NAME"; then
-    sleep 1
     if ip link show "$IFNAME" >/dev/null 2>&1; then
       ok "GRE interface is up"
     elif [ "$SECURITY" = ipsec ]; then
       ok "Secure GRE armed - waiting for KHAREJ / IPsec peer"
-      dim "after KHAREJ applies the Pair Code, this service retries automatically"
+      dim "watcher checks every 5s; service stays healthy while waiting"
     else
-      warn "service started but GRE interface is not ready yet"
+      warn "GRE armed but interface is not ready yet"
     fi
   else
     bad "service could not be armed - config and Pair Code were kept"
@@ -695,18 +755,13 @@ new_kharej(){
   save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
   [ "$SECURITY" = ipsec ] && security_sync_all
   if service_start "$NAME"; then
-    info "waiting briefly for IPsec/GRE"
-    local _i
-    for _i in 1 2 3 4 5 6; do
-      ip link show "$IFNAME" >/dev/null 2>&1 && break
-      sleep 1
-    done
+    "$RUNNER" reconcile "$NAME" >/dev/null 2>&1 || true
     if ip link show "$IFNAME" >/dev/null 2>&1; then
       ok "GRE interface is up"
       ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 && ok "inner peer responds: $REMOTE_TUN" || warn "GRE is up but inner peer is not responding yet"
     else
       ok "Secure GRE armed - waiting for IRAN / IPsec peer"
-      dim "both sides retry automatically; no tunnel deletion is needed"
+      dim "watcher checks every 5s; no tunnel deletion is needed"
     fi
   else
     bad "service could not be armed"
@@ -775,6 +830,7 @@ delete_tunnel(){
   local n="$1" d="$TUN_DIR/$1" v
   read -r -p "  type the tunnel name to remove $n: " v; [ "$v" = "$n" ] || { warn "cancelled"; return; }
   systemctl disable "darkgre@$n.service" >/dev/null 2>&1 || true
+  systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
   set_restart_timer "$n" off; service_stop "$n"; rm -rf "$d"; security_sync_all
   ok "deleted $n"
 }
@@ -1146,7 +1202,7 @@ uninstall_all(){
   local d; shopt -s nullglob
   for d in "$TUN_DIR"/*; do [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; systemctl disable "darkgre@$NAME.service" >/dev/null 2>&1 || true; set_restart_timer "$NAME" off; service_stop "$NAME"; done
   shopt -u nullglob
-  rm -f "$UNIT_FILE" "$RS_UNIT" "$RS_TIMER" "$RUNNER" /etc/sysctl.d/99-dark-gre.conf
+  rm -f "$UNIT_FILE" "$RS_UNIT" "$RS_TIMER" "$WATCH_UNIT" "$WATCH_TIMER" "$RUNNER" /etc/sysctl.d/99-dark-gre.conf
   sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/dark-gre/security/ipsec.secrets|d' /etc/ipsec.conf /etc/ipsec.secrets 2>/dev/null || true
   rm -rf "$BASE_DIR"; systemctl daemon-reload; command -v ipsec >/dev/null 2>&1 && ipsec reload >/dev/null 2>&1 || true
   ok "DARK GRE uninstalled; strongSwan package was left installed"; pause; exit 0
