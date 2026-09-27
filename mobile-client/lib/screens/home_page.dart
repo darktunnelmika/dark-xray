@@ -572,11 +572,29 @@ class _HomePageState extends State<HomePage>
                           children: [
                             _PowerSection(
                               connected: _connected,
+                              reconnecting:
+                                  _vpnStatus?.reconnecting ?? false,
                               busy: _vpnBusy,
                               accent: _accent,
                               animation: _pulse,
+                              error: _coreError,
                               onTap: _toggleVpn,
                             ),
+                            if ((_vpnStatus?.desiredConnected ?? false) ||
+                                _connected ||
+                                (_vpnStatus?.reconnecting ?? false)) ...[
+                              const SizedBox(height: 14),
+                              _SessionStats(
+                                status: _vpnStatus,
+                                accent: _accent,
+                              ),
+                            ],
+                            if (_coreError.isNotEmpty && !_connected) ...[
+                              const SizedBox(height: 12),
+                              _CoreErrorBanner(
+                                error: _coreError,
+                              ),
+                            ],
                             const SizedBox(height: 20),
                             CyberFrame(
                               accent: _accent,
@@ -598,10 +616,14 @@ class _HomePageState extends State<HomePage>
                                     children: [
                                       Expanded(
                                         child: CyberActionButton(
-                                          label: 'PING',
+                                          label: _pingingAll
+                                              ? 'PINGING…'
+                                              : 'PING ALL',
                                           icon: Icons.speed_rounded,
                                           accent: _accent,
-                                          onTap: _pingSelected,
+                                          onTap: _pingingAll
+                                              ? () {}
+                                              : _pingAllAndSort,
                                         ),
                                       ),
                                       const SizedBox(width: 10),
@@ -640,7 +662,7 @@ class _HomePageState extends State<HomePage>
                                         profile: _profiles[i],
                                         selected: _selected == i,
                                         accent: _accent,
-                                        onTap: () => setState(() => _selected = i),
+                                        onTap: () => _selectProfile(i),
                                       ),
                                   ],
                                 ),
@@ -747,16 +769,20 @@ class _TopBar extends StatelessWidget {
 class _PowerSection extends StatelessWidget {
   const _PowerSection({
     required this.connected,
+    required this.reconnecting,
     required this.busy,
     required this.accent,
     required this.animation,
+    required this.error,
     required this.onTap,
   });
 
   final bool connected;
+  final bool reconnecting;
   final bool busy;
   final Color accent;
   final Animation<double> animation;
+  final String error;
   final VoidCallback onTap;
 
   @override
@@ -811,7 +837,15 @@ class _PowerSection extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Text(
-          busy ? 'CONNECTING' : connected ? 'CONNECTED' : 'READY',
+          busy
+              ? 'CONNECTING'
+              : reconnecting
+                  ? 'RECONNECTING'
+                  : connected
+                      ? 'CONNECTED'
+                      : error.isNotEmpty
+                          ? 'CONNECTION ERROR'
+                          : 'READY',
           style: TextStyle(
             color: accent,
             fontSize: 14,
@@ -821,15 +855,136 @@ class _PowerSection extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          connected
-              ? 'Secure tunnel active'
-              : 'Tap power to connect',
+          reconnecting
+              ? 'Waiting for the underlying network'
+              : connected
+                  ? 'Secure tunnel active'
+                  : error.isNotEmpty
+                      ? 'Open diagnostics or retry the connection'
+                      : 'Tap power to connect',
           style: const TextStyle(
             color: CyberPalette.muted,
             fontSize: 12,
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SessionStats extends StatelessWidget {
+  const _SessionStats({
+    required this.status,
+    required this.accent,
+  });
+
+  final VpnStatus? status;
+  final Color accent;
+
+  String _formatBytes(int value) {
+    if (value < 1024) return value.toString() + ' B';
+    final kb = value / 1024;
+    if (kb < 1024) return kb.toStringAsFixed(kb < 10 ? 1 : 0) + ' KB';
+    final mb = kb / 1024;
+    if (mb < 1024) return mb.toStringAsFixed(mb < 10 ? 1 : 0) + ' MB';
+    final gb = mb / 1024;
+    return gb.toStringAsFixed(gb < 10 ? 2 : 1) + ' GB';
+  }
+
+  String _formatDuration(Duration value) {
+    final hours = value.inHours;
+    final minutes = value.inMinutes.remainder(60);
+    final seconds = value.inSeconds.remainder(60);
+    if (hours > 0) {
+      return hours.toString().padLeft(2, '0') +
+          ':' +
+          minutes.toString().padLeft(2, '0') +
+          ':' +
+          seconds.toString().padLeft(2, '0');
+    }
+    return minutes.toString().padLeft(2, '0') +
+        ':' +
+        seconds.toString().padLeft(2, '0');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final current = status;
+    return CyberFrame(
+      accent: accent,
+      child: Row(
+        children: [
+          Expanded(
+            child: _Stat(
+              label: 'SESSION',
+              value: _formatDuration(
+                current?.connectedDuration ?? Duration.zero,
+              ),
+              accent: accent,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _Stat(
+              label: 'DOWNLOAD',
+              value: _formatBytes(current?.rxBytes ?? 0),
+              accent: accent,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _Stat(
+              label: 'UPLOAD',
+              value: _formatBytes(current?.txBytes ?? 0),
+              accent: accent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CoreErrorBanner extends StatelessWidget {
+  const _CoreErrorBanner({required this.error});
+
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: CyberPalette.red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: CyberPalette.red.withValues(alpha: 0.55),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            color: CyberPalette.red,
+            size: 19,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              error,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: CyberPalette.text,
+                fontSize: 11,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
