@@ -1179,7 +1179,13 @@ update_self(){
   curl -fsSL --retry 3 --max-time 60 -o "$tmp" "$url" || { bad "download failed"; rm -f "$tmp"; return; }
   grep -q 'DARKVPN-GRE-SCRIPT' "$tmp" && bash -n "$tmp" || { bad "invalid update"; rm -f "$tmp"; return; }
   ver="$(grep -m1 '^SCRIPT_VER=' "$tmp" | cut -d'"' -f2)"; cp -f "$SELF_PATH" "$SELF_PATH.bak" 2>/dev/null || true
-  install -m 0755 "$tmp" "$SELF_PATH"; rm -f "$tmp"; ok "updated to v${ver:-?}"
+  install -m 0755 "$tmp" "$SELF_PATH"; rm -f "$tmp"
+  if DARK_GRE_REPAIR_ONLY=1 "$SELF_PATH"; then
+    ok "updated to v${ver:-?} and runtime repaired"
+  else
+    bad "script updated, but runtime repair failed"
+    return 1
+  fi
 }
 screen_update(){
   while :; do
