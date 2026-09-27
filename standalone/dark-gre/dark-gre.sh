@@ -945,6 +945,28 @@ screen_fingerprint(){
   shopt -u nullglob; pause
 }
 
+
+apply_pair_code_existing(){
+  local n="$1" d="$TUN_DIR/$1" code oldpsk
+  . "$d/meta.conf"
+  [ "$ROLE" = KHAREJ ] || { info "IRAN owns the Pair Code"; return; }
+  header "RE-PAIR - $n"; info "paste the refreshed Pair Code from IRAN"; ask "pair code"; code="$ANS"
+  decode_pair "$code" || { bad "invalid Pair Code"; pause; return; }
+  [ "$P_NAME" = "$n" ] || { bad "Pair Code belongs to tunnel $P_NAME, not $n"; pause; return; }
+  LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"; LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"; PREFIX="$P_PREFIX"
+  PROFILE="$P_PROFILE"; MTU_MODE="$P_MTU_MODE"; PATH_MTU="$P_PATH_MTU"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"; GRE_KEY="$P_GRE_KEY"; SECURITY="$P_SECURITY"; IPSEC_PSK="$P_IPSEC_PSK"; RESTART_EVERY="$P_RESTART"
+  if [ "$SECURITY" = ipsec ]; then
+    ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }
+    oldpsk="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"
+    [ -z "$oldpsk" ] || [ "$oldpsk" = "$IPSEC_PSK" ] || warn "replacing the shared IPsec key for this peer"
+  fi
+  PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
+  save_meta "$d" "NAME=$n" "ROLE=KHAREJ" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
+  security_sync_all; set_restart_timer "$n" "$RESTART_EVERY"
+  service_restart "$n" >/dev/null 2>&1 && ok "Pair Code applied and tunnel restarted" || bad "re-pair saved but service did not start"
+  pause
+}
+
 manage(){
   pick_tunnel || return
   local n="$SELECTED" d="$TUN_DIR/$SELECTED"
@@ -960,17 +982,20 @@ manage(){
     kv "security" "$W$SECURITY$N $D$(ipsec_state "$n")$N"; kv "profile" "$W$PROFILE$N"; kv "mtu" "$W$MTU$N $D$MTU_MODE$N"
     kv "traffic" "$L4$(human_bytes "$rx") rx$N  $L6$(human_bytes "$tx") tx$N"; kv "restart" "$W$RESTART_EVERY$N"
     mid; sect "CONTROL"; item 1 "Start" ""; item 2 "Stop" ""; item 3 "Restart" ""
-    if [ "$ROLE" = IRAN ]; then mid; sect "PAIRING"; item p "Pair code" "paste this on KHAREJ"; fi
+    mid; sect "PAIRING"
+    if [ "$ROLE" = IRAN ]; then item p "Pair code" "paste this on KHAREJ"; else item p "Apply Pair Code" "re-pair without deleting"; fi
     mid; sect "CONFIGURE"; [ "$ROLE" = IRAN ] && item 4 "Ports" "user-facing ports"; item 5 "Tuning" "profile + MTU / PMTU"; item 6 "Endpoint" "local / peer IP"; item 7 "Security" "GRE + IPsec"; item 8 "Scheduled restart" ""
-    mid; sect "INSPECT"; item s "Speed test" "latency + throughput"; [ "$ROLE" = IRAN ] && item c "Live connections" ""; item L "Logs + interface" ""; item f "Config fingerprint" ""
-    mid; sect "ADVANCED"; item d "Delete tunnel" ""; item 0 "Back" ""; bot; echo; getkey
+    mid; sect "INSPECT"; item s "Speed test" "latency + throughput"; [ "$ROLE" = IRAN ] && item c "Live connections" ""; item L "Logs + interface" ""; item f "Config fingerprint" ""; item v "Show config" ""
+    mid; sect "ADVANCED"; item e "Edit metadata" "advanced / manual"; item d "Delete tunnel" ""; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) service_start "$n"; pause ;; 2) service_stop "$n"; pause ;; 3) service_restart "$n"; pause ;;
       4) [ "$ROLE" = IRAN ] && screen_ports "$n" || { info "ports are managed on IRAN"; pause; } ;;
       5) screen_tuning "$n" ;; 6) screen_endpoint "$n" ;; 7) screen_security "$n" ;; 8) screen_restart "$n" ;;
-      p|P) [ "$ROLE" = IRAN ] && show_pair_code "$n" || info "Pair Code comes from IRAN"; pause ;;
+      p|P) if [ "$ROLE" = IRAN ]; then show_pair_code "$n"; pause; else apply_pair_code_existing "$n"; fi ;;
       s|S) speed_screen "$n" ;; c|C) [ "$ROLE" = IRAN ] && screen_connections "$n" || { info "connections are visible on IRAN"; pause; } ;;
       l|L) screen_logs "$n" ;; f|F) header "FINGERPRINT - $n"; kv "fingerprint" "$W$(config_fingerprint "$n")$N"; pause ;;
+      v|V) header "CONFIG - $n"; sed 's/^/    /' "$d/meta.conf"; echo; [ -s "$d/ports.list" ] && { info "ports"; sed 's/^/    /' "$d/ports.list"; }; pause ;;
+      e|E) local ed=nano; command -v nano >/dev/null 2>&1 || ed=vi; "$ed" "$d/meta.conf"; security_sync_all; service_restart "$n" >/dev/null 2>&1 || true; warn "manual metadata edits can break pairing"; pause ;;
       d|D) delete_tunnel "$n"; pause; [ -d "$d" ] || return ;;
       0|_) return ;;
     esac
