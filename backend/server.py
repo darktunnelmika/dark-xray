@@ -1474,7 +1474,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         refs=[h for h in engine.section('hosts') if h.get('runtime')=='node:'+node_id]
         if refs:raise HTTPException(409,'Move or delete Public Endpoints that use this Node before deleting it')
-        result=nodes.delete(node_id);apply_global_security()
+        result=nodes.delete(node_id)
+        scope='node:'+str(node_id)
+        with store.transaction() as db:
+            db.execute('DELETE FROM traffic_matrix WHERE scope=?',(scope,))
+            db.execute('DELETE FROM warp_profiles WHERE scope=?',(scope,))
+        apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
     @app.post('/api/nodes/{node_id}/probe')
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
@@ -1591,6 +1596,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             # Persist the new Hub desired revision immediately even when a node
             # is offline. The monitor will apply it when connectivity returns.
             ensure_node_desired_state(node_id)
+        valid_scopes=({'hub'} if body.local else set())|{'node:'+x for x in after}
+        with store.transaction() as db:
+            for row in db.execute('SELECT scope,access_path FROM traffic_matrix WHERE inbound_id=?',(inbound_id,)).fetchall():
+                scope=str(row['scope']);path=str(row['access_path'])
+                runtime='local' if scope=='hub' else scope
+                if scope not in valid_scopes or (path=='tunnel' and runtime not in tunnel_ports):
+                    db.execute('DELETE FROM traffic_matrix WHERE scope=? AND inbound_id=? AND access_path=?',
+                               (scope,inbound_id,path))
         manager.audit(p.actor,p.actor.id,'inbound.deployments',str(inbound_id),
                       'local='+str(bool(body.local))+'; nodes='+','.join(sorted(after))+
                       '; tunnel_ports='+','.join(k+':'+str(v) for k,v in sorted(tunnel_ports.items())))
@@ -2375,6 +2388,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.transaction() as db:
             for row in db.execute('SELECT id,allowed FROM owner_profiles').fetchall():
                 db.execute('UPDATE owner_profiles SET allowed=? WHERE id=?',(json.dumps([i for i in json.loads(row['allowed']) if i!=inbound_id]),row['id']))
+            db.execute('DELETE FROM traffic_matrix WHERE inbound_id=?',(inbound_id,))
         manager.tick(suppress=True);manager.audit(p.actor,p.actor.id,'inbound.delete',str(inbound_id));return result
 
     @app.get('/api/subscription/status')
