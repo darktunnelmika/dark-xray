@@ -23,3 +23,19 @@ test('REALITY UI no longer suggests the known-bad Microsoft target',()=>{
   assert.ok(src.includes("www.microsoft.com is blocked as a REALITY target"));
   assert.ok(src.includes("use-suggested-target"));
 });
+
+test('Representative inbound surface is read-only and client creation is not exposed there',()=>{
+  assert.ok(src.includes("ownerMode=isOwner()"));
+  assert.ok(src.includes("isOwner()?`<button class=\"btn btn-primary\" data-v3-action=\"new\""));
+  assert.ok(src.includes("iv3-readonly-toggle"));
+  assert.ok(!src.includes('data-v3-action="add-client"'));
+  assert.ok(!src.includes("if(act==='add-client')"));
+});
+
+test('Inbound mobile stylesheet increases touch targets and technical text readability',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'..','web','inbounds-v3.css'),'utf8');
+  assert.match(css,/Representative read-only state \+ mobile readability/);
+  assert.match(css,/\.iv3-name strong\{font-size:13px\}/);
+  assert.match(css,/\.iv3-actions button,.iv3-client-actions button,.iv3-icon\{width:40px;height:40px\}/);
+  assert.match(css,/\.iv3-search input\{font-size:16px;min-height:42px\}/);
+});
