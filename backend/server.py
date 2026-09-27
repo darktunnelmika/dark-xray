@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import sys
 import time
@@ -36,6 +37,10 @@ from dark_policy import Store,Actor,PolicyError,PermissionDenied,MAX_INT,NAME_RE
 from manager import Manager,SYSTEM
 from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
+from outbound_probe import OutboundProbeError,probe_outbounds
+from warp_cloudflare import WarpRegistrationError,register_cloudflare_warp,validate_warp_endpoint
+from warp_paths import warp_endpoint_candidates
+from traffic_matrix import POLICIES as MATRIX_POLICIES,ACCESS_PATHS as MATRIX_ACCESS_PATHS,policy_parts as matrix_policy_parts
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
@@ -186,6 +191,29 @@ class TrafficRoutePreview(Model):
     process:str=Field(default='',max_length=1024)
     vless_route:StrictInt=Field(default=0,ge=0,le=65535)
     attrs:dict[str,str]=Field(default_factory=dict,max_length=64)
+class TrafficMatrixSet(Model):
+    inboundId:StrictInt=Field(ge=1)
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    accessPath:Literal['direct','tunnel']='direct'
+    policy:str=Field(default='normal',min_length=1,max_length=40)
+class TrafficMatrixBatch(Model):
+    inboundId:StrictInt=Field(ge=1)
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    accessPaths:list[Literal['direct','tunnel']]=Field(min_length=1,max_length=2)
+    policy:str=Field(default='normal',min_length=1,max_length=40)
+class TrafficMatrixProbe(Model):
+    inboundId:StrictInt=Field(ge=1)
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    accessPath:Literal['direct','tunnel']='direct'
+    attempts:StrictInt=Field(default=2,ge=1,le=3)
+class WarpCreate(Model):
+    server:str=Field(default='hub',min_length=1,max_length=160)
+class WarpEndpointScan(Model):
+    server:str=Field(default='hub',min_length=1,max_length=160)
+class WarpEndpointSelect(Model):
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    endpoint:str=Field(min_length=3,max_length=160)
+
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
 class NodePair(Model):
@@ -233,6 +261,94 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     replacements=NodeReplacement(nodes)
     node_reset_lock=threading.RLock()
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
+    def _runtime_targets()->list[dict]:
+        rows=[{'id':'hub','kind':'hub','name':'HUB','address':str(config.public_address),'online':True,'latencyMs':0}]
+        for node in nodes.list():
+            rows.append({'id':'node:'+str(node.get('id')),'nodeId':str(node.get('id')),'kind':'node',
+                         'name':str(node.get('name') or node.get('id') or 'Node'),
+                         'address':str(node.get('data_address') or ''),'online':bool(node.get('online')),
+                         'latencyMs':int(node.get('last_latency_ms') or 0)})
+        return rows
+
+    def _runtime_target(scope:str,*,require_online:bool=False)->dict:
+        value=str(scope or 'hub').strip() or 'hub'
+        row=next((x for x in _runtime_targets() if x['id']==value),None)
+        if not row:raise HTTPException(400,'Unknown runtime server target')
+        if require_online and not row.get('online'):raise HTTPException(409,'Selected Node is offline')
+        return row
+
+    def _warp_profile(scope:str)->dict|None:
+        return engine.warp_profile(str(scope or 'hub'))
+
+    def _warp_profile_save(scope:str,outbound:dict,device_id:str='')->dict:
+        value=str(scope or 'hub').strip() or 'hub';body=copy.deepcopy(outbound);body['tag']='warp'
+        with store.transaction() as db:
+            db.execute("""INSERT INTO warp_profiles(scope,outbound_json,device_id,updated_at) VALUES(?,?,?,?)
+                          ON CONFLICT(scope) DO UPDATE SET outbound_json=excluded.outbound_json,
+                          device_id=excluded.device_id,updated_at=excluded.updated_at""",
+                       (value,json.dumps(body,separators=(',',':')),str(device_id or '')[:256],time.time()))
+        return body
+
+    def _warp_profile_delete(scope:str):
+        with store.transaction() as db:db.execute('DELETE FROM warp_profiles WHERE scope=?',(str(scope or 'hub'),))
+
+    def _matrix_deployments(inbound_id:int)->tuple[dict,list[str],dict]:
+        inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+        scopes=[]
+        if meta.get('deployLocal',True) is not False:scopes.append('hub')
+        for node_id in sorted(nodes.inbound_assignments(inbound_id)):scopes.append('node:'+str(node_id))
+        raw=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts'),dict) else {}
+        ports={str(k):int(v) for k,v in raw.items() if isinstance(k,str) and type(v)is int and 1<=v<=65535}
+        return inbound,scopes,ports
+
+    def _matrix_port(scope:str,inbound:dict,ports:dict,access_path:str)->int:
+        if access_path=='direct':return int(inbound.get('port') or 0)
+        key='local' if scope=='hub' else scope
+        return int(ports.get(key) or 0)
+
+    def _matrix_doc(inbound_id:int)->dict:
+        inbound,scopes,ports=_matrix_deployments(inbound_id)
+        with store.lock:
+            saved={(str(r['scope']),str(r['access_path'])):str(r['policy']) for r in store.db.execute(
+                'SELECT scope,access_path,policy FROM traffic_matrix WHERE inbound_id=?',(inbound_id,))}
+        block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
+        rows=[]
+        for scope in scopes:
+            target=_runtime_target(scope,require_online=False);warp=bool(_warp_profile(scope))
+            for path in ('direct','tunnel'):
+                port=_matrix_port(scope,inbound,ports,path)
+                if path=='tunnel' and not port:continue
+                rows.append({'server':target,'serverId':scope,'inboundId':inbound_id,'accessPath':path,'port':port,
+                             'policy':saved.get((scope,path),'normal'),'warpReady':warp,
+                             'adblockReady':bool(block and str(block.get('protocol','')).lower()=='blackhole')})
+        return {'inboundId':inbound_id,'remark':str(inbound.get('remark') or inbound.get('tag') or inbound_id),
+                'tag':str(inbound.get('tag') or ''),'rows':rows,'policies':sorted(MATRIX_POLICIES)}
+
+    def _ensure_matrix_base_outbounds(policy:str):
+        if policy not in MATRIX_POLICIES:raise HTTPException(400,'Unsupported Traffic Matrix policy')
+        adblock,warp=matrix_policy_parts(policy);outs=engine.section('outbounds');changed=False
+        direct=next((x for x in outs if isinstance(x,dict) and x.get('tag')=='direct'),None)
+        if direct is None:outs.append({'tag':'direct','protocol':'freedom','settings':{}});changed=True
+        elif str(direct.get('protocol','')).lower()!='freedom':raise HTTPException(409,"Traffic Matrix requires freedom outbound 'direct'")
+        if adblock:
+            block=next((x for x in outs if isinstance(x,dict) and x.get('tag')=='block'),None)
+            if block is None:outs.append({'tag':'block','protocol':'blackhole','settings':{}});changed=True
+            elif str(block.get('protocol','')).lower()!='blackhole':raise HTTPException(409,"Traffic Matrix Adblock requires blackhole outbound 'block'")
+        if changed:engine.save_section('outbounds',outs)
+        return warp
+
+    def _listener_ready(port:int)->bool:
+        if not 1<=int(port or 0)<=65535:return False
+        try:
+            with socket.create_connection(('127.0.0.1',int(port)),timeout=.5):return True
+        except OSError:return False
+
+    def _apply_matrix_scope(scope:str)->dict:
+        target=_runtime_target(scope,require_online=True)
+        if target['kind']=='hub':return {'server':target,'runtime':engine.apply(start=True)}
+        result=sync_node_assignments(target['nodeId'])
+        return {'server':target,'nodeSync':result}
+
     def apply_global_security(_node_id:str='',_result:dict|None=None,*,client_ids=None):
         result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified),client_ids=client_ids)
         changed=list(result.get('changed') or [])
@@ -903,6 +1019,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                              'globalIpBlocked':bool(row.get('global_ip_block')),
                              'globalDeviceBlocked':bool(row.get('global_device_block'))})
         sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
+        sections['outbounds']=engine.runtime_outbounds('node:'+str(node_id))
+        sections['routing']=engine.routing_for_scope('node:'+str(node_id),sections['routing'])
         # Local and Node packet-source trust are separate boundaries. A Central
         # host behind Backhaul may have to remain Observe while direct-source
         # Nodes enforce through their own root-owned broker. Never send the
@@ -1459,6 +1577,164 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                       'local='+str(bool(body.local))+'; nodes='+','.join(sorted(after))+
                       '; tunnel_ports='+','.join(k+':'+str(v) for k,v in sorted(tunnel_ports.items())))
         return inbound_deployments(inbound_id,p)
+
+    @app.get('/api/traffic-matrix')
+    def traffic_matrix(inboundId:int,p:Principal=Depends(owner)):
+        return _matrix_doc(inboundId)
+
+    def _matrix_write(rows:list[tuple[str,int,str,str]],p:Principal)->dict:
+        writable()
+        if not rows:raise HTTPException(400,'Traffic Matrix update is empty')
+        inbound_id=int(rows[0][1]);doc=_matrix_doc(inbound_id)
+        allowed={(str(x['serverId']),str(x['accessPath'])) for x in doc['rows']}
+        scopes=set()
+        old={}
+        with store.lock:
+            for scope,iid,path,policy in rows:
+                if iid!=inbound_id or (scope,path) not in allowed:raise HTTPException(400,'Traffic Matrix path is not deployed')
+                if policy not in MATRIX_POLICIES:raise HTTPException(400,'Unsupported Traffic Matrix policy')
+                _ensure_matrix_base_outbounds(policy)
+                if policy.startswith('warp_') and _warp_profile(scope) is None:
+                    raise HTTPException(409,'Create WARP on this runtime before selecting a WARP policy')
+                row=store.db.execute('SELECT policy,updated_at FROM traffic_matrix WHERE scope=? AND inbound_id=? AND access_path=?',
+                                     (scope,iid,path)).fetchone()
+                old[(scope,iid,path)]=dict(row) if row else None;scopes.add(scope)
+        with store.transaction() as db:
+            for scope,iid,path,policy in rows:
+                db.execute("""INSERT INTO traffic_matrix(scope,inbound_id,access_path,policy,updated_at) VALUES(?,?,?,?,?)
+                              ON CONFLICT(scope,inbound_id,access_path) DO UPDATE SET policy=excluded.policy,updated_at=excluded.updated_at""",
+                           (scope,iid,path,policy,time.time()))
+        try:
+            applied={scope:_apply_matrix_scope(scope) for scope in sorted(scopes)}
+        except Exception as ex:
+            with store.transaction() as db:
+                for key,prev in old.items():
+                    scope,iid,path=key
+                    if prev is None:db.execute('DELETE FROM traffic_matrix WHERE scope=? AND inbound_id=? AND access_path=?',key)
+                    else:db.execute('UPDATE traffic_matrix SET policy=?,updated_at=? WHERE scope=? AND inbound_id=? AND access_path=?',
+                                    (prev['policy'],prev['updated_at'],scope,iid,path))
+            for scope in sorted(scopes):
+                try:_apply_matrix_scope(scope)
+                except Exception:pass
+            raise HTTPException(409,'Traffic Matrix apply failed and was rolled back: '+str(ex)[:300])
+        manager.audit(p.actor,p.actor.id,'traffic_matrix.apply',str(inbound_id),
+                      '; '.join(scope+'/'+path+'='+policy for scope,_iid,path,policy in rows))
+        return _matrix_doc(inbound_id)|{'applied':applied}
+
+    @app.post('/api/traffic-matrix')
+    def traffic_matrix_set(body:TrafficMatrixSet,p:Principal=Depends(owner)):
+        return _matrix_write([(str(body.server),int(body.inboundId),str(body.accessPath),str(body.policy))],p)
+
+    @app.post('/api/traffic-matrix/batch')
+    def traffic_matrix_batch(body:TrafficMatrixBatch,p:Principal=Depends(owner)):
+        return _matrix_write([(str(body.server),int(body.inboundId),str(path),str(body.policy)) for path in dict.fromkeys(body.accessPaths)],p)
+
+    @app.post('/api/traffic-matrix/probe')
+    def traffic_matrix_probe(body:TrafficMatrixProbe,p:Principal=Depends(owner)):
+        doc=_matrix_doc(int(body.inboundId));row=next((x for x in doc['rows']
+            if x['serverId']==str(body.server) and x['accessPath']==str(body.accessPath)),None)
+        if not row:raise HTTPException(404,'Traffic Matrix path not found')
+        target=_runtime_target(str(body.server),require_online=True);policy=str(row['policy']);warp=policy.startswith('warp_')
+        outbound_tag='warp' if warp else 'direct'
+        if warp and _warp_profile(str(body.server)) is None:raise HTTPException(409,'WARP profile is missing on this runtime')
+        try:
+            if target['kind']=='hub':
+                listener=_listener_ready(int(row['port']))
+                items=probe_outbounds(engine._binary(),config.xray_assets,engine.runtime_outbounds(str(body.server)),
+                                      tags=[outbound_tag],attempts=int(body.attempts),timeout=5.0,trace=warp)
+                result=items[0] if items else {}
+            else:
+                remote=nodes.traffic_matrix_probe(target['nodeId'],int(row['port']),outbound_tag,
+                                                  attempts=int(body.attempts),timeout_seconds=5)
+                listener=bool(remote.get('listenerReady'));result=remote.get('probe') or {}
+        except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'Traffic Matrix probe failed: '+str(ex))
+        warp_verified=bool(result.get('warpVerified')) if warp else True
+        ok=listener and bool(result.get('success')) and warp_verified
+        return {'ok':ok,'server':target,'accessPath':row['accessPath'],'policy':policy,'port':row['port'],
+                'listenerReady':listener,'delayMs':result.get('delayMs'),'lossPercent':result.get('lossPercent'),
+                'jitterMs':result.get('jitterMs'),'warpVerified':warp_verified,'egress':result.get('egress',{}),
+                'adblockReady':bool(row.get('adblockReady')),'productionTrafficMutation':False}
+
+    @app.get('/api/traffic-matrix/warp')
+    def traffic_matrix_warp_status(server:str='hub',p:Principal=Depends(owner)):
+        target=_runtime_target(server,require_online=False);profile=_warp_profile(server)
+        endpoint=''
+        if profile:
+            peers=((profile.get('settings') or {}).get('peers') or [{}])
+            if isinstance(peers,list) and peers and isinstance(peers[0],dict):endpoint=str(peers[0].get('endpoint') or '')
+        return {'server':target,'registered':bool(profile),'endpoint':endpoint}
+
+    @app.post('/api/traffic-matrix/warp/create')
+    def traffic_matrix_warp_create(body:WarpCreate,p:Principal=Depends(owner)):
+        writable();target=_runtime_target(body.server,require_online=True);old=_warp_profile(body.server)
+        try:registered=register_cloudflare_warp(tag='warp')
+        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
+        _warp_profile_save(body.server,registered['outbound'],registered.get('deviceId',''))
+        try:applied=_apply_matrix_scope(body.server)
+        except Exception as ex:
+            if old is None:_warp_profile_delete(body.server)
+            else:_warp_profile_save(body.server,old,'rollback')
+            try:_apply_matrix_scope(body.server)
+            except Exception:pass
+            raise HTTPException(409,'WARP install failed and was rolled back: '+str(ex)[:300])
+        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.create',body.server,'independent runtime WARP profile')
+        return {'registered':True,'server':target,'applied':applied}
+
+    @app.post('/api/traffic-matrix/warp/scan')
+    def traffic_matrix_warp_scan(body:WarpEndpointScan,p:Principal=Depends(owner)):
+        target=_runtime_target(body.server,require_online=True);outbound=_warp_profile(body.server)
+        if not outbound:raise HTTPException(409,'Create WARP on this runtime first')
+        peers=((outbound.get('settings') or {}).get('peers') or [{}]);current=str(peers[0].get('endpoint') or '') if peers else ''
+        endpoints=warp_endpoint_candidates(current)
+        try:
+            if target['kind']=='hub':
+                clones=[];mapping={}
+                for idx,endpoint in enumerate(endpoints):
+                    item=copy.deepcopy(outbound);tag='dark-warp-path-'+str(idx);item['tag']=tag
+                    item['settings']['peers'][0]['endpoint']=endpoint;clones.append(item);mapping[tag]=endpoint
+                raw=probe_outbounds(engine._binary(),config.xray_assets,clones,tags=[x['tag'] for x in clones],
+                                    attempts=2,timeout=4.0,trace=True)
+                for x in raw:x['endpoint']=mapping.get(str(x.get('tag') or ''),'')
+            else:
+                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',None,attempts=2,timeout_seconds=4)
+                raw=remote['items']
+        except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'WARP path scan failed: '+str(ex))
+        items=[]
+        for x in raw:
+            e=x.get('egress') if isinstance(x.get('egress'),dict) else {}
+            ready=bool(x.get('success')) and bool(x.get('warpVerified'))
+            items.append({'endpoint':str(x.get('endpoint') or ''),'ready':ready,'selected':str(x.get('endpoint') or '')==current,
+                          'delayMs':x.get('delayMs'),'lossPercent':x.get('lossPercent'),'jitterMs':x.get('jitterMs'),
+                          'country':e.get('country',''),'colo':e.get('colo',''),'egressIp':e.get('ip',''),'warp':e.get('warp',''),
+                          'error':x.get('error','')})
+        items.sort(key=lambda x:(not x['ready'],float(x['lossPercent']) if x['lossPercent'] is not None else 100,
+                                 float(x['delayMs']) if x['delayMs'] is not None else 10**9))
+        return {'server':target,'selected':current,'items':items,'productionTrafficMutation':False}
+
+    @app.post('/api/traffic-matrix/warp/endpoint')
+    def traffic_matrix_warp_endpoint(body:WarpEndpointSelect,p:Principal=Depends(owner)):
+        writable();target=_runtime_target(body.server,require_online=True);old=_warp_profile(body.server)
+        if not old:raise HTTPException(409,'Create WARP on this runtime first')
+        try:endpoint=validate_warp_endpoint(body.endpoint)
+        except WarpRegistrationError as ex:raise HTTPException(400,str(ex))
+        candidate=copy.deepcopy(old);candidate['settings']['peers'][0]['endpoint']=endpoint
+        try:
+            if target['kind']=='hub':
+                checked=probe_outbounds(engine._binary(),config.xray_assets,[candidate],tags=['warp'],attempts=2,timeout=5.0,trace=True)[0]
+            else:
+                checked=nodes.warp_endpoint_probe(target['nodeId'],'warp',[endpoint],attempts=2,timeout_seconds=5)['items'][0]
+        except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'Selected WARP path test failed: '+str(ex))
+        if not checked.get('success') or not checked.get('warpVerified'):
+            raise HTTPException(409,'Selected WARP path did not verify Cloudflare warp=on')
+        _warp_profile_save(body.server,candidate,'endpoint-change')
+        try:applied=_apply_matrix_scope(body.server)
+        except Exception as ex:
+            _warp_profile_save(body.server,old,'rollback')
+            try:_apply_matrix_scope(body.server)
+            except Exception:pass
+            raise HTTPException(409,'WARP endpoint apply failed and was rolled back: '+str(ex)[:300])
+        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',body.server,endpoint)
+        return {'server':target,'selected':endpoint,'test':checked,'applied':applied}
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
