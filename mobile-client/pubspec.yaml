@@ -1,7 +1,7 @@
 name: dark_xray_client
 description: DARK XRAY mobile client bootstrap.
 publish_to: "none"
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
 
 dev_dependencies:
   flutter_test:
