@@ -525,6 +525,8 @@ def test_failover_does_not_clone_local_tunnel_endpoint(env):
  store,_,app,c=env
  a=c.post('/api/inbounds',json=_test_vless('TUNNEL FAILOVER',24102,'tunnel-failover')).json()['id']
  _managed_client(c,'tunnel-fail-user',a)
+ dep=c.put(f'/api/inbounds/{a}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20443}})
+ assert dep.status_code==200,dep.text
  assert c.put('/api/settings/hosts',json={'value':[{
    'inboundId':a,'runtime':'local','endpointType':'tunnel',
    'address':'iran-tunnel.example.com','port':20443,'remark':'TUNNEL ONLY',
