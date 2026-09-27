@@ -35,3 +35,18 @@ html[dir=rtl] .iv3-toggle.on i{transform:translateX(-14px)}html[dir=rtl] .iv3-dr
 .iv3-tunnel-port{display:grid;gap:3px;font-size:8px;color:#627d82}.iv3-tunnel-port input{width:100%;min-width:0;height:34px;border:1px solid rgba(83,202,255,.14);background:#02090d;border-radius:7px;color:#a9e8dc;padding:6px 8px;font:10px var(--mono);direction:ltr;text-align:center}.iv3-tunnel-port input:disabled{opacity:.35}.iv3-tunnel-route>small{color:#566e73;font-size:8px;line-height:1.45}
 @media(max-width:620px){.iv3-tunnel-controls{grid-template-columns:1fr}.iv3-tunnel-head{align-items:flex-start}.iv3-tunnel-head>b{text-align:center}}
 @media(max-width:620px){.iv3-deploy-grid{grid-template-columns:1fr}.iv3-deploy .iv3-section-title.compact{display:grid;align-items:start}.iv3-deploy .iv3-section-title.compact small{text-align:start}}
+
+
+/* Representative read-only state + mobile readability */
+.iv3-readonly-toggle{cursor:default;pointer-events:none;opacity:.9}
+.iv3-expanded-head small{color:var(--faint);font-size:10px;line-height:1.5;text-align:end}
+@media(max-width:620px){
+ .iv3-head{gap:12px;margin-bottom:14px}.iv3-head h1{font-size:24px}.iv3-head p{font-size:12px;line-height:1.65}
+ .iv3-eyebrow{font-size:10px}.iv3-summary>span{font-size:11px;padding:8px 9px}.iv3-summary b{font-size:13px}
+ .iv3-toolbar{padding:10px}.iv3-search input{font-size:16px;min-height:42px}.iv3-protocols button{font-size:11px;min-height:38px}
+ .iv3-row-main{padding:12px 10px;gap:9px}.iv3-name strong{font-size:13px}.iv3-name small{font-size:10px;line-height:1.5}
+ .iv3-pill{font-size:10px;padding:4px 7px}.iv3-actions button,.iv3-client-actions button,.iv3-icon{width:40px;height:40px}.iv3-actions .icon,.iv3-client-actions .icon,.iv3-icon .icon{width:17px;height:17px}
+ .iv3-expanded{padding:11px 10px}.iv3-expanded-head{display:grid;gap:4px;align-items:start;font-size:12px}.iv3-expanded-head small{text-align:start;font-size:10px}
+ .iv3-client-row{font-size:12px;padding:10px}.iv3-client-row b{font-size:12px}.iv3-client-row small{font-size:10px}.iv3-more,.iv3-empty-inline{font-size:11px}
+ .iv3-foot{font-size:10px}.iv3-toggle{width:38px;height:22px}
+}

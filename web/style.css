@@ -13,3 +13,14 @@
 /* Bidirectional technical labels and small-screen refinements. */
 .brand-sub,.section-tag,.tiny-code,.tag{direction:ltr;unicode-bidi:isolate;white-space:nowrap}.node-metrics strong{direction:ltr;unicode-bidi:isolate;display:inline-block}.sidebar{overflow-y:auto}.brand-sub{font-size:8px;letter-spacing:1.4px}
 @media(max-width:760px){.kpi-note>.tiny-code{display:none}.kpi-note{min-height:30px}.kpi-title{line-height:1.7}.table-bottom{flex-wrap:wrap}.chart-toolbar{flex-wrap:wrap;gap:8px 14px}.chart-toolbar .spacer{display:none}.chart-toolbar .subtext{flex-basis:100%}.brand-sub{font-size:8px}}
+
+/* Mobile readability and touch layout */
+@media(max-width:760px){
+ body{font-size:14px;line-height:1.75}.content{padding:14px 10px 24px}.topbar{height:58px;padding:0 10px;gap:8px}.topbar>.mono{display:none}
+ .page-heading{display:grid;grid-template-columns:1fr;align-items:start;gap:10px;margin-bottom:16px}.page-heading h1{font-size:23px}.page-heading p{font-size:12px;line-height:1.7;max-width:none}.eyebrow{font-size:9px}
+ .heading-actions{display:flex;flex-wrap:wrap;width:100%;gap:7px}.page-heading .heading-actions .btn{flex:1 1 auto;min-height:44px;font-size:12px!important;padding:9px 11px}
+ .tag{font-size:10px}.btn{min-height:42px;font-size:12px}.icon-btn{width:38px;min-height:38px}.panel-head h2{font-size:13px}
+ .field-input,.form-field input,.form-field select,.form-field textarea{font-size:16px;min-height:44px}
+ .dialog{width:100%;max-width:100%;border-radius:11px}.dialog-head h2{font-size:15px}.dialog-foot{gap:8px;flex-wrap:wrap}.dialog-foot .btn{min-height:44px;flex:1}
+ .toast{font-size:12px}.nav-btn{font-size:13px;min-height:44px}.breadcrumb{font-size:12px}
+}

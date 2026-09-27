@@ -111,3 +111,43 @@
 @media(max-width:900px){.cv4d-hero{align-items:flex-start}.cv4d-kpis{flex-wrap:wrap;justify-content:flex-end}.cv4-delivery{grid-template-columns:1fr}.cv4d-qr{position:static}.cv4d-qr-stage{width:270px;height:270px}#cv4d-qr{width:260px;height:260px}#cv4d-qr[data-ready="true"] svg{width:260px!important;height:260px!important}}
 @media(max-width:620px){.cv4-delivery-dialog{width:100vw;max-width:100vw;border-radius:0}.cv4-delivery-dialog .dialog-body{padding:8px}.cv4d-hero{display:grid}.cv4d-kpis{display:grid;grid-template-columns:repeat(3,1fr);width:100%}.cv4d-kpis>span{min-width:0;padding:7px 4px}.cv4d-qr{padding-inline:8px}.cv4d-qr-stage{width:min(280px,86vw);height:min(280px,86vw)}#cv4d-qr{width:calc(min(280px,86vw) - 10px);height:calc(min(280px,86vw) - 10px)}#cv4d-qr[data-ready="true"] svg{width:100%!important;height:100%!important}.cv4d-qr-tools{grid-template-columns:1fr 1fr}.cv4d-qr-tools button:first-child{grid-column:1/-1;min-height:42px}.cv4d-actions{display:grid;grid-template-columns:1fr}.cv4d-actions button{justify-content:center;min-height:40px}}
 @media(prefers-reduced-motion:reduce){.cv4d-config{transition:none}.cv4d-scanline{animation:none}}
+
+
+/* Representative quick-create + mobile readability */
+.cv4-generated-client{grid-column:span 1;align-content:center}
+.cv4-generated-client>div{display:flex;align-items:center;gap:8px;min-width:0;margin-top:5px}
+.cv4-generated-client b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cv4-generated-client button{display:inline-flex;align-items:center;gap:5px;min-height:34px;border:1px solid rgba(41,224,190,.18);background:rgba(35,210,181,.045);color:#93d8c8;border-radius:7px;padding:6px 9px;font-size:10px}
+.cv4-generated-client button svg{width:13px}.cv4-generated-client small{display:block;margin-top:5px;color:#5d7d7b;font-size:10px}
+.cv4-fast-plan{display:grid;grid-template-columns:1fr 1fr;gap:10px;grid-column:1/-1}
+.cv4-representative-editor .cv4-edit-section>header small{font-size:10px;line-height:1.55}
+.cv4d-actions .cv4d-copy-primary{background:linear-gradient(135deg,rgba(25,255,134,.15),rgba(25,201,141,.08));border-color:rgba(25,255,134,.32);color:#caffdf;font-weight:800}
+.cv4d-actions .cv4d-copy-primary:hover{border-color:rgba(25,255,134,.62);color:#ecfff5}
+
+@media(max-width:760px){
+ .clients-v4{gap:10px}.cv4-nav{width:100%}.cv4-nav button{flex:1;justify-content:center;font-size:13px;min-height:42px}
+ .cv4-stats{gap:7px}.cv4-stats>button,.cv4-stats>div{padding:11px}.cv4-stats span{font-size:11px}.cv4-stats b{font-size:21px}
+ .cv4-commandbar{padding:9px}.cv4-search{min-width:0}.cv4-search input{height:44px;font-size:16px}.cv4-commandbar select,.cv4-filter-btn,.cv4-reset{height:42px;font-size:11px}
+ .cv4-filterdeck label>span{font-size:11px}.cv4-filterdeck select{height:42px;font-size:16px}
+ .cv4-row{grid-template-columns:26px minmax(0,1fr) auto;gap:8px 10px;padding:13px 10px}
+ .cv4-client b{font-size:14px}.cv4-client small{font-size:11px}.cv4-avatar{width:34px;height:34px;font-size:13px}
+ .cv4-signal b{font-size:11px}.cv4-signal small,.cv4-policy{font-size:10px}
+ .cv4-service span,.cv4-service small{font-size:10px}.cv4-usage b,.cv4-expiry b{font-size:13px}.cv4-usage small,.cv4-expiry small{font-size:11px}
+ .cv4-row-actions{gap:7px}.cv4-action{min-height:40px;height:40px;font-size:11px;padding:0 13px}
+ .cv4-editor .dialog-body{padding:10px}.cv4-edit-section>header b{font-size:13px}.cv4-edit-section>header small{font-size:11px;line-height:1.55}
+ .cv4-field,.cv4-choice>span,.cv4-lockfield span{font-size:12px}.cv4-field input,.cv4-field select,.cv4-field textarea{font-size:16px;min-height:44px}
+ .cv4-lockfield b{font-size:13px}.cv4-inbound-picker{gap:7px}.cv4-inbound-picker label{min-height:52px;padding:10px}.cv4-inbound-picker b{font-size:12px}.cv4-inbound-picker small{font-size:10px;line-height:1.45}
+ .cv4-segments span{font-size:11px;min-height:40px;display:grid;place-items:center}.cv4-fast-plan{grid-template-columns:1fr}
+ .cv4-generated-client{grid-column:auto}.cv4-generated-client>div{align-items:stretch;flex-direction:column}.cv4-generated-client button{justify-content:center;min-height:42px;font-size:11px}
+ .cv4-generated-client small{font-size:11px}.cv4-advanced summary b{font-size:12px}.cv4-advanced summary small{font-size:10px}
+}
+@media(max-width:620px){
+ .cv4-delivery-dialog .dialog-body{padding:8px 7px 12px}.cv4d-hero{padding:12px}.cv4d-hero>div:first-child>span{font-size:10px}.cv4d-hero h3{font-size:17px}.cv4d-hero p{font-size:11px}
+ .cv4d-kpis small{font-size:9px}.cv4d-title small{font-size:10px}.cv4d-title b{font-size:12px}.cv4d-title>span,.cv4d-good{font-size:10px}
+ .cv4d-linkline{grid-template-columns:1fr}.cv4d-linkline code,.cv4d-config>code{white-space:normal;overflow:visible;overflow-wrap:anywhere;font-size:10px;line-height:1.6;max-height:112px;overflow-y:auto}
+ .cv4d-linkline button{width:100%;min-height:42px}.cv4d-formats button{font-size:10px;min-height:38px;padding:7px 9px}
+ .cv4d-actions{grid-template-columns:1fr}.cv4d-actions button,.cv4d-config footer button{font-size:11px;min-height:43px;justify-content:center}
+ .cv4d-config header small{font-size:10px}.cv4d-config header b{font-size:12px}.cv4d-route{font-size:9px}
+ .cv4d-selected>span{font-size:9px}.cv4d-selected>b{font-size:11px}.cv4d-selected>code{font-size:9px;white-space:normal;overflow-wrap:anywhere;max-height:68px;overflow:auto}
+ .cv4d-qr-tools button,.cv4d-open-portal{font-size:10px;min-height:42px}.cv4d-qr>header span{font-size:9px}.cv4d-qr>header b{font-size:12px}.cv4d-qr>small{font-size:10px}
+}
