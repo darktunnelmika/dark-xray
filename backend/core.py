@@ -26,6 +26,7 @@ import uuid
 import psutil
 from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line
 from reality_scan import reality_target_policy
+from traffic_matrix import compile_rules as compile_matrix_rules, POLICIES as MATRIX_POLICIES
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
@@ -150,6 +151,12 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_clients(email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS core_sections(name TEXT PRIMARY KEY,body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS warp_profiles(
+              scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS traffic_matrix(
+              scope TEXT NOT NULL,inbound_id INTEGER NOT NULL,access_path TEXT NOT NULL,policy TEXT NOT NULL,
+              updated_at REAL NOT NULL,PRIMARY KEY(scope,inbound_id,access_path));
+            CREATE INDEX IF NOT EXISTS traffic_matrix_inbound ON traffic_matrix(inbound_id,scope);
             CREATE TABLE IF NOT EXISTS core_devices(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,
               digest TEXT NOT NULL,device_os TEXT NOT NULL,model TEXT NOT NULL,first_seen REAL NOT NULL,last_seen REAL NOT NULL,
               UNIQUE(email,digest));
@@ -872,6 +879,56 @@ class CoreEngine:
             self._observed_exit_pid=p.pid;self.last_exit_code=code;self.last_exit_at=time.time()
         return False
 
+    def warp_profile(self,scope:str='hub')->dict|None:
+        value=str(scope or 'hub').strip() or 'hub'
+        with self.store.lock:row=self.store.db.execute('SELECT outbound_json FROM warp_profiles WHERE scope=?',(value,)).fetchone()
+        if not row:return None
+        try:out=json.loads(row['outbound_json'])
+        except (TypeError,ValueError):return None
+        return copy.deepcopy(out) if isinstance(out,dict) else None
+
+    def runtime_outbounds(self,scope:str='hub')->list[dict]:
+        rows=[copy.deepcopy(x) for x in self.section('outbounds') if isinstance(x,dict) and str(x.get('tag') or '')!='warp']
+        warp=self.warp_profile(scope)
+        if warp is not None:
+            warp['tag']='warp';rows.append(warp)
+        return rows
+
+    def traffic_matrix_rows(self,scope:str|None=None,inbound_id:int|None=None)->list[dict]:
+        query='SELECT scope,inbound_id,access_path,policy,updated_at FROM traffic_matrix'
+        args=[];where=[]
+        if scope is not None:where.append('scope=?');args.append(str(scope or 'hub'))
+        if inbound_id is not None:where.append('inbound_id=?');args.append(int(inbound_id))
+        if where:query+=' WHERE '+' AND '.join(where)
+        query+=' ORDER BY scope,inbound_id,access_path'
+        with self.store.lock:rows=self.store.db.execute(query,args).fetchall()
+        return [dict(r) for r in rows]
+
+    def routing_for_scope(self,scope:str,routing:dict|None=None)->dict:
+        scope=str(scope or 'hub').strip() or 'hub'
+        result=copy.deepcopy(routing if isinstance(routing,dict) else self.section('routing'))
+        rules=result.get('rules',[]) if isinstance(result.get('rules'),list) else []
+        base=[r for r in rules if not (isinstance(r,dict) and str(r.get('ruleTag') or '').startswith('dark-matrix-'))]
+        generated=[]
+        by_id={int(x['id']):x for x in self.inbounds()}
+        for row in self.traffic_matrix_rows(scope=scope):
+            inbound=by_id.get(int(row['inbound_id']))
+            if not inbound or not inbound.get('enable',True):continue
+            policy=str(row['policy'] or 'normal')
+            if policy not in MATRIX_POLICIES:continue
+            meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+            raw_ports=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts'),dict) else {}
+            port_key='local' if scope=='hub' else scope
+            tunnel_port=int(raw_ports.get(port_key) or 0)
+            try:
+                generated.extend(compile_matrix_rules(scope=scope,inbound_id=int(inbound['id']),
+                    access_path=str(row['access_path']),policy=policy,inbound_tag=str(inbound.get('tag') or ''),
+                    tunnel_port=tunnel_port))
+            except (ValueError,TypeError):
+                continue
+        result['rules']=generated+base
+        return result
+
     def build_config(self)->dict:
         # Read local tables directly; compiling never queries an external panel.
         with self.store.lock:rows=self.store.db.execute('SELECT body,inbounds FROM core_clients').fetchall()
@@ -917,10 +974,11 @@ class CoreEngine:
         policy=self.section('policy');levels=policy.setdefault('levels',{});level=levels.setdefault('0',{})
         level.update({'statsUserUplink':True,'statsUserDownlink':True})
         policy.setdefault('system',{}).update({'statsInboundUplink':True,'statsInboundDownlink':True})
-        routing=copy.deepcopy(self.section('routing'))
+        routing=self.routing_for_scope('hub')
         if shadow_tags and isinstance(routing,dict) and isinstance(routing.get('rules'),list):
             for rule in routing['rules']:
                 if not isinstance(rule,dict) or not isinstance(rule.get('inboundTag'),list):continue
+                if str(rule.get('ruleTag') or '').startswith('dark-matrix-'):continue
                 expanded=list(rule['inboundTag'])
                 for tag in list(rule['inboundTag']):
                     for shadow in shadow_tags.get(str(tag),[]):
@@ -928,7 +986,7 @@ class CoreEngine:
                 rule['inboundTag']=expanded
         cfg={'log':{'access':str(self.runtime/'access.log'),'error':str(self.runtime/'error.log'),'loglevel':'warning'},
              'api':{'tag':'dark-api','listen':'127.0.0.1:'+str(self.config.xray_api_port),'services':['StatsService','HandlerService','LoggerService']},
-             'stats':{},'policy':policy,'inbounds':result,'outbounds':self.section('outbounds'),
+             'stats':{},'policy':policy,'inbounds':result,'outbounds':self.runtime_outbounds('hub'),
              'routing':routing,'dns':self.section('dns')}
         if self.section('observatory'):cfg['observatory']=self.section('observatory')
         return cfg
