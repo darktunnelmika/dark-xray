@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.6.0-rc6"
+SCRIPT_VER="0.7.0-rc7"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -232,10 +232,10 @@ scan_path_mtu(){
 }
 calc_inner_mtu(){
   local p="$1" sec="$2" overhead mtu
-  [ "$sec" = ipsec ] && overhead=64 || overhead=28
+  [ "$sec" = ipsec ] && overhead=100 || overhead=28
   mtu=$((p-overhead))
   [ "$mtu" -lt 1280 ] && mtu=1280
-  [ "$sec" = ipsec ] && [ "$mtu" -gt 1436 ] && mtu=1436
+  [ "$sec" = ipsec ] && [ "$mtu" -gt 1400 ] && mtu=1400
   [ "$sec" != ipsec ] && [ "$mtu" -gt 1472 ] && mtu=1472
   echo "$mtu"
 }
@@ -295,30 +295,75 @@ SECURITY="${SECURITY:-plain}"; IPSEC_PSK="${IPSEC_PSK:-}"; GRE_KEY="${GRE_KEY:-0
 MTU_MODE="${MTU_MODE:-custom}"; PATH_MTU="${PATH_MTU:-0}"; RESTART_EVERY="${RESTART_EVERY:-off}"
 PEER_ID="${PEER_ID:-$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | tr '\n' '|' | sha256sum | cut -c1-12)}"
 nat_chain="DGRN_${ID}"; post_chain="DGRP_${ID}"; fw_chain="DGRF_${ID}"; mss_chain="DGRM_${ID}"
+sec_in_chain="DGRI_${ID}"; sec_out_chain="DGRO_${ID}"
 remove_chain(){ local table="$1" chain="$2" hook="$3"; iptables -t "$table" -D "$hook" -j "$chain" 2>/dev/null || true; iptables -t "$table" -F "$chain" 2>/dev/null || true; iptables -t "$table" -X "$chain" 2>/dev/null || true; }
-remove_fw(){
-  remove_chain nat "$nat_chain" PREROUTING; remove_chain nat "$post_chain" POSTROUTING; remove_chain filter "$fw_chain" FORWARD
-  iptables -t mangle -D FORWARD -j "$mss_chain" 2>/dev/null || true; iptables -t mangle -D OUTPUT -j "$mss_chain" 2>/dev/null || true
-  iptables -t mangle -F "$mss_chain" 2>/dev/null || true; iptables -t mangle -X "$mss_chain" 2>/dev/null || true
+remove_data_fw(){
+  remove_chain nat "$nat_chain" PREROUTING
+  remove_chain nat "$post_chain" POSTROUTING
+  remove_chain filter "$fw_chain" FORWARD
+  iptables -t mangle -D FORWARD -j "$mss_chain" 2>/dev/null || true
+  iptables -t mangle -D OUTPUT -j "$mss_chain" 2>/dev/null || true
+  iptables -t mangle -F "$mss_chain" 2>/dev/null || true
+  iptables -t mangle -X "$mss_chain" 2>/dev/null || true
 }
+remove_outer_guard(){
+  iptables -D INPUT -j "$sec_in_chain" 2>/dev/null || true
+  iptables -D OUTPUT -j "$sec_out_chain" 2>/dev/null || true
+  iptables -F "$sec_in_chain" 2>/dev/null || true
+  iptables -F "$sec_out_chain" 2>/dev/null || true
+  iptables -X "$sec_in_chain" 2>/dev/null || true
+  iptables -X "$sec_out_chain" 2>/dev/null || true
+}
+remove_fw(){ remove_data_fw; remove_outer_guard; }
 apply_mss(){
   iptables -t mangle -N "$mss_chain" 2>/dev/null || true
   iptables -t mangle -C FORWARD -j "$mss_chain" 2>/dev/null || iptables -t mangle -I FORWARD 1 -j "$mss_chain"
   iptables -t mangle -C OUTPUT -j "$mss_chain" 2>/dev/null || iptables -t mangle -I OUTPUT 1 -j "$mss_chain"
-  iptables -t mangle -A "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+  iptables -t mangle -C "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null ||
+    iptables -t mangle -A "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+}
+apply_outer_guard(){
+  [ "${SECURITY:-plain}" = ipsec ] || { remove_outer_guard; return 0; }
+  modprobe xt_policy 2>/dev/null || true
+  iptables -m policy -h >/dev/null 2>&1 || { echo "xt_policy unavailable; refusing insecure GRE" >&2; return 1; }
+
+  iptables -N "$sec_in_chain" 2>/dev/null || true
+  iptables -N "$sec_out_chain" 2>/dev/null || true
+  iptables -C INPUT -j "$sec_in_chain" 2>/dev/null || iptables -I INPUT 1 -j "$sec_in_chain"
+  iptables -C OUTPUT -j "$sec_out_chain" 2>/dev/null || iptables -I OUTPUT 1 -j "$sec_out_chain"
+
+  iptables -C "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -m policy --dir in --pol ipsec -j RETURN 2>/dev/null ||
+    iptables -A "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -m policy --dir in --pol ipsec -j RETURN
+  iptables -C "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -j DROP 2>/dev/null ||
+    iptables -A "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -j DROP
+  iptables -C "$sec_in_chain" -j RETURN 2>/dev/null || iptables -A "$sec_in_chain" -j RETURN
+
+  iptables -C "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -m policy --dir out --pol ipsec -j RETURN 2>/dev/null ||
+    iptables -A "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -m policy --dir out --pol ipsec -j RETURN
+  iptables -C "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -j DROP 2>/dev/null ||
+    iptables -A "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -j DROP
+  iptables -C "$sec_out_chain" -j RETURN 2>/dev/null || iptables -A "$sec_out_chain" -j RETURN
 }
 apply_fw(){
-  remove_fw; apply_mss
+  remove_data_fw
+  apply_mss
   [ "$ROLE" = IRAN ] || return 0
-  iptables -t nat -N "$nat_chain"; iptables -t nat -N "$post_chain"; iptables -t filter -N "$fw_chain"
-  iptables -t nat -I PREROUTING 1 -j "$nat_chain"; iptables -t nat -I POSTROUTING 1 -j "$post_chain"; iptables -t filter -I FORWARD 1 -j "$fw_chain"
+  iptables -t nat -N "$nat_chain" 2>/dev/null || true
+  iptables -t nat -N "$post_chain" 2>/dev/null || true
+  iptables -t filter -N "$fw_chain" 2>/dev/null || true
+  iptables -t nat -C PREROUTING -j "$nat_chain" 2>/dev/null || iptables -t nat -I PREROUTING 1 -j "$nat_chain"
+  iptables -t nat -C POSTROUTING -j "$post_chain" 2>/dev/null || iptables -t nat -I POSTROUTING 1 -j "$post_chain"
+  iptables -t filter -C FORWARD -j "$fw_chain" 2>/dev/null || iptables -t filter -I FORWARD 1 -j "$fw_chain"
   iptables -t filter -A "$fw_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   while IFS=: read -r proto listen target; do
     [ -n "${proto:-}" ] || continue
-    case "$proto" in tcp|udp)
-      iptables -t nat -A "$nat_chain" -p "$proto" --dport "$listen" -j DNAT --to-destination "$REMOTE_TUN:$target"
-      iptables -t nat -A "$post_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j MASQUERADE
-      iptables -t filter -A "$fw_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j ACCEPT ;; esac
+    case "$proto" in
+      tcp|udp)
+        iptables -t nat -A "$nat_chain" -p "$proto" --dport "$listen" -j DNAT --to-destination "$REMOTE_TUN:$target"
+        iptables -t nat -A "$post_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j MASQUERADE
+        iptables -t filter -A "$fw_chain" -p "$proto" -d "$REMOTE_TUN" --dport "$target" -o "$IFNAME" -j ACCEPT
+        ;;
+    esac
   done <"$TUN_DIR/$name/ports.list"
 }
 ipsec_ready(){
@@ -335,6 +380,7 @@ gre_down(){
 }
 gre_up(){
   modprobe ip_gre 2>/dev/null || true
+  apply_outer_guard || return 1
   if ! gre_exists; then
     if [ "$GRE_KEY" = 0 ] || [ -z "$GRE_KEY" ]; then
       ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64
@@ -348,20 +394,17 @@ gre_up(){
   apply_fw
 }
 reconcile(){
-  if [ "${SECURITY:-plain}" = ipsec ]; then
-    if ipsec_ready; then
-      gre_up
-      return 0
-    fi
-    gre_exists && gre_down
-    return 0
+  if ! gre_exists; then
+    gre_up
+    return $?
   fi
-  gre_up
+  apply_outer_guard || return 1
+  return 0
 }
 watch_loop(){
   while :; do
     reconcile || true
-    sleep 5
+    sleep 15
   done
 }
 case "$action" in
@@ -484,10 +527,11 @@ conn $conn
   ike=aes256gcm16-prfsha256-modp2048!
   esp=aes256gcm16!
   dpdaction=restart
-  dpddelay=20s
+  closeaction=restart
+  dpddelay=30s
   keyingtries=%forever
   mobike=no
-  auto=start
+  auto=route
 EOF
     chmod 600 "$IPSEC_DIR/$pid.conf"
     printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
