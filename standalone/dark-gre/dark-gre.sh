@@ -22,7 +22,12 @@ UNIT_FILE="/etc/systemd/system/darkgre@.service"
 UPDATE_URL_FILE="$BASE_DIR/update.url"
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 
-if [ ! -t 0 ] && [ -r /dev/tty ]; then exec </dev/tty; fi
+if [ ! -t 0 ]; then
+  if { exec 3</dev/tty; } 2>/dev/null; then
+    exec 0<&3
+    exec 3<&-
+  fi
+fi
 
 R=$'\e[38;5;203m'; G=$'\e[38;5;114m'; Y=$'\e[38;5;221m'
 C=$'\e[38;5;81m';  M=$'\e[38;5;177m'; W=$'\e[1;97m'
