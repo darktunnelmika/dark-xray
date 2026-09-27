@@ -1,7 +1,7 @@
 name: dark_xray_client
 description: DARK XRAY mobile client bootstrap.
 publish_to: "none"
-version: 0.2.0+2
+version: 0.3.0+3
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
