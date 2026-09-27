@@ -840,66 +840,137 @@ screen_restart(){
 }
 
 screen_logs(){
+  local n="$1" d="$TUN_DIR/$1"; . "$d/meta.conf"
+  while :; do
+    header "LOGS + INTERFACE - $n"
+    top; sect "STATUS"; blank
+    kv "state" "$W$(service_state "$n")$N"; kv "interface" "$W$IFNAME$N"; kv "inner peer" "$W$REMOTE_TUN$N"; kv "security" "$W$(ipsec_state "$n")$N"
+    bot; echo
+    ip -d link show "$IFNAME" 2>/dev/null | sed 's/^/    /' || true
+    echo; top; item 1 "Last 60 lines" ""; item L "Live journal" ""; item x "XFRM / IPsec" ""; item 0 "Back" ""; bot; echo; getkey
+    case "$KEY" in
+      1) journalctl -u "darkgre@$n" -n 60 --no-pager -o cat 2>/dev/null | sed 's/^/    /'; pause ;;
+      l|L) journalctl -u "darkgre@$n" -f -n 30 --no-pager ;;
+      x|X) header "XFRM - $n"; ip xfrm state 2>/dev/null | sed 's/^/    /'; echo; ip xfrm policy 2>/dev/null | sed 's/^/    /'; pause ;;
+      0|_) return ;;
+    esac
+  done
+}
+conn_rows(){
+  local n="$1" d="$TUN_DIR/$1" lp proto line src sport
+  . "$d/meta.conf"; command -v conntrack >/dev/null 2>&1 || return 0
+  while IFS=: read -r proto lp _; do
+    [ "$proto" = tcp ] || continue
+    conntrack -L -p tcp 2>/dev/null | grep -E 'ESTABLISHED|ASSURED' | grep -E "dport=$lp([[:space:]]|$)" | head -n 30 |
+    while IFS= read -r line; do
+      src="$(sed -n 's/.*src=\([^ ]*\).*/\1/p' <<<"$line" | head -n1)"
+      sport="$(sed -n 's/.*sport=\([^ ]*\).*/\1/p' <<<"$line" | head -n1)"
+      [ -n "$src" ] && printf '%s\t%s\t%s\t%s\n' "$src" "$sport" "$lp" "$proto"
+    done
+  done <"$d/ports.list"
+}
+screen_connections(){
   local n="$1" d="$TUN_DIR/$1"
   . "$d/meta.conf"
-  header "LOGS + INTERFACE - $n"
-  top; sect "STATUS"; blank
-  kv "state" "$W$(service_state "$n")$N"
-  kv "interface" "$W$IFNAME$N"
-  kv "inner peer" "$W$REMOTE_TUN$N"
-  bot; echo
-  ip -d link show "$IFNAME" 2>/dev/null | sed 's/^/    /' || true
-  echo
-  journalctl -u "darkgre@$n" -n 25 --no-pager -o cat 2>/dev/null | sed 's/^/    /'
-  echo; top
-  item L "Live journal" ""
-  item 0 "Back" ""
-  bot; echo; getkey
-  case "$KEY" in l|L) journalctl -u "darkgre@$n" -f --no-pager ;; esac
+  [ "$ROLE" = IRAN ] || { header "LIVE CONNECTIONS - $n"; bad "user connections land on the IRAN side"; pause; return; }
+  command -v conntrack >/dev/null 2>&1 || { bad "conntrack is not installed"; pause; return; }
+  while :; do
+    header "LIVE CONNECTIONS - $n"
+    top; sect "ESTABLISHED"; blank
+    row "$(printf '%s%-22s %-8s %-8s %-5s%s' "$D" "client" "source" "port" "proto" "$N")"
+    local total=0 src sport lp proto
+    while IFS=$'\t' read -r src sport lp proto; do
+      [ -n "$src" ] || continue; total=$((total+1))
+      [ "$total" -le 18 ] && row "$(printf '%-22s %-8s %-8s %-5s' "${src:0:22}" "$sport" "$lp" "$proto")"
+    done < <(conn_rows "$n")
+    [ "$total" -eq 0 ] && row "$(printf '%sno user is connected right now%s' "$D" "$N")"
+    mid; kv "clients" "$W$total$N"; kv "service" "$(dot "$(service_state "$n")") $(service_state "$n")  $D uptime $(svc_uptime_short "$n")$N"; bot
+    printf '\n  %s2s refresh  -  any key to exit%s' "$D" "$N"
+    read -rsn1 -t 2 _ && { echo; return; }
+  done
+}
+speed_latency(){
+  local n="$1" d="$TUN_DIR/$1" out
+  . "$d/meta.conf"; header "LATENCY - $n"; info "10 pings through inner GRE link to $REMOTE_TUN"; echo
+  out="$(ping -c 10 -W 2 "$REMOTE_TUN" 2>&1)"; printf '%s\n' "$out" | sed 's/^/    /'
+  echo; top; sect "RESULT"; blank
+  local loss avg
+  loss="$(grep -oE '[0-9]+% packet loss' <<<"$out" | head -n1 | awk '{print $1}')"
+  avg="$(grep -E '^(rtt|round-trip)' <<<"$out" | awk -F'=' '{print $2}' | awk -F'/' '{print $2}' | xargs)"
+  kv "average" "$W${avg:--} ms$N"; kv "loss" "$W${loss:--}$N"; bot; pause
+}
+speed_passive(){
+  local n="$1" win i1 o1 i2 o2 din dout
+  header "PASSIVE THROUGHPUT - $n"; read -r i1 o1 <<<"$(tunnel_traffic "$n")"
+  ask "sample for how many seconds" "10"; win="${ANS:-10}"; [[ "$win" =~ ^[0-9]+$ ]] && [ "$win" -ge 2 ] || win=10
+  info "sampling GRE interface for ${win}s"; sleep "$win"; read -r i2 o2 <<<"$(tunnel_traffic "$n")"
+  din=$(( (i2-i1)/win )); dout=$(( (o2-o1)/win )); [ "$din" -lt 0 ] && din=0; [ "$dout" -lt 0 ] && dout=0
+  echo; top; sect "RESULT"; blank
+  kv "receive" "$W$(human_bytes "$din")/s$N  $D$((din*8/1000000)) Mbps$N"; kv "transmit" "$W$(human_bytes "$dout")/s$N  $D$((dout*8/1000000)) Mbps$N"
+  kv "rx total" "$W$(human_bytes "$i2")$N"; kv "tx total" "$W$(human_bytes "$o2")$N"; bot; pause
+}
+speed_responder(){
+  pick_tunnel || return; local n="$SELECTED" d="$TUN_DIR/$SELECTED"; . "$d/meta.conf"
+  [ "$ROLE" = KHAREJ ] || { bad "run responder on KHAREJ"; pause; return; }
+  install_iperf3 || { bad "iperf3 install failed"; pause; return; }
+  ask "responder port" "19999"; valid_port "$ANS" || { bad "invalid port"; pause; return; }
+  header "SPEED RESPONDER - $n"; info "waiting on $LOCAL_TUN:$ANS - ctrl+c to stop"; echo
+  iperf3 -s -1 -B "$LOCAL_TUN" -p "$ANS"; pause
+}
+speed_active(){
+  local n="$1" d="$TUN_DIR/$1" secs port
+  . "$d/meta.conf"; [ "$ROLE" = IRAN ] || { bad "run active test on IRAN"; pause; return; }
+  install_iperf3 || { bad "iperf3 install failed"; pause; return; }
+  header "ACTIVE THROUGHPUT - $n"
+  row "$(printf '%sstart Diagnostics -> Speed responder on KHAREJ first%s' "$Y" "$N")"; echo
+  yesno "responder is running?" n || return
+  ask "responder port" "19999"; port="$ANS"; valid_port "$port" || { bad "invalid port"; pause; return; }
+  ask "seconds" "10"; secs="$ANS"; [[ "$secs" =~ ^[0-9]+$ ]] || secs=10
+  iperf3 -c "$REMOTE_TUN" -p "$port" -t "$secs"; pause
+}
+speed_screen(){
+  local n="$1"
+  while :; do
+    header "SPEED - $n"; top; sect "OPTIONS"; blank
+    item 1 "Latency" "inner GRE RTT"; item 2 "Passive throughput" "real interface traffic"; item 3 "Active throughput" "iperf3 benchmark"; item 0 "Back" ""; bot; echo; getkey
+    case "$KEY" in 1) speed_latency "$n";; 2) speed_passive "$n";; 3) speed_active "$n";; 0|_) return;; esac
+  done
+}
+screen_fingerprint(){
+  header "CONFIG FINGERPRINT"; top; sect "MUST MATCH"; blank
+  row "$(printf '%scompare the same tunnel on IRAN and KHAREJ%s' "$D" "$N")"; row "$(printf '%sIPsec secret is hashed and never printed%s' "$D" "$N")"; bot; echo
+  local d
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*; do [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; printf '  %s%-16s%s %s(%s)%s  %s%s%s\n' "$W" "$NAME" "$N" "$D" "$ROLE" "$N" "$C" "$(config_fingerprint "$NAME")" "$N"; done
+  shopt -u nullglob; pause
 }
 
 manage(){
   pick_tunnel || return
   local n="$SELECTED" d="$TUN_DIR/$SELECTED"
   while :; do
-    [ -r "$d/meta.conf" ] || return
-    . "$d/meta.conf"
+    [ -r "$d/meta.conf" ] || return; . "$d/meta.conf"
+    SECURITY="${SECURITY:-plain}"; MTU_MODE="${MTU_MODE:-custom}"; RESTART_EVERY="${RESTART_EVERY:-off}"
+    local rx tx; read -r rx tx <<<"$(tunnel_traffic "$n")"
     header "TUNNEL - $n"
     top; sect "STATUS"; blank
-    kv "state" "$W$(service_state "$n")$N"
+    kv "state" "$(case "$(service_state "$n")" in active) badge ACTIVE "$BG_OK$W";; failed) badge FAILED "$BG_ERR$W";; *) badge INACTIVE "$BG_WARN$W";; esac)  $D uptime $(svc_uptime_short "$n")$N"
     kv "role" "$W$([ "$ROLE" = IRAN ] && echo 'IRAN (pair owner)' || echo 'KHAREJ (peer)')$N"
-    kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"
-    kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"
-    kv "profile" "$W$PROFILE$N $D MTU $MTU$N"
-    mid; sect "CONTROL"
-    item 1 "Start" ""
-    item 2 "Stop" ""
-    item 3 "Restart" ""
-    if [ "$ROLE" = IRAN ]; then
-      mid; sect "PAIRING"
-      item p "Pair code" "paste this on the KHAREJ server"
-    fi
-    mid; sect "CONFIGURE"
-    [ "$ROLE" = IRAN ] && item 4 "Ports" "user-facing ports"
-    item 5 "Tuning" "profile, MTU"
-    item 6 "Endpoint" "local / peer IP"
-    mid; sect "INSPECT"
-    item 7 "Ping inner peer" "$REMOTE_TUN"
-    item L "Logs + interface" ""
-    mid; sect "ADVANCED"
-    item d "Delete tunnel" ""
-    item 0 "Back" ""
-    bot; echo; getkey
+    kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"; kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"
+    kv "security" "$W$SECURITY$N $D$(ipsec_state "$n")$N"; kv "profile" "$W$PROFILE$N"; kv "mtu" "$W$MTU$N $D$MTU_MODE$N"
+    kv "traffic" "$L4$(human_bytes "$rx") rx$N  $L6$(human_bytes "$tx") tx$N"; kv "restart" "$W$RESTART_EVERY$N"
+    mid; sect "CONTROL"; item 1 "Start" ""; item 2 "Stop" ""; item 3 "Restart" ""
+    if [ "$ROLE" = IRAN ]; then mid; sect "PAIRING"; item p "Pair code" "paste this on KHAREJ"; fi
+    mid; sect "CONFIGURE"; [ "$ROLE" = IRAN ] && item 4 "Ports" "user-facing ports"; item 5 "Tuning" "profile + MTU / PMTU"; item 6 "Endpoint" "local / peer IP"; item 7 "Security" "GRE + IPsec"; item 8 "Scheduled restart" ""
+    mid; sect "INSPECT"; item s "Speed test" "latency + throughput"; [ "$ROLE" = IRAN ] && item c "Live connections" ""; item L "Logs + interface" ""; item f "Config fingerprint" ""
+    mid; sect "ADVANCED"; item d "Delete tunnel" ""; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
-      1) service_start "$n"; pause ;;
-      2) service_stop "$n"; pause ;;
-      3) service_restart "$n"; pause ;;
+      1) service_start "$n"; pause ;; 2) service_stop "$n"; pause ;; 3) service_restart "$n"; pause ;;
       4) [ "$ROLE" = IRAN ] && screen_ports "$n" || { info "ports are managed on IRAN"; pause; } ;;
-      5) screen_tuning "$n" ;;
-      6) screen_endpoint "$n" ;;
-      7) ping -c 4 -W 2 "$REMOTE_TUN" || true; pause ;;
+      5) screen_tuning "$n" ;; 6) screen_endpoint "$n" ;; 7) screen_security "$n" ;; 8) screen_restart "$n" ;;
       p|P) [ "$ROLE" = IRAN ] && show_pair_code "$n" || info "Pair Code comes from IRAN"; pause ;;
-      l|L) screen_logs "$n" ;;
+      s|S) speed_screen "$n" ;; c|C) [ "$ROLE" = IRAN ] && screen_connections "$n" || { info "connections are visible on IRAN"; pause; } ;;
+      l|L) screen_logs "$n" ;; f|F) header "FINGERPRINT - $n"; kv "fingerprint" "$W$(config_fingerprint "$n")$N"; pause ;;
       d|D) delete_tunnel "$n"; pause; [ -d "$d" ] || return ;;
       0|_) return ;;
     esac
@@ -907,15 +978,20 @@ manage(){
 }
 
 dashboard(){
-  header "Dashboard"; list_tunnels; echo
-  local d
-  shopt -s nullglob
-  for d in "$TUN_DIR"/*; do
-    [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"
-    if ping -c 1 -W 1 "$REMOTE_TUN" >/dev/null 2>&1; then ok "$NAME inner peer $REMOTE_TUN reachable"; else warn "$NAME inner peer $REMOTE_TUN unreachable"; fi
+  [ -d "$TUN_DIR" ] || return
+  while :; do
+    header "LIVE DASHBOARD"
+    top; sect "TUNNELS"; row "$(printf '%s%-11s %-6s %-9s %-8s %-8s %-9s %-8s%s' "$D" "name" "role" "state" "mtu" "security" "latency" "traffic" "$N")"; blank
+    local d st lat rx tx sec
+    shopt -s nullglob
+    for d in "$TUN_DIR"/*; do
+      [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; st="$(service_state "$NAME")"; sec="$(ipsec_state "$NAME")"; read -r rx tx <<<"$(tunnel_traffic "$NAME")"
+      lat="$(ping -c1 -W1 "$REMOTE_TUN" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n1)"; [ -n "$lat" ] || lat="-"
+      row "$(printf '%s %-11s %-6s %-9s %-8s %-8s %-9s %-8s' "$(dot "$st")" "${NAME:0:11}" "$ROLE" "$st" "$MTU" "${sec:0:8}" "$lat" "$(human_bytes $((rx+tx)))")"
+    done
+    shopt -u nullglob
+    bot; printf '\n  %s2s refresh  -  any key to exit%s' "$D" "$N"; read -rsn1 -t 2 _ && { echo; return; }
   done
-  shopt -u nullglob
-  pause
 }
 
 screen_core(){
@@ -925,94 +1001,95 @@ screen_core(){
     command -v ip >/dev/null 2>&1 && kv "iproute2" "$G ready$N" || kv "iproute2" "$R missing$N"
     command -v iptables >/dev/null 2>&1 && kv "iptables" "$G ready$N" || kv "iptables" "$R missing$N"
     [ -d /sys/module/ip_gre ] && kv "ip_gre" "$G loaded$N" || kv "ip_gre" "$Y not loaded$N"
+    command -v conntrack >/dev/null 2>&1 && kv "conntrack" "$G ready$N" || kv "conntrack" "$Y optional$N"
+    command -v ipsec >/dev/null 2>&1 && kv "strongSwan" "$G ready$N" || kv "strongSwan" "$D not installed$N"
     kv "forwarding" "$W$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo '?')$N"
-    mid
-    item 1 "Install / repair" "dependencies"
-    item 2 "Load GRE module" ""
-    item 0 "Back" ""
-    bot; echo; getkey
+    mid; item 1 "Install / repair" "GRE dependencies"; item 2 "Load GRE module" ""; item 3 "Security core" "install strongSwan"; item 4 "iperf3" "speed-test core"; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) ensure_deps; ensure_system; ok "GRE core checked"; pause ;;
       2) modprobe ip_gre >/dev/null 2>&1 && ok "ip_gre loaded" || bad "could not load ip_gre"; pause ;;
+      3) ensure_ipsec_deps && { security_sync_all; ok "strongSwan ready"; } || bad "security core install failed"; pause ;;
+      4) install_iperf3 && ok "iperf3 ready" || bad "iperf3 install failed"; pause ;;
       0|_) return ;;
     esac
   done
 }
 
 diagnostics(){
-  header "Diagnostics"
-  command -v ip >/dev/null && ok "iproute2 available" || bad "ip command missing"
-  modprobe ip_gre 2>/dev/null && ok "GRE kernel module available" || warn "could not load ip_gre"
-  [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = 1 ] && ok "IPv4 forwarding enabled" || warn "IPv4 forwarding disabled"
-  iptables -t nat -L -n >/dev/null 2>&1 && ok "iptables NAT available" || bad "iptables NAT unavailable"
-  echo; list_tunnels; pause
+  while :; do
+    header "DIAGNOSTICS"
+    top; sect "LOGS"; blank; item 1 "Live log" ""; item 2 "Last 60 lines" ""
+    mid; sect "TESTS"; item 3 "Health check" "all tunnels"; item 4 "Link test" "inner peer + MTU"; item 5 "Config fingerprint" "compare both servers"; item 6 "Path MTU scan" "outer DF probe"; item r "Speed responder" "run on KHAREJ"
+    mid; sect "SECURITY"; item i "IPsec / XFRM status" ""; item 0 "Back" ""; bot; echo; getkey
+    case "$KEY" in
+      1) pick_tunnel && journalctl -u "darkgre@$SELECTED" -f -n 30 --no-pager; pause ;;
+      2) pick_tunnel && { header "LOG - $SELECTED"; journalctl -u "darkgre@$SELECTED" -n 60 --no-pager -o cat | sed 's/^/    /'; }; pause ;;
+      3) health_check; pause ;;
+      4) pick_tunnel || continue; . "$TUN_DIR/$SELECTED/meta.conf"; header "LINK - $SELECTED"; ping -c 5 -W 2 "$REMOTE_TUN" || true; echo; ip -d link show "$IFNAME" | sed 's/^/    /'; pause ;;
+      5) screen_fingerprint ;;
+      6) pick_tunnel || continue; . "$TUN_DIR/$SELECTED/meta.conf"; header "PMTU - $SELECTED"; info "scanning $REMOTE_PUBLIC"; local p; p="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"; [ "$p" -gt 0 ] && { ok "Path MTU: $p"; ok "recommended GRE MTU: $(calc_inner_mtu "$p" "${SECURITY:-plain}")"; } || bad "scan failed"; pause ;;
+      r|R) speed_responder ;;
+      i|I) header "IPSEC / XFRM"; command -v ipsec >/dev/null 2>&1 && ipsec statusall | sed 's/^/    /' || dim "strongSwan not installed"; echo; ip xfrm state 2>/dev/null | sed 's/^/    /'; pause ;;
+      0|_) return ;;
+    esac
+  done
 }
 
 update_self(){
-  header "Update"
-  [ -s "$UPDATE_URL_FILE" ] || { warn "no update URL configured"; pause; return; }
-  local url tmp ver; url="$(cat "$UPDATE_URL_FILE")"; tmp="$(mktemp)"
-  curl -fsSL --retry 3 --max-time 30 -o "$tmp" "$url" || { bad "download failed"; rm -f "$tmp"; pause; return; }
-  grep -q 'DARKVPN-GRE-SCRIPT' "$tmp" && bash -n "$tmp" || { bad "invalid update"; rm -f "$tmp"; pause; return; }
-  ver="$(grep -m1 '^SCRIPT_VER=' "$tmp" | cut -d'"' -f2)"
-  install -m 0755 "$tmp" "$SELF_PATH"; rm -f "$tmp"; ok "updated to $ver"; pause
+  local url tmp ver
+  url="$(cat "$UPDATE_URL_FILE" 2>/dev/null)"
+  [ -n "$url" ] || { bad "no update URL configured"; return; }
+  tmp="$(mktemp)"; info "downloading"
+  curl -fsSL --retry 3 --max-time 60 -o "$tmp" "$url" || { bad "download failed"; rm -f "$tmp"; return; }
+  grep -q 'DARKVPN-GRE-SCRIPT' "$tmp" && bash -n "$tmp" || { bad "invalid update"; rm -f "$tmp"; return; }
+  ver="$(grep -m1 '^SCRIPT_VER=' "$tmp" | cut -d'"' -f2)"; cp -f "$SELF_PATH" "$SELF_PATH.bak" 2>/dev/null || true
+  install -m 0755 "$tmp" "$SELF_PATH"; rm -f "$tmp"; ok "updated to v${ver:-?}"
+}
+screen_update(){
+  while :; do
+    header "UPDATE"; top; sect "VERSIONS"; blank
+    kv "core" "$WLinux GRE$N"; kv "security" "$W$(command -v ipsec >/dev/null 2>&1 && echo strongSwan || echo optional)$N"; kv "script" "$Wv$SCRIPT_VER$N"; kv "source" "$D$(cat "$UPDATE_URL_FILE" 2>/dev/null || echo 'not set')$N"
+    mid; item 1 "Core" "install / repair"; item 2 "Update script" "from source url"; item 3 "Set source url" ""; item 4 "Install as command" "run as: darkgre"; item 0 "Back" ""; bot; echo; getkey
+    case "$KEY" in
+      1) screen_core ;;
+      2) update_self; pause ;;
+      3) ask "raw url"; [ -n "$ANS" ] && { echo "$ANS" >"$UPDATE_URL_FILE"; ok "saved"; }; pause ;;
+      4) install -m 0755 "$SELF_PATH" /usr/local/bin/darkgre && ok "run: darkgre" || bad "failed"; pause ;;
+      0|_) return ;;
+    esac
+  done
 }
 
 uninstall_all(){
-  header "Uninstall"; local v d
-  read -r -p "  type UNINSTALL to remove DARK GRE: " v; [ "$v" = UNINSTALL ] || return
-  shopt -s nullglob
-  for d in "$TUN_DIR"/*; do
-    [ -r "$d/meta.conf" ] || continue
-    . "$d/meta.conf"
-    systemctl disable "darkgre@$NAME.service" >/dev/null 2>&1 || true
-    service_stop "$NAME"
-  done
+  header "UNINSTALL"; warn "removes every DARK GRE tunnel and service"; echo; ask "type UNINSTALL to confirm"
+  [ "$ANS" = UNINSTALL ] || { info "cancelled"; pause; return; }
+  local d; shopt -s nullglob
+  for d in "$TUN_DIR"/*; do [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; systemctl disable "darkgre@$NAME.service" >/dev/null 2>&1 || true; set_restart_timer "$NAME" off; service_stop "$NAME"; done
   shopt -u nullglob
-  rm -f "$UNIT_FILE" "$RUNNER" /etc/sysctl.d/99-dark-gre.conf
-  systemctl daemon-reload
-  rm -rf "$BASE_DIR"
-  ok "DARK GRE removed; manager file kept at $SELF_PATH"
-  pause
+  rm -f "$UNIT_FILE" "$RS_UNIT" "$RS_TIMER" "$RUNNER" /etc/sysctl.d/99-dark-gre.conf
+  sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/dark-gre/security/ipsec.secrets|d' /etc/ipsec.conf /etc/ipsec.secrets 2>/dev/null || true
+  rm -rf "$BASE_DIR"; systemctl daemon-reload; command -v ipsec >/dev/null 2>&1 && ipsec reload >/dev/null 2>&1 || true
+  ok "DARK GRE uninstalled; strongSwan package was left installed"; pause; exit 0
 }
 
 main(){
-  need_root
-  ensure_deps
-  ensure_system
+  need_root; ensure_deps; ensure_system; migrate_existing_tunnels; sweep_partials
+  trap on_interrupt INT TERM
+  security_sync_all
   while :; do
     header
-    local tot run
-    tot="$(find "$TUN_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
-    run="$(systemctl list-units 'darkgre@*' --state=running --no-legend 2>/dev/null | grep -c .)"
-    top
-    row "$(printf '%s%s%s tunnels   %s%s%s running   %s%s%s' "$W$BD" "$tot" "$N" "$G$BD" "$run" "$N" "$D" "$(gre_core_ready && echo 'core ready' || echo 'core check')" "$N")"
-    mid; sect "SETUP"
-    item 1 "Core" "GRE kernel / dependencies"
-    item 2 "New tunnel - IRAN" "makes Pair Code"
-    item 3 "New tunnel - KHAREJ" "takes Pair Code"
-    mid; sect "OPERATE"
-    item 4 "Manage tunnels" "ports, profile, endpoint"
-    item 5 "Dashboard" ""
-    item 6 "Diagnostics" "GRE and firewall tests"
-    mid; sect "MAINTENANCE"
-    item 7 "Update" ""
-    item 8 "Uninstall" ""
-    item 0 "Exit" ""
-    bot; echo; getkey
+    local tot run; tot="$(find "$TUN_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"; run="$(systemctl list-units 'darkgre@*' --state=active --no-legend 2>/dev/null | grep -c .)"
+    top; row "$(printf '%s%s%s tunnels   %s%s%s running   %s%s%s' "$W$BD" "$tot" "$N" "$G$BD" "$run" "$N" "$D" "$(gre_core_ready && echo 'core ready' || echo 'core check')" "$N")"
+    mid; sect "SETUP"; item 1 "Core" "GRE + security cores"; item 2 "New tunnel - IRAN" "makes Pair Code"; item 3 "New tunnel - KHAREJ" "takes Pair Code"
+    mid; sect "OPERATE"; item 4 "Manage tunnels" "ports, security, MTU, endpoint"; item 5 "Dashboard" ""; item 6 "Diagnostics" "logs, tests, fingerprint"
+    mid; sect "MAINTENANCE"; item 7 "Update" ""; item 8 "Uninstall" ""; item 0 "Exit" ""; bot; echo; getkey
     case "$KEY" in
-      1) screen_core ;;
-      2) new_iran ;;
-      3) new_kharej ;;
-      4) manage ;;
-      5) dashboard ;;
-      6) diagnostics ;;
-      7) update_self ;;
-      8) uninstall_all ;;
+      1) screen_core ;; 2) new_iran ;; 3) new_kharej ;; 4) manage ;; 5) dashboard ;; 6) diagnostics ;; 7) screen_update ;; 8) uninstall_all ;;
       0|q|Q) clear; printf '  %sDARK VPN - GRE Direct%s  %s%s%s\n\n' "$C" "$N" "$D" "$DEV_ID" "$N"; exit 0 ;;
     esac
   done
 }
+
 if [ "${DARK_GRE_LIB_ONLY:-0}" != 1 ]; then
   main "$@"
 fi
