@@ -1424,6 +1424,8 @@ class CoreEngine:
                     direct_seen.add(direct_key)
                 address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
                 proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
+                if endpoint_type=='tunnel' and not re.search(r'(?i)\\btunnel\\b|تانل|🚇',str(base_remark)):
+                    base_remark=str(base_remark)+' · 🚇 TUNNEL'
                 if int(host.get('_addressTotal') or 1)>1:
                     base_remark=base_remark+' · '+str(int(host.get('_addressIndex') or 1))
                 label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
