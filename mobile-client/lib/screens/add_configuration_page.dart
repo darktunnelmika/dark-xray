@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../models/proxy_profile.dart';
 import '../services/import_resolver.dart';
 import '../services/subscription_service.dart';
+import '../services/vpn_bridge.dart';
 import '../ui/cyber.dart';
 import 'manual_config_page.dart';
 import 'qr_scanner_page.dart';
@@ -20,6 +21,7 @@ class AddConfigurationPage extends StatefulWidget {
 
 class _AddConfigurationPageState extends State<AddConfigurationPage> {
   final _resolver = const ImportResolver();
+  final _vpn = VpnBridge();
   bool _busy = false;
 
   Future<void> _resolveAndReturn(String raw) async {
@@ -77,7 +79,16 @@ class _AddConfigurationPageState extends State<AddConfigurationPage> {
         return;
       }
       final text = utf8.decode(bytes, allowMalformed: true).trim();
-      await _resolveAndReturn(text);
+      try {
+        await _resolveAndReturn(text);
+      } on SubscriptionException {
+        final links = await _vpn.convertXrayJsonToShareLinks(text);
+        if (links.isEmpty) {
+          _showError('No supported proxy profiles were found in this file.');
+          return;
+        }
+        await _resolveAndReturn(links.join('\n'));
+      }
     } catch (error) {
       _showError('Could not read selected file: $error');
     }
