@@ -27,11 +27,12 @@ jobs:
       - name: Create temporary Android host
         run: |
           rm -rf .mobile-build
-          flutter create             --platforms=android             --project-name=dark_xray_client             --org=com.darkxray             .mobile-build
+          flutter create --platforms=android --project-name=dark_xray_client --org=com.darkxray .mobile-build
           cp mobile-client/pubspec.yaml .mobile-build/pubspec.yaml
           cp mobile-client/analysis_options.yaml .mobile-build/analysis_options.yaml
-          rm -rf .mobile-build/lib
+          rm -rf .mobile-build/lib .mobile-build/test
           cp -R mobile-client/lib .mobile-build/lib
+          cp -R mobile-client/test .mobile-build/test
 
       - name: Resolve dependencies
         working-directory: .mobile-build
