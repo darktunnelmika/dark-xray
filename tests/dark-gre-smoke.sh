@@ -24,7 +24,7 @@ export DARK_GRE_LIB_ONLY=1
 # shellcheck disable=SC1090
 source "$SCRIPT"
 
-# Render runtime units in a temp directory and verify the RC9 lifecycle.
+# Render runtime units in a temp directory and verify the RC10 lifecycle.
 runtime="$tmpdir/runtime"
 mkdir -p "$runtime"
 RUNNER="$runtime/darkgre-runner"
@@ -112,14 +112,14 @@ grep -q 'aes256gcm16' "$SCRIPT"
 grep -q 'forceencaps=yes' "$SCRIPT"
 grep -q 'fragmentation=yes' "$SCRIPT"
 grep -q 'reauth=no' "$SCRIPT"
-grep -q 'start_mode=start' "$SCRIPT"
-grep -q 'start_mode=add' "$SCRIPT"
+grep -q 'auto=add' "$SCRIPT"
+! grep -q 'auto=start' "$SCRIPT"
+grep -q 'flock -n 9' "$SCRIPT"
 grep -q 'dpd_mode=restart' "$SCRIPT"
 grep -q 'dpd_mode=clear' "$SCRIPT"
 grep -q 'overhead=100' "$SCRIPT"
 grep -q 'IPSEC_DIR="/etc/ipsec.d/dark-gre"' "$SCRIPT"
 grep -q 'IPSEC_SECRETS="/etc/ipsec.dark-gre.secrets"' "$SCRIPT"
-grep -q 'timeout 3 ipsec up' "$SCRIPT"
 ! grep -q 'trigger_ipsec()' "$SCRIPT"
 grep -q 'WATCH_UNIT="/etc/systemd/system/darkgre-watch@.service"' "$SCRIPT"
 grep -q 'watch_loop()' "$SCRIPT"
@@ -133,4 +133,4 @@ grep -q 'sect "SETUP"' "$SCRIPT"
 grep -q 'sect "OPERATE"' "$SCRIPT"
 grep -q 'sect "MAINTENANCE"' "$SCRIPT"
 
-echo "dark-gre rc9 peer reboot recovery + UDP4500 + MTU migration smoke: PASS"
+echo "dark-gre rc10 single initiator + reboot recovery + UDP4500 smoke: PASS"
