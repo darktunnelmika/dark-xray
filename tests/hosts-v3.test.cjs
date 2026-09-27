@@ -167,3 +167,21 @@ test('Tunnel Host cards reflect the Inbound Tunnel Port contract',()=>{
     assert.ok(src.includes(token),token);
   assert.ok(src.includes('runtime and port match the Tunnel Port configured'));
 });
+
+test('One host accepts multiple endpoint addresses with one shared port',()=>{
+  const ctx=context(),M=ctx.DarkHostV3;
+  const out=M.normalizeEndpoint({
+    mode:'tunnel',runtime:'local',
+    addresses:'5.202.75.85\n5.202.75.86,5.202.75.85\niran-edge.example.test',
+    port:1185,remark:'TUNNEL POOL',enable:true
+  },inbound);
+  assert.equal(out.address,'5.202.75.85');
+  assert.deepEqual(Array.from(out.addresses),['5.202.75.85','5.202.75.86','iran-edge.example.test']);
+  assert.equal(out.port,1185);
+});
+
+test('Host editor exposes a single multi-address pool field',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','hosts-v2.js'),'utf8');
+  for(const token of ['name="addresses"','max 64','endpointAddresses','hv3-address-list'])
+    assert.ok(src.includes(token),token);
+});
