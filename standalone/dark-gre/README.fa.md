@@ -2,20 +2,37 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.2.0-rc2` — Draft / Test
+> وضعیت: `v0.3.0-rc3` — Draft / Test
+
+## تغییرات RC3
+
+- **DGR2 Pair Code** شامل GRE Key، MTU، Security و Scheduled Restart
+- **Auto PMTU Scan** با DF probe و محاسبه MTU مناسب برای مسیر
+- **TCP MSS Clamp** خودکار برای جلوگیری از مشکل fragmentation/black-hole
+- **GRE Key** برای جداسازی Pairها
+- **GRE + IPsec** اختیاری با strongSwan، IKEv2 و AES-256-GCM
+- سازگاری با تونل‌ها و Pair Codeهای RC2 / DGR1
+- Re-pair روی KHAREJ بدون Delete کردن تانل
+- Scheduled Restart
+- Traffic counters
+- Live Connections
+- Speed Test: Latency / Passive / Active iperf3
+- Config Fingerprint
+- Health Check، PMTU diagnostics و XFRM/IPsec status
+- Show Config و Edit Metadata برای Advanced
 
 ## منوی اصلی
 
 ```text
 SETUP
-[1] Core                 GRE kernel / dependencies
+[1] Core                 GRE + security cores
 [2] New tunnel - IRAN    makes Pair Code
 [3] New tunnel - KHAREJ  takes Pair Code
 
 OPERATE
-[4] Manage tunnels       ports, profile, endpoint
+[4] Manage tunnels       ports, security, MTU, endpoint
 [5] Dashboard
-[6] Diagnostics
+[6] Diagnostics          logs, tests, fingerprint
 
 MAINTENANCE
 [7] Update
@@ -23,98 +40,151 @@ MAINTENANCE
 [0] Exit
 ```
 
-## Pair Code
+## ساخت تانل
 
-فلو مثل DARK Backhaul است:
+### IRAN
 
-1. روی **IRAN** تانل ساخته می‌شود.
-2. IP ایران/خارج، subnet داخلی، Profile و تنظیمات GRE ثبت می‌شوند.
-3. یک Pair Code با پیشوند `DGR1-` ساخته و در `pair.code` ذخیره می‌شود.
-4. روی **KHAREJ** فقط Pair Code Paste می‌شود.
-5. Pair Code روی IRAN همیشه از مسیر زیر دوباره قابل مشاهده است:
+IRAN صاحب Pair است. هنگام ساخت:
+
+1. IP ایران و خارج ثبت می‌شود.
+2. GRE Key ساخته می‌شود.
+3. Security انتخاب می‌شود:
+   - `GRE + IPsec` — حالت پیشنهادی
+   - `Plain GRE`
+4. Profile انتخاب می‌شود.
+5. MTU به صورت Auto Scan / Safe / Maximum / Custom تنظیم می‌شود.
+6. پورت‌ها و Scheduled Restart تنظیم می‌شوند.
+7. Pair Code با پیشوند `DGR2-` ساخته می‌شود.
+
+### KHAREJ
+
+روی KHAREJ فقط Pair Code Paste می‌شود و GRE Key، MTU، Security، IPsec PSK و Restart از کد دریافت می‌شوند.
+
+اگر بعداً MTU، Endpoint یا Security روی IRAN تغییر کرد:
 
 ```text
 Manage tunnels
-  -> TUNNEL
-     -> PAIRING
-        -> Pair code
+ -> PAIRING
+ -> Apply Pair Code
 ```
 
-## مدیریت تانل
+روی KHAREJ کد جدید را اعمال می‌کند و نیازی به حذف تانل نیست.
+
+## Security
+
+### Plain GRE
+
+GRE خالص رمزنگاری ندارد.
+
+### GRE + IPsec
+
+در Secure Mode، strongSwan یک IPsec Transport Mode بین IPهای عمومی Pair می‌سازد و GRE داخل آن محافظت می‌شود.
+
+```text
+IRAN
+  |
+  +-- Public Port
+  |
+  +-- GRE interface
+  |
+  +== IPsec / AES-256-GCM ==+
+                            |
+                         KHAREJ
+                            |
+                         Xray Port
+```
+
+Runner قبل از بالا آوردن GRE در Secure Mode، وجود IPsec/XFRM policy را بررسی می‌کند؛ اگر Security آماده نباشد GRE بالا نمی‌آید.
+
+## MTU
+
+MTU دیگر از Profile تعیین نمی‌شود.
+
+```text
+[1] Auto Scan   recommended
+[2] Safe
+[3] Maximum
+[4] Custom
+```
+
+Auto Scan با DF probe Path MTU را پیدا می‌کند و سربار GRE Key و در Secure Mode سربار IPsec را کم می‌کند.
+
+همچنین روی مسیر TCP، `TCPMSS --clamp-mss-to-pmtu` به صورت خودکار اعمال می‌شود.
+
+## Manage
 
 ```text
 CONTROL
-  Start / Stop / Restart
+  Start
+  Stop
+  Restart
 
-PAIRING (IRAN)
-  Pair code
+PAIRING
+  IRAN   -> Pair code
+  KHAREJ -> Apply Pair Code
 
 CONFIGURE
   Ports
   Tuning
   Endpoint
+  Security
+  Scheduled restart
 
 INSPECT
-  Ping inner peer
+  Speed test
+  Live connections
   Logs + interface
+  Config fingerprint
+  Show config
 
 ADVANCED
+  Edit metadata
   Delete tunnel
 ```
 
-پورت‌ها روی IRAN تعریف می‌شوند. حالت پیش‌فرض Same Port است؛ مثلاً `1185 -> 1185`. TCP پیش‌فرض است و در صورت نیاز UDP نیز قابل فعال‌سازی است.
+## Diagnostics
 
-## نصب RC2
+- Live log
+- Last 60 lines
+- Health check
+- Link test
+- Config fingerprint
+- Path MTU scan
+- Speed responder
+- IPsec / XFRM status
+
+## نصب RC3
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
 ```
 
-بعداً با این دستور دوباره Manager باز می‌شود:
+اجرای مجدد:
 
 ```bash
 darkgre
 ```
 
-Installer مانند DARK Backhaul قبل از نصب، فایل Manager را دانلود، marker را بررسی و `bash -n` اجرا می‌کند و نسخه قبلی `darkgre` را به عنوان backup نگه می‌دارد.
-
-## Data Plane
-
-```text
-USER
-  |
-  v
-IRAN Public IP : PORT
-  |
-  | DNAT / MASQUERADE
-  v
-IRAN GRE IP  ===== GRE protocol 47 =====  KHAREJ GRE IP
-                                           |
-                                           v
-                                     Xray : PORT
-```
-
-GRE از **IP protocol 47** استفاده می‌کند؛ بنابراین هر دو دیتاسنتر باید GRE را عبور دهند.
-
-## فایل‌ها
+## مسیر فایل‌ها
 
 ```text
 /etc/dark-gre/
 ├── update.url
+├── security/
+│   ├── ipsec.secrets
+│   └── ipsec.d/
 └── tunnels/
     └── <name>/
         ├── meta.conf
         ├── ports.list
-        └── pair.code   # IRAN
+        └── pair.code
 
 /usr/local/bin/darkgre
 /usr/local/libexec/darkgre-runner
 /etc/systemd/system/darkgre@.service
+/etc/systemd/system/darkgre-restart@.service
+/etc/systemd/system/darkgre-restart@.timer
 /etc/sysctl.d/99-dark-gre.conf
 ```
 
-## نکته امنیتی
-
-GRE به تنهایی Encryption یا Authentication ندارد. امنیت Sessionهای Xray همچنان توسط پروتکل Xray تأمین می‌شود؛ GRE فقط مسیر مستقیم L3 را ایجاد می‌کند.
-
-این RC تا قبل از تست کامل **Public Port -> GRE -> Xray** در Draft باقی می‌ماند و به `main` Merge نمی‌شود.
+RC3 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
