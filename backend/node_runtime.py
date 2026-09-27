@@ -403,8 +403,17 @@ class NodeRuntime:
 
     def _sync_guard_ports(self,payload:dict)->tuple[BrokerClient|None,list[int]|None]:
         mode=str(payload.get('sections',{}).get('ipguard',{}).get('mode','observe'))
-        ports=sorted({int(a['inbound'].get('port') or 0) for a in payload['assignments']
-                      if a['inbound'].get('enable',True) and int(a['inbound'].get('port') or 0)>0})
+        ports=set()
+        for assignment in payload['assignments']:
+            inbound=assignment.get('inbound',{}) if isinstance(assignment,dict) else {}
+            if not inbound.get('enable',True):continue
+            primary=int(inbound.get('port') or 0)
+            if primary>0:ports.add(primary)
+            meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta',{}),dict) else {}
+            raw=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            shadow=raw.get('local')
+            if type(shadow)is int and 1<=shadow<=65535:ports.add(int(shadow))
+        ports=sorted(ports)
         client=BrokerClient(self.engine.config.guard_socket)
         try:status=client.status()
         except PolicyError:
