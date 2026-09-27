@@ -425,9 +425,14 @@ def update_latest():
     sha=cp.stdout.split()[0].strip().lower()
     if not re.fullmatch(r'[0-9a-f]{40}',sha):raise RuntimeError('Cannot resolve main commit')
     current=source_info()[1]
-    if sha==current:
+    matrix_files=[APP/'backend/traffic_matrix.py',APP/'backend/outbound_probe.py',APP/'backend/warp_paths.py']
+    missing=[str(path.relative_to(APP)) for path in matrix_files if not path.is_file()]
+    if sha==current and not missing:
         print('Node is already on latest main:',sha);return
-    print('Updating Node to',sha)
+    if sha==current:
+        print('Materializing missing rc8 Node modules at current commit:',','.join(missing))
+    else:
+        print('Updating Node to',sha)
     cp=run([APP/'.venv/bin/python',APP/'tools/update_node.py','--ref',sha],capture=False,timeout=300)
     if cp.returncode:raise RuntimeError('Node updater failed')
 
