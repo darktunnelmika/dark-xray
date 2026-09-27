@@ -998,3 +998,21 @@ class Manager:
             self.audit(actor,row['owner'],'reset.resolve_current',email,'Current engine counters accepted; destructive reset NOT replayed; due reset cycle advanced')
             self.tick(suppress=False)
             return self.detail(actor,email)
+
+    def recover_resets(self):
+        # A crash during a reset has an ambiguous remote outcome. Never replay it.
+        with self.store.transaction() as db:
+            db.execute("UPDATE managed_clients SET state='uncertain',error='Service restarted during a engine reset; automatic retry refused' WHERE state='reset_inflight'")
+
+    def start(self):
+        self.recover_resets()
+        if self.thread:return
+        def run():
+            while not self.stop.is_set():
+                self.tick(suppress=True)
+                self.stop.wait(self.engine.config.poll_seconds)
+        self.thread=threading.Thread(target=run,name='dark-engine-reconcile',daemon=True);self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:self.thread.join(timeout=35)

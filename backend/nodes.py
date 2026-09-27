@@ -998,3 +998,273 @@ class NodeRegistry:
                     self._recompute_client_usage(db,client_id)
                 results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
         return {'nodes':len(results),'items':results,'reset':True}
+
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None):
+        if self.thread and self.thread.is_alive():return
+        if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
+        if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
+        if desired_provider is not None and not callable(desired_provider):raise ValueError('desired_provider must be callable')
+        if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
+        if security_callback is not None and not callable(security_callback):raise ValueError('security_callback must be callable')
+        self.stop.clear()
+        def run():
+            if self.stop.wait(initial_delay):return
+            while not self.stop.is_set():
+                with self.store.lock:ids=[r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY id')]
+                for node_id in ids:
+                    if self.stop.is_set():return
+                    command=self.commands.status(node_id)
+                    if command['pending'] and command['action']=='stop':
+                        try:self.deliver_pending_control(node_id)
+                        except (PolicyError,OSError,ValueError):pass
+                    desired_state=None
+                    if desired_provider is not None:
+                        try:desired_state=desired_provider(node_id)
+                        except (PolicyError,OSError,ValueError):desired_state=None
+                    try:
+                        self.probe(node_id,timeout=5.0)
+                        traffic=self.sync_traffic(node_id)
+                        if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
+                        if security_callback is not None:
+                            try:
+                                security=self.sync_security(node_id);security_callback(node_id,security)
+                            except (PolicyError,OSError,ValueError):
+                                pass
+                        if desired_provider is not None:
+                            legacy_bundles=sync_provider(node_id) if sync_provider is not None else None
+                            # Traffic/security callbacks may just have disabled a client.
+                            # Persist before probing for offline visibility, but rebuild here
+                            # so this cycle never sends the pre-quota/pre-block payload.
+                            desired_state=desired_provider(node_id)
+                            self.sync_desired_state(node_id,desired_state,legacy_bundles=legacy_bundles)
+                            post=self.sync_traffic(node_id)
+                            if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
+                            if security_callback is not None:
+                                try:
+                                    security=self.sync_security(node_id);security_callback(node_id,security)
+                                except (PolicyError,OSError,ValueError):
+                                    pass
+                        elif sync_provider is not None:
+                            self.sync_mirrors(node_id,sync_provider(node_id))
+                            post=self.sync_traffic(node_id)
+                            if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
+                            if security_callback is not None:
+                                try:
+                                    security=self.sync_security(node_id);security_callback(node_id,security)
+                                except (PolicyError,OSError,ValueError):
+                                    pass
+                        self.deliver_pending_control(node_id)
+                    except (PolicyError,OSError,ValueError):
+                        pass
+                if self.stop.wait(interval):return
+        self.thread=threading.Thread(target=run,name='dark-node-health',daemon=True);self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:self.thread.join(timeout=6.0)
+        self.thread=None
+
+    @installation_operation
+    def remote_logs(self,node_id:str,kind:str='process',limit:int=300)->dict:
+        if kind not in {'process','error','access'}:raise PolicyError('Unknown Node log kind')
+        if type(limit)is not int or not 1<=limit<=1000:raise PolicyError('Invalid Node log limit')
+        doc,ms=self._request(node_id,'/node/api/logs/'+kind,timeout=12.0)
+        if not isinstance(doc,dict) or doc.get('kind')!=kind or not isinstance(doc.get('lines'),list):
+            raise PolicyError('Invalid Node log response')
+        return {'latency_ms':ms,'kind':kind,'lines':[str(x)[:2000] for x in doc['lines'][-limit:]]}
+
+    @installation_operation
+    def remote_update_status(self,node_id:str)->dict:
+        doc,ms=self._request(node_id,'/node/api/v1/update/status',timeout=12.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
+            raise PolicyError('Invalid Node update status response')
+        return {'latency_ms':ms,'update':doc['update']}
+
+    @installation_operation
+    def remote_update_check(self,node_id:str,commit:str)->dict:
+        if not isinstance(commit,str) or not re.fullmatch(r'[0-9a-f]{40}',commit):raise PolicyError('Exact Hub commit required')
+        doc,ms=self._request(node_id,'/node/api/v1/update/check','POST',{'commit':commit},30.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
+            raise PolicyError('Invalid Node update check response')
+        return {'latency_ms':ms,'update':doc['update']}
+
+    @installation_operation
+    def remote_update_start(self,node_id:str,commit:str)->dict:
+        if not isinstance(commit,str) or not re.fullmatch(r'[0-9a-f]{40}',commit):raise PolicyError('Exact Hub commit required')
+        doc,ms=self._request(node_id,'/node/api/v1/update/start','POST',{'commit':commit},30.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('update'),dict):
+            raise PolicyError('Invalid Node update start response')
+        return {'latency_ms':ms,'update':doc['update']}
+
+    def rotate_token(self,node_id:str,new_token:str)->dict:
+        from node_credentials import NodeCredentials
+        coordinator=NodeCredentials(self)
+        binding=self.installations.capture(node_id)
+        saved=coordinator.begin(node_id,new_token,binding_id=binding['binding_id'])
+        return coordinator.retry(node_id,saved['attempt_id'])
+
+    def remote_core(self,node_id:str,action:str)->dict:
+        self.get(node_id)  # Unknown IDs are errors, not superseded operations.
+        try:
+            with self.installations.operation(node_id):
+                return self._remote_core_operation(node_id,action)
+        except StaleInstallation:
+            # Preserve the public pending/executed contract even when a Node
+            # is deleted/replaced mid-flight. Never return the obsolete result.
+            control=self.commands.status(node_id)
+            return {'queued':bool(control['pending']),'executed':False,'delivery_state':'superseded',
+                    'control':control,'result':None}
+
+    def _remote_core_operation(self,node_id:str,action:str)->dict:
+        if not isinstance(action,str) or action not in {'validate','restart','start','stop'}:
+            raise PolicyError('Unsupported remote core action')
+        if action=='validate':
+            doc,ms=self._request(node_id,'/node/api/core/validate','POST',{})
+            if not isinstance(doc,dict) or not isinstance(doc.get('engine'),dict):
+                self._request_failed(node_id,'Invalid remote core response')
+                raise PolicyError('Invalid remote core response')
+            return {'latency_ms':ms,'result':doc,'queued':False,'validated':True}
+        self.commands.record(node_id,action)
+        return self.deliver_pending_control(node_id)
+
+    @installation_operation
+    def deliver_pending_control(self,node_id:str)->dict:
+        with self._node_operation(node_id):
+            command=self.commands.status(node_id)
+            if not command['pending']:return self.commands.deliver(node_id)
+            try:
+                node=self.get(node_id)
+                if not node['enabled']:
+                    return self.commands.defer(node_id,command,'Node is disabled; enable it to deliver the pending command','disabled')
+                result=self.probe(node_id,timeout=5.0);health=result['health']
+                if health.get('agent_only') is True and health.get('node_id')!=self.installations.current(node_id)['agent_id']:
+                    return self.commands.defer(node_id,command,'Agent identity mismatch; verify Node enrolment','identity_mismatch')
+                capabilities=health.get('capabilities')
+                version=capabilities.get('ordered_control') if isinstance(capabilities,dict) else None
+                if health.get('agent_only') is not True or type(version) is not int or version!=1:
+                    return self.commands.defer(node_id,command,'Agent lacks ordered control v1; update the Node Agent. No legacy command was sent','unsupported_agent')
+                # A resumed core must not run a known-outdated configuration.
+                desired=self.desired_state(node_id,include_payload=False)
+                if command['action']!='stop' and (desired.get('pending') or desired.get('last_error')):
+                    return self.commands.defer(node_id,command,'Waiting for desired configuration acknowledgement before resume','configuration_pending')
+            except (PolicyError,OSError,ValueError) as exc:
+                return self.commands.defer(node_id,command,str(exc),'pending')
+            return self.commands.deliver(node_id,expected_command_id=command['command_id'])
+
+    @installation_operation
+    def remote_inbounds(self,node_id:str)->dict:
+        doc,ms=self._request(node_id,'/node/api/inbounds')
+        if not isinstance(doc,list):
+            self._request_failed(node_id,'Invalid node inbound response');raise PolicyError('Invalid node inbound response')
+        return {'latency_ms':ms,'items':doc}
+
+    @installation_operation
+    def deploy_inbound(self,node_id:str,payload:dict)->dict:
+        if not isinstance(payload,dict):raise PolicyError('Inbound payload must be an object')
+        doc,ms=self._request(node_id,'/node/api/inbounds','POST',payload,12.0)
+        if not isinstance(doc,dict) or type(doc.get('id')) is not int:
+            self._request_failed(node_id,'Invalid node inbound deploy response');raise PolicyError('Invalid node inbound deploy response')
+        return {'latency_ms':ms,'inbound':doc,'applied':False,'next':'validate/restart remote Xray'}
+
+    def assignments(self,node_id:str)->list[dict]:
+        self.get(node_id)
+        with self.store.lock:
+            return [dict(r) for r in self.store.db.execute(
+                'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(node_id,))]
+
+    @installation_operation
+    def sync_desired_state(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None)->dict:
+        if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
+            raise PolicyError('Invalid Hub desired-state envelope')
+        with self._node_operation(node_id):
+            control=self.deliver_pending_control(node_id)
+            if control['queued'] and control['delivery_state']!='configuration_pending':
+                return {**control,'desired_state_applied':False,'sync_deferred':True,'items':[]}
+            current=self.desired_state(node_id)
+            if state.get('revision')!=current['revision'] or state.get('hash')!=current['hash']:
+                raise PolicyError('Desired state changed before delivery; retry synchronization')
+            result=self._sync_desired_state_locked(node_id,state,legacy_bundles=legacy_bundles)
+            control=self.deliver_pending_control(node_id)
+            result['control']=control['control'];result['queued']=control['queued']
+            if control.get('executed'):result['core']=control['result']['engine']
+            return result
+
+    def _sync_desired_state_locked(self,node_id:str,state:dict,*,legacy_bundles:list[dict]|None=None,_requester=None)->dict:
+        if not isinstance(state,dict) or type(state.get('revision')) is not int or not isinstance(state.get('hash'),str) or not isinstance(state.get('payload'),dict):
+            raise PolicyError('Invalid Hub desired-state envelope')
+        body={'revision':state['revision'],'hash':state['hash'],'payload':state['payload']}
+        try:
+            doc,ms=(_requester or self._request)(node_id,'/node/api/v1/state/apply','POST',body,30.0)
+        except PolicyError as ex:
+            if legacy_bundles is not None and str(ex).startswith('Node HTTP 404'):
+                legacy=self.sync_mirrors(node_id,legacy_bundles)
+                # Legacy full-panel nodes cannot truthfully acknowledge sections
+                # that only the lightweight Node Agent can own.
+                self.mark_desired_state(node_id,state['revision'],state['hash'],error='legacy node: inbound/client mirror only; upgrade to agent-only runtime')
+                return {**legacy,'legacy':True,'desired_revision':state['revision'],'desired_hash':state['hash'],
+                        'desired_state_applied':False}
+            self.mark_desired_state(node_id,state['revision'],state['hash'],error=str(ex))
+            raise
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('appliedRevision')!=state['revision'] or doc.get('appliedHash')!=state['hash']:
+            error='Node returned an invalid desired-state acknowledgement'
+            self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
+            self._request_failed(node_id,error);raise PolicyError(error)
+        items=doc.get('items')
+        desired_sources={x['sourceInboundId'] for x in state['payload'].get('assignments',[])
+                         if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
+        by_source={}
+        valid=isinstance(items,list)
+        for item in items if valid else []:
+            if (not isinstance(item,dict) or type(item.get('sourceInboundId')) is not int
+                    or item['sourceInboundId'] not in desired_sources or item['sourceInboundId'] in by_source
+                    or type(item.get('remoteInboundId')) is not int or item['remoteInboundId']<1 or item.get('error')):
+                valid=False;break
+            by_source[item['sourceInboundId']]=item
+        if not valid or set(by_source)!=desired_sources:
+            error='Node returned incomplete or invalid assignment acknowledgements'
+            self.mark_desired_state(node_id,state['revision'],state['hash'],error=error)
+            self._request_failed(node_id,error);raise PolicyError(error)
+        now=time.time()
+        with self._node_transaction(node_id) as db:
+            current=db.execute('SELECT revision,desired_hash FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
+            if not current or int(current['revision'])!=state['revision'] or current['desired_hash']!=state['hash']:
+                raise PolicyError('Node acknowledged a stale desired state')
+            assigned={int(r[0]) for r in db.execute(
+                'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
+            if not desired_sources<=assigned:raise PolicyError('Node assignments changed while applying desired state')
+            for source in assigned:
+                item=by_source.get(source)
+                db.execute("""UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?
+                              WHERE node_id=? AND local_inbound_id=?""",
+                           (item['remoteInboundId'] if item else 0,now,
+                            '' if item else 'not present in desired state',now,node_id,source))
+            # The assignment list and revision acknowledgement commit together.
+            db.execute("""UPDATE remote_node_desired_state SET applied_revision=?,applied_hash=?,applied_at=?,last_error=''
+                          WHERE node_id=?""",(state['revision'],state['hash'],now,node_id))
+            row=db.execute('SELECT last_health FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            try:health=json.loads(row['last_health'])
+            except (ValueError,TypeError):health={}
+            if not isinstance(health,dict):health={}
+            if isinstance(doc.get('core'),dict):health['core']=doc['core']
+            db.execute('UPDATE remote_nodes SET last_health=? WHERE id=?',(json.dumps(health),node_id))
+        status=self.desired_state(node_id,include_payload=False)
+        return {'latency_ms':ms,'legacy':False,'desired_state_applied':True,'desired_state':status,
+                'items':items,'core':doc.get('core',{}),'agent':doc,'synced_at':now}
+
+    @installation_operation
+    def sync_mirrors(self,node_id:str,bundles:list[dict])->dict:
+        if self.commands.status(node_id)['pending']:
+            raise PolicyError('Ordered Node control is pending; legacy mirror synchronization is deferred')
+        if not isinstance(bundles,list) or len(bundles)>256:raise PolicyError('Invalid node mirror bundle')
+        doc,ms=self._request(node_id,'/node/api/mirrors/sync','POST',{'assignments':bundles},30.0)
+        if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
+            self._request_failed(node_id,'Invalid node mirror sync response');raise PolicyError('Invalid node mirror sync response')
+        now=time.time()
+        by_source={int(x.get('sourceInboundId')):x for x in doc['items'] if isinstance(x,dict) and type(x.get('sourceInboundId')) is int}
+        with self._node_transaction(node_id) as db:
+            for bundle in bundles:
+                source=int(bundle['sourceInboundId']);item=by_source.get(source,{})
+                db.execute('''UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?
+                              WHERE node_id=? AND local_inbound_id=?''',
+                           (int(item.get('remoteInboundId') or 0),now,str(item.get('error') or '')[:300],now,node_id,source))
+        return {'latency_ms':ms,'items':doc['items'],'core':doc.get('core',{}),'synced_at':now}
