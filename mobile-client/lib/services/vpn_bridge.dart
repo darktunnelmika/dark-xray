@@ -48,6 +48,17 @@ class VpnBridge {
     return status();
   }
 
+  Future<List<String>> convertXrayJsonToShareLinks(String xrayJson) async {
+    final links = await _channel.invokeMethod<List<dynamic>>(
+      'convertXrayJsonToShareLinks',
+      {'xrayJson': xrayJson},
+    );
+    return (links ?? const <dynamic>[])
+        .map((item) => item.toString())
+        .where((item) => item.trim().isNotEmpty)
+        .toList(growable: false);
+  }
+
   Future<VpnStatus> disconnect() async {
     await _channel.invokeMethod<void>('disconnect');
     for (var i = 0; i < 12; i++) {
