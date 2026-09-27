@@ -158,5 +158,12 @@ test('Node tunnel editor keeps a direct sibling contract in source',()=>{
   assert.match(src,/nodeForRuntime/);
   assert.match(src,/node\.data_address/);
   assert.match(src,/endpointType==='tunnel'/);
-  assert.match(src,/Direct sibling/);
+  assert.match(src,/directExists/);
+});
+
+test('Tunnel Host cards reflect the Inbound Tunnel Port contract',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','hosts-v2.js'),'utf8');
+  for(const token of ['tunnelContract','tunnelPorts','WAITING PORT','PORT MISMATCH','Expected Tunnel Port'])
+    assert.ok(src.includes(token),token);
+  assert.ok(src.includes('runtime and port match the Tunnel Port configured'));
 });
