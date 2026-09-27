@@ -605,6 +605,21 @@ class CoreEngine:
             if not isinstance(v[key],dict):raise CoreError(key+' must be an object')
         v.setdefault('panelMeta',{})
         if not isinstance(v['panelMeta'],dict):raise CoreError('panelMeta must be an object')
+        raw_tunnel_ports=v['panelMeta'].get('tunnelPorts',{})
+        if raw_tunnel_ports is None:raw_tunnel_ports={}
+        if not isinstance(raw_tunnel_ports,dict) or len(raw_tunnel_ports)>257:
+            raise CoreError('Tunnel Ports must be a runtime-to-port object')
+        tunnel_ports={}
+        for runtime,port in raw_tunnel_ports.items():
+            if not isinstance(runtime,str) or (runtime!='local' and not re.fullmatch(r'node:[A-Za-z0-9_.@+-]{1,128}',runtime)):
+                raise CoreError('Invalid Tunnel Port runtime')
+            if type(port)is not int or not 1<=port<=65535:
+                raise CoreError('Tunnel Port must be between 1 and 65535')
+            if port==v['port']:raise CoreError('Tunnel Port must differ from the Direct inbound port')
+            if port in self.config.protected_ports:raise CoreError('Tunnel Port overlaps a protected management port')
+            tunnel_ports[runtime]=port
+        if tunnel_ports:v['panelMeta']['tunnelPorts']=dict(sorted(tunnel_ports.items()))
+        else:v['panelMeta'].pop('tunnelPorts',None)
         if len(json.dumps(v['panelMeta']))>20000:raise CoreError('panelMeta too large')
         if v['settings'].get('clients') or v['settings'].get('accounts'):
             raise CoreError('Credentials must be managed through DARK clients, not hidden in inbound JSON')
@@ -617,10 +632,27 @@ class CoreEngine:
             old=self.inbound(i)
             if old['protocol']!=v['protocol'] and any(i in c['inboundIds'] for c in self.clients()):
                 raise CoreError('Detach clients before switching an inbound protocol')
+        def meta_ports(row):
+            meta=row.get('panelMeta',{}) if isinstance(row.get('panelMeta',{}),dict) else {}
+            raw=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            return {str(k):int(p) for k,p in raw.items() if isinstance(k,str) and type(p)is int and 1<=p<=65535}
+        def deployed_on(row,runtime):
+            meta=row.get('panelMeta',{}) if isinstance(row.get('panelMeta',{}),dict) else {}
+            if runtime=='local':return meta.get('deployLocal',True) is not False
+            return runtime in set(meta.get('deploymentTargets',[]) if isinstance(meta.get('deploymentTargets',[]),list) else [])
         for r in current:
             if r['id']==i:continue
             if r['tag']==v['tag']:raise CoreError('Duplicate inbound tag')
             if r['port']==v['port']:raise CoreError('Duplicate port; this release uses conservative collision checks')
+            other_ports=meta_ports(r)
+            for runtime,port in tunnel_ports.items():
+                if other_ports.get(runtime)==port:
+                    raise CoreError('Duplicate Tunnel Port on '+runtime)
+                if deployed_on(r,runtime) and int(r['port'])==port:
+                    raise CoreError('Tunnel Port collides with another inbound on '+runtime)
+            for runtime,port in other_ports.items():
+                if deployed_on(v,runtime) and int(v['port'])==port:
+                    raise CoreError('Inbound port collides with an existing Tunnel Port on '+runtime)
         with self.store.transaction() as db:
             if i is None:i=db.execute('INSERT INTO core_inbounds(body) VALUES(?)',(json.dumps(v),)).lastrowid
             else:db.execute('UPDATE core_inbounds SET body=? WHERE id=?',(json.dumps(v),i))
@@ -825,7 +857,7 @@ class CoreEngine:
         # Read local tables directly; compiling never queries an external panel.
         with self.store.lock:rows=self.store.db.execute('SELECT body,inbounds FROM core_clients').fetchall()
         cs=[(json.loads(r[0]),set(json.loads(r[1]))) for r in rows]
-        result=[]
+        result=[];shadow_tags={}
         for r in self.inbounds():
             if not r['enable']:continue
             meta=r.get('panelMeta',{}) if isinstance(r.get('panelMeta'),dict) else {}
@@ -851,17 +883,34 @@ class CoreEngine:
             elif proto in ('socks','http'):
                 settings['accounts']=users
                 if proto=='socks':settings['auth']='password'
-                if not users:continue  # never turn a no-user customer inbound into an open proxy
-            result.append({'tag':r['tag'],'listen':r['listen'],'port':r['port'],'protocol':proto,
-                           'settings':settings,'streamSettings':copy.deepcopy(r['streamSettings']),
-                           'sniffing':copy.deepcopy(r['sniffing'])})
+                if not users:continue
+            primary={'tag':r['tag'],'listen':r['listen'],'port':r['port'],'protocol':proto,
+                     'settings':settings,'streamSettings':copy.deepcopy(r['streamSettings']),
+                     'sniffing':copy.deepcopy(r['sniffing'])}
+            result.append(primary)
+            raw_ports=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            tunnel_port=raw_ports.get('local')
+            if type(tunnel_port)is int and 1<=tunnel_port<=65535:
+                shadow=copy.deepcopy(primary)
+                shadow_tag='dark-tunnel-'+str(r['id'])+'-'+str(tunnel_port)
+                shadow['tag']=shadow_tag;shadow['port']=int(tunnel_port)
+                result.append(shadow);shadow_tags.setdefault(str(r['tag']),[]).append(shadow_tag)
         policy=self.section('policy');levels=policy.setdefault('levels',{});level=levels.setdefault('0',{})
         level.update({'statsUserUplink':True,'statsUserDownlink':True})
         policy.setdefault('system',{}).update({'statsInboundUplink':True,'statsInboundDownlink':True})
+        routing=copy.deepcopy(self.section('routing'))
+        if shadow_tags and isinstance(routing,dict) and isinstance(routing.get('rules'),list):
+            for rule in routing['rules']:
+                if not isinstance(rule,dict) or not isinstance(rule.get('inboundTag'),list):continue
+                expanded=list(rule['inboundTag'])
+                for tag in list(rule['inboundTag']):
+                    for shadow in shadow_tags.get(str(tag),[]):
+                        if shadow not in expanded:expanded.append(shadow)
+                rule['inboundTag']=expanded
         cfg={'log':{'access':str(self.runtime/'access.log'),'error':str(self.runtime/'error.log'),'loglevel':'warning'},
              'api':{'tag':'dark-api','listen':'127.0.0.1:'+str(self.config.xray_api_port),'services':['StatsService','HandlerService','LoggerService']},
              'stats':{},'policy':policy,'inbounds':result,'outbounds':self.section('outbounds'),
-             'routing':self.section('routing'),'dns':self.section('dns')}
+             'routing':routing,'dns':self.section('dns')}
         if self.section('observatory'):cfg['observatory']=self.section('observatory')
         return cfg
 
