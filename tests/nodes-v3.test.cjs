@@ -26,10 +26,16 @@ test('Node Manage keeps daily operations in the Hub',()=>{
 });
 
 test('Inbound editor is the primary deployment target selector',()=>{
-  for(const token of ['Deployment Targets','name="deployLocal"','name="deployNode"','/deployments','Clients follow this inbound automatically'])
+  for(const token of ['Deployment Targets + Tunnel Ports','name="deployLocal"','name="deployNode"','/deployments','Direct is always independent'])
     assert.ok(inbound.includes(token),token);
 });
 
+test('Inbound deployment cards own per-target Tunnel Port activation',()=>{
+  for(const token of ['name="tunnelEnable"','name="tunnelPort"','tunnelPorts','WAITING HOST','PORT MISMATCH','deploymentTunnelPorts'])
+    assert.ok(inbound.includes(token),token);
+  assert.ok(inbound.includes("runtime='node:'+n.id"));
+  assert.ok(inbound.includes('Direct is always independent'));
+});
 test('Detailed orchestration remains available but is no longer the main surface',()=>{
   for(const token of ['nv5-advanced','Deployment & failover details','Subscription Orchestrator','subscription_included','subscription_reason'])
     assert.ok(src.includes(token),token);
