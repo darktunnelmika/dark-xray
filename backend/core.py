@@ -888,10 +888,11 @@ class CoreEngine:
         return copy.deepcopy(out) if isinstance(out,dict) else None
 
     def runtime_outbounds(self,scope:str='hub')->list[dict]:
-        rows=[copy.deepcopy(x) for x in self.section('outbounds') if isinstance(x,dict) and str(x.get('tag') or '')!='warp']
+        base=[copy.deepcopy(x) for x in self.section('outbounds') if isinstance(x,dict)]
         warp=self.warp_profile(scope)
-        if warp is not None:
-            warp['tag']='warp';rows.append(warp)
+        if warp is None:return base
+        rows=[x for x in base if str(x.get('tag') or '')!='warp']
+        warp['tag']='warp';rows.append(warp)
         return rows
 
     def traffic_matrix_rows(self,scope:str|None=None,inbound_id:int|None=None)->list[dict]:
