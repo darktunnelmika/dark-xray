@@ -551,6 +551,8 @@ def test_failover_does_not_clone_local_tunnel_endpoint(env):
  assert links['failover'][0]['endpointType']=='direct'
  assert 'data-edge-tunnel.example.com' in links['failover'][0]['uri']
  assert 'TUNNEL ONLY' not in links['failover'][0]['remark']
+ assert 'EDGE TUNNEL' in links['failover'][0]['remark']
+ assert '[edge-tunnel]' not in links['failover'][0]['remark']
 
 
 def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
