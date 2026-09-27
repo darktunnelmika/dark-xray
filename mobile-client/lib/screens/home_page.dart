@@ -33,15 +33,18 @@ class _HomePageState extends State<HomePage>
 
   late final AnimationController _pulse;
   Timer? _statusTimer;
+  Timer? _refreshTimer;
   List<ProxyProfile> _profiles = const [];
   DarkXraySettings _settings = const DarkXraySettings();
   int _selected = 0;
   bool _connected = false;
   bool _vpnBusy = false;
+  bool _pingingAll = false;
   bool _loading = true;
   String _sourceMeta = 'No subscription loaded';
   String _coreVersion = '';
   String _coreError = '';
+  VpnStatus? _vpnStatus;
 
   Color get _accent => _connected ? CyberPalette.cyan : CyberPalette.red;
 
@@ -62,27 +65,29 @@ class _HomePageState extends State<HomePage>
       const Duration(seconds: 2),
       (_) => _pollVpnState(),
     );
+    _refreshTimer = Timer.periodic(
+      const Duration(minutes: 15),
+      (_) => _maybeAutoRefreshSubscription(),
+    );
   }
 
   Future<void> _pollVpnState() async {
     try {
       final status = await _vpn.status();
       if (!mounted) return;
-      if (_connected != status.running ||
-          _coreVersion != status.version ||
-          _coreError != status.error) {
-        setState(() {
-          _connected = status.running;
-          _coreVersion = status.version;
-          _coreError = status.error;
-        });
-      }
+      setState(() {
+        _vpnStatus = status;
+        _connected = status.running;
+        _coreVersion = status.version;
+        _coreError = status.error;
+      });
     } catch (_) {}
   }
 
   @override
   void dispose() {
     _statusTimer?.cancel();
+    _refreshTimer?.cancel();
     _pulse.dispose();
     super.dispose();
   }
@@ -93,6 +98,7 @@ class _HomePageState extends State<HomePage>
       final settings = await _settingsStore.load();
       final lastSync = await _profileStore.loadLastSync();
       final source = await _profileStore.loadSourceUrl();
+      final selectedId = await _profileStore.loadSelectedProfileId();
 
       VpnStatus? vpnStatus;
       try {
@@ -103,13 +109,22 @@ class _HomePageState extends State<HomePage>
       setState(() {
         _profiles = profiles;
         _settings = settings;
-        _selected = profiles.isEmpty ? 0 : _selected.clamp(0, profiles.length - 1);
+        final restoredIndex = selectedId == null
+            ? -1
+            : profiles.indexWhere((profile) => profile.id == selectedId);
+        _selected = profiles.isEmpty
+            ? 0
+            : restoredIndex >= 0
+                ? restoredIndex
+                : _selected.clamp(0, profiles.length - 1);
+        _vpnStatus = vpnStatus;
         _connected = vpnStatus?.running ?? false;
         _coreVersion = vpnStatus?.version ?? '';
         _coreError = vpnStatus?.error ?? '';
         _sourceMeta = _formatSourceMeta(source, lastSync, profiles.length);
         _loading = false;
       });
+      unawaited(_maybeAutoRefreshSubscription());
     } catch (error) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -165,6 +180,7 @@ class _HomePageState extends State<HomePage>
               allowLan: _settings.allowLan,
               dns: _settings.dns,
               routingMode: _settings.routingMode,
+              autoReconnect: _settings.autoReconnect,
             );
 
       if (!mounted) return;
@@ -223,6 +239,9 @@ class _HomePageState extends State<HomePage>
       _selected = merged.isEmpty ? 0 : merged.length - 1;
       _sourceMeta = merged.length.toString() + ' local profiles';
     });
+    if (merged.isNotEmpty) {
+      await _profileStore.saveSelectedProfileId(merged[_selected].id);
+    }
     _show('Imported ' + incoming.length.toString() + ' profile(s).');
   }
 
@@ -241,6 +260,9 @@ class _HomePageState extends State<HomePage>
           _profiles = profiles;
           _selected = 0;
         });
+        if (profiles.isNotEmpty) {
+          await _profileStore.saveSelectedProfileId(profiles.first.id);
+        }
         await _reloadAll();
         _show('Subscription imported: ' + profiles.length.toString() + ' profiles.');
       } else {
@@ -286,6 +308,9 @@ class _HomePageState extends State<HomePage>
         _profiles = profiles;
         _selected = 0;
       });
+      if (profiles.isNotEmpty) {
+        await _profileStore.saveSelectedProfileId(profiles.first.id);
+      }
       await _reloadAll();
       _show('Subscription refreshed: ' + profiles.length.toString() + ' profiles.');
     } on SubscriptionException catch (error) {
