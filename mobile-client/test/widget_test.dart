@@ -2,11 +2,12 @@ import 'package:dark_xray_client/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('renders DARK XRAY home', (tester) async {
+  testWidgets('renders DarkXray cyber home', (tester) async {
     await tester.pumpWidget(const DarkXrayApp());
 
-    expect(find.text('DARK XRAY'), findsOneWidget);
-    expect(find.text('DISCONNECTED'), findsOneWidget);
-    expect(find.text('Subscription'), findsOneWidget);
+    expect(find.text('READY'), findsOneWidget);
+    expect(find.text('DARKXRAY NETWORK'), findsOneWidget);
+    expect(find.text('CLIPBOARD'), findsOneWidget);
+    expect(find.text('QR SCAN'), findsOneWidget);
   });
 }
