@@ -1,0 +1,58 @@
+name: Mobile Client Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/dark-xray-client-bootstrap
+    paths:
+      - "mobile-client/**"
+      - ".github/workflows/mobile-client-android.yml"
+
+jobs:
+  build-debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create temporary Android host
+        run: |
+          rm -rf .mobile-build
+          flutter create             --platforms=android             --project-name=dark_xray_client             --org=com.darkxray             .mobile-build
+          cp mobile-client/pubspec.yaml .mobile-build/pubspec.yaml
+          cp mobile-client/analysis_options.yaml .mobile-build/analysis_options.yaml
+          rm -rf .mobile-build/lib
+          cp -R mobile-client/lib .mobile-build/lib
+
+      - name: Resolve dependencies
+        working-directory: .mobile-build
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: .mobile-build
+        run: flutter analyze
+
+      - name: Test
+        working-directory: .mobile-build
+        run: flutter test
+
+      - name: Build debug APK
+        working-directory: .mobile-build
+        run: flutter build apk --debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dark-xray-client-debug-apk
+          path: .mobile-build/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
