@@ -1240,9 +1240,30 @@ class CoreEngine:
             ib=self.inbound(i)
             if not ib['enable']:continue
             configured=[h for h in self.section('hosts') if h['inboundId']==i]
+            meta=ib.get('panelMeta',{}) if isinstance(ib.get('panelMeta',{}),dict) else {}
+            raw_tunnel_ports=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            tunnel_ports={str(k):int(v) for k,v in raw_tunnel_ports.items()
+                          if isinstance(k,str) and type(v)is int and 1<=v<=65535}
             if configured:
-                hs=[h for h in configured if h.get('enable',True) and host_format not in h.get('excludeFromSubTypes',[])
-                    and (runtime_ready is None or i in runtime_ready.get(h.get('runtime','local') or 'local',set()))]
+                candidates=[h for h in configured if h.get('enable',True)
+                            and host_format not in h.get('excludeFromSubTypes',[])
+                            and (runtime_ready is None or i in runtime_ready.get(h.get('runtime','local') or 'local',set()))]
+                hs=[]
+                for h in candidates:
+                    runtime=h.get('runtime','local') or 'local'
+                    endpoint_type=h.get('endpointType','direct') or 'direct'
+                    if endpoint_type=='tunnel':
+                        expected=int(tunnel_ports.get(runtime) or 0)
+                        actual=int(h.get('port') or 0)
+                        if not expected:
+                            warnings.append('Tunnel endpoint '+str(h.get('remark') or h.get('address') or runtime)+
+                                            ' is waiting for Tunnel Port on '+runtime)
+                            continue
+                        if actual!=expected:
+                            warnings.append('Tunnel endpoint '+str(h.get('remark') or h.get('address') or runtime)+
+                                            ' port mismatch: expected '+str(expected)+', got '+str(actual))
+                            continue
+                    hs.append(h)
                 # A local Tunnel/CDN endpoint is an additional customer route, not
                 # a replacement for the Hub's direct inbound. Keep the implicit
                 # direct route unless an explicit local Direct endpoint exists
