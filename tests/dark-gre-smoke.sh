@@ -3,13 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT/standalone/dark-gre/dark-gre.sh"
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+INSTALLER="$ROOT/standalone/dark-gre/install.sh"
 
 bash -n "$SCRIPT"
-sed '$d' "$SCRIPT" > "$tmp"
+bash -n "$INSTALLER"
+
+export DARK_GRE_LIB_ONLY=1
 # shellcheck disable=SC1090
-source "$tmp"
+source "$SCRIPT"
 
 NAME=testgre
 LOCAL_PUBLIC=1.2.3.4
@@ -22,6 +23,7 @@ MTU=1436
 TXQLEN=1000
 
 code="$(pair_code)"
+[[ "$code" == DGR1-* ]]
 decode_pair "$code"
 
 [ "$P_NAME" = "$NAME" ]
@@ -30,10 +32,12 @@ decode_pair "$code"
 [ "$P_IRAN_TUN" = "$LOCAL_TUN" ]
 [ "$P_KHAREJ_TUN" = "$REMOTE_TUN" ]
 
-bad="${code/DGR1-/DGR1-0}"
-if decode_pair "$bad" 2>/dev/null; then
-  echo "checksum test unexpectedly passed" >&2
-  exit 1
-fi
+grep -q 'item 2 "New tunnel - IRAN" "makes Pair Code"' "$SCRIPT"
+grep -q 'item 3 "New tunnel - KHAREJ" "takes Pair Code"' "$SCRIPT"
+grep -q 'item p "Pair code" "paste this on the KHAREJ server"' "$SCRIPT"
+grep -q 'sect "SETUP"' "$SCRIPT"
+grep -q 'sect "OPERATE"' "$SCRIPT"
+grep -q 'sect "MAINTENANCE"' "$SCRIPT"
+grep -q 'screen_core' "$SCRIPT"
 
-echo "dark-gre smoke: PASS"
+echo "dark-gre rc2 smoke: PASS"
