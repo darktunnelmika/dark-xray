@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastapi.testclient import TestClient
 from auth import Auth
@@ -54,3 +55,30 @@ def test_custom_policy_delegates_to_advanced_routing(env):
  r=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"custom"})
  assert r.status_code==200,r.text
  assert not [x for x in eng.routing_for_scope("hub")["rules"] if x.get("ruleTag","").startswith("dark-matrix-")]
+
+
+def _seed_warp(store):
+ profile={"tag":"warp","protocol":"wireguard","settings":{"secretKey":"secret","address":["172.16.0.2/32"],
+          "peers":[{"publicKey":"peer","endpoint":"162.159.192.1:2408"}]}}
+ with store.transaction() as db:
+  db.execute("INSERT INTO warp_profiles(scope,outbound_json,device_id,updated_at) VALUES(?,?,?,1)",
+             ("hub",json.dumps(profile),"test-device"))
+
+def test_warp_policy_refuses_unverified_path(env,monkeypatch):
+ import server
+ store,eng,c,iid=env;_seed_warp(store)
+ monkeypatch.setattr(server,"probe_outbounds",lambda *a,**k:[{"success":False,"warpVerified":False,"lossPercent":100.0}])
+ r=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"warp_ai"})
+ assert r.status_code==409
+ with store.lock:
+  assert store.db.execute("SELECT 1 FROM traffic_matrix WHERE inbound_id=?",(iid,)).fetchone() is None
+
+def test_warp_policy_applies_only_after_verified_probe(env,monkeypatch):
+ import server
+ store,eng,c,iid=env;_seed_warp(store)
+ monkeypatch.setattr(server,"probe_outbounds",lambda *a,**k:[{"success":True,"warpVerified":True,"delayMs":45.0,"lossPercent":0.0,"jitterMs":2.0}])
+ r=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"warp_ai"})
+ assert r.status_code==200,r.text
+ with store.lock:
+  row=store.db.execute("SELECT policy FROM traffic_matrix WHERE scope='hub' AND inbound_id=? AND access_path='direct'",(iid,)).fetchone()
+ assert row and row["policy"]=="warp_ai"
