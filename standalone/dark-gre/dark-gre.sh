@@ -287,6 +287,9 @@ action="${1:-up}"; name="${2:-}"
 [ -n "$name" ] || { echo "missing tunnel name" >&2; exit 2; }
 conf="$TUN_DIR/$name/meta.conf"; [ -r "$conf" ] || { echo "missing $conf" >&2; exit 3; }
 . "$conf"
+SECURITY="${SECURITY:-plain}"; IPSEC_PSK="${IPSEC_PSK:-}"; GRE_KEY="${GRE_KEY:-0}"
+MTU_MODE="${MTU_MODE:-custom}"; PATH_MTU="${PATH_MTU:-0}"; RESTART_EVERY="${RESTART_EVERY:-off}"
+PEER_ID="${PEER_ID:-$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | tr '\n' '|' | sha256sum | cut -c1-12)}"
 nat_chain="DGRN_${ID}"; post_chain="DGRP_${ID}"; fw_chain="DGRF_${ID}"; mss_chain="DGRM_${ID}"
 remove_chain(){ local table="$1" chain="$2" hook="$3"; iptables -t "$table" -D "$hook" -j "$chain" 2>/dev/null || true; iptables -t "$table" -F "$chain" 2>/dev/null || true; iptables -t "$table" -X "$chain" 2>/dev/null || true; }
 remove_fw(){
@@ -325,7 +328,11 @@ case "$action" in
   up)
     modprobe ip_gre 2>/dev/null || true; secure_ready
     ip tunnel del "$IFNAME" 2>/dev/null || true
-    ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64 key "$GRE_KEY"
+    if [ "$GRE_KEY" = 0 ] || [ -z "$GRE_KEY" ]; then
+      ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64
+    else
+      ip tunnel add "$IFNAME" mode gre local "$LOCAL_PUBLIC" remote "$REMOTE_PUBLIC" ttl 64 key "$GRE_KEY"
+    fi
     ip addr add "$LOCAL_TUN/$PREFIX" dev "$IFNAME"; ip link set dev "$IFNAME" mtu "$MTU" txqueuelen "$TXQLEN" up
     sysctl -q -w net.ipv4.ip_forward=1 >/dev/null; apply_fw ;;
   down) remove_fw; ip link set dev "$IFNAME" down 2>/dev/null || true; ip tunnel del "$IFNAME" 2>/dev/null || true ;;
@@ -422,6 +429,26 @@ EOF
   systemctl enable --now strongswan-starter >/dev/null 2>&1 || systemctl enable --now strongswan >/dev/null 2>&1 || true
   ipsec rereadsecrets >/dev/null 2>&1 || true; ipsec reload >/dev/null 2>&1 || true
 }
+
+migrate_existing_tunnels(){
+  local f
+  shopt -s nullglob
+  for f in "$TUN_DIR"/*/meta.conf; do
+    grep -q '^SECURITY=' "$f" || printf 'SECURITY="plain"\n' >>"$f"
+    grep -q '^IPSEC_PSK=' "$f" || printf 'IPSEC_PSK=""\n' >>"$f"
+    grep -q '^GRE_KEY=' "$f" || printf 'GRE_KEY="0"\n' >>"$f"
+    grep -q '^MTU_MODE=' "$f" || printf 'MTU_MODE="custom"\n' >>"$f"
+    grep -q '^PATH_MTU=' "$f" || printf 'PATH_MTU="0"\n' >>"$f"
+    grep -q '^RESTART_EVERY=' "$f" || printf 'RESTART_EVERY="off"\n' >>"$f"
+    if ! grep -q '^PEER_ID=' "$f"; then
+      unset LOCAL_PUBLIC REMOTE_PUBLIC
+      . "$f" 2>/dev/null || continue
+      printf 'PEER_ID="%s"\n' "$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")" >>"$f"
+    fi
+  done
+  shopt -u nullglob
+}
+
 PARTIAL_TUNNEL=""
 discard_partial(){ [ -n "$PARTIAL_TUNNEL" ] || return 0; local p="$PARTIAL_TUNNEL"; PARTIAL_TUNNEL=""; [ -s "$TUN_DIR/$p/meta.conf" ] || rm -rf "${TUN_DIR:?}/$p"; }
 on_interrupt(){ trap - INT TERM; echo; discard_partial; warn "cancelled"; exit 130; }
@@ -566,7 +593,6 @@ new_kharej(){
   detected="$(public_ipv4)"; [ -n "$detected" ] && [ "$detected" != "$P_KHAREJ_PUBLIC" ] && warn "Pair Code expects $P_KHAREJ_PUBLIC but this server reports $detected"
   LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"; LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"; PREFIX="$P_PREFIX"
   PROFILE="$P_PROFILE"; MTU_MODE="$P_MTU_MODE"; PATH_MTU="$P_PATH_MTU"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"; GRE_KEY="$P_GRE_KEY"; SECURITY="$P_SECURITY"; IPSEC_PSK="$P_IPSEC_PSK"; RESTART_EVERY="$P_RESTART"
-  [ "$GRE_KEY" = 0 ] && GRE_KEY="$(gen_gre_key)"
   if [ "$SECURITY" = ipsec ]; then ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }; oldpsk="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"; [ -z "$oldpsk" ] || [ "$oldpsk" = "$IPSEC_PSK" ] || { bad "this peer already uses a different IPsec key"; pause; return; }; fi
   id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE=KHAREJ; ID="$id"; PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
   save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
