@@ -2,9 +2,9 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.10.0-rc10` — Draft / Test
+> وضعیت: `v0.11.0-rc11` — Draft / Test
 
-## تغییرات RC10
+## تغییرات RC11
 
 - Installer بعد از هر نصب/آپدیت **runtime repair** اجرا می‌کند تا unit/runner قدیمی باقی نماند
 - سرویس اصلی در Secure Mode در حالت **armed/active** می‌ماند و منتظر Peer fail نمی‌شود
@@ -176,7 +176,7 @@ ADVANCED
 - Speed responder
 - IPsec / XFRM status
 
-## نصب RC10
+## نصب RC11
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
@@ -210,4 +210,4 @@ darkgre
 /etc/sysctl.d/99-dark-gre.conf
 ```
 
-RC10 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
+RC11 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
