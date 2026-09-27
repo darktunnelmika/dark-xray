@@ -35,6 +35,35 @@ def test_host_v3_clash_consumes_mihomo_ip_alpn_and_skip_verify(env):
     assert '"alpn":' in r.text and '"h2"' in r.text and '"http/1.1"' in r.text
 
 
+def test_local_tunnel_adds_direct_sibling_without_replacing_inbound_route(env):
+    store,engine,c=env;iid,url=setup_client(c,'local-tunnel-user')
+    tunnel=host(iid,runtime='local',endpointType='tunnel',
+                address='iran.example.test',port=20001,remark='TUNNEL',
+                security='same',sni='',host='',path='',alpn='',fingerprint='',
+                allowInsecure=False,finalMask='',mihomoIpVersion='')
+    assert c.put('/api/settings/hosts',json={'value':[tunnel]}).status_code==200
+    out=engine.links('local-tunnel-user',runtime_ready={'local':{iid}})
+    assert [(x['endpointType'],x['runtime']) for x in out['links']]==[
+        ('direct','local'),('tunnel','local')]
+    direct=urlsplit(out['links'][0]['uri'])
+    tunnel_link=urlsplit(out['links'][1]['uri'])
+    assert direct.hostname=='vpn.example.test' and direct.port==IB['port']
+    assert tunnel_link.hostname=='iran.example.test' and tunnel_link.port==20001
+
+
+def test_disabled_explicit_local_direct_suppresses_implicit_fallback(env):
+    store,engine,c=env;iid,url=setup_client(c,'local-tunnel-disabled-direct')
+    direct=host(iid,runtime='local',endpointType='direct',
+                address='direct.example.test',port=IB['port'],remark='DIRECT',enable=False)
+    tunnel=host(iid,runtime='local',endpointType='tunnel',
+                address='iran.example.test',port=20001,remark='TUNNEL',
+                security='same',sni='',host='',path='',alpn='',fingerprint='',
+                allowInsecure=False,finalMask='',mihomoIpVersion='')
+    assert c.put('/api/settings/hosts',json={'value':[direct,tunnel]}).status_code==200
+    out=engine.links('local-tunnel-disabled-direct',runtime_ready={'local':{iid}})
+    assert [(x['endpointType'],x['runtime']) for x in out['links']]==[('tunnel','local')]
+
+
 def test_host_v3_format_exclusion_has_no_direct_fallback(env):
     store,engine,c=env;iid,url=setup_client(c)
     assert c.put('/api/settings/hosts',json={'value':[host(iid,excludeFromSubTypes=['clash'])]}).status_code==200

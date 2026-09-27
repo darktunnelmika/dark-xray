@@ -1243,6 +1243,20 @@ class CoreEngine:
             if configured:
                 hs=[h for h in configured if h.get('enable',True) and host_format not in h.get('excludeFromSubTypes',[])
                     and (runtime_ready is None or i in runtime_ready.get(h.get('runtime','local') or 'local',set()))]
+                # A local Tunnel/CDN endpoint is an additional customer route, not
+                # a replacement for the Hub's direct inbound. Keep the implicit
+                # direct route unless an explicit local Direct endpoint exists
+                # (enabled or disabled). A disabled explicit Direct therefore
+                # remains an intentional opt-out instead of being resurrected.
+                has_local_tunnel=any((h.get('runtime','local') or 'local')=='local'
+                                     and (h.get('endpointType','direct') or 'direct')=='tunnel'
+                                     for h in configured)
+                has_local_direct=any((h.get('runtime','local') or 'local')=='local'
+                                     and (h.get('endpointType','direct') or 'direct')!='tunnel'
+                                     for h in configured)
+                local_ready=runtime_ready is None or i in runtime_ready.get('local',set())
+                if has_local_tunnel and not has_local_direct and local_ready:
+                    hs.insert(0,{})
             else:
                 hs=[{}] if runtime_ready is None or i in runtime_ready.get('local',set()) else []
             for host in hs:
