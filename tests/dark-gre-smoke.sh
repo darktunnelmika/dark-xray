@@ -24,7 +24,7 @@ export DARK_GRE_LIB_ONLY=1
 # shellcheck disable=SC1090
 source "$SCRIPT"
 
-# Render runtime units in a temp directory and verify the RC7 lifecycle.
+# Render runtime units in a temp directory and verify the RC8 lifecycle.
 runtime="$tmpdir/runtime"
 mkdir -p "$runtime"
 RUNNER="$runtime/darkgre-runner"
@@ -99,8 +99,13 @@ grep -q 'item r "Speed responder"' "$SCRIPT"
 grep -q 'item 6 "Path MTU scan"' "$SCRIPT"
 grep -q 'TCPMSS --clamp-mss-to-pmtu' "$SCRIPT"
 grep -q 'aes256gcm16' "$SCRIPT"
-grep -q 'auto=route' "$SCRIPT"
-grep -q 'closeaction=restart' "$SCRIPT"
+grep -q 'forceencaps=yes' "$SCRIPT"
+grep -q 'fragmentation=yes' "$SCRIPT"
+grep -q 'reauth=no' "$SCRIPT"
+grep -q 'start_mode=start' "$SCRIPT"
+grep -q 'start_mode=add' "$SCRIPT"
+grep -q 'dpd_mode=restart' "$SCRIPT"
+grep -q 'dpd_mode=clear' "$SCRIPT"
 grep -q 'overhead=100' "$SCRIPT"
 grep -q 'IPSEC_DIR="/etc/ipsec.d/dark-gre"' "$SCRIPT"
 grep -q 'IPSEC_SECRETS="/etc/ipsec.dark-gre.secrets"' "$SCRIPT"
@@ -113,4 +118,4 @@ grep -q 'sect "SETUP"' "$SCRIPT"
 grep -q 'sect "OPERATE"' "$SCRIPT"
 grep -q 'sect "MAINTENANCE"' "$SCRIPT"
 
-echo "dark-gre rc7 stable secure GRE + policy gate + MTU + pairing smoke: PASS"
+echo "dark-gre rc8 UDP4500 + single initiator + policy gate + MTU smoke: PASS"
