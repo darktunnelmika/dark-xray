@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.9.0-rc9"
+SCRIPT_VER="0.10.0-rc10"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -160,17 +160,17 @@ public_ipv4(){
 
 ensure_deps(){
   local need=0 c
-  for c in curl ip iptables systemctl base64 sha256sum awk sed grep ping openssl; do
+  for c in curl ip iptables systemctl base64 sha256sum awk sed grep ping openssl flock; do
     command -v "$c" >/dev/null 2>&1 || need=1
   done
   if [ "$need" -ne 0 ]; then
     info "installing GRE dependencies"
     if command -v apt-get >/dev/null 2>&1; then
       apt-get update -qq >/dev/null 2>&1
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl iproute2 iptables kmod coreutils ca-certificates iputils-ping openssl conntrack >/dev/null 2>&1
-    elif command -v dnf >/dev/null 2>&1; then dnf install -y curl iproute iptables kmod coreutils ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
-    elif command -v yum >/dev/null 2>&1; then yum install -y curl iproute iptables kmod coreutils ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
-    elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash curl iproute2 iptables kmod coreutils ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl iproute2 iptables kmod coreutils util-linux ca-certificates iputils-ping openssl conntrack >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then dnf install -y curl iproute iptables kmod coreutils util-linux ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then yum install -y curl iproute iptables kmod coreutils util-linux ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
+    elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash curl iproute2 iptables kmod coreutils util-linux ca-certificates iputils openssl conntrack-tools >/dev/null 2>&1
     else bad "supported package manager not found"; return 1; fi
   fi
   modprobe ip_gre >/dev/null 2>&1 || true
@@ -394,17 +394,21 @@ ensure_ike_initiator(){
   [ "${SECURITY:-plain}" = ipsec ] || return 0
   [ "${ROLE:-}" = IRAN ] || return 0
 
-  local st now last stamp="/run/darkgre-${ID}.ike-last"
+  local st now last stamp="/run/darkgre-${ID}.ike-last" lock="/run/darkgre-${ID}.ike-lock"
+  exec 9>"$lock"
+  flock -n 9 || return 0
+
   st="$(ike_state)"
-  case "$st" in established|connecting) return 0 ;; esac
+  case "$st" in established|connecting) flock -u 9; return 0 ;; esac
 
   now="$(date +%s)"
   last="$(cat "$stamp" 2>/dev/null || echo 0)"
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
-  [ $((now-last)) -ge 30 ] || return 0
+  if [ $((now-last)) -lt 30 ]; then flock -u 9; return 0; fi
 
   printf '%s\n' "$now" >"$stamp"
   timeout 5 ipsec up "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
+  flock -u 9
 }
 
 gre_exists(){ ip link show "$IFNAME" >/dev/null 2>&1; }
@@ -535,7 +539,7 @@ security_sync_all(){
   : >"$IPSEC_SECRETS"
   chmod 600 "$IPSEC_SECRETS"
 
-  local f pid conn start_mode dpd_mode close_mode
+  local f pid conn dpd_mode close_mode
   local conns=()
   declare -A done=()
   shopt -s nullglob
@@ -550,12 +554,9 @@ security_sync_all(){
     done[$pid]=1
     conn="darkgre-$pid"
     if [ "$ROLE" = IRAN ]; then
-      start_mode=start
       dpd_mode=restart
       close_mode=restart
-      conns+=("$conn")
     else
-      start_mode=add
       dpd_mode=clear
       close_mode=clear
     fi
@@ -582,7 +583,7 @@ conn $conn
   dpddelay=30s
   keyingtries=%forever
   mobike=no
-  auto=$start_mode
+  auto=add
 EOF
     chmod 600 "$IPSEC_DIR/$pid.conf"
     printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
@@ -603,10 +604,7 @@ EOF
   ipsec reload >/dev/null 2>&1 || true
   ipsec rereadsecrets >/dev/null 2>&1 || true
 
-  # Only IRAN initiates. KHAREJ stays responder-only. strongSwan owns later retries.
-  for conn in "${conns[@]}"; do
-    timeout 3 ipsec up "$conn" >/dev/null 2>&1 || true
-  done
+  # RC10: watcher on IRAN is the only IKE initiator.
 }
 
 migrate_existing_tunnels(){
@@ -1403,12 +1401,12 @@ repair_runtime(){
     # Kill stale RC3/early-RC4 restart loops before rearming with RC5 units.
     systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
+    [ "${SECURITY:-plain}" = ipsec ] && ipsec down "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
     systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
     systemctl disable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
 
     systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl start "darkgre@$n.service" >/dev/null 2>&1 || true
-    [ "${ROLE:-}" = IRAN ] && "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
     systemctl enable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
     "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
 
