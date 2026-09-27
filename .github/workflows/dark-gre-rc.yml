@@ -1,0 +1,27 @@
+name: DARK GRE RC
+
+on:
+  push:
+    branches:
+      - feature/dark-gre-direct-v1
+    paths:
+      - 'standalone/dark-gre/**'
+      - 'tests/dark-gre-smoke.sh'
+      - '.github/workflows/dark-gre-rc.yml'
+  pull_request:
+    paths:
+      - 'standalone/dark-gre/**'
+      - 'tests/dark-gre-smoke.sh'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash syntax
+        run: |
+          bash -n standalone/dark-gre/dark-gre.sh
+          bash -n standalone/dark-gre/install.sh
+          bash -n tests/dark-gre-smoke.sh
+      - name: Pair code smoke
+        run: bash tests/dark-gre-smoke.sh
