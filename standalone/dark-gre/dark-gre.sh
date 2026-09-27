@@ -472,7 +472,64 @@ save_meta(){
 service_start(){ systemctl enable --now "darkgre@$1.service" >/dev/null; }
 service_restart(){ systemctl restart "darkgre@$1.service"; }
 service_stop(){ systemctl stop "darkgre@$1.service" 2>/dev/null || true; }
+
 service_state(){ systemctl is-active "darkgre@$1.service" 2>/dev/null || echo inactive; }
+svc_uptime_short(){
+  local ts t n d
+  ts="$(systemctl show "darkgre@$1.service" -p ActiveEnterTimestamp --value 2>/dev/null)"
+  [ -n "$ts" ] || { echo "-"; return; }
+  t="$(date -d "$ts" +%s 2>/dev/null)" || { echo "-"; return; }; n="$(date +%s)"; d=$((n-t)); [ "$d" -lt 0 ] && { echo "-"; return; }
+  if [ "$d" -ge 86400 ]; then printf '%dd%02dh' $((d/86400)) $((d%86400/3600))
+  elif [ "$d" -ge 3600 ]; then printf '%dh%02dm' $((d/3600)) $((d%3600/60))
+  else printf '%dm%02ds' $((d/60)) $((d%60)); fi
+}
+human_bytes(){
+  local b="${1:-0}"
+  if [ "$b" -ge 1073741824 ] 2>/dev/null; then printf '%d.%01dG' $((b/1073741824)) $(((b%1073741824)*10/1073741824))
+  elif [ "$b" -ge 1048576 ] 2>/dev/null; then printf '%d.%01dM' $((b/1048576)) $(((b%1048576)*10/1048576))
+  elif [ "$b" -ge 1024 ] 2>/dev/null; then printf '%dK' $((b/1024))
+  else printf '%sB' "$b"; fi
+}
+tunnel_traffic(){
+  local n="$1" d="$TUN_DIR/$1" rx=0 tx=0
+  [ -r "$d/meta.conf" ] || { echo "0 0"; return; }; . "$d/meta.conf"
+  [ -d "/sys/class/net/$IFNAME" ] || { echo "0 0"; return; }
+  rx="$(cat "/sys/class/net/$IFNAME/statistics/rx_bytes" 2>/dev/null || echo 0)"
+  tx="$(cat "/sys/class/net/$IFNAME/statistics/tx_bytes" 2>/dev/null || echo 0)"
+  echo "$rx $tx"
+}
+ipsec_state(){
+  local d="$TUN_DIR/$1"; [ -r "$d/meta.conf" ] || { echo "-"; return; }; . "$d/meta.conf"
+  [ "${SECURITY:-plain}" = ipsec ] || { echo plain; return; }
+  command -v ipsec >/dev/null 2>&1 || { echo missing; return; }
+  ipsec status "darkgre-$PEER_ID" 2>/dev/null | grep -qi ESTABLISHED && echo encrypted || echo down
+}
+config_fingerprint(){
+  local n="$1" d="$TUN_DIR/$1" pubs inns ph sec
+  . "$d/meta.conf"
+  pubs="$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | paste -sd, -)"
+  inns="$(printf '%s\n%s\n' "$LOCAL_TUN" "$REMOTE_TUN" | sort | paste -sd, -)"
+  ph="$(printf '%s' "${IPSEC_PSK:-}" | sha256sum | cut -c1-12)"
+  sec="${SECURITY:-plain}"
+  printf '%s' "$pubs|$inns|$PREFIX|$PROFILE|$MTU|$GRE_KEY|$sec|$ph" | sha256sum | cut -c1-20
+}
+health_check(){
+  header "HEALTH CHECK"
+  local d st rx tx okn=0 badn=0
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*; do
+    [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; st="$(service_state "$NAME")"
+    read -r rx tx <<<"$(tunnel_traffic "$NAME")"
+    if [ "$st" = active ] && ip link show "$IFNAME" >/dev/null 2>&1 && ping -c1 -W1 "$REMOTE_TUN" >/dev/null 2>&1; then
+      ok "$NAME  $ROLE  peer ok  mtu=$MTU  security=$(ipsec_state "$NAME")  traffic $(human_bytes "$rx")/$(human_bytes "$tx")"; okn=$((okn+1))
+    else
+      bad "$NAME  state=$st  peer=$REMOTE_TUN  security=$(ipsec_state "$NAME")"; badn=$((badn+1))
+    fi
+  done
+  shopt -u nullglob
+  echo; info "healthy $okn   problem $badn"
+}
+
 
 choose_profile(){
   echo; top; sect "PROFILE"; blank
@@ -638,35 +695,32 @@ status_tunnel(){
 }
 
 add_port_menu(){
-  local n="$1" d="$TUN_DIR/$n" p proto target
+  local n="$1" d="$TUN_DIR/$1" p proto target
   . "$d/meta.conf"; [ "$ROLE" = IRAN ] || { warn "forward ports are managed on IRAN"; return; }
-  ask "Listen port on IRAN" ""; p="$ANS"; valid_port "$p" || { warn "invalid port"; return; }
+  ask "Listen port on IRAN"; p="$ANS"; valid_port "$p" || { warn "invalid port"; return; }
   ask "Protocol tcp/udp/both" "tcp"; proto="${ANS,,}"
   ask "Target port on KHAREJ" "$p"; target="$ANS"; valid_port "$target" || { warn "invalid port"; return; }
-  case "$proto" in
-    tcp|udp) add_port_noninteractive "$n" "$proto" "$p" "$target" ;;
+  case "$proto" in tcp|udp) add_port_noninteractive "$n" "$proto" "$p" "$target" ;;
     both) add_port_noninteractive "$n" tcp "$p" "$target"; add_port_noninteractive "$n" udp "$p" "$target" ;;
-    *) warn "invalid protocol"; return ;;
-  esac
-  "$RUNNER" reload-fw "$n" && ok "port map applied"
+    *) warn "invalid protocol"; return ;; esac
+  ok "port map added - press Apply to activate"
 }
 
 remove_port_menu(){
-  local n="$1" d="$TUN_DIR/$n" line tmp
+  local n="$1" d="$TUN_DIR/$1" line tmp
   . "$d/meta.conf"; [ "$ROLE" = IRAN ] || { warn "forward ports are managed on IRAN"; return; }
   [ -s "$d/ports.list" ] || { warn "no ports"; return; }
   nl -ba "$d/ports.list" | sed 's/^/  /'
-  ask "Line number to remove" ""; line="$ANS"; [[ "$line" =~ ^[0-9]+$ ]] || return
+  ask "Line number to remove"; line="$ANS"; [[ "$line" =~ ^[0-9]+$ ]] || return
   tmp="$(mktemp)"; awk -v n="$line" 'NR!=n' "$d/ports.list" >"$tmp"; install -m 600 "$tmp" "$d/ports.list"; rm -f "$tmp"
-  "$RUNNER" reload-fw "$n" && ok "port map removed"
+  ok "removed - press Apply to activate"
 }
 
 delete_tunnel(){
-  local n="$1" d="$TUN_DIR/$n" v
-  read -r -p "  type DELETE to remove $n: " v; [ "$v" = DELETE ] || return
+  local n="$1" d="$TUN_DIR/$1" v
+  read -r -p "  type the tunnel name to remove $n: " v; [ "$v" = "$n" ] || { warn "cancelled"; return; }
   systemctl disable "darkgre@$n.service" >/dev/null 2>&1 || true
-  service_stop "$n"
-  rm -rf "$d"
+  set_restart_timer "$n" off; service_stop "$n"; rm -rf "$d"; security_sync_all
   ok "deleted $n"
 }
 
@@ -695,22 +749,15 @@ screen_ports(){
     top; sect "USER PORTS"; blank
     if [ -s "$d/ports.list" ]; then
       local i=1 proto lp target
-      while IFS=: read -r proto lp target; do
-        [ -n "$proto" ] || continue
-        row "$(printf '%s%2d.%s %s%-4s%s %s%-7s%s %s-> %s%s' "$D" "$i" "$N" "$C" "$proto" "$N" "$W" "$lp" "$N" "$D" "$target" "$N")"
-        i=$((i+1))
+      while IFS=: read -r proto lp target; do [ -n "$proto" ] || continue
+        row "$(printf '%s%2d.%s %s%-4s%s %s%-7s%s %s-> %s%s' "$D" "$i" "$N" "$C" "$proto" "$N" "$W" "$lp" "$N" "$D" "$target" "$N")"; i=$((i+1))
       done <"$d/ports.list"
-    else
-      row "$(printf '%s(none)%s' "$D" "$N")"
-    fi
-    mid
-    item 1 "Add port" ""
-    item 2 "Remove port" "by row number"
-    item 0 "Back" ""
-    bot; echo; getkey
+    else row "$(printf '%s(none)%s' "$D" "$N")"; fi
+    mid; item 1 "Add port" ""; item 2 "Remove port" "by row number"; item 3 "Apply + reload" ""; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) add_port_menu "$n"; pause ;;
       2) remove_port_menu "$n"; pause ;;
+      3) "$RUNNER" reload-fw "$n" && ok "port rules applied" || bad "apply failed"; pause ;;
       0|_) return ;;
     esac
   done
@@ -718,24 +765,27 @@ screen_ports(){
 
 screen_tuning(){
   local n="$1" d="$TUN_DIR/$1"
-  . "$d/meta.conf"
-  header "TUNING - $n"
-  top; sect "CURRENT"; blank
-  kv "profile" "$W$PROFILE$N"
-  kv "mtu" "$W$MTU$N"
-  kv "txqueuelen" "$W$TXQLEN$N"
-  bot
-  choose_profile
-  sed -i "s|^PROFILE=.*|PROFILE=$(printf %q "$PROFILE")|; s|^MTU=.*|MTU=$(printf %q "$MTU")|; s|^TXQLEN=.*|TXQLEN=$(printf %q "$TXQLEN")|" "$d/meta.conf"
-  service_restart "$n" >/dev/null 2>&1 || true
-  . "$d/meta.conf"
-  if [ "$ROLE" = IRAN ]; then
-    warn "profile changed - use the new Pair Code on KHAREJ"
-    show_pair_code "$n"
-  else
-    ok "profile applied"
-  fi
-  pause
+  while :; do
+    . "$d/meta.conf"; SECURITY="${SECURITY:-plain}"; MTU_MODE="${MTU_MODE:-custom}"; PATH_MTU="${PATH_MTU:-0}"
+    header "TUNING - $n"
+    top; sect "CURRENT"; blank
+    kv "profile" "$W$PROFILE$N"; kv "mtu" "$W$MTU$N $D($MTU_MODE / path $PATH_MTU)$N"; kv "txqueuelen" "$W$TXQLEN$N"
+    mid; item 1 "Performance profile" ""; item 2 "MTU / PMTU" "auto scan, safe, max, custom"; item 3 "Rescan MTU" "DF probe now"; item 0 "Back" ""; bot; echo; getkey
+    case "$KEY" in
+      1) choose_profile; sed -i "s|^PROFILE=.*|PROFILE=$(printf %q "$PROFILE")|; s|^TXQLEN=.*|TXQLEN=$(printf %q "$TXQLEN")|" "$d/meta.conf" ;;
+      2) choose_mtu || { pause; continue; }; sed -i "s|^MTU_MODE=.*|MTU_MODE=$(printf %q "$MTU_MODE")|; s|^PATH_MTU=.*|PATH_MTU=$(printf %q "$PATH_MTU")|; s|^MTU=.*|MTU=$(printf %q "$MTU")|" "$d/meta.conf" ;;
+      3) PATH_MTU="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"
+         [ "$PATH_MTU" -gt 0 ] || { bad "PMTU scan failed"; pause; continue; }
+         MTU_MODE=auto; MTU="$(calc_inner_mtu "$PATH_MTU" "$SECURITY")"
+         sed -i "s|^MTU_MODE=.*|MTU_MODE=auto|; s|^PATH_MTU=.*|PATH_MTU=$PATH_MTU|; s|^MTU=.*|MTU=$MTU|" "$d/meta.conf"; ok "Path MTU $PATH_MTU -> GRE MTU $MTU" ;;
+      0|_) return ;;
+      *) continue ;;
+    esac
+    service_restart "$n" >/dev/null 2>&1 || true
+    . "$d/meta.conf"
+    if [ "$ROLE" = IRAN ]; then warn "tuning changed - use the refreshed Pair Code on KHAREJ"; show_pair_code "$n"; else ok "tuning applied"; fi
+    pause
+  done
 }
 
 screen_endpoint(){
@@ -743,28 +793,50 @@ screen_endpoint(){
   . "$d/meta.conf"
   header "ENDPOINT - $n"
   top; sect "CURRENT"; blank
-  kv "local public" "$W$LOCAL_PUBLIC$N"
-  kv "peer public" "$W$REMOTE_PUBLIC$N"
-  mid
-  item 1 "Change local IP" ""
-  item 2 "Change peer IP" ""
-  item 0 "Back" ""
-  bot; echo; getkey
+  kv "local public" "$W$LOCAL_PUBLIC$N"; kv "peer public" "$W$REMOTE_PUBLIC$N"; kv "inner local" "$W$LOCAL_TUN$N"; kv "inner peer" "$W$REMOTE_TUN$N"
+  mid; item 1 "Change local IP" ""; item 2 "Change peer IP" ""; item 0 "Back" ""; bot; echo; getkey
   case "$KEY" in
     1) ask "new local public ip" "$LOCAL_PUBLIC"; valid_ip4 "$ANS" || { bad "invalid IPv4"; pause; return; }; LOCAL_PUBLIC="$ANS" ;;
     2) ask "new peer public ip" "$REMOTE_PUBLIC"; valid_ip4 "$ANS" || { bad "invalid IPv4"; pause; return; }; REMOTE_PUBLIC="$ANS" ;;
     *) return ;;
   esac
-  sed -i "s|^LOCAL_PUBLIC=.*|LOCAL_PUBLIC=$(printf %q "$LOCAL_PUBLIC")|; s|^REMOTE_PUBLIC=.*|REMOTE_PUBLIC=$(printf %q "$REMOTE_PUBLIC")|" "$d/meta.conf"
-  service_restart "$n" >/dev/null 2>&1 || true
+  PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
+  sed -i "s|^LOCAL_PUBLIC=.*|LOCAL_PUBLIC=$(printf %q "$LOCAL_PUBLIC")|; s|^REMOTE_PUBLIC=.*|REMOTE_PUBLIC=$(printf %q "$REMOTE_PUBLIC")|; s|^PEER_ID=.*|PEER_ID=$(printf %q "$PEER_ID")|" "$d/meta.conf"
+  security_sync_all; service_restart "$n" >/dev/null 2>&1 || true
   . "$d/meta.conf"
-  if [ "$ROLE" = IRAN ]; then
-    warn "endpoint changed - use the new Pair Code on KHAREJ"
-    show_pair_code "$n"
-  else
-    ok "endpoint applied"
-  fi
+  if [ "$ROLE" = IRAN ]; then warn "endpoint changed - use the new Pair Code on KHAREJ"; show_pair_code "$n"; else ok "endpoint applied"; fi
   pause
+}
+screen_security(){
+  local n="$1" d="$TUN_DIR/$1" old
+  . "$d/meta.conf"; SECURITY="${SECURITY:-plain}"; IPSEC_PSK="${IPSEC_PSK:-}"
+  header "SECURITY - $n"
+  top; sect "CURRENT"; blank
+  kv "mode" "$W$SECURITY$N"; [ "$SECURITY" = ipsec ] && kv "IPsec" "$W$(ipsec_state "$n")$N"
+  mid
+  if [ "$ROLE" = IRAN ]; then item 1 "GRE + IPsec" "AES-256-GCM / IKEv2"; item 2 "Plain GRE" "no encryption"; else row "$(printf '%ssecurity is controlled by the IRAN Pair Code%s' "$D" "$N")"; fi
+  item 0 "Back" ""; bot; echo; getkey
+  [ "$ROLE" = IRAN ] || return
+  old="$SECURITY"
+  case "$KEY" in
+    1) SECURITY=ipsec; ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }
+       [ -n "$IPSEC_PSK" ] || IPSEC_PSK="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"; [ -n "$IPSEC_PSK" ] || IPSEC_PSK="$(openssl rand -hex 32)" ;;
+    2) SECURITY=plain; IPSEC_PSK="" ;;
+    *) return ;;
+  esac
+  if [ "${MTU_MODE:-custom}" = auto ] || [ "$old" != "$SECURITY" ]; then
+    PATH_MTU="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"
+    [ "$PATH_MTU" -gt 0 ] && MTU="$(calc_inner_mtu "$PATH_MTU" "$SECURITY")" || { PATH_MTU=0; [ "$SECURITY" = ipsec ] && MTU=1360 || MTU=1400; }
+    MTU_MODE=auto
+  fi
+  sed -i "s|^SECURITY=.*|SECURITY=$(printf %q "$SECURITY")|; s|^IPSEC_PSK=.*|IPSEC_PSK=$(printf %q "$IPSEC_PSK")|; s|^MTU_MODE=.*|MTU_MODE=$MTU_MODE|; s|^PATH_MTU=.*|PATH_MTU=$PATH_MTU|; s|^MTU=.*|MTU=$MTU|" "$d/meta.conf"
+  security_sync_all; service_restart "$n" >/dev/null 2>&1 || true
+  ok "security mode: $SECURITY"; warn "Pair Code changed - re-pair KHAREJ"; show_pair_code "$n"; pause
+}
+screen_restart(){
+  local n="$1" d="$TUN_DIR/$1"; . "$d/meta.conf"; RESTART_EVERY="${RESTART_EVERY:-off}"
+  header "SCHEDULED RESTART - $n"; kv "current" "$W$RESTART_EVERY$N"; pick_restart
+  sed -i "s|^RESTART_EVERY=.*|RESTART_EVERY=$(printf %q "$RESTART_EVERY")|" "$d/meta.conf"; set_restart_timer "$n" "$RESTART_EVERY"; ok "scheduled restart: $RESTART_EVERY"; pause
 }
 
 screen_logs(){
