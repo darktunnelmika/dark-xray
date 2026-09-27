@@ -146,3 +146,40 @@ test('Clients V6 link center has cyber scanner frame and mobile-safe QR sizing',
   assert.match(css,/@media\(max-width:620px\)/);
   assert.match(css,/#cv4d-qr\[data-ready="true"\] svg\{width:100%!important;height:100%!important\}/);
 });
+
+test('Representative quick create uses random prefix-aware IDs and preset-only time/IP controls',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/function randomClientId\(owner\)/);
+  assert.match(src,/profile\.prefix\|\|'dark-'/);
+  assert.match(src,/crypto\.getRandomValues/);
+  assert.match(src,/name="expiryPreset"/);
+  for(const months of ["'1'","'2'","'3'","'6'","'12'"])assert.match(src,new RegExp('\\['+months+',L\\('));
+  assert.match(src,/name="limitIpPreset"/);
+  assert.match(src,/function representativeIpOptions\(owner,current,editing\)/);
+  assert.match(src,/Math\.min\(5,cap\|\|5\)/);
+  assert.match(src,/data-cv4-random-client/);
+  assert.match(src,/isOwner\(\)&&can\('clients\.create'\)\?button\(L\('Bulk create'/);
+});
+
+test('Representative quick editor removes manual expiry/IP entry while preserving owner advanced editor',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/const representative=!isOwner\(\)/);
+  assert.match(src,/cv4-fast-plan/);
+  assert.match(src,/const advanced=representative\?''/);
+  assert.match(src,/selectedIp==='keep'/);
+  assert.match(src,/addCalendarMonths\(Number\(preset\)\)/);
+});
+
+test('Delivery center exposes an obvious subscription copy action',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/cv4d-copy-primary/);
+  assert.match(src,/COPY SUBSCRIPTION/);
+  assert.match(src,/data-act="cv4dcopy" data-kind="sub"/);
+});
+
+test('Client mobile UI raises form type size and makes long delivery links wrap',()=>{
+  const css=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.css'),'utf8');
+  assert.match(css,/Representative quick-create \+ mobile readability/);
+  assert.match(css,/\.cv4-field input,.cv4-field select,.cv4-field textarea\{font-size:16px;min-height:44px\}/);
+  assert.match(css,/\.cv4d-linkline code,.cv4d-config>code\{white-space:normal;[^}]*overflow-wrap:anywhere/);
+});
