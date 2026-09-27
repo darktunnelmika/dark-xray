@@ -38,6 +38,8 @@ class _HomePageState extends State<HomePage>
   bool _vpnBusy = false;
   bool _loading = true;
   String _sourceMeta = 'No subscription loaded';
+  String _coreVersion = '';
+  String _coreError = '';
 
   Color get _accent => _connected ? CyberPalette.cyan : CyberPalette.red;
 
@@ -80,6 +82,8 @@ class _HomePageState extends State<HomePage>
         _settings = settings;
         _selected = profiles.isEmpty ? 0 : _selected.clamp(0, profiles.length - 1);
         _connected = vpnStatus?.running ?? false;
+        _coreVersion = vpnStatus?.version ?? '';
+        _coreError = vpnStatus?.error ?? '';
         _sourceMeta = _formatSourceMeta(source, lastSync, profiles.length);
         _loading = false;
       });
@@ -535,6 +539,29 @@ class _HomePageState extends State<HomePage>
                                 ),
                               ],
                             ),
+                            if (_settings.developerMode) ...[
+                              const SizedBox(height: 14),
+                              CyberFrame(
+                                accent: _accent,
+                                child: Text(
+                                  'CORE ' +
+                                      (_coreVersion.isEmpty ? 'unknown' : _coreVersion) +
+                                      '  •  ROUTE ' +
+                                      _settings.routingMode.toUpperCase() +
+                                      '  •  DNS ' +
+                                      _settings.dns +
+                                      '\n' +
+                                      (_coreError.isEmpty
+                                          ? 'No native core error reported.'
+                                          : 'Last error: ' + _coreError),
+                                  style: const TextStyle(
+                                    color: CyberPalette.muted,
+                                    fontSize: 10,
+                                    height: 1.45,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                 ),
