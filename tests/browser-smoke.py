@@ -210,7 +210,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('#dialog-form [name="inboundId"]').select_option(str(inbound_id))
             assert page.locator('#dialog-form [name="runtime"] option[value="local"]').count()==1
             page.locator('#dialog-form [name="runtime"]').select_option('local')
-            page.locator('#dialog-form [name="address"]').fill('public-browser.example.test')
+            page.locator('#dialog-form [name="addresses"]').fill('public-browser.example.test\npublic-browser-2.example.test')
             page.locator('#dialog-form [name="port"]').fill('20443')
             page.locator('#dialog-form [name="remark"]').fill('BROWSER PUBLIC ENDPOINT')
             assert page.locator('#dialog-form input[name="mode"][value="direct"]').is_checked()
@@ -221,6 +221,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             endpoint=next((x for x in hosts if x.get('remark')=='BROWSER PUBLIC ENDPOINT'),None)
             assert endpoint and endpoint['inboundId']==inbound_id
             assert endpoint['address']=='public-browser.example.test' and endpoint['port']==20443
+            assert endpoint['addresses']==['public-browser.example.test','public-browser-2.example.test']
             assert endpoint['security']=='same' and endpoint['host']=='' and endpoint['path']=='' and endpoint['runtime']=='local'
             mark('Public Endpoints V3 distinguishes Xray listener from customer-facing address and previews delivery impact')
             page.screenshot(path=str(OUT/'browser-public-endpoints-v3.png'),full_page=True)
