@@ -2,9 +2,9 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.5.0-rc5` — Draft / Test
+> وضعیت: `v0.6.0-rc6` — Draft / Test
 
-## تغییرات RC5
+## تغییرات RC6
 
 - Installer بعد از هر نصب/آپدیت **runtime repair** اجرا می‌کند تا unit/runner قدیمی باقی نماند
 - سرویس اصلی در Secure Mode در حالت **armed/active** می‌ماند و منتظر Peer fail نمی‌شود
@@ -75,6 +75,15 @@ Manage tunnels
 روی KHAREJ کد جدید را اعمال می‌کند و نیازی به حذف تانل نیست.
 
 ## Security
+
+RC6 فایل‌های strongSwan را داخل مسیرهای AppArmor-safe نگه می‌دارد:
+
+- `/etc/ipsec.d/dark-gre/*.conf`
+- `/etc/ipsec.dark-gre.secrets`
+
+Watcher دیگر `ipsec up` را تکرار نمی‌کند؛ retry خود IKE به strongSwan سپرده شده است.
+
+
 
 ### Plain GRE
 
@@ -157,7 +166,7 @@ ADVANCED
 - Speed responder
 - IPsec / XFRM status
 
-## نصب RC5
+## نصب RC6
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
@@ -191,4 +200,4 @@ darkgre
 /etc/sysctl.d/99-dark-gre.conf
 ```
 
-RC5 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
+RC6 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
