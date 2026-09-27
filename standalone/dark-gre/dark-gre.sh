@@ -320,9 +320,18 @@ apply_fw(){
 secure_ready(){
   [ "${SECURITY:-plain}" != ipsec ] && return 0
   command -v ipsec >/dev/null 2>&1 || { echo "strongSwan missing" >&2; return 1; }
-  local conn="darkgre-${PEER_ID}"
-  ipsec up "$conn" >/dev/null 2>&1 || ipsec status "$conn" 2>/dev/null | grep -qi ESTABLISHED || { echo "IPsec failed: $conn" >&2; return 1; }
-  ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC" || { echo "IPsec policy missing" >&2; return 1; }
+  local conn="darkgre-${PEER_ID}" i
+  # Trigger IKE, but never block the tunnel service waiting for an absent peer.
+  timeout 3 ipsec up "$conn" >/dev/null 2>&1 || true
+  for i in 1 2 3; do
+    if ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
+       ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "IPsec peer not ready yet: $conn" >&2
+  return 75
 }
 case "$action" in
   up)
@@ -349,13 +358,16 @@ write_unit(){
 Description=DARK GRE Direct tunnel %i
 After=network-online.target strongswan-starter.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=$RUNNER up %i
 ExecStop=$RUNNER down %i
-TimeoutStartSec=30
+TimeoutStartSec=12
 TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF
@@ -469,11 +481,27 @@ save_meta(){
   chmod 600 "$dir/ports.list"
 }
 
-service_start(){ systemctl enable --now "darkgre@$1.service" >/dev/null; }
-service_restart(){ systemctl restart "darkgre@$1.service"; }
+service_start(){
+  local n="$1" st
+  systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || return 1
+  systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
+  systemctl --no-block start "darkgre@$n.service" >/dev/null 2>&1 || return 1
+  sleep 1
+  st="$(systemctl is-active "darkgre@$n.service" 2>/dev/null || true)"
+  case "$st" in active|activating) return 0 ;; *) return 1 ;; esac
+}
+service_restart(){
+  local n="$1"
+  systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
+  systemctl --no-block restart "darkgre@$n.service" >/dev/null 2>&1
+}
 service_stop(){ systemctl stop "darkgre@$1.service" 2>/dev/null || true; }
 
-service_state(){ systemctl is-active "darkgre@$1.service" 2>/dev/null || echo inactive; }
+service_state(){
+  local st
+  st="$(systemctl is-active "darkgre@$1.service" 2>/dev/null || true)"
+  printf '%s\n' "${st:-inactive}"
+}
 svc_uptime_short(){
   local ts t n d
   ts="$(systemctl show "darkgre@$1.service" -p ActiveEnterTimestamp --value 2>/dev/null)"
@@ -631,7 +659,19 @@ new_iran(){
   [ "$SECURITY" = ipsec ] && security_sync_all
   echo; top; sect "CREATED - $NAME"; blank
   kv "role" "$W IRAN / pair owner$N"; kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"; kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"; kv "security" "$W$SECURITY$N"; kv "mtu" "$W$MTU$N $D($MTU_MODE)$N"; kv "profile" "$W$PROFILE$N"; kv "restart" "$W$RESTART_EVERY$N"; bot; echo
-  service_start "$NAME" && ok "GRE interface is up" || bad "service failed - config and Pair Code were kept"
+  if service_start "$NAME"; then
+    sleep 1
+    if ip link show "$IFNAME" >/dev/null 2>&1; then
+      ok "GRE interface is up"
+    elif [ "$SECURITY" = ipsec ]; then
+      ok "Secure GRE armed - waiting for KHAREJ / IPsec peer"
+      dim "after KHAREJ applies the Pair Code, this service retries automatically"
+    else
+      warn "service started but GRE interface is not ready yet"
+    fi
+  else
+    bad "service could not be armed - config and Pair Code were kept"
+  fi
   set_restart_timer "$NAME" "$RESTART_EVERY"; show_pair_code "$NAME"
   [ "$SECURITY" = ipsec ] && warn "provider firewall must allow IKE/IPsec (UDP 500/4500 + ESP)" || warn "provider firewall/security-group must allow GRE protocol 47"
   pause
@@ -654,9 +694,24 @@ new_kharej(){
   id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE=KHAREJ; ID="$id"; PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
   save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "RESTART_EVERY=$RESTART_EVERY"
   [ "$SECURITY" = ipsec ] && security_sync_all
-  service_start "$NAME" && ok "GRE interface is up" || bad "service failed"
+  if service_start "$NAME"; then
+    info "waiting briefly for IPsec/GRE"
+    local _i
+    for _i in 1 2 3 4 5 6; do
+      ip link show "$IFNAME" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    if ip link show "$IFNAME" >/dev/null 2>&1; then
+      ok "GRE interface is up"
+      ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 && ok "inner peer responds: $REMOTE_TUN" || warn "GRE is up but inner peer is not responding yet"
+    else
+      ok "Secure GRE armed - waiting for IRAN / IPsec peer"
+      dim "both sides retry automatically; no tunnel deletion is needed"
+    fi
+  else
+    bad "service could not be armed"
+  fi
   set_restart_timer "$NAME" "$RESTART_EVERY"
-  ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 && ok "inner peer responds: $REMOTE_TUN" || warn "inner peer is not responding yet"
   pause
 }
 
