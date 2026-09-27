@@ -28,6 +28,21 @@ class ProfileStore {
     await prefs.setString(_syncKey, DateTime.now().toIso8601String());
   }
 
+  Future<void> saveLocalProfiles(List<ProxyProfile> profiles) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _profilesKey,
+      profiles.map((profile) => profile.encode()).toList(),
+    );
+  }
+
+  Future<void> clearProfiles() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_profilesKey);
+    await prefs.remove(_sourceKey);
+    await prefs.remove(_syncKey);
+  }
+
   Future<String?> loadSourceUrl() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_sourceKey);
