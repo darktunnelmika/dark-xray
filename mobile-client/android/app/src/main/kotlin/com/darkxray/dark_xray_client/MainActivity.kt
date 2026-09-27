@@ -7,6 +7,8 @@ import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import libXray.LibXray
+import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.darkxray.client/vpn"
@@ -51,6 +53,39 @@ class MainActivity : FlutterActivity() {
                                 "version" to DarkXrayVpnService.coreVersion
                             )
                         )
+                    }
+                    "convertXrayJsonToShareLinks" -> {
+                        val xrayJson = call.argument<String>("xrayJson").orEmpty()
+                        try {
+                            val request = JSONObject()
+                                .put("apiVersion", 3)
+                                .put("method", "convertXrayJsonToShareLinks")
+                                .put("payload", JSONObject().put("xrayJson", xrayJson))
+                            val response = JSONObject(LibXray.invoke(request.toString()))
+                            if (!response.optBoolean("success")) {
+                                result.error(
+                                    "CONVERT_FAILED",
+                                    response.optString("error", "Xray JSON conversion failed."),
+                                    null
+                                )
+                            } else {
+                                val links = response.optJSONObject("data")
+                                    ?.optJSONArray("links")
+                                val output = mutableListOf<String>()
+                                if (links != null) {
+                                    for (i in 0 until links.length()) {
+                                        output.add(links.optString(i))
+                                    }
+                                }
+                                result.success(output)
+                            }
+                        } catch (error: Throwable) {
+                            result.error(
+                                "CONVERT_FAILED",
+                                error.message ?: "Xray JSON conversion failed.",
+                                null
+                            )
+                        }
                     }
                     else -> result.notImplemented()
                 }
