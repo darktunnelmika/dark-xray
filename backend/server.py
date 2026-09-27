@@ -836,8 +836,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             # Deployment scope belongs to the Hub. A selected remote Node must
             # run the logical inbound even when Local deployment is disabled.
             if isinstance(inbound.get('panelMeta'),dict):
-                inbound['panelMeta'].pop('deployLocal',None);inbound['panelMeta'].pop('deploymentTargets',None)
-                if not inbound['panelMeta']:inbound.pop('panelMeta',None)
+                meta=inbound['panelMeta']
+                raw_ports=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+                tunnel_port=raw_ports.get('node:'+str(node_id))
+                meta.pop('deployLocal',None);meta.pop('deploymentTargets',None)
+                if type(tunnel_port)is int and 1<=tunnel_port<=65535:meta['tunnelPorts']={'local':int(tunnel_port)}
+                else:meta.pop('tunnelPorts',None)
+                if not meta:inbound.pop('panelMeta',None)
             clients=[]
             for client in all_clients:
                 if source not in client.get('inboundIds',[]):continue
@@ -1440,6 +1445,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         meta=copy.deepcopy(meta);meta['deployLocal']=bool(body.local);meta['deploymentTargets']=['local']*int(bool(body.local))+requested
         meta['tunnelPorts']=dict(sorted(tunnel_ports.items()))
         inbound['panelMeta']=meta;engine.save_inbound(inbound,inbound_id)
+        # Tunnel Port is a real listener contract. Apply the new local Xray
+        # generation immediately; CoreEngine validates and rolls back the
+        # previous running generation if the shadow listener cannot start.
+        manager.tick(suppress=False)
         before=set(nodes.inbound_assignments(inbound_id));after=set(requested)
         for node_id in sorted(before|after):
             nodes.set_inbound_assignment(node_id,inbound_id,node_id in after)
