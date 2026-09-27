@@ -12,7 +12,7 @@ on:
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -33,6 +33,28 @@ jobs:
           rm -rf .mobile-build/lib .mobile-build/test
           cp -R mobile-client/lib .mobile-build/lib
           cp -R mobile-client/test .mobile-build/test
+          cp mobile-client/android/app/src/main/AndroidManifest.xml .mobile-build/android/app/src/main/AndroidManifest.xml
+          rm -rf .mobile-build/android/app/src/main/kotlin/com/darkxray/dark_xray_client
+          mkdir -p .mobile-build/android/app/src/main/kotlin/com/darkxray/dark_xray_client
+          cp mobile-client/android/app/src/main/kotlin/com/darkxray/dark_xray_client/*.kt .mobile-build/android/app/src/main/kotlin/com/darkxray/dark_xray_client/
+
+      - name: Download official XTLS libXray
+        run: |
+          mkdir -p .mobile-build/android/app/libs /tmp/libxray
+          curl -L --fail --retry 3             -o /tmp/libxray/libxray-android.zip             https://github.com/XTLS/libXray/releases/download/v26.9.9/libxray-android.zip
+          unzip -j /tmp/libxray/libxray-android.zip             'libxray-android/libXray.aar'             -d .mobile-build/android/app/libs
+          test -s .mobile-build/android/app/libs/libXray.aar
+
+      - name: Wire libXray AAR into Android app
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path(".mobile-build/android/app/build.gradle.kts")
+          text = p.read_text()
+          if 'implementation(files("libs/libXray.aar"))' not in text:
+              text += '\n\ndependencies {\n    implementation(files("libs/libXray.aar"))\n}\n'
+          p.write_text(text)
+          PY
 
       - name: Resolve dependencies
         working-directory: .mobile-build
@@ -48,7 +70,7 @@ jobs:
 
       - name: Build debug APK
         working-directory: .mobile-build
-        run: flutter build apk --debug
+        run: flutter build apk --debug --target-platform android-arm64
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
