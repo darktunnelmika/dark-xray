@@ -391,6 +391,21 @@ class _HomePageState extends State<HomePage>
     return int.tryParse(match.group(1) ?? '') ?? (1 << 30);
   }
 
+  Future<List<ProxyProfile>> _tcpPingFallback(
+    List<ProxyProfile> input,
+  ) async {
+    final output = <ProxyProfile>[];
+    const batchSize = 8;
+
+    for (var start = 0; start < input.length; start += batchSize) {
+      final rawEnd = start + batchSize;
+      final end = rawEnd > input.length ? input.length : rawEnd;
+      final batch = input.sublist(start, end);
+      output.addAll(await Future.wait(batch.map(_measureProfile)));
+    }
+    return output;
+  }
+
   Future<void> _pingAllAndSort() async {
     if (_pingingAll || _profiles.isEmpty) return;
 
@@ -398,13 +413,39 @@ class _HomePageState extends State<HomePage>
     setState(() => _pingingAll = true);
 
     try {
-      final results = <ProxyProfile>[];
-      const batchSize = 8;
+      List<ProxyProfile> results;
 
-      for (var start = 0; start < _profiles.length; start += batchSize) {
-        final end = (start + batchSize).clamp(0, _profiles.length);
-        final batch = _profiles.sublist(start, end);
-        results.addAll(await Future.wait(batch.map(_measureProfile)));
+      final canUseCorePing =
+          !_connected && !(_vpnStatus?.reconnecting ?? false);
+      if (canUseCorePing) {
+        try {
+          final timeoutSeconds =
+              ((_settings.pingTimeoutMs + 999) ~/ 1000).clamp(1, 15);
+          final delays = await _vpn.pingProfiles(
+            _profiles.map((profile) => profile.rawUri).toList(growable: false),
+            timeoutSeconds: timeoutSeconds,
+          );
+
+          results = <ProxyProfile>[];
+          for (var i = 0; i < _profiles.length; i++) {
+            final profile = _profiles[i];
+            final delay = i < delays.length ? delays[i] : -1;
+
+            if (delay >= 0 && delay < 10000) {
+              results.add(profile.copyWith(ping: '$delay ms'));
+            } else if (delay == 10000 || delay == 11000) {
+              results.add(profile.copyWith(ping: 'timeout'));
+            } else {
+              results.add(await _measureProfile(profile));
+            }
+          }
+        } on PlatformException {
+          results = await _tcpPingFallback(_profiles);
+        } catch (_) {
+          results = await _tcpPingFallback(_profiles);
+        }
+      } else {
+        results = await _tcpPingFallback(_profiles);
       }
 
       results.sort((a, b) {
