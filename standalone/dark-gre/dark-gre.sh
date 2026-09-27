@@ -527,29 +527,167 @@ delete_tunnel(){
   ok "deleted $n"
 }
 
+pick_tunnel(){
+  local names=() n i=1
+  while read -r n; do [ -n "$n" ] && names+=("$n"); done < <(find "$TUN_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
+  [ ${#names[@]} -gt 0 ] || { bad "no tunnels yet"; return 1; }
+  echo; top; sect "TUNNELS"; blank
+  for n in "${names[@]}"; do
+    . "$TUN_DIR/$n/meta.conf"
+    row "$(printf '%s[%d]%s %s %-13s %s%-6s%s %s%s%s' "$Y" "$i" "$N" "$(dot "$(service_state "$n")")" "$n" "$D" "$([ "$ROLE" = IRAN ] && echo iran || echo kharej)" "$N" "$D" "-> $REMOTE_PUBLIC" "$N")"
+    i=$((i+1))
+  done
+  blank; item 0 "Back" ""; bot; echo; getkey
+  [[ "$KEY" =~ ^[0-9]+$ ]] || return 1
+  [ "$KEY" -gt 0 ] && [ "$KEY" -le ${#names[@]} ] || return 1
+  SELECTED="${names[$((KEY-1))]}"
+}
+
+screen_ports(){
+  local n="$1" d="$TUN_DIR/$1"
+  while :; do
+    . "$d/meta.conf"
+    header "PORTS - $n"
+    [ "$ROLE" = IRAN ] || { bad "ports are managed on the IRAN side only"; pause; return; }
+    top; sect "USER PORTS"; blank
+    if [ -s "$d/ports.list" ]; then
+      local i=1 proto lp target
+      while IFS=: read -r proto lp target; do
+        [ -n "$proto" ] || continue
+        row "$(printf '%s%2d.%s %s%-4s%s %s%-7s%s %s-> %s%s' "$D" "$i" "$N" "$C" "$proto" "$N" "$W" "$lp" "$N" "$D" "$target" "$N")"
+        i=$((i+1))
+      done <"$d/ports.list"
+    else
+      row "$(printf '%s(none)%s' "$D" "$N")"
+    fi
+    mid
+    item 1 "Add port" ""
+    item 2 "Remove port" "by row number"
+    item 0 "Back" ""
+    bot; echo; getkey
+    case "$KEY" in
+      1) add_port_menu "$n"; pause ;;
+      2) remove_port_menu "$n"; pause ;;
+      0|_) return ;;
+    esac
+  done
+}
+
+screen_tuning(){
+  local n="$1" d="$TUN_DIR/$1"
+  . "$d/meta.conf"
+  header "TUNING - $n"
+  top; sect "CURRENT"; blank
+  kv "profile" "$W$PROFILE$N"
+  kv "mtu" "$W$MTU$N"
+  kv "txqueuelen" "$W$TXQLEN$N"
+  bot
+  choose_profile
+  sed -i "s|^PROFILE=.*|PROFILE=$(printf %q "$PROFILE")|; s|^MTU=.*|MTU=$(printf %q "$MTU")|; s|^TXQLEN=.*|TXQLEN=$(printf %q "$TXQLEN")|" "$d/meta.conf"
+  service_restart "$n" >/dev/null 2>&1 || true
+  . "$d/meta.conf"
+  if [ "$ROLE" = IRAN ]; then
+    warn "profile changed - use the new Pair Code on KHAREJ"
+    show_pair_code "$n"
+  else
+    ok "profile applied"
+  fi
+  pause
+}
+
+screen_endpoint(){
+  local n="$1" d="$TUN_DIR/$1"
+  . "$d/meta.conf"
+  header "ENDPOINT - $n"
+  top; sect "CURRENT"; blank
+  kv "local public" "$W$LOCAL_PUBLIC$N"
+  kv "peer public" "$W$REMOTE_PUBLIC$N"
+  mid
+  item 1 "Change local IP" ""
+  item 2 "Change peer IP" ""
+  item 0 "Back" ""
+  bot; echo; getkey
+  case "$KEY" in
+    1) ask "new local public ip" "$LOCAL_PUBLIC"; valid_ip4 "$ANS" || { bad "invalid IPv4"; pause; return; }; LOCAL_PUBLIC="$ANS" ;;
+    2) ask "new peer public ip" "$REMOTE_PUBLIC"; valid_ip4 "$ANS" || { bad "invalid IPv4"; pause; return; }; REMOTE_PUBLIC="$ANS" ;;
+    *) return ;;
+  esac
+  sed -i "s|^LOCAL_PUBLIC=.*|LOCAL_PUBLIC=$(printf %q "$LOCAL_PUBLIC")|; s|^REMOTE_PUBLIC=.*|REMOTE_PUBLIC=$(printf %q "$REMOTE_PUBLIC")|" "$d/meta.conf"
+  service_restart "$n" >/dev/null 2>&1 || true
+  . "$d/meta.conf"
+  if [ "$ROLE" = IRAN ]; then
+    warn "endpoint changed - use the new Pair Code on KHAREJ"
+    show_pair_code "$n"
+  else
+    ok "endpoint applied"
+  fi
+  pause
+}
+
+screen_logs(){
+  local n="$1" d="$TUN_DIR/$1"
+  . "$d/meta.conf"
+  header "LOGS + INTERFACE - $n"
+  top; sect "STATUS"; blank
+  kv "state" "$W$(service_state "$n")$N"
+  kv "interface" "$W$IFNAME$N"
+  kv "inner peer" "$W$REMOTE_TUN$N"
+  bot; echo
+  ip -d link show "$IFNAME" 2>/dev/null | sed 's/^/    /' || true
+  echo
+  journalctl -u "darkgre@$n" -n 25 --no-pager -o cat 2>/dev/null | sed 's/^/    /'
+  echo; top
+  item L "Live journal" ""
+  item 0 "Back" ""
+  bot; echo; getkey
+  case "$KEY" in l|L) journalctl -u "darkgre@$n" -f --no-pager ;; esac
+}
+
 manage(){
-  while true; do
-    header "Manage tunnels"; list_tunnels; echo
-    ask "Tunnel name (blank = back)" ""; local n="$ANS"; [ -z "$n" ] && return
-    [ -r "$TUN_DIR/$n/meta.conf" ] || { warn "not found"; pause; continue; }
-    while true; do
-      header "Manage · $n"; status_tunnel "$n"; echo
-      echo "  [1] Start          [2] Stop           [3] Restart"
-      echo "  [4] Add port       [5] Remove port    [6] Ping inner peer"
-      echo "  [7] Live log       [8] Delete         [0] Back"
-      ask "Select" "0"
-      case "$ANS" in
-        1) service_start "$n"; pause ;;
-        2) service_stop "$n"; pause ;;
-        3) service_restart "$n"; pause ;;
-        4) add_port_menu "$n"; pause ;;
-        5) remove_port_menu "$n"; pause ;;
-        6) . "$TUN_DIR/$n/meta.conf"; ping -c 4 -W 2 "$REMOTE_TUN" || true; pause ;;
-        7) journalctl -u "darkgre@$n.service" -f --no-pager ;;
-        8) delete_tunnel "$n"; pause; break ;;
-        0) break ;;
-      esac
-    done
+  pick_tunnel || return
+  local n="$SELECTED" d="$TUN_DIR/$SELECTED"
+  while :; do
+    [ -r "$d/meta.conf" ] || return
+    . "$d/meta.conf"
+    header "TUNNEL - $n"
+    top; sect "STATUS"; blank
+    kv "state" "$W$(service_state "$n")$N"
+    kv "role" "$W$([ "$ROLE" = IRAN ] && echo 'IRAN (pair owner)' || echo 'KHAREJ (peer)')$N"
+    kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"
+    kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"
+    kv "profile" "$W$PROFILE$N $D MTU $MTU$N"
+    mid; sect "CONTROL"
+    item 1 "Start" ""
+    item 2 "Stop" ""
+    item 3 "Restart" ""
+    if [ "$ROLE" = IRAN ]; then
+      mid; sect "PAIRING"
+      item p "Pair code" "paste this on the KHAREJ server"
+    fi
+    mid; sect "CONFIGURE"
+    [ "$ROLE" = IRAN ] && item 4 "Ports" "user-facing ports"
+    item 5 "Tuning" "profile, MTU"
+    item 6 "Endpoint" "local / peer IP"
+    mid; sect "INSPECT"
+    item 7 "Ping inner peer" "$REMOTE_TUN"
+    item L "Logs + interface" ""
+    mid; sect "ADVANCED"
+    item d "Delete tunnel" ""
+    item 0 "Back" ""
+    bot; echo; getkey
+    case "$KEY" in
+      1) service_start "$n"; pause ;;
+      2) service_stop "$n"; pause ;;
+      3) service_restart "$n"; pause ;;
+      4) [ "$ROLE" = IRAN ] && screen_ports "$n" || { info "ports are managed on IRAN"; pause; } ;;
+      5) screen_tuning "$n" ;;
+      6) screen_endpoint "$n" ;;
+      7) ping -c 4 -W 2 "$REMOTE_TUN" || true; pause ;;
+      p|P) [ "$ROLE" = IRAN ] && show_pair_code "$n" || info "Pair Code comes from IRAN"; pause ;;
+      l|L) screen_logs "$n" ;;
+      d|D) delete_tunnel "$n"; pause; [ -d "$d" ] || return ;;
+      0|_) return ;;
+    esac
   done
 }
 
