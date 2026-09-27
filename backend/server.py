@@ -1589,13 +1589,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         allowed={(str(x['serverId']),str(x['accessPath'])) for x in doc['rows']}
         scopes=set()
         old={}
+        for scope,iid,path,policy in rows:
+            if iid!=inbound_id or (scope,path) not in allowed:raise HTTPException(400,'Traffic Matrix path is not deployed')
+            if policy not in MATRIX_POLICIES:raise HTTPException(400,'Unsupported Traffic Matrix policy')
+            _ensure_matrix_base_outbounds(policy)
+            if policy.startswith('warp_') and _warp_profile(scope) is None:
+                raise HTTPException(409,'Create WARP on this runtime before selecting a WARP policy')
         with store.lock:
             for scope,iid,path,policy in rows:
-                if iid!=inbound_id or (scope,path) not in allowed:raise HTTPException(400,'Traffic Matrix path is not deployed')
-                if policy not in MATRIX_POLICIES:raise HTTPException(400,'Unsupported Traffic Matrix policy')
-                _ensure_matrix_base_outbounds(policy)
-                if policy.startswith('warp_') and _warp_profile(scope) is None:
-                    raise HTTPException(409,'Create WARP on this runtime before selecting a WARP policy')
                 row=store.db.execute('SELECT policy,updated_at FROM traffic_matrix WHERE scope=? AND inbound_id=? AND access_path=?',
                                      (scope,iid,path)).fetchone()
                 old[(scope,iid,path)]=dict(row) if row else None;scopes.add(scope)
