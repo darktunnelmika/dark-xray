@@ -531,8 +531,27 @@ class CoreEngine:
                 if not isinstance(host,dict) or type(host.get('inboundId'))is not int or host['inboundId'] not in known:
                     raise CoreError('Host requires an existing inboundId')
                 addr=host.get('address','')
-                if not isinstance(addr,str) or not addr or any(c in addr for c in '/?#@ \r\n'):
-                    raise CoreError('Host address must be a plain IP/domain')
+                raw_addresses=host.get('addresses')
+                if raw_addresses is None:
+                    raw_addresses=[addr]
+                elif not isinstance(raw_addresses,list) or not 1<=len(raw_addresses)<=64:
+                    raise CoreError('Host addresses must contain 1..64 IP/domain values')
+                addresses=[]
+                for item in raw_addresses:
+                    if not isinstance(item,str):raise CoreError('Host address must be a plain IP/domain')
+                    item=item.strip()
+                    if not item or len(item)>253 or any(c in item for c in '/?#@ \r\n'):
+                        raise CoreError('Host address must be a plain IP/domain')
+                    if item not in addresses:addresses.append(item)
+                if isinstance(addr,str) and addr.strip() and addr.strip() not in addresses:
+                    primary=addr.strip()
+                    if len(primary)>253 or any(c in primary for c in '/?#@ \r\n'):
+                        raise CoreError('Host address must be a plain IP/domain')
+                    addresses.insert(0,primary)
+                if not addresses:raise CoreError('Host address must be a plain IP/domain')
+                host['address']=addresses[0]
+                if len(addresses)>1:host['addresses']=addresses
+                else:host.pop('addresses',None)
                 if type(host.get('port',0))is not int or not 1<=host['port']<=65535: raise CoreError('Invalid host port')
                 if 'enable' in host and type(host['enable'])is not bool:raise CoreError('Host enable must be boolean')
                 runtime=host.get('runtime','local') or 'local'
@@ -1329,10 +1348,23 @@ class CoreEngine:
                     hs.insert(0,{})
             else:
                 hs=[{}] if runtime_ready is None or i in runtime_ready.get('local',set()) else []
-            for host in hs:
+            expanded_hs=[]
+            for source_host in hs:
+                if not source_host:
+                    expanded_hs.append(source_host);continue
+                raw_addresses=source_host.get('addresses')
+                addresses=raw_addresses if isinstance(raw_addresses,list) and raw_addresses else [source_host.get('address')]
+                addresses=[str(x) for x in addresses if isinstance(x,str) and x]
+                if not addresses:addresses=[self.config.public_address]
+                for index,address in enumerate(addresses,1):
+                    clone=copy.deepcopy(source_host);clone['address']=address;clone.pop('addresses',None)
+                    clone['_addressIndex']=index;clone['_addressTotal']=len(addresses);expanded_hs.append(clone)
+            for host in expanded_hs:
                 runtime=host.get('runtime','local') or 'local'
                 address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
                 proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
+                if int(host.get('_addressTotal') or 1)>1:
+                    base_remark=base_remark+' · '+str(int(host.get('_addressIndex') or 1))
                 label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
                 st=ib['streamSettings'];net=st.get('network','tcp');base_sec=st.get('security','none')
                 force=host.get('security','same') or 'same';sec=base_sec if force=='same' else force
