@@ -82,6 +82,26 @@ class VpnBridge {
     return status();
   }
 
+  Future<List<int>> pingProfiles(
+    List<String> rawUris, {
+    int timeoutSeconds = 5,
+  }) async {
+    final values = await _channel.invokeMethod<List<dynamic>>(
+      'pingProfiles',
+      {
+        'rawUris': rawUris,
+        'timeoutSeconds': timeoutSeconds,
+      },
+    );
+    return (values ?? const <dynamic>[])
+        .map((item) {
+          if (item is int) return item;
+          if (item is num) return item.toInt();
+          return int.tryParse(item.toString()) ?? -1;
+        })
+        .toList(growable: false);
+  }
+
   Future<List<String>> convertXrayJsonToShareLinks(String xrayJson) async {
     final links = await _channel.invokeMethod<List<dynamic>>(
       'convertXrayJsonToShareLinks',
