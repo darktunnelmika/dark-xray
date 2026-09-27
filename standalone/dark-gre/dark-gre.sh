@@ -293,12 +293,18 @@ service_stop(){ systemctl stop "darkgre@$1.service" 2>/dev/null || true; }
 service_state(){ systemctl is-active "darkgre@$1.service" 2>/dev/null || echo inactive; }
 
 choose_profile(){
-  echo "  [1] Balanced  MTU 1436"
-  echo "  [2] Stable    MTU 1380"
-  echo "  [3] Low Ping  MTU 1400"
-  echo "  [4] Turbo     MTU 1476"
-  ask "Profile" "1"
-  case "$ANS" in 2) PROFILE=stable;; 3) PROFILE=lowping;; 4) PROFILE=turbo;; *) PROFILE=balanced;; esac
+  echo; top; sect "PROFILE"; blank
+  item 1 "Balanced" "MTU 1436 - recommended"
+  item 2 "Stable" "MTU 1380 - safer"
+  item 3 "Low Ping" "MTU 1400 - interactive"
+  item 4 "Turbo" "MTU 1476 - clean paths"
+  bot; echo; getkey
+  case "$KEY" in
+    2) PROFILE=stable ;;
+    3) PROFILE=lowping ;;
+    4) PROFILE=turbo ;;
+    *) PROFILE=balanced ;;
+  esac
   profile_values "$PROFILE"
 }
 
@@ -310,22 +316,29 @@ add_port_noninteractive(){
 }
 
 prompt_initial_ports(){
-  local name="$1" p proto target
-  echo
-  info "Initial forward ports. Leave blank to finish."
-  while true; do
-    ask "Listen port on IRAN" ""
-    p="$ANS"; [ -z "$p" ] && break
-    valid_port "$p" || { warn "invalid port"; continue; }
-    ask "Protocol tcp/udp/both" "tcp"; proto="${ANS,,}"
-    ask "Target port on KHAREJ" "$p"; target="$ANS"
-    valid_port "$target" || { warn "invalid target port"; continue; }
-    case "$proto" in
-      tcp|udp) add_port_noninteractive "$name" "$proto" "$p" "$target" ;;
-      both) add_port_noninteractive "$name" tcp "$p" "$target"; add_port_noninteractive "$name" udp "$p" "$target" ;;
-      *) warn "invalid protocol" ;;
-    esac
+  local name="$1" p arr added
+  echo; top; sect "USER PORTS"; blank
+  row "$(printf '%sone port, or several separated by commas%s' "$D" "$N")"
+  row "$(printf '%sexample:  1185,443,2087%s' "$D" "$N")"
+  row "$(printf '%ssame port on KHAREJ is used by default%s' "$D" "$N")"
+  bot; echo
+  while :; do
+    ask "ports"
+    IFS=', ' read -r -a arr <<<"$ANS"
+    : >"$TUN_DIR/$name/ports.list"
+    added=0
+    for p in "${arr[@]}"; do
+      valid_port "$p" || continue
+      add_port_noninteractive "$name" tcp "$p" "$p" && added=$((added+1))
+    done
+    [ "$added" -gt 0 ] && break
+    bad "enter at least one valid port"
   done
+  if yesno "these services also need UDP?" n; then
+    for p in "${arr[@]}"; do
+      valid_port "$p" && add_port_noninteractive "$name" udp "$p" "$p"
+    done
+  fi
 }
 
 pair_code(){
@@ -354,42 +367,96 @@ decode_pair(){
     [[ "$P_PROFILE" =~ ^(balanced|stable|lowping|turbo)$ ]]
 }
 
+show_pair_code(){
+  local name="$1" dir="$TUN_DIR/$1" code
+  [ -r "$dir/meta.conf" ] || { bad "tunnel metadata missing"; return; }
+  . "$dir/meta.conf"
+  [ "$ROLE" = IRAN ] || { info "Pair Code is generated on the IRAN side"; return; }
+  code="$(pair_code)"
+  printf '%s\n' "$code" >"$dir/pair.code"
+  chmod 600 "$dir/pair.code"
+  echo; top; sect "PAIR CODE"
+  row "$(printf '%spaste this on the KHAREJ server%s' "$D" "$N")"
+  blank; bot
+  echo; printf '%s%s%s\n' "$W" "$code" "$N"; echo
+}
+
 new_iran(){
-  header "New tunnel - IRAN"
+  header "NEW TUNNEL - IRAN"
+  top; sect "ROLE CHECK"; blank
+  row "$(printf '%sIRAN creates the pair and exposes the user-facing ports.%s' "$D" "$N")"
+  row "$(printf '%sthe Pair Code is made here and pasted on KHAREJ.%s' "$D" "$N")"
+  bot; echo
   local detected oct dir id
-  ask "Tunnel name" "gre1"; NAME="$ANS"; valid_name "$NAME" || { bad "invalid name"; pause; return; }
-  dir="$TUN_DIR/$NAME"; [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
+  while :; do
+    ask "tunnel name"
+    NAME="$ANS"
+    valid_name "$NAME" || { bad "letters, digits, - and _ only"; continue; }
+    [ -e "$TUN_DIR/$NAME" ] && { bad "name already exists"; continue; }
+    break
+  done
+  dir="$TUN_DIR/$NAME"
   detected="$(public_ipv4)"
-  ask "IRAN public IP" "$detected"; LOCAL_PUBLIC="$ANS"; valid_ip4 "$LOCAL_PUBLIC" || { bad "invalid IP"; pause; return; }
-  ask "KHAREJ public IP" ""; REMOTE_PUBLIC="$ANS"; valid_ip4 "$REMOTE_PUBLIC" || { bad "invalid IP"; pause; return; }
-  oct="$(next_pair)" || { bad "no free 10.77.x.0/30 subnet found"; pause; return; }
+  ask "iran public ip" "$detected"; LOCAL_PUBLIC="$ANS"
+  valid_ip4 "$LOCAL_PUBLIC" || { bad "invalid IPv4"; pause; return; }
+  ask "kharej public ip"; REMOTE_PUBLIC="$ANS"
+  valid_ip4 "$REMOTE_PUBLIC" || { bad "invalid IPv4"; pause; return; }
+  oct="$(next_pair)" || { bad "no free GRE subnet found"; pause; return; }
   LOCAL_TUN="10.77.$oct.1"; REMOTE_TUN="10.77.$oct.2"; PREFIX=30
   choose_profile
-  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE="IRAN"; ID="$id"
-  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU=$MTU" "TXQLEN=$TXQLEN"
+  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"
+  IFNAME="$(iface_for "$NAME")"; ROLE="IRAN"; ID="$id"
+  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME"     "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC"     "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX"     "PROFILE=$PROFILE" "MTU=$MTU" "TXQLEN=$TXQLEN"
   prompt_initial_ports "$NAME"
-  if service_start "$NAME"; then ok "GRE interface is up"; else bad "service failed"; fi
+  printf '%s\n' "$(pair_code)" >"$dir/pair.code"; chmod 600 "$dir/pair.code"
   echo
-  info "Pair Code for KHAREJ:"
-  printf '\n%s\n\n' "$(pair_code)"
-  info "Inner link: $LOCAL_TUN <-> $REMOTE_TUN"
+  top; sect "CREATED - $NAME"; blank
+  kv "role" "$W IRAN / pair owner$N"
+  kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"
+  kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"
+  kv "profile" "$W$PROFILE$N"
+  bot; echo
+  if service_start "$NAME"; then ok "GRE interface is up"; else bad "service failed - config and Pair Code were kept"; fi
+  show_pair_code "$NAME"
+  warn "provider firewall/security-group must allow GRE protocol 47"
   pause
 }
 
 new_kharej(){
-  header "New tunnel - KHAREJ"
+  header "NEW TUNNEL - KHAREJ"
+  top; sect "ROLE CHECK"; blank
+  row "$(printf '%sKHAREJ takes the Pair Code created on IRAN.%s' "$D" "$N")"
+  row "$(printf '%sGRE settings come from the code - no manual duplicate setup.%s' "$D" "$N")"
+  bot; echo
   local code dir detected id
-  ask "Pair Code" ""; code="$ANS"
-  decode_pair "$code" || { bad "invalid Pair Code"; pause; return; }
-  NAME="$P_NAME"; dir="$TUN_DIR/$NAME"; [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
+  info "paste the pair code from the IRAN server"
+  ask "pair code"; code="$ANS"
+  if ! decode_pair "$code"; then
+    bad "invalid or unsupported Pair Code"
+    dim "copy the complete DGR1-... code from IRAN"
+    pause; return
+  fi
+  echo; top; sect "PAIRED WITH"; blank
+  kv "iran" "$W$P_IRAN_PUBLIC$N"
+  kv "kharej" "$W$P_KHAREJ_PUBLIC$N"
+  kv "inner" "$W$P_KHAREJ_TUN/$P_PREFIX -> $P_IRAN_TUN$N"
+  kv "profile" "$W$P_PROFILE$N"
+  bot; echo
+  NAME="$P_NAME"; dir="$TUN_DIR/$NAME"
+  [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
   detected="$(public_ipv4)"
-  [ -n "$detected" ] && [ "$detected" != "$P_KHAREJ_PUBLIC" ] && warn "Pair Code expects $P_KHAREJ_PUBLIC but this server reports $detected"
+  [ -n "$detected" ] && [ "$detected" != "$P_KHAREJ_PUBLIC" ] &&
+    warn "Pair Code expects $P_KHAREJ_PUBLIC but this server reports $detected"
   LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"
-  LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"; PREFIX="$P_PREFIX"; PROFILE="$P_PROFILE"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"
-  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE="KHAREJ"; ID="$id"
-  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU=$MTU" "TXQLEN=$TXQLEN"
+  LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"
+  PREFIX="$P_PREFIX"; PROFILE="$P_PROFILE"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"
+  id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"
+  IFNAME="$(iface_for "$NAME")"; ROLE="KHAREJ"; ID="$id"
+  save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME"     "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC"     "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX"     "PROFILE=$PROFILE" "MTU=$MTU" "TXQLEN=$TXQLEN"
   if service_start "$NAME"; then ok "GRE interface is up"; else bad "service failed"; fi
-  ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 && ok "inner peer responds: $REMOTE_TUN" || warn "inner peer is not responding yet"
+  ping -c 2 -W 2 "$REMOTE_TUN" >/dev/null 2>&1 &&
+    ok "inner peer responds: $REMOTE_TUN" ||
+    warn "inner peer is not responding yet"
   pause
 }
 
