@@ -9,6 +9,10 @@ on:
       - "mobile-client/**"
       - ".github/workflows/mobile-client-android.yml"
 
+concurrency:
+  group: mobile-client-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
