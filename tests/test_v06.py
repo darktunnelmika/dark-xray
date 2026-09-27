@@ -434,3 +434,20 @@ def test_guard_sync_replays_active_sqlite_bans_after_broker_lease_loss(env,tmp_p
         assert engine.ip_status()['broker']['restored_active_bans']>=1
     finally:
         server.shutdown();server.server_close();worker.join()
+
+
+def test_ip_guard_policy_snapshot_is_reused_until_db_revision_changes(env,monkeypatch):
+    _,engine,_,_,c=env;create(c)
+    calls=0;real=engine.ip_policy
+    def counted(*args,**kwargs):
+        nonlocal calls;calls+=1
+        return real(*args,**kwargs)
+    monkeypatch.setattr(engine,'ip_policy',counted)
+    engine._guard_policy_cache=None;engine._guard_policy_cache_key=None
+    first=engine.sync_ip_guard();second=engine.sync_ip_guard()
+    assert calls==1 and first.clients['dark-test'].limit_ip==second.clients['dark-test'].limit_ip
+    assert c.patch('/api/clients/dark-test',json={'client':{'limitHwid':2}}).status_code==202
+    assert calls==1
+    assert c.patch('/api/clients/dark-test',json={'client':{'limitIp':2}}).status_code==202
+    after=engine.sync_ip_guard()
+    assert calls==2 and after.clients['dark-test'].limit_ip==2

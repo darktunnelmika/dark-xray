@@ -142,6 +142,8 @@ class CoreEngine:
         self._guard_status={'state':'pending','requested_mode':'observe','applied':False,'checked_at':0}
         self._guard_boot=''
         self._guard_executor=None
+        self._guard_policy_cache=None
+        self._guard_policy_cache_key=None
         with store.lock:
             store.db.executescript('''
             CREATE TABLE IF NOT EXISTS core_inbounds(id INTEGER PRIMARY KEY AUTOINCREMENT,body TEXT NOT NULL);
@@ -154,6 +156,41 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_client_tombstones(
               email TEXT PRIMARY KEY,body TEXT NOT NULL,inbounds TEXT NOT NULL,
               up INTEGER NOT NULL,down INTEGER NOT NULL,deleted_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS core_guard_revision(
+              id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL DEFAULT 0);
+            INSERT OR IGNORE INTO core_guard_revision(id,revision) VALUES(1,0);
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_clients_insert
+              AFTER INSERT ON clients BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_clients_delete
+              AFTER DELETE ON clients BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_clients_update
+              AFTER UPDATE OF id,owner,limit_ip ON clients
+              WHEN OLD.id IS NOT NEW.id OR OLD.owner IS NOT NEW.owner OR OLD.limit_ip IS NOT NEW.limit_ip
+              BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_core_clients_insert
+              AFTER INSERT ON core_clients BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_core_clients_delete
+              AFTER DELETE ON core_clients BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_core_clients_update
+              AFTER UPDATE OF email,inbounds ON core_clients
+              WHEN OLD.email IS NOT NEW.email OR OLD.inbounds IS NOT NEW.inbounds
+              BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_inbounds_insert
+              AFTER INSERT ON core_inbounds BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_inbounds_delete
+              AFTER DELETE ON core_inbounds BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_inbounds_update
+              AFTER UPDATE OF body ON core_inbounds WHEN OLD.body IS NOT NEW.body
+              BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_ipguard_insert
+              AFTER INSERT ON core_sections WHEN NEW.name='ipguard'
+              BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_ipguard_update
+              AFTER UPDATE OF body ON core_sections WHEN NEW.name='ipguard' AND OLD.body IS NOT NEW.body
+              BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
+            CREATE TRIGGER IF NOT EXISTS core_guard_rev_ipguard_delete
+              AFTER DELETE ON core_sections WHEN OLD.name='ipguard'
+              BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
             ''')
         self.validate_schema_only=True
 
@@ -649,6 +686,14 @@ class CoreEngine:
         if not r:raise CoreError('Core client not found',status=404)
         return {'client':json.loads(r['body']),'inboundIds':json.loads(r['inbounds'])}
 
+    def client_snapshot(self,email:str,*,collect:bool=False)->dict|None:
+        if collect:self.collect_stats()
+        with self.store.lock:
+            r=self.store.db.execute('SELECT body,inbounds,up,down FROM core_clients WHERE email=?',(email,)).fetchone()
+        if not r:return None
+        return json.loads(r['body'])|{'inboundIds':json.loads(r['inbounds']),
+                                     'traffic':{'up':int(r['up']),'down':int(r['down'])}}
+
     @serialized
     def create(self,client:dict,inbounds:list[int]):
         self._write()
@@ -674,8 +719,18 @@ class CoreEngine:
         if not isinstance(items,list) or not items or len(items)>500:
             raise CoreError('Core batch upsert requires 1..500 clients')
         known={r['id'] for r in self.inbounds()}
+        requested=[];seen=set()
+        for raw in items:
+            if not isinstance(raw,dict):
+                raise CoreError('Invalid core batch item')
+            email=raw.get('email')
+            if not isinstance(email,str) or not EMAIL_RE.fullmatch(email) or email in seen:
+                raise CoreError('Invalid or duplicate core batch identity')
+            seen.add(email);requested.append(email)
+        placeholders=','.join('?' for _ in requested)
         with self.store.lock:
-            rows={r['email']:r for r in self.store.db.execute('SELECT email,body,inbounds FROM core_clients')}
+            rows={r['email']:r for r in self.store.db.execute(
+                f'SELECT email,body,inbounds FROM core_clients WHERE email IN ({placeholders})',tuple(requested))}
         prepared=[];seen=set()
         for raw in items:
             if not isinstance(raw,dict):
@@ -943,423 +998,3 @@ class CoreEngine:
                     for email,pair in samples.items():
                         old=self.last_samples.get(email,(0,0));delta=[pair[i]-old[i] if pair[i]>=old[i] else pair[i] for i in range(2)]
                         db.execute('UPDATE core_clients SET up=up+?,down=down+? WHERE email=?',(*delta,email))
-                self.last_samples.update({k:tuple(v) for k,v in samples.items()})
-                self.last_stats=time.monotonic();self.stats_error=''
-            except (ValueError,OSError,subprocess.SubprocessError,CoreError) as ex:
-                self.stats_error=str(ex)[:500]
-                if strict:raise CoreError('Cannot safely snapshot traffic before stopping/resetting: '+self.stats_error,status=503)
-
-    def runtime_state(self)->dict:
-        try:dirty=self.config_hash(self.build_config())!=self.applied_hash
-        except Exception:dirty=True
-        running=self.running
-        return {'running':running,'pid':self.process.pid if running else None,'core_binary_present':Path(self.config.xray_binary).is_file(),
-                'version':self.version,'dirty':dirty,'state':'running' if running else 'stopped','last_error':self.last_error,
-                'statistics_error':self.stats_error,'applied_hash':self.applied_hash,'last_apply':self.last_apply,
-                'desired_running':bool(self.wants_running),'automatic_recoveries':self.automatic_recoveries,
-                'last_exit_code':self.last_exit_code,'last_exit_at':self.last_exit_at,
-                'independent':True,'restart_disconnects_existing_sessions':True}
-
-    def _host_cpu_percent(self,now:float)->float:
-        if self._cpu_sample_at and now-self._cpu_sample_at<1.0:return self._cpu_value
-        # A 200 ms psutil sample avoids the false-looking zeros caused by the old 50 ms window.
-        self._cpu_value=round(float(psutil.cpu_percent(interval=.2)),1);self._cpu_sample_at=time.monotonic()
-        return self._cpu_value
-
-    def system(self)->dict:
-        vm=psutil.virtual_memory();disk=psutil.disk_usage(self.runtime);swap=psutil.swap_memory();net=psutil.net_io_counters()
-        now=time.monotonic();rates={}
-        if self._net_sample:
-            then,up,down=self._net_sample;elapsed=max(.001,now-then)
-            rates={'up':max(0,net.bytes_sent-up)/elapsed,'down':max(0,net.bytes_recv-down)/elapsed}
-        self._net_sample=(now,net.bytes_sent,net.bytes_recv)
-        core_mem=0
-        if self.running:
-            try:core_mem=psutil.Process(self.process.pid).memory_info().rss
-            except psutil.Error:pass
-        panel_mem=panel_threads=0
-        try:
-            panel=psutil.Process(os.getpid());panel_mem=panel.memory_info().rss;panel_threads=panel.num_threads()
-        except psutil.Error:pass
-        physical=psutil.cpu_count(logical=False) or 0;logical=psutil.cpu_count(logical=True) or 0
-        freq=psutil.cpu_freq()
-        cpu_info={'physical':int(physical),'logical':int(logical),'mhz':round(float(freq.current),1) if freq and freq.current else 0.0}
-        conn={'open':0,'tcp':0,'udp':0,'available':True}
-        try:
-            for row in psutil.net_connections(kind='inet'):
-                if row.type==socket.SOCK_STREAM:conn['tcp']+=1
-                elif row.type==socket.SOCK_DGRAM:conn['udp']+=1
-            conn['open']=conn['tcp']+conn['udp']
-        except (psutil.AccessDenied,psutil.Error,OSError):
-            conn={'open':0,'tcp':0,'udp':0,'available':False}
-        addresses=[]
-        try:
-            for name,rows in psutil.net_if_addrs().items():
-                for row in rows:
-                    if row.family not in (socket.AF_INET,socket.AF_INET6):continue
-                    raw=str(row.address).split('%',1)[0]
-                    try:ip=ipaddress.ip_address(raw)
-                    except ValueError:continue
-                    if ip.is_loopback or ip.is_link_local:continue
-                    item={'interface':str(name)[:64],'address':ip.compressed,'family':4 if ip.version==4 else 6}
-                    if item not in addresses:addresses.append(item)
-                    if len(addresses)>=16:break
-                if len(addresses)>=16:break
-        except (psutil.Error,OSError):pass
-        return {'cpu':self._host_cpu_percent(now),'cpuInfo':cpu_info,
-                'mem':{'current':vm.used,'total':vm.total},
-                'disk':{'current':disk.used,'total':disk.total,'free':disk.free},
-                'swap':{'current':swap.used,'total':swap.total},
-                'uptime':int(time.time()-psutil.boot_time()),'loads':list(os.getloadavg()),
-                'netTraffic':{'sent':net.bytes_sent,'recv':net.bytes_recv},'netIO':rates,
-                'connections':conn,'addresses':addresses,
-                'panel':{'mem':panel_mem,'threads':panel_threads,'pid':os.getpid()},
-                'xray':{'state':'running' if self.running else 'stopped','version':self.version,'mem':core_mem,
-                        'uptime':int(time.time()-self.last_start) if self.running and self.last_start else 0},
-                'runtime':self.runtime_state()}
-
-    def ip_policy(self,enforce:bool|None=None)->Policy:
-        clients={};ibs={i['id']:i for i in self.inbounds() if i['enable']}
-        settings=self.section('ipguard')
-        if enforce is None:enforce=settings['mode']=='enforce'
-        with self.store.lock:
-            rows=self.store.db.execute('SELECT id,owner,limit_ip FROM clients').fetchall()
-            cs={r['email']:json.loads(r['inbounds']) for r in self.store.db.execute('SELECT email,inbounds FROM core_clients')}
-            mirror_table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_agent_mirror_clients'").fetchone()
-            mirrors=[r[0] for r in self.store.db.execute('SELECT DISTINCT mirror_email FROM node_agent_mirror_clients')] if mirror_table else []
-        for r in rows:
-            ports=sorted({ibs[i]['port'] for i in cs.get(r['id'],[]) if i in ibs})
-            if ports:clients[r['id']]={'owner':r['owner'],'limit_ip':r['limit_ip'],'ports':ports}
-        # Node mirror identities are observed locally with no per-node quota.
-        # Central aggregates their verified source observations across nodes and
-        # decides the global client policy; a node must never invent a local cap.
-        for email in mirrors:
-            ports=sorted({ibs[i]['port'] for i in cs.get(email,[]) if i in ibs})
-            if ports:clients[email]={'owner':'_node_mirror','limit_ip':0,'ports':ports}
-        return Policy.from_dict({'schema':1,'clients':clients,'enforce':enforce,
-            'source_mode':'direct' if self.config.direct_source_verified else 'opaque',
-            'original_ip_verified':self.config.direct_source_verified,'window_seconds':settings['window_seconds'],
-            'ban_seconds':settings['ban_seconds'],'exempt_ips':settings.get('exempt_ips',[]),
-            'protected_ports':self.config.protected_ports})
-
-    def sync_ip_guard(self):
-        from dataclasses import asdict
-        from guard_bridge import BrokerClient,BrokerExecutor
-        policy=self.ip_policy()
-        generation=self.config_hash(asdict(policy));self._guard_executor=None
-        status={'state':'observing','requested_mode':'enforce' if policy.enforce else 'observe',
-                'policy_hash':generation,'loaded_policy_hash':generation,'applied':False,
-                'checked_at':time.time(),'limited_clients':sum(c.limit_ip>0 for c in policy.clients.values()),
-                'error':''}
-        if policy.enforce:
-            try:
-                executor=BrokerExecutor(policy,BrokerClient(self.config.guard_socket));info=executor.check()
-                # The broker's nftables set is volatile. SQLite is the durable
-                # source for not-yet-expired bans, so a broker restart or lost
-                # lease must replay active bans instead of leaving a false
-                # `applied` row with no packet-level element.
-                with self.store.transaction() as db:
-                    db.execute("CREATE TABLE IF NOT EXISTS core_guard_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-                    db.execute("INSERT INTO core_guard_meta VALUES('boot_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(info['boot_id'],))
-                restored=0;released=0;now=time.time()
-                with self.store.lock:
-                    active=[dict(r) for r in self.store.db.execute(
-                        "SELECT jail,ip,expires_at FROM bans WHERE state='applied' AND expires_at>?",(now,))]
-                for ban in active:
-                    remaining=max(1,int(float(ban['expires_at'])-now))
-                    try:
-                        executor.ban(str(ban['jail']),str(ban['ip']),seconds=remaining);restored+=1
-                    except PolicyError as ex:
-                        if 'Unmanaged data-port group' not in str(ex):raise
-                        with self.store.transaction() as db:
-                            db.execute("UPDATE bans SET state='released',expires_at=? WHERE jail=? AND ip=?",
-                                       (now,ban['jail'],ban['ip']))
-                        released+=1
-                if restored:
-                    info=executor.client.status()
-                info={**info,'restored_active_bans':restored,'released_unmanaged_bans':released}
-                self._guard_executor=executor;status.update(state='applied',applied=True,broker=info)
-            except (PolicyError,OSError) as exc:
-                status.update(state='error',error=str(exc)[:500],loaded_policy_hash='')
-        elif not policy.original_ip_verified:
-            status['source_warning']='IP sources are not verified; no automatic ban or concurrency claim'
-        self._guard_status=status
-        return policy
-
-    def read_ip_log(self):
-        try:policy=self.sync_ip_guard()
-        except (PolicyError,CoreError) as exc:
-            self.ip_error=str(exc);return
-        path=self.runtime/'access.log'
-        if not path.exists():return
-        try:
-            if path.is_symlink():raise PolicyError('Access log symlink refused')
-            info=path.stat();identity=(info.st_dev,info.st_ino)
-            if self._access_inode is None:
-                self._access_inode=identity;self._access_position=0
-            if identity!=self._access_inode or info.st_size<self._access_position:
-                self._access_position=0;self._access_fragment='';self._access_inode=identity
-            with path.open('rb') as f:
-                f.seek(self._access_position);data=f.read(1024*1024);self._access_position=f.tell()
-            text=self._access_fragment+data.decode('utf-8',errors='replace');lines=text.split('\n');self._access_fragment=lines.pop()[-16384:]
-            guard=Guard(policy,self.store,self._guard_executor)
-            for line in lines:
-                obs=parse_access_line(line)
-                if obs:
-                    result=guard.observe(obs.email,obs.ip)
-                    if result.get('decision')=='enforcement_failed':
-                        self._guard_status.update(state='error',applied=False,error=result.get('reason','Enforcement failed'))
-            self.ip_error=''
-        except (OSError,PolicyError) as ex:self.ip_error=str(ex)[:500]
-
-    def ips(self,email:str)->list[dict]:
-        self.read_ip_log()
-        with self.store.lock:return [dict(r) for r in self.store.db.execute('SELECT ip,node,first_seen,last_seen,granted FROM observations WHERE client_id=? ORDER BY last_seen DESC',(email,))]
-
-    def clear_ips(self,email:str):
-        with self.store.transaction() as db:db.execute('DELETE FROM observations WHERE client_id=?',(email,))
-        return {'cleared':True,'firewall_unban':False}
-
-    def unban_ip(self,ip:str)->dict:
-        from guard_bridge import BrokerClient
-        from dark_policy import normalize_ip
-        ip=normalize_ip(ip);response=BrokerClient(self.config.guard_socket).release(ip)
-        with self.store.transaction() as db:
-            db.execute("UPDATE bans SET state='released',expires_at=? WHERE ip=?",(time.time(),ip))
-            db.execute('DELETE FROM observations WHERE ip=? AND granted=0',(ip,))
-        return response
-
-    def ip_status(self)->dict:
-        return {'mode':self.section('ipguard')['mode'],'source_verified':self.config.direct_source_verified,
-                'window_seconds':self.section('ipguard')['window_seconds'],
-                'limiter':'independent DARK Guard','error':self.ip_error or self._guard_status.get('error',''),
-                'enforcement':'narrow root-owned Unix/nftables broker; panel remains unprivileged',
-                'global_multi_node_limit':False,'packet_block_tested':False,**self._guard_status,
-                **({'error':self.ip_error,'state':'error','applied':False} if self.ip_error else {})}
-
-    def devices(self,email:str)->list[dict]:
-        with self.store.lock:return [dict(r) for r in self.store.db.execute('SELECT id,device_os,model,first_seen,last_seen FROM core_devices WHERE email=?',(email,))]
-
-    def clear_devices(self,email:str,device_id:int|None=None):
-        with self.store.transaction() as db:
-            db.execute('DELETE FROM core_devices WHERE email=?'+(' AND id=?' if device_id is not None else ''),(email,device_id) if device_id is not None else (email,))
-        return {'cleared':True}
-
-    @serialized
-    def check_device(self,email:str,hwid:str,os_name:str='',model:str=''):
-        client=self.client_detail(email)['client'];limit=client.get('limitHwid',0)
-        if not limit:return
-        if not isinstance(hwid,str) or not 4<=len(hwid)<=512:raise CoreError('A supported client must send x-hwid for this subscription',status=403)
-        fingerprint=hashlib.sha256(hwid.encode()).hexdigest();now=time.time()
-        with self.store.transaction() as db:
-            r=db.execute('SELECT id FROM core_devices WHERE email=? AND digest=?',(email,fingerprint)).fetchone()
-            if r:db.execute('UPDATE core_devices SET last_seen=? WHERE id=?',(now,r[0]));return
-            if db.execute('SELECT COUNT(*) FROM core_devices WHERE email=?',(email,)).fetchone()[0]>=limit:raise CoreError('Subscription device limit reached',status=403)
-            db.execute('INSERT INTO core_devices(email,digest,device_os,model,first_seen,last_seen) VALUES(?,?,?,?,?,?)',(email,fingerprint,os_name[:80],model[:120],now,now))
-
-    def links(self,email:str,fmt:str='raw',runtime_ready:dict[str,set[int]]|None=None)->dict:
-        if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported link format',status=400)
-        host_format='raw' if fmt=='base64' else fmt
-        d=self.client_detail(email);c=d['client'];links=[];warnings=[]
-        for i in d['inboundIds']:
-            ib=self.inbound(i)
-            if not ib['enable']:continue
-            configured=[h for h in self.section('hosts') if h['inboundId']==i]
-            if configured:
-                hs=[h for h in configured if h.get('enable',True) and host_format not in h.get('excludeFromSubTypes',[])
-                    and (runtime_ready is None or i in runtime_ready.get(h.get('runtime','local') or 'local',set()))]
-            else:
-                hs=[{}] if runtime_ready is None or i in runtime_ready.get('local',set()) else []
-            for host in hs:
-                runtime=host.get('runtime','local') or 'local'
-                address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
-                proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
-                label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
-                st=ib['streamSettings'];net=st.get('network','tcp');base_sec=st.get('security','none')
-                force=host.get('security','same') or 'same';sec=base_sec if force=='same' else force
-                q={'type':net,'security':sec}
-                base_security=st.get('realitySettings' if base_sec=='reality' else 'tlsSettings',{}) if base_sec!='none' else {}
-                security=base_security if sec==base_sec else {}
-                sni=''
-                if not host.get('keepSniBlank',False) and sec!='none':
-                    if host.get('overrideSniFromAddress',False):sni=address
-                    elif host.get('sni'):sni=host['sni']
-                    elif sec==base_sec:sni=security.get('serverName') or next(iter(security.get('serverNames',[])),'')
-                if sni:q['sni']=sni
-                if sec=='reality':
-                    key=security.get('privateKey','')
-                    if not key: warnings.append('REALITY private key missing for '+ib['tag']);continue
-                    try:
-                        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-                        from cryptography.hazmat.primitives import serialization
-                        pub=X25519PrivateKey.from_private_bytes(base64.urlsafe_b64decode(key+'='*((4-len(key)%4)%4))).public_key()
-                        q['pbk']=base64.urlsafe_b64encode(pub.public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode().rstrip('=')
-                    except (ValueError,TypeError):warnings.append('Invalid REALITY key for '+ib['tag']);continue
-                    q['sid']=next(iter(security.get('shortIds',[])),'')
-                    meta=ib.get('panelMeta',{}).get('reality',{}) if isinstance(ib.get('panelMeta',{}),dict) else {}
-                    q['fp']=host.get('fingerprint') or meta.get('fingerprint','chrome')
-                    spider=meta.get('spiderX','')
-                    if spider:q['spx']=spider
-                elif sec=='tls' and host.get('fingerprint'):
-                    q['fp']=host['fingerprint']
-                alpn=host.get('alpn','')
-                if not alpn and sec==base_sec and isinstance(security.get('alpn'),list):alpn=','.join(str(x) for x in security['alpn'] if x)
-                if sec!='none' and alpn:q['alpn']=alpn
-                if sec!='none' and host.get('allowInsecure',False):q['allowInsecure']='1'
-                if host.get('finalMask'):q['fm']=host['finalMask']
-                if net in ('ws','httpupgrade','xhttp'):
-                    ns=st.get(net+'Settings',{});q['path']=host.get('path') or ns.get('path','/')
-                    q['host']=host.get('host') or ns.get('host',ns.get('headers',{}).get('Host',''))
-                    if net=='xhttp':q['mode']=ns.get('mode','auto')
-                if net=='grpc':q['serviceName']=st.get('grpcSettings',{}).get('serviceName','')
-                hp=('['+address+']' if ':' in address else address)+':'+str(port)
-                if proto=='vless':
-                    q['encryption']=c.get('encryption') or 'none'
-                    if c.get('flow') and net in ('tcp','raw') and sec in ('tls','reality'):q['flow']=c['flow']
-                    uri='vless://'+c['id']+'@'+hp+'?'+urlencode(q)+'#'+quote(label)
-                elif proto=='trojan':uri='trojan://'+quote(c['password'],safe='')+'@'+hp+'?'+urlencode(q)+'#'+quote(label)
-                elif proto=='vmess':
-                    ob={'v':'2','ps':label,'add':address,'port':str(port),'id':c['id'],'aid':'0','scy':c.get('security','auto'),
-                        'net':net,'type':'none','host':q.get('host',''),'path':q.get('serviceName',q.get('path','')),'tls':sec if sec!='none' else '','sni':sni}
-                    if q.get('fp'):ob['fp']=q['fp']
-                    if q.get('alpn'):ob['alpn']=q['alpn']
-                    if q.get('allowInsecure'):ob['allowInsecure']=True
-                    if q.get('fm'):ob['fm']=q['fm']
-                    uri='vmess://'+base64.b64encode(json.dumps(ob,separators=(',',':'),ensure_ascii=False).encode()).decode()
-                elif proto=='shadowsocks':
-                    method=ib['settings'].get('method','aes-128-gcm')
-                    if method.startswith('2022-') or net not in ('tcp','raw') or sec!='none':
-                        warnings.append('Shadowsocks transport/2022 export not yet supported');continue
-                    user=base64.urlsafe_b64encode((method+':'+c['password']).encode()).decode().rstrip('=');uri='ss://'+user+'@'+hp+'#'+quote(label)
-                else:warnings.append('No subscription generator for '+proto);continue
-                meta={}
-                if host.get('mihomoIpVersion'):meta['mihomoIpVersion']=host['mihomoIpVersion']
-                links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta,'runtime':runtime,
-                              'endpointType':host.get('endpointType','direct') or 'direct'})
-        return {'links':links,'warnings':warnings,'formats':['raw','base64','json','clash']}
-
-    @staticmethod
-    def _clash_proxy(uri:str,name:str,meta:dict|None=None)->dict:
-        from urllib.parse import urlsplit,parse_qs,unquote
-        meta=meta if isinstance(meta,dict) else {}
-        def finish(out):
-            ipver=meta.get('mihomoIpVersion','')
-            if ipver:out['ip-version']=ipver
-            return out
-        if uri.startswith('vmess://'):
-            raw=uri[8:];doc=json.loads(base64.b64decode(raw+'='*((4-len(raw)%4)%4)).decode())
-            out={'name':name,'type':'vmess','server':doc['add'],'port':int(doc['port']),'uuid':doc['id'],'alterId':int(doc.get('aid',0)),'cipher':doc.get('scy','auto'),'udp':True}
-            net=doc.get('net','tcp');out['network']=net
-            if doc.get('tls'):out['tls']=True
-            if doc.get('sni'):out['servername']=doc['sni']
-            if doc.get('fp'):out['client-fingerprint']=doc['fp']
-            if doc.get('allowInsecure'):out['skip-cert-verify']=True
-            if doc.get('alpn'):out['alpn']=[x for x in str(doc['alpn']).split(',') if x]
-            if net=='ws':out['ws-opts']={'path':doc.get('path','/'),'headers':{'Host':doc.get('host','')}}
-            if net=='grpc':out['grpc-opts']={'grpc-service-name':doc.get('path','')}
-            return finish(out)
-        p=urlsplit(uri);q={k:v[-1] for k,v in parse_qs(p.query).items()};proto=p.scheme
-        if proto=='ss':
-            user=p.username or ''
-            try:creds=base64.urlsafe_b64decode(user+'='*((4-len(user)%4)%4)).decode();method,password=creds.split(':',1)
-            except Exception:raise CoreError('Cannot convert Shadowsocks link to Clash')
-            return finish({'name':name,'type':'ss','server':p.hostname,'port':p.port,'cipher':method,'password':password,'udp':True})
-        if proto not in ('vless','trojan'):raise CoreError('Unsupported Clash proxy protocol')
-        out={'name':name,'type':proto,'server':p.hostname,'port':p.port,'udp':True}
-        if proto=='vless':out['uuid']=unquote(p.username or '')
-        else:out['password']=unquote(p.username or '')
-        net=q.get('type','tcp');sec=q.get('security','none');out['network']=net
-        if sec in ('tls','reality'):out['tls']=True
-        if q.get('sni'):out['servername']=q['sni']
-        if q.get('flow'):out['flow']=q['flow']
-        if q.get('fp'):out['client-fingerprint']=q['fp']
-        if q.get('allowInsecure')=='1':out['skip-cert-verify']=True
-        if q.get('alpn'):out['alpn']=[x for x in q['alpn'].split(',') if x]
-        if sec=='reality':out['reality-opts']={'public-key':q.get('pbk',''),'short-id':q.get('sid','')}
-        if net=='ws':out['ws-opts']={'path':q.get('path','/'),'headers':{'Host':q.get('host','')}}
-        if net=='grpc':out['grpc-opts']={'grpc-service-name':q.get('serviceName','')}
-        if net=='xhttp':out['xhttp-opts']={'path':q.get('path','/'),'mode':q.get('mode','auto')}
-        return finish(out)
-
-    @staticmethod
-    def _yaml(value,level:int=0)->str:
-        pad='  '*level
-        if isinstance(value,dict):
-            lines=[]
-            for k,v in value.items():
-                key=json.dumps(str(k),ensure_ascii=False)
-                if isinstance(v,(dict,list)):lines.append(f'{pad}{key}:\n'+CoreEngine._yaml(v,level+1))
-                else:lines.append(f'{pad}{key}: {CoreEngine._yaml(v,0).strip()}')
-            return '\n'.join(lines)
-        if isinstance(value,list):
-            lines=[]
-            for v in value:
-                if isinstance(v,(dict,list)):
-                    nested=CoreEngine._yaml(v,level+1).splitlines();lines.append(pad+'- '+nested[0].lstrip());lines.extend(nested[1:])
-                else:lines.append(pad+'- '+CoreEngine._yaml(v,0).strip())
-            return '\n'.join(lines)
-        if value is True:return 'true'
-        if value is False:return 'false'
-        if value is None:return 'null'
-        if isinstance(value,(int,float)):return str(value)
-        return json.dumps(str(value),ensure_ascii=False)
-
-    @staticmethod
-    def _header_text(value:str)->str:
-        value=' '.join(str(value or '').splitlines()).strip()
-        if any(ord(ch)<32 or ord(ch)==127 for ch in value):raise CoreError('Unsafe subscription header value')
-        try:value.encode('ascii');return value
-        except UnicodeEncodeError:return 'base64:'+base64.b64encode(value.encode('utf-8')).decode('ascii')
-
-    def subscription(self,email:str,fmt:str,extra_links:list[dict]|None=None,runtime_ready:dict[str,set[int]]|None=None)->tuple[bytes,dict]:
-        if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported subscription format',status=400)
-        settings=self.section('subscription');result=self.links(email,'raw' if fmt=='base64' else fmt,runtime_ready=runtime_ready)
-        if result['warnings']:raise CoreError('Subscription would be incomplete: '+'; '.join(result['warnings']),status=422)
-        if extra_links:
-            if not isinstance(extra_links,list) or len(extra_links)>2048:raise CoreError('Invalid failover link set',status=500)
-            for item in extra_links:
-                if not isinstance(item,dict) or not isinstance(item.get('uri'),str) or not isinstance(item.get('remark'),str):
-                    raise CoreError('Invalid failover link item',status=500)
-                result['links'].append(copy.deepcopy(item))
-        links=[r['uri'] for r in result['links']]
-        if not links:raise CoreError('No enabled supported connection',status=503)
-        content_type='text/plain; charset=utf-8'
-        if fmt in ('raw','base64'):
-            body='\n'.join(links).encode();body=base64.b64encode(body) if fmt=='base64' else body
-        elif fmt=='json':
-            body=json.dumps({'version':1,'title':settings.get('profile_title','DARK XRAY'),'client':email,'announce':settings.get('announce',''),'links':result['links']},ensure_ascii=False,indent=2).encode();content_type='application/json; charset=utf-8'
-        else:
-            proxies=[]
-            for item in result['links']:proxies.append(self._clash_proxy(item['uri'],item['remark'],item.get('hostMeta')))
-            names=[p['name'] for p in proxies]
-            if any(item.get('failoverNode') for item in result['links']):
-                groups=[
-                    {'name':'DARK FAILOVER','type':'fallback','url':'https://www.gstatic.com/generate_204','interval':120,'proxies':names},
-                    {'name':'DARK AUTO','type':'select','proxies':['DARK FAILOVER',*names]},
-                ]
-                doc={'proxies':proxies,'proxy-groups':groups,'rules':['MATCH,DARK FAILOVER']}
-            else:
-                doc={'proxies':proxies,'proxy-groups':[{'name':'DARK AUTO','type':'select','proxies':names}], 'rules':['MATCH,DARK AUTO']}
-            body=(self._yaml(doc)+'\n').encode();content_type='application/yaml; charset=utf-8'
-        with self.store.lock:
-            r=self.store.db.execute('SELECT * FROM core_clients WHERE email=?',(email,)).fetchone()
-            remote_table=self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='remote_node_client_usage'").fetchone()
-            remote=self.store.db.execute('SELECT COALESCE(SUM(current_up),0) up,COALESCE(SUM(current_down),0) down FROM remote_node_client_usage WHERE client_id=?',(email,)).fetchone() if remote_table else None
-        c=json.loads(r['body']);global_up=int(r['up'])+int(remote['up'] if remote else 0);global_down=int(r['down'])+int(remote['down'] if remote else 0)
-        headers={'Content-Type':content_type,'profile-update-interval':str(settings.get('profile_update_interval_hours',6)),
-            'profile-title':self._header_text(settings.get('profile_title','DARK XRAY')),
-            'subscription-userinfo':f"upload={global_up}; download={global_down}; total={c.get('totalGB',0)}; expire={max(0,c.get('expiryTime',0)//1000)}"}
-        support=settings.get('support_url','');profile=settings.get('profile_url','')
-        if support:headers['support-url']=support
-        if profile:headers['profile-web-page-url']=profile
-        return body,headers
-
-    def close(self):
-        with self.lock:
-            if self.running:
-                last=None
-                for _ in range(3):
-                    try:self.collect_stats(force=True,strict=True);last=None;break
-                    except CoreError as ex:last=ex;time.sleep(.1)
-                if last:self.stats_error=('Final traffic snapshot failed before core shutdown: '+str(last))[:500]
-            self._stop_child()

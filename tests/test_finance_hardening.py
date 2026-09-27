@@ -22,10 +22,11 @@ def test_resource_credit_adjustment_is_interactive_owner_only(env):
         assert store.db.execute("SELECT COUNT(*) FROM resource_credit_ledger WHERE event_id='seller-resource-0001'").fetchone()[0]==0
 
 
-def test_resource_credit_retry_is_idempotent_and_audited_once(env):
-    store,_,_,_,c=env
+def test_resource_credit_retry_is_idempotent_and_audited_once(env,monkeypatch):
+    store,_,manager,_,c=env
     assert c.put('/api/owners/seller',json={'name':'Seller','allowed':[],'volume_credit_bytes':0,'unlimited_credit':0}).status_code==200
     assert c.post('/api/admins',json={'username':'seller','password':'SellerPass88','role':'reseller'}).status_code==200
+    monkeypatch.setattr(manager,'tick',lambda *a,**k:(_ for _ in ()).throw(AssertionError('credit adjustment must not full-fleet tick')))
     payload={'volume_bytes':125,'unlimited_units':3,'event_id':'owner-resource-0001'}
     first=c.post('/api/resellers/seller/credits',json=payload)
     second=c.post('/api/resellers/seller/credits',json=payload)

@@ -316,7 +316,8 @@ class Manager:
         return existing,reserved
 
     def _stage_create_locked(self,actor:Actor,owner:str,client:dict,ids:list[int],
-                             existing:set[str],reserved:set[str],*,inbounds_checked:bool=False,validated:bool=False)->str:
+                             existing:set[str],reserved:set[str],*,inbounds_checked:bool=False,validated:bool=False,
+                             owner_profile:dict|None=None)->str:
         actor.require('clients','create',owner)
         if not self.engine.config.writes_enabled:raise PolicyError('CoreEngine writes are disabled')
         data=dict(client) if validated else self.validate_client(client);email=data['email'].lower()
@@ -324,7 +325,7 @@ class Manager:
         self.validate_client_transport(data,ids)
         if email in existing:raise PolicyError('Client already exists in engine; adopt explicitly instead of overwriting')
         if email in reserved:raise PolicyError('Identity is already reserved (including historical tombstones)')
-        profile=self.profile(owner);prefix=str(profile.get('prefix') or '').lower()
+        profile=owner_profile if owner_profile is not None else self.profile(owner);prefix=str(profile.get('prefix') or '').lower()
         if prefix and not email.startswith(prefix):raise PolicyError('Client identity must start with reseller prefix: '+prefix)
         data['email']=email;data['id']=data.get('id') or str(uuid.uuid4());data['password']=data.get('password') or secrets.token_urlsafe(24)
         data['auth']=data.get('auth') or secrets.token_urlsafe(24);data['subId']=secrets.token_hex(16)
@@ -360,6 +361,36 @@ class Manager:
             self.tick(suppress=True)
             return self.detail(actor,email)
 
+    def _reconcile_created_batch_locked(self,emails:list[str]):
+        # Apply only newly staged bulk creates; full tick is the fail-closed fallback.
+        if not emails:return
+        placeholders=','.join('?' for _ in emails)
+        with self.store.lock:
+            rows=self.store.db.execute(
+                f"SELECT * FROM managed_clients WHERE email IN ({placeholders})",tuple(emails)).fetchall()
+        metas={r['email']:dict(r) for r in rows}
+        batch=[];snapshots={};now=time.time()
+        try:
+            for email in emails:
+                meta=metas.get(email)
+                if not meta:raise PolicyError('Managed metadata missing during bulk create reconciliation')
+                desired=json.loads(meta['desired']);ids=json.loads(meta['inbounds'])
+                enabled=not self.store.client_reasons(email) and not meta['external_disabled']
+                desired['enable']=enabled
+                batch.append({'email':email,'client':desired,'inbounds':ids})
+                snapshots[email]=CoreEngine.writable(desired)|{
+                    'inboundIds':ids,'traffic':{'up':0,'down':0}}
+            self._schedule_cycles(emails)
+            self.engine.upsert_many(batch)
+            with self.store.transaction() as db:
+                db.executemany("""UPDATE managed_clients SET expected_enable=?,op='none',op_id='',state='applied',
+                    error='',retry_at=0,attempts=0,last_up=0,last_down=0,initialized=1,seq=1,updated_at=? WHERE email=?""",
+                    [(int(bool(snapshots[email].get('enable'))),now,email) for email in emails])
+            self.snapshot.update(snapshots);self.engine.flush()
+            self.last_poll=time.time();self.last_error=''
+        except Exception:
+            self.tick(suppress=True)
+
     def create_batch(self,actor:Actor,owner:str,clients:list[dict],ids:list[int])->dict:
         """Stage up to 500 independent creates, then reconcile the runtime once.
 
@@ -370,23 +401,29 @@ class Manager:
         with self.lock:
             try:
                 actor.require('clients','create',owner);self.check_inbounds(actor,owner,ids)
+                owner_profile=self.profile(owner)
                 existing,reserved=self._creation_sets_locked();preflight_error=''
             except (PolicyError,CoreError) as ex:
-                existing,reserved=set(),set();preflight_error=str(ex)[:300]
+                owner_profile=None;existing,reserved=set(),set();preflight_error=str(ex)[:300]
             out=[];staged=[]
             for raw in clients:
                 label=str(raw.get('email',''))[:128] if isinstance(raw,dict) else ''
                 if preflight_error:
                     out.append({'email':label,'error':preflight_error});continue
                 try:
-                    email=self._stage_create_locked(actor,owner,raw,ids,existing,reserved,inbounds_checked=True)
+                    email=self._stage_create_locked(actor,owner,raw,ids,existing,reserved,inbounds_checked=True,
+                                                    owner_profile=owner_profile)
                     staged.append(email);out.append({'email':email,'_staged':True})
                 except (PolicyError,CoreError,sqlite3.IntegrityError) as ex:
                     out.append({'email':label,'error':str(ex)[:300]})
-            if staged:self.tick(suppress=True)
+            if staged:self._reconcile_created_batch_locked(staged)
+            details={}
+            if staged:
+                try:details=self.details_many(actor,staged)
+                except (PolicyError,CoreError):details={}
             for item in out:
                 if not item.pop('_staged',False):continue
-                try:item['result']=self.detail(actor,item['email'])
+                try:item['result']=details.get(item['email']) or self.detail(actor,item['email'])
                 except (PolicyError,CoreError) as ex:
                     # The durable record was created. Surface reconciliation state
                     # rather than misreporting it as a failed identity reservation.
@@ -415,6 +452,30 @@ class Manager:
             self.audit(actor,owner,'client.adopt',email,'Historical engine bytes are a baseline; resource credit is reserved from the configured client plan')
             self.tick(suppress=True)
             return self.detail(actor,email)
+
+    def _reconcile_client_locked(self,email:str):
+        # Reconcile one edited identity; full-fleet tick is only the fail-closed fallback.
+        try:
+            meta=self.meta(email);desired=json.loads(meta['desired']);ids=json.loads(meta['inbounds'])
+            existing=self.engine.client_snapshot(email,collect=True)
+            if existing:
+                if existing.get('subId')!=desired.get('subId'):
+                    raise CoreError('Identity conflict: engine subId changed; explicit re-adoption is required',status=409)
+                self._charge_snapshot(meta,existing);meta=self.meta(email)
+            enabled=not self.store.client_reasons(email) and not meta['external_disabled']
+            desired['enable']=enabled
+            self._schedule_cycles([email])
+            self.engine.upsert_many([{'email':email,'client':desired,'inbounds':ids}])
+            now=time.time()
+            with self.store.transaction() as db:
+                db.execute("""UPDATE managed_clients SET expected_enable=?,op='none',op_id='',state='applied',
+                    error='',retry_at=0,attempts=0,updated_at=? WHERE email=?""",
+                    (int(enabled),now,email))
+            traffic=(existing or {}).get('traffic') or {'up':0,'down':0}
+            self.snapshot[email]=CoreEngine.writable(desired)|{'inboundIds':ids,'traffic':traffic}
+            self.engine.flush();self.last_poll=time.time();self.last_error=''
+        except Exception:
+            self.tick(suppress=True)
 
     def update(self, actor: Actor,email: str,patch: dict,ids: list[int]|None=None,*,reconcile:bool=True,return_detail:bool=True) -> dict|None:
         patch=self.validate_client(patch,partial=True)
@@ -447,7 +508,7 @@ class Manager:
                 db.execute("UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?",
                   (json.dumps(desired),json.dumps(ids),time.time(),'enable' in patch,email))
             self.audit(actor,row['owner'],'client.update',email,','.join(sorted(patch)))
-            if reconcile:self.tick(suppress=True)
+            if reconcile:self._reconcile_client_locked(email)
             return self.detail(actor,email) if return_detail else None
 
     def update_batch(self,actor:Actor,items:list[dict],*,action:str='edit')->dict:
@@ -714,7 +775,7 @@ class Manager:
         if period<=0:raise PolicyError('Invalid traffic reset schedule')
         return now+period
 
-    def _schedule_cycles(self):
+    def _schedule_cycles(self,emails:list[str]|None=None):
         """Schedule one destructive reset at a time with durable deadlines.
 
         Hourly/daily/weekly/custom intervals are deadline based. Monthly uses the
@@ -722,8 +783,15 @@ class Manager:
         periods collapse into one reset; crash-uncertain resets are never replayed.
         """
         now=time.time()
+        if emails is not None and not emails:return
         with self.store.transaction() as db:
-            metas=db.execute("SELECT * FROM managed_clients WHERE state!='deleted'").fetchall()
+            if emails is None:
+                metas=db.execute("SELECT * FROM managed_clients WHERE state!='deleted'").fetchall()
+            else:
+                placeholders=','.join('?' for _ in emails)
+                metas=db.execute(
+                    f"SELECT * FROM managed_clients WHERE state!='deleted' AND email IN ({placeholders})",
+                    tuple(emails)).fetchall()
             for meta in metas:
                 desired=json.loads(meta['desired']);spec=self._schedule_spec(desired)
                 if not spec:
@@ -930,21 +998,3 @@ class Manager:
             self.audit(actor,row['owner'],'reset.resolve_current',email,'Current engine counters accepted; destructive reset NOT replayed; due reset cycle advanced')
             self.tick(suppress=False)
             return self.detail(actor,email)
-
-    def recover_resets(self):
-        # A crash during a reset has an ambiguous remote outcome. Never replay it.
-        with self.store.transaction() as db:
-            db.execute("UPDATE managed_clients SET state='uncertain',error='Service restarted during a engine reset; automatic retry refused' WHERE state='reset_inflight'")
-
-    def start(self):
-        self.recover_resets()
-        if self.thread:return
-        def run():
-            while not self.stop.is_set():
-                self.tick(suppress=True)
-                self.stop.wait(self.engine.config.poll_seconds)
-        self.thread=threading.Thread(target=run,name='dark-engine-reconcile',daemon=True);self.thread.start()
-
-    def close(self):
-        self.stop.set()
-        if self.thread:self.thread.join(timeout=35)

@@ -420,6 +420,27 @@ def test_agent_security_snapshot_maps_mirror_identity_without_raw_hwid(env,monke
  assert clear.status_code==200 and clear.json()['ips']==1 and clear.json()['devices']==1
 
 
+def test_global_security_reconcile_can_scope_to_one_client(env,monkeypatch):
+ store,_,app,c=env
+ inbound=c.post('/api/inbounds',json=_test_vless('SCOPED SECURITY',24100,'scoped-security')).json()['id']
+ _managed_client(c,'scope-a',inbound,{'limitHwid':1})
+ _managed_client(c,'scope-b',inbound,{'limitHwid':1})
+ reg=app.state.nodes
+ out=reg.reconcile_global_security(local_source_verified=True,client_ids=['scope-a'])
+ assert out['clients']==1
+ assert [x['client_id'] for x in out['items']]==['scope-a']
+
+ calls=[]
+ real=reg.reconcile_global_security
+ def wrapped(**kwargs):
+  calls.append(kwargs.get('client_ids'))
+  return real(**kwargs)
+ monkeypatch.setattr(reg,'reconcile_global_security',wrapped)
+ r=c.patch('/api/clients/scope-b',json={'client':{'limitHwid':2}})
+ assert r.status_code==202,r.text
+ assert calls and calls[-1]==['scope-b']
+
+
 def test_global_ip_guard_aggregates_nodes_and_preserves_block_while_telemetry_stale(env,monkeypatch):
  store,eng,app,c=env
  a=c.post('/api/inbounds',json=_test_vless('GLOBAL IP',24101,'global-ip')).json()['id']

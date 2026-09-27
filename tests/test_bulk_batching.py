@@ -36,11 +36,18 @@ def test_bulk_paths_reconcile_once_per_request(tmp_path,monkeypatch):
             nonlocal calls;calls+=1;return real_tick(*args,**kwargs)
         monkeypatch.setattr(manager,'tick',counted)
 
+        upserts=[];real_upsert=engine.upsert_many
+        def counted_upsert(items):
+            upserts.append(len(items));return real_upsert(items)
+        monkeypatch.setattr(engine,'upsert_many',counted_upsert)
         r=c.post('/api/clients/bulk-create',json={'owner':'dark','prefix':'batch-','postfix':'','first':1,'quantity':5,
             'inboundIds':[i1],'client':{'totalGB':1024*1024,'limitIp':1}})
         assert r.status_code==200,r.text
-        assert r.json()['created']==5 and calls==1
+        assert r.json()['created']==5 and calls==0 and upserts==[5]
         assert all(x['result']['state']=='applied' for x in r.json()['items'] if 'result' in x)
+        with store.lock:
+            rows=store.db.execute("SELECT op,state,initialized,seq FROM managed_clients WHERE email LIKE 'batch-%'").fetchall()
+        assert rows and all(tuple(x)==('none','applied',1,1) for x in rows)
 
         # Bulk edit endpoints must never fall back to one Manager.update()/commit per item.
         def forbidden_update(*args,**kwargs):raise AssertionError('bulk endpoint used per-client Manager.update')
@@ -71,7 +78,7 @@ def test_bulk_create_mixed_duplicate_does_not_poison_other_items(tmp_path,monkey
         r=c.post('/api/clients/bulk-create',json={'owner':'dark','prefix':'mix-','postfix':'','first':1,'quantity':3,
             'inboundIds':[i1],'client':{'limitIp':1}})
         assert r.status_code==200,r.text
-        body=r.json();assert body['created']==2 and calls==1
+        body=r.json();assert body['created']==2 and calls==0
         assert [x['email'] for x in body['items'] if 'error' in x]==['mix-2']
         assert c.get('/api/clients/mix-1').status_code==200
         assert c.get('/api/clients/mix-3').status_code==200
@@ -99,5 +106,45 @@ def test_bulk_adjust_uses_one_core_batch_transaction(tmp_path,monkeypatch):
         assert r.json()['changed']==25
         assert calls==[25] and policy_calls==[25]
         assert all(x.get('result',{}).get('client',{}).get('group')=='FAST' for x in r.json()['items'])
+    finally:
+        c.__exit__(None,None,None);manager.close();engine.close();store.close()
+
+
+def test_bulk_create_schedules_reset_cycles_without_full_fleet_tick(tmp_path,monkeypatch):
+    store,engine,manager,c=make_env(tmp_path)
+    try:
+        i1=c.post('/api/inbounds',json=inbound('batch-cycle',19705)).json()['id']
+        def forbidden_tick(*args,**kwargs):raise AssertionError('bulk create fell back to full-fleet tick')
+        monkeypatch.setattr(manager,'tick',forbidden_tick)
+        r=c.post('/api/clients/bulk-create',json={'owner':'dark','prefix':'cycle-','postfix':'','first':1,'quantity':3,
+            'inboundIds':[i1],'client':{'limitIp':1,'resetTraffic':'daily'}})
+        assert r.status_code==200,r.text
+        assert r.json()['created']==3
+        with store.lock:
+            rows=store.db.execute("SELECT mode,days,completed FROM client_cycles WHERE email LIKE 'cycle-%' ORDER BY email").fetchall()
+        assert [tuple(x) for x in rows]==[('daily',0,0)]*3
+    finally:
+        c.__exit__(None,None,None);manager.close();engine.close();store.close()
+
+
+def test_single_update_reconciles_only_target_client(tmp_path,monkeypatch):
+    store,engine,manager,c=make_env(tmp_path)
+    try:
+        i1=c.post('/api/inbounds',json=inbound('single-fast',19706)).json()['id']
+        r=c.post('/api/clients/bulk-create',json={'owner':'dark','prefix':'single-','postfix':'','first':1,'quantity':20,
+            'inboundIds':[i1],'client':{'limitIp':1}})
+        assert r.status_code==200 and r.json()['created']==20
+        calls=[];real=engine.upsert_many
+        def counted(items):
+            calls.append([x['email'] for x in items]);return real(items)
+        monkeypatch.setattr(engine,'upsert_many',counted)
+        def forbidden_tick(*args,**kwargs):raise AssertionError('single update fell back to full-fleet tick')
+        monkeypatch.setattr(manager,'tick',forbidden_tick)
+        r=c.patch('/api/clients/single-7',json={'client':{'limitHwid':2}})
+        assert r.status_code==202,r.text
+        assert calls==[['single-7']]
+        assert r.json()['client']['limitHwid']==2 and r.json()['state']=='applied'
+        assert engine.client_detail('single-7')['client']['limitHwid']==2
+        assert engine.client_detail('single-8')['client'].get('limitHwid',0)==0
     finally:
         c.__exit__(None,None,None);manager.close();engine.close();store.close()
