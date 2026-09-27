@@ -7,6 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -16,33 +21,78 @@ import libXray.LibXray
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class DarkXrayVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "com.darkxray.client.CONNECT"
         const val ACTION_DISCONNECT = "com.darkxray.client.DISCONNECT"
+
         const val EXTRA_RAW_URI = "rawUri"
         const val EXTRA_ALLOW_LAN = "allowLan"
         const val EXTRA_DNS = "dns"
         const val EXTRA_ROUTING_MODE = "routingMode"
+        const val EXTRA_AUTO_RECONNECT = "autoReconnect"
+
         private const val CHANNEL_ID = "darkxray_vpn"
         private const val NOTIFICATION_ID = 7410
+        private const val STATE_PREFS = "darkxray_vpn_state"
 
         @Volatile var running: Boolean = false
+        @Volatile var reconnecting: Boolean = false
+        @Volatile var desiredConnected: Boolean = false
         @Volatile var lastError: String = ""
         @Volatile var coreVersion: String = ""
+        @Volatile var connectedAtMs: Long = 0L
+        @Volatile var rxBaseline: Long = 0L
+        @Volatile var txBaseline: Long = 0L
     }
 
     private val executor = Executors.newSingleThreadExecutor()
+    private val connectGuard = AtomicBoolean(false)
+
     private var vpnInterface: ParcelFileDescriptor? = null
+    private lateinit var connectivityManager: ConnectivityManager
+    private var networkCallbackRegistered = false
+    @Volatile private var underlyingNetworkLost = false
+
+    @Volatile private var currentRawUri = ""
+    @Volatile private var currentAllowLan = true
+    @Volatile private var currentDns = "1.1.1.1"
+    @Volatile private var currentRoutingMode = "global"
+    @Volatile private var currentAutoReconnect = true
 
     private val controller = object : DialerController {
         override fun protectFd(p0: Long): Boolean = protect(p0.toInt())
     }
 
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLost(network: Network) {
+            if (!desiredConnected || !currentAutoReconnect) return
+            underlyingNetworkLost = true
+            executor.execute {
+                if (!desiredConnected || !currentAutoReconnect) return@execute
+                reconnecting = true
+                running = false
+                lastError = "Network changed. Waiting to reconnect."
+                stopXrayOnly()
+                notifyState("Waiting for network…", false)
+            }
+        }
+
+        override fun onAvailable(network: Network) {
+            if (!desiredConnected || !currentAutoReconnect || !underlyingNetworkLost) return
+            underlyingNetworkLost = false
+            executor.execute { reconnectAfterNetworkChange() }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        connectivityManager = getSystemService(ConnectivityManager::class.java)
+        registerUnderlyingNetworkCallback()
+
         try {
             val response = invoke("xrayVersion", JSONObject())
             coreVersion = response.optJSONObject("data")?.optString("version").orEmpty()
@@ -52,10 +102,32 @@ class DarkXrayVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_DISCONNECT -> executor.execute { disconnectInternal(stopSelf = true) }
+        if (intent == null) {
+            if (restoreDesiredConnection()) {
+                startForegroundCompat(buildNotification("Restoring connection…", false))
+                executor.execute {
+                    connectInternal(
+                        currentRawUri,
+                        currentAllowLan,
+                        currentDns,
+                        currentRoutingMode,
+                        currentAutoReconnect,
+                        restore = true,
+                    )
+                }
+                return Service.START_STICKY
+            }
+            stopSelf()
+            return Service.START_NOT_STICKY
+        }
+
+        when (intent.action) {
+            ACTION_DISCONNECT -> {
+                executor.execute { disconnectInternal(intentional = true) }
+                return Service.START_NOT_STICKY
+            }
+
             ACTION_CONNECT -> {
-                startForegroundCompat(buildNotification("Connecting…", false))
                 val rawUri = intent.getStringExtra(EXTRA_RAW_URI).orEmpty()
                 val allowLan = intent.getBooleanExtra(EXTRA_ALLOW_LAN, true)
                 val dns = sanitizeDns(intent.getStringExtra(EXTRA_DNS).orEmpty())
@@ -64,19 +136,44 @@ class DarkXrayVpnService : VpnService() {
                     ?.lowercase()
                     .orEmpty()
                     .ifBlank { "global" }
-                executor.execute { connectInternal(rawUri, allowLan, dns, routingMode) }
+                val autoReconnect = intent.getBooleanExtra(EXTRA_AUTO_RECONNECT, true)
+
+                currentRawUri = rawUri
+                currentAllowLan = allowLan
+                currentDns = dns
+                currentRoutingMode = routingMode
+                currentAutoReconnect = autoReconnect
+                desiredConnected = true
+                persistDesiredConnection(true)
+
+                startForegroundCompat(buildNotification("Connecting…", false))
+                executor.execute {
+                    connectInternal(
+                        rawUri,
+                        allowLan,
+                        dns,
+                        routingMode,
+                        autoReconnect,
+                        restore = false,
+                    )
+                }
+                return Service.START_STICKY
             }
         }
-        return Service.START_NOT_STICKY
+
+        return if (desiredConnected) Service.START_STICKY else Service.START_NOT_STICKY
     }
 
     override fun onRevoke() {
-        executor.execute { disconnectInternal(stopSelf = true) }
+        executor.execute { disconnectInternal(intentional = true) }
         super.onRevoke()
     }
 
     override fun onDestroy() {
-        disconnectInternal(stopSelf = false)
+        unregisterUnderlyingNetworkCallback()
+        stopCoreAndVpn()
+        running = false
+        reconnecting = false
         executor.shutdownNow()
         super.onDestroy()
     }
@@ -85,69 +182,182 @@ class DarkXrayVpnService : VpnService() {
         rawUri: String,
         allowLan: Boolean,
         dns: String,
-        routingMode: String
+        routingMode: String,
+        autoReconnect: Boolean,
+        restore: Boolean,
     ) {
+        if (!connectGuard.compareAndSet(false, true)) return
+
+        reconnecting = restore
         lastError = ""
+
         try {
             if (rawUri.isBlank()) error("Selected profile is empty.")
-            stopCoreOnly()
 
-            val descriptor = Builder()
-                .setSession("DarkXray")
-                .setMtu(1500)
-                .addAddress("172.19.0.1", 30)
-                .addAddress("fd19:db8:1::1", 126)
-                .addRoute("0.0.0.0", 0)
-                .addRoute("::", 0)
-                .addDnsServer(dns)
-                .apply {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
-                }
-                .establish() ?: error("Android could not establish the VPN interface.")
-
-            vpnInterface = descriptor
-            LibXray.registerDialerController(controller)
-            LibXray.setDNS(controller, "$dns:53")
-
-            val config = buildXrayConfig(
-                rawUri,
-                descriptor.fd,
-                allowLan,
-                routingMode
-            )
-            val run = invoke(
-                "runXray",
-                JSONObject().put("xrayJson", config.toString())
-            )
-            if (!run.optBoolean("success")) {
-                error(run.optString("error", "Xray failed to start."))
+            if (running) {
+                stopCoreAndVpn()
+                running = false
             }
 
+            currentRawUri = rawUri
+            currentAllowLan = allowLan
+            currentDns = dns
+            currentRoutingMode = routingMode
+            currentAutoReconnect = autoReconnect
+            desiredConnected = true
+            persistDesiredConnection(true)
+
+            val descriptor = createVpnInterface(dns)
+            vpnInterface = descriptor
+            startCore(descriptor.fd, rawUri, allowLan, dns, routingMode)
+
             running = true
+            reconnecting = false
             lastError = ""
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.notify(NOTIFICATION_ID, buildNotification("Connected", true))
+
+            if (!restore || connectedAtMs <= 0L) {
+                connectedAtMs = System.currentTimeMillis()
+                rxBaseline = safeUidRxBytes()
+                txBaseline = safeUidTxBytes()
+            }
+
+            notifyState("Connected", true)
         } catch (error: Throwable) {
             running = false
+            reconnecting = false
             lastError = error.message ?: error.javaClass.simpleName
-            stopCoreOnly()
+            desiredConnected = false
+            persistDesiredConnection(false)
+            stopCoreAndVpn()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        } finally {
+            connectGuard.set(false)
         }
     }
 
-    private fun disconnectInternal(stopSelf: Boolean) {
-        stopCoreOnly()
-        running = false
-        lastError = ""
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        if (stopSelf) stopSelf()
+    private fun reconnectAfterNetworkChange() {
+        if (!desiredConnected || !currentAutoReconnect || currentRawUri.isBlank()) {
+            reconnecting = false
+            return
+        }
+        if (!connectGuard.compareAndSet(false, true)) return
+
+        reconnecting = true
+        try {
+            val descriptor = vpnInterface
+            if (descriptor == null) {
+                connectGuard.set(false)
+                connectInternal(
+                    currentRawUri,
+                    currentAllowLan,
+                    currentDns,
+                    currentRoutingMode,
+                    currentAutoReconnect,
+                    restore = true,
+                )
+                return
+            }
+
+            stopXrayOnly()
+            startCore(
+                descriptor.fd,
+                currentRawUri,
+                currentAllowLan,
+                currentDns,
+                currentRoutingMode,
+            )
+            running = true
+            reconnecting = false
+            lastError = ""
+            notifyState("Reconnected", true)
+        } catch (error: Throwable) {
+            running = false
+            reconnecting = true
+            lastError = error.message ?: "Reconnect failed."
+            notifyState("Reconnect failed • waiting for network", false)
+        } finally {
+            connectGuard.set(false)
+        }
     }
 
-    private fun stopCoreOnly() {
-        try { invoke("stopXray", JSONObject()) } catch (_: Throwable) {}
-        try { LibXray.resetDNS() } catch (_: Throwable) {}
-        try { vpnInterface?.close() } catch (_: Throwable) {}
+    private fun disconnectInternal(intentional: Boolean) {
+        if (intentional) {
+            desiredConnected = false
+            persistDesiredConnection(false)
+        }
+
+        stopCoreAndVpn()
+        running = false
+        reconnecting = false
+        underlyingNetworkLost = false
+        lastError = ""
+        connectedAtMs = 0L
+        rxBaseline = 0L
+        txBaseline = 0L
+
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun createVpnInterface(dns: String): ParcelFileDescriptor {
+        return Builder()
+            .setSession("DarkXray")
+            .setMtu(1500)
+            .addAddress("172.19.0.1", 30)
+            .addAddress("fd19:db8:1::1", 126)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
+            .addDnsServer(dns)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
+            }
+            .establish()
+            ?: error("Android could not establish the VPN interface.")
+    }
+
+    private fun startCore(
+        tunFd: Int,
+        rawUri: String,
+        allowLan: Boolean,
+        dns: String,
+        routingMode: String,
+    ) {
+        LibXray.registerDialerController(controller)
+        LibXray.setDNS(controller, "$dns:53")
+
+        val config = buildXrayConfig(
+            rawUri,
+            tunFd,
+            allowLan,
+            routingMode,
+        )
+        val run = invoke(
+            "runXray",
+            JSONObject().put("xrayJson", config.toString()),
+        )
+        if (!run.optBoolean("success")) {
+            error(run.optString("error", "Xray failed to start."))
+        }
+    }
+
+    private fun stopXrayOnly() {
+        try {
+            invoke("stopXray", JSONObject())
+        } catch (_: Throwable) {
+        }
+        try {
+            LibXray.resetDNS()
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun stopCoreAndVpn() {
+        stopXrayOnly()
+        try {
+            vpnInterface?.close()
+        } catch (_: Throwable) {
+        }
         vpnInterface = null
     }
 
@@ -155,7 +365,7 @@ class DarkXrayVpnService : VpnService() {
         rawUri: String,
         tunFd: Int,
         allowLan: Boolean,
-        routingMode: String
+        routingMode: String,
     ): JSONObject {
         val proxy = parseOutbound(rawUri)
         proxy.put("tag", "proxy")
@@ -169,8 +379,8 @@ class DarkXrayVpnService : VpnService() {
                     "settings",
                     JSONObject()
                         .put("name", "darkxray0")
-                        .put("mtu", 1500)
-                )
+                        .put("mtu", 1500),
+                ),
         )
 
         val outbounds = JSONArray()
@@ -193,19 +403,20 @@ class DarkXrayVpnService : VpnService() {
                             .put("169.254.0.0/16")
                             .put("fc00::/7")
                             .put("fe80::/10")
-                            .put("::1/128")
+                            .put("::1/128"),
                     )
-                    .put("outboundTag", "direct")
+                    .put("outboundTag", "direct"),
             )
         }
+
         rules.put(
             JSONObject()
                 .put("type", "field")
                 .put("inboundTag", JSONArray().put("tun-in"))
                 .put(
                     "outboundTag",
-                    if (routingMode == "direct") "direct" else "proxy"
-                )
+                    if (routingMode == "direct") "direct" else "proxy",
+                ),
         )
 
         return JSONObject()
@@ -217,18 +428,20 @@ class DarkXrayVpnService : VpnService() {
                 "routing",
                 JSONObject()
                     .put("domainStrategy", "AsIs")
-                    .put("rules", rules)
+                    .put("rules", rules),
             )
     }
 
     private fun parseOutbound(rawUri: String): JSONObject {
         val converted = invoke(
             "convertShareLinksToXrayJson",
-            JSONObject().put("text", rawUri)
+            JSONObject().put("text", rawUri),
         )
         if (converted.optBoolean("success")) {
             val list = converted.optJSONObject("data")?.optJSONArray("outbounds")
-            if (list != null && list.length() > 0) return JSONObject(list.getJSONObject(0).toString())
+            if (list != null && list.length() > 0) {
+                return JSONObject(list.getJSONObject(0).toString())
+            }
         }
 
         if (rawUri.startsWith("vmess://", ignoreCase = true)) {
@@ -243,34 +456,35 @@ class DarkXrayVpnService : VpnService() {
         val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
         val json = String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
         val node = JSONObject(json)
-        val address = node.getString("add")
-        val port = node.get("port").toString().toInt()
-        val id = node.getString("id")
-        val alterId = node.opt("aid")?.toString()?.toIntOrNull() ?: 0
-        val security = node.optString("scy", "auto").ifBlank { "auto" }
 
         val user = JSONObject()
-            .put("id", id)
-            .put("alterId", alterId)
-            .put("security", security)
+            .put("id", node.getString("id"))
+            .put("alterId", node.opt("aid")?.toString()?.toIntOrNull() ?: 0)
+            .put("security", node.optString("scy", "auto").ifBlank { "auto" })
+
         val vnext = JSONObject()
-            .put("address", address)
-            .put("port", port)
+            .put("address", node.getString("add"))
+            .put("port", node.get("port").toString().toInt())
             .put("users", JSONArray().put(user))
 
         val network = node.optString("net", "tcp").ifBlank { "tcp" }.lowercase()
         val stream = JSONObject().put("network", network)
+
         when (network) {
             "ws" -> {
                 val ws = JSONObject().put("path", node.optString("path", "/"))
                 val host = node.optString("host")
-                if (host.isNotBlank()) ws.put("headers", JSONObject().put("Host", host))
+                if (host.isNotBlank()) {
+                    ws.put("headers", JSONObject().put("Host", host))
+                }
                 stream.put("wsSettings", ws)
             }
+
             "grpc" -> stream.put(
                 "grpcSettings",
-                JSONObject().put("serviceName", node.optString("path"))
+                JSONObject().put("serviceName", node.optString("path")),
             )
+
             "httpupgrade" -> {
                 val hu = JSONObject().put("path", node.optString("path", "/"))
                 val host = node.optString("host")
@@ -306,13 +520,76 @@ class DarkXrayVpnService : VpnService() {
     private fun sanitizeDns(value: String): String {
         val candidate = value.trim()
         if (candidate.isBlank()) return "1.1.1.1"
+
         val ipv4 = Regex("""^(?:\d{1,3}\.){3}\d{1,3}$""")
         if (!ipv4.matches(candidate)) return "1.1.1.1"
+
         val valid = candidate.split('.').all {
             val number = it.toIntOrNull() ?: return@all false
             number in 0..255
         }
         return if (valid) candidate else "1.1.1.1"
+    }
+
+    private fun persistDesiredConnection(desired: Boolean) {
+        getSharedPreferences(STATE_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean("desired", desired)
+            .putString("rawUri", currentRawUri)
+            .putBoolean("allowLan", currentAllowLan)
+            .putString("dns", currentDns)
+            .putString("routingMode", currentRoutingMode)
+            .putBoolean("autoReconnect", currentAutoReconnect)
+            .apply()
+    }
+
+    private fun restoreDesiredConnection(): Boolean {
+        val prefs = getSharedPreferences(STATE_PREFS, MODE_PRIVATE)
+        val desired = prefs.getBoolean("desired", false)
+        if (!desired) return false
+
+        currentRawUri = prefs.getString("rawUri", "").orEmpty()
+        currentAllowLan = prefs.getBoolean("allowLan", true)
+        currentDns = sanitizeDns(prefs.getString("dns", "1.1.1.1").orEmpty())
+        currentRoutingMode = prefs.getString("routingMode", "global")
+            .orEmpty()
+            .ifBlank { "global" }
+        currentAutoReconnect = prefs.getBoolean("autoReconnect", true)
+
+        desiredConnected = currentRawUri.isNotBlank()
+        return desiredConnected
+    }
+
+    private fun registerUnderlyingNetworkCallback() {
+        if (networkCallbackRegistered) return
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+            connectivityManager.registerNetworkCallback(request, networkCallback)
+            networkCallbackRegistered = true
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun unregisterUnderlyingNetworkCallback() {
+        if (!networkCallbackRegistered) return
+        try {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        } catch (_: Throwable) {
+        }
+        networkCallbackRegistered = false
+    }
+
+    private fun safeUidRxBytes(): Long {
+        val value = TrafficStats.getUidRxBytes(applicationInfo.uid)
+        return if (value == TrafficStats.UNSUPPORTED.toLong()) 0L else value
+    }
+
+    private fun safeUidTxBytes(): Long {
+        val value = TrafficStats.getUidTxBytes(applicationInfo.uid)
+        return if (value == TrafficStats.UNSUPPORTED.toLong()) 0L else value
     }
 
     private fun createNotificationChannel() {
@@ -322,9 +599,14 @@ class DarkXrayVpnService : VpnService() {
             NotificationChannel(
                 CHANNEL_ID,
                 "DarkXray VPN",
-                NotificationManager.IMPORTANCE_LOW
-            )
+                NotificationManager.IMPORTANCE_LOW,
+            ),
         )
+    }
+
+    private fun notifyState(text: String, connected: Boolean) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, buildNotification(text, connected))
     }
 
     private fun buildNotification(text: String, connected: Boolean): Notification {
@@ -335,8 +617,9 @@ class DarkXrayVpnService : VpnService() {
             this,
             2,
             disconnectIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val launchPending = PendingIntent.getActivity(
             this,
@@ -353,16 +636,22 @@ class DarkXrayVpnService : VpnService() {
 
         return builder
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(if (connected) "DarkXray • Connected" else "DarkXray")
+            .setContentTitle(
+                when {
+                    reconnecting -> "DarkXray • Reconnecting"
+                    connected -> "DarkXray • Connected"
+                    else -> "DarkXray"
+                },
+            )
             .setContentText(text)
-            .setOngoing(connected)
+            .setOngoing(desiredConnected)
             .setContentIntent(launchPending)
             .addAction(
                 Notification.Action.Builder(
                     R.mipmap.ic_launcher,
                     "Disconnect",
                     disconnectPending,
-                ).build()
+                ).build(),
             )
             .build()
     }
