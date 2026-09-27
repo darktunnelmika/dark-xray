@@ -66,6 +66,7 @@ class _AddConfigurationPageState extends State<AddConfigurationPage> {
   }
 
   Future<void> _pickFile() async {
+    if (_busy) return;
     try {
       final file = await FilePicker.pickFile();
       if (file == null) return;
@@ -78,19 +79,30 @@ class _AddConfigurationPageState extends State<AddConfigurationPage> {
         _showError('Configuration file is larger than 16 MiB.');
         return;
       }
+
+      setState(() => _busy = true);
       final text = utf8.decode(bytes, allowMalformed: true).trim();
+      List<ProxyProfile> profiles;
       try {
-        await _resolveAndReturn(text);
+        profiles = await _resolver.resolve(text);
       } on SubscriptionException {
         final links = await _vpn.convertXrayJsonToShareLinks(text);
         if (links.isEmpty) {
-          _showError('No supported proxy profiles were found in this file.');
-          return;
+          throw const SubscriptionException(
+            'No supported proxy profiles were found in this file.',
+          );
         }
-        await _resolveAndReturn(links.join('\n'));
+        profiles = await _resolver.resolve(links.join('\n'));
       }
+
+      if (!mounted) return;
+      Navigator.of(context).pop<List<ProxyProfile>>(profiles);
+    } on SubscriptionException catch (error) {
+      _showError(error.message);
     } catch (error) {
-      _showError('Could not read selected file: $error');
+      _showError('Could not import selected file: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
