@@ -24,7 +24,7 @@ export DARK_GRE_LIB_ONLY=1
 # shellcheck disable=SC1090
 source "$SCRIPT"
 
-# Render runtime units in a temp directory and verify the RC6 lifecycle.
+# Render runtime units in a temp directory and verify the RC7 lifecycle.
 runtime="$tmpdir/runtime"
 mkdir -p "$runtime"
 RUNNER="$runtime/darkgre-runner"
@@ -42,7 +42,11 @@ grep -q 'ExecStart=.* arm %i' "$UNIT_FILE"
 grep -q 'ExecStart=.* watch %i' "$WATCH_UNIT"
 grep -q 'Restart=always' "$WATCH_UNIT"
 test ! -e "$WATCH_TIMER"
-grep -q 'gre_exists && gre_down' "$RUNNER"
+grep -q 'apply_outer_guard' "$RUNNER"
+grep -q -- '--pol ipsec' "$RUNNER"
+grep -q -- '-p 47' "$RUNNER"
+! grep -q 'gre_exists && gre_down' "$RUNNER"
+grep -q 'sleep 15' "$RUNNER"
 grep -q 'DARK_GRE_REPAIR_ONLY=1' "$INSTALLER"
 
 
@@ -79,7 +83,7 @@ decode_pair "$code"
 [ "$P_RESTART" = 6h ]
 
 [ "$(calc_inner_mtu 1500 plain)" = 1472 ]
-[ "$(calc_inner_mtu 1500 ipsec)" = 1436 ]
+[ "$(calc_inner_mtu 1500 ipsec)" = 1400 ]
 
 grep -q 'item 2 "New tunnel - IRAN" "makes Pair Code"' "$SCRIPT"
 grep -q 'item 3 "New tunnel - KHAREJ" "takes Pair Code"' "$SCRIPT"
@@ -95,6 +99,9 @@ grep -q 'item r "Speed responder"' "$SCRIPT"
 grep -q 'item 6 "Path MTU scan"' "$SCRIPT"
 grep -q 'TCPMSS --clamp-mss-to-pmtu' "$SCRIPT"
 grep -q 'aes256gcm16' "$SCRIPT"
+grep -q 'auto=route' "$SCRIPT"
+grep -q 'closeaction=restart' "$SCRIPT"
+grep -q 'overhead=100' "$SCRIPT"
 grep -q 'IPSEC_DIR="/etc/ipsec.d/dark-gre"' "$SCRIPT"
 grep -q 'IPSEC_SECRETS="/etc/ipsec.dark-gre.secrets"' "$SCRIPT"
 grep -q 'timeout 3 ipsec up' "$SCRIPT"
@@ -106,4 +113,4 @@ grep -q 'sect "SETUP"' "$SCRIPT"
 grep -q 'sect "OPERATE"' "$SCRIPT"
 grep -q 'sect "MAINTENANCE"' "$SCRIPT"
 
-echo "dark-gre rc6 AppArmor-safe IPsec + watcher + DGR2 + MTU + security smoke: PASS"
+echo "dark-gre rc7 stable secure GRE + policy gate + MTU + pairing smoke: PASS"
