@@ -184,7 +184,12 @@ class _HomePageState extends State<HomePage>
             );
 
       if (!mounted) return;
-      setState(() => _connected = status.running);
+      setState(() {
+        _vpnStatus = status;
+        _connected = status.running;
+        _coreError = status.error;
+        _coreVersion = status.version;
+      });
       if (status.error.isNotEmpty) _show(status.error);
     } on PlatformException catch (error) {
       _show(error.message ?? error.code);
@@ -212,6 +217,7 @@ class _HomePageState extends State<HomePage>
         _profiles = imported;
         _selected = 0;
       });
+      await _profileStore.saveSelectedProfileId(imported.first.id);
     }
     await _reloadAll();
   }
@@ -293,45 +299,73 @@ class _HomePageState extends State<HomePage>
     await _importRaw(raw);
   }
 
-  Future<void> _refreshSubscription() async {
+  Future<void> _selectProfile(int index) async {
+    if (index < 0 || index >= _profiles.length) return;
+    setState(() => _selected = index);
+    await _profileStore.saveSelectedProfileId(_profiles[index].id);
+  }
+
+  Future<void> _maybeAutoRefreshSubscription() async {
+    if (_settings.autoRefreshHours <= 0) return;
+
+    final source = await _profileStore.loadSourceUrl();
+    if (source == null || source.trim().isEmpty) return;
+
+    final lastSync = await _profileStore.loadLastSync();
+    if (lastSync != null) {
+      final age = DateTime.now().difference(lastSync);
+      if (age < Duration(hours: _settings.autoRefreshHours)) return;
+    }
+
+    await _refreshSubscription(silent: true);
+  }
+
+  Future<void> _refreshSubscription({bool silent = false}) async {
     final source = await _profileStore.loadSourceUrl();
     if (source == null || source.trim().isEmpty) {
-      await _openSubscriptions();
+      if (!silent) await _openSubscriptions();
       return;
     }
 
+    final selectedId = _selectedProfile?.id;
     try {
       final profiles = await _subscription.fetchAndParse(source);
       await _profileStore.saveProfiles(profiles, sourceUrl: source);
       if (!mounted) return;
+
+      var nextIndex = 0;
+      if (selectedId != null) {
+        final found = profiles.indexWhere((profile) => profile.id == selectedId);
+        if (found >= 0) nextIndex = found;
+      }
+
       setState(() {
         _profiles = profiles;
-        _selected = 0;
+        _selected = profiles.isEmpty ? 0 : nextIndex;
       });
+
       if (profiles.isNotEmpty) {
-        await _profileStore.saveSelectedProfileId(profiles.first.id);
+        await _profileStore.saveSelectedProfileId(profiles[_selected].id);
       }
       await _reloadAll();
-      _show('Subscription refreshed: ' + profiles.length.toString() + ' profiles.');
+
+      if (!silent) {
+        _show('Subscription refreshed: ' +
+            profiles.length.toString() +
+            ' profiles.');
+      }
     } on SubscriptionException catch (error) {
-      _show(error.message);
+      if (!silent) _show(error.message);
     } catch (error) {
-      _show('Refresh failed: ' + error.toString());
+      if (!silent) _show('Refresh failed: ' + error.toString());
     }
   }
 
-  Future<void> _pingSelected() async {
-    final profile = _selectedProfile;
-    if (profile == null) {
-      _show('Select a profile first.');
-      return;
-    }
-
+  Future<ProxyProfile> _measureProfile(ProxyProfile profile) async {
     final host = profile.host;
     final port = profile.port;
     if (host == null || host.isEmpty || port == null || port <= 0) {
-      _show('This profile has no testable host and port.');
-      return;
+      return profile.copyWith(ping: 'n/a');
     }
 
     final watch = Stopwatch()..start();
@@ -343,19 +377,61 @@ class _HomePageState extends State<HomePage>
       );
       watch.stop();
       socket.destroy();
-
-      final updated = List<ProxyProfile>.from(_profiles);
-      updated[_selected] = profile.copyWith(
+      return profile.copyWith(
         ping: watch.elapsedMilliseconds.toString() + ' ms',
       );
-      await _profileStore.saveLocalProfiles(updated);
-      if (mounted) setState(() => _profiles = updated);
     } catch (_) {
-      final updated = List<ProxyProfile>.from(_profiles);
-      updated[_selected] = profile.copyWith(ping: 'timeout');
-      await _profileStore.saveLocalProfiles(updated);
-      if (mounted) setState(() => _profiles = updated);
-      _show('Server ping timed out.');
+      return profile.copyWith(ping: 'timeout');
+    }
+  }
+
+  int _pingValue(ProxyProfile profile) {
+    final match = RegExp(r'^(\d+)').firstMatch(profile.ping);
+    if (match == null) return 1 << 30;
+    return int.tryParse(match.group(1) ?? '') ?? (1 << 30);
+  }
+
+  Future<void> _pingAllAndSort() async {
+    if (_pingingAll || _profiles.isEmpty) return;
+
+    final selectedId = _selectedProfile?.id;
+    setState(() => _pingingAll = true);
+
+    try {
+      final results = <ProxyProfile>[];
+      const batchSize = 8;
+
+      for (var start = 0; start < _profiles.length; start += batchSize) {
+        final end = (start + batchSize).clamp(0, _profiles.length);
+        final batch = _profiles.sublist(start, end);
+        results.addAll(await Future.wait(batch.map(_measureProfile)));
+      }
+
+      results.sort((a, b) {
+        final pingCompare = _pingValue(a).compareTo(_pingValue(b));
+        if (pingCompare != 0) return pingCompare;
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
+
+      await _profileStore.saveLocalProfiles(results);
+
+      var nextIndex = 0;
+      if (selectedId != null) {
+        final found = results.indexWhere((profile) => profile.id == selectedId);
+        if (found >= 0) nextIndex = found;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _profiles = results;
+        _selected = results.isEmpty ? 0 : nextIndex;
+      });
+
+      if (results.isNotEmpty) {
+        await _profileStore.saveSelectedProfileId(results[_selected].id);
+      }
+    } finally {
+      if (mounted) setState(() => _pingingAll = false);
     }
   }
 
@@ -384,6 +460,10 @@ class _HomePageState extends State<HomePage>
           ? 'No subscription loaded'
           : updated.length.toString() + ' local profiles';
     });
+
+    await _profileStore.saveSelectedProfileId(
+      updated.isEmpty ? null : updated[_selected].id,
+    );
   }
 
   Future<void> _showDetails() async {
