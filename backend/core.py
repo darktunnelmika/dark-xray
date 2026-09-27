@@ -1316,7 +1316,7 @@ class CoreEngine:
                 candidates=[h for h in configured if h.get('enable',True)
                             and host_format not in h.get('excludeFromSubTypes',[])
                             and (runtime_ready is None or i in runtime_ready.get(h.get('runtime','local') or 'local',set()))]
-                hs=[]
+                hs=[];explicit_direct_runtimes=set()
                 for h in candidates:
                     runtime=h.get('runtime','local') or 'local'
                     endpoint_type=h.get('endpointType','direct') or 'direct'
@@ -1331,14 +1331,16 @@ class CoreEngine:
                             warnings.append('Tunnel endpoint '+str(h.get('remark') or h.get('address') or runtime)+
                                             ' port mismatch: expected '+str(expected)+', got '+str(actual))
                             continue
+                    else:
+                        explicit_direct_runtimes.add(runtime)
                     hs.append(h)
-                # Tunnel Port changes Host semantics for this runtime:
-                # while armed, the real Direct inbound is mandatory and every
-                # Host is additive. Only with Tunnel Port OFF do configured
-                # Hosts use the classic replacement behavior.
+                # Tunnel Port makes Direct mandatory, but an enabled explicit
+                # Direct endpoint already satisfies that runtime. Only create
+                # the implicit local sibling when no explicit local Direct is
+                # eligible for this subscription format/runtime.
                 local_ready=runtime_ready is None or i in runtime_ready.get('local',set())
                 local_tunnel_port=int(tunnel_ports.get('local') or 0)
-                if local_tunnel_port and local_ready:
+                if local_tunnel_port and local_ready and 'local' not in explicit_direct_runtimes:
                     hs.insert(0,{})
             else:
                 hs=[{}] if runtime_ready is None or i in runtime_ready.get('local',set()) else []
@@ -1353,8 +1355,14 @@ class CoreEngine:
                 for index,address in enumerate(addresses,1):
                     clone=copy.deepcopy(source_host);clone['address']=address;clone.pop('addresses',None)
                     clone['_addressIndex']=index;clone['_addressTotal']=len(addresses);expanded_hs.append(clone)
+            direct_seen=set()
             for host in expanded_hs:
                 runtime=host.get('runtime','local') or 'local'
+                endpoint_type=host.get('endpointType','direct') or 'direct'
+                if endpoint_type!='tunnel':
+                    direct_key=(i,runtime)
+                    if direct_key in direct_seen:continue
+                    direct_seen.add(direct_key)
                 address=host.get('address',self.config.public_address);port=host.get('port',ib['port'])
                 proto=ib['protocol'];sub=self.section('subscription');base_remark=host.get('remark',ib['remark'])
                 if int(host.get('_addressTotal') or 1)>1:
@@ -1420,7 +1428,7 @@ class CoreEngine:
                 meta={}
                 if host.get('mihomoIpVersion'):meta['mihomoIpVersion']=host['mihomoIpVersion']
                 links.append({'inboundId':i,'remark':label,'uri':uri,'hostMeta':meta,'runtime':runtime,
-                              'endpointType':host.get('endpointType','direct') or 'direct'})
+                              'endpointType':endpoint_type})
         return {'links':links,'warnings':warnings,'formats':['raw','base64','json','clash']}
 
     @staticmethod
