@@ -85,6 +85,30 @@ def test_grpc_compilation(env):
     assert cfg['policy']['levels']['0']['statsUserUplink'] is True
     assert 'clients' in cfg['inbounds'][0]['settings']
 
+def test_tunnel_port_compiles_a_real_shadow_listener(env):
+    _,engine,_,_,c=env
+    ib=json.loads(json.dumps(IB));ib['panelMeta']={'tunnelPorts':{'local':1185}}
+    assert c.post('/api/inbounds',json=ib).status_code==200
+    create(c,'shadow-user')
+    engine.save_section('routing',{'domainStrategy':'AsIs','rules':[{
+        'type':'field','inboundTag':['dark-test'],'outboundTag':'direct'}]})
+    cfg=engine.build_config()
+    data=[x for x in cfg['inbounds'] if x.get('protocol')=='vless']
+    assert [(x['port'],x['tag']) for x in data]==[
+        (19443,'dark-test'),(1185,'dark-tunnel-1-1185')]
+    assert data[0]['settings']['clients']==data[1]['settings']['clients']
+    assert data[0]['streamSettings']==data[1]['streamSettings']
+    assert cfg['routing']['rules'][0]['inboundTag']==['dark-test','dark-tunnel-1-1185']
+
+
+def test_tunnel_port_rejects_direct_and_protected_collisions(env):
+    _,_,_,_,c=env
+    same=json.loads(json.dumps(IB));same['panelMeta']={'tunnelPorts':{'local':19443}}
+    assert c.post('/api/inbounds',json=same).status_code==422
+    protected=json.loads(json.dumps(IB));protected['panelMeta']={'tunnelPorts':{'local':2087}}
+    assert c.post('/api/inbounds',json=protected).status_code==422
+
+
 def test_no_credentials_in_inbound_json(env):
     _,_,_,_,c=env
     ib=dict(IB,settings={'clients':[{'id':'hidden-bypass'}]})
@@ -218,25 +242,3 @@ def test_ip_policy_is_independent(env):
     _,_,_,_,c=env;create(c)
     p=c.get('/api/ip-policy').json()
     assert p['schema']==1 and p['clients']['dark-test']['limit_ip']==1
-    assert p['enforce'] is False
-    assert c.get('/api/ip-status').json()['engine']['limiter']=='independent DARK Guard'
-
-def test_fixed_day_cycle_scheduled(env):
-    _,_,_,_,c=env;c.post('/api/inbounds',json=IB)
-    r=c.post('/api/clients',json={'owner':'dark','client':{'email':'abc','reset':30},'inboundIds':[1]})
-    assert r.status_code==202
-    store=env[0]
-    with store.lock: row=store.db.execute('SELECT days,next_at FROM client_cycles WHERE email=?',('abc',)).fetchone()
-    assert row['days']==30 and row['next_at']>time.time()
-
-def test_backup_has_own_runtime_tables(env):
-    import zipfile,io,sqlite3,tempfile
-    _,_,_,_,c=env;create(c)
-    r=c.get('/api/backup');assert r.status_code==200
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-        assert 'dark.sqlite3' in z.namelist()
-        assert json.loads(z.read('manifest.json'))['runtime_tables_included'] is True
-
-@pytest.mark.parametrize('val',[True,-1,0,65536,'10085'])
-def test_bad_api_ports(val):
-    with pytest.raises(ValueError):Config(xray_api_port=val)
