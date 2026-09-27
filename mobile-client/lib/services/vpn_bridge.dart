@@ -28,8 +28,18 @@ class VpnBridge {
     return VpnStatus.fromMap(map);
   }
 
-  Future<VpnStatus> connect(String rawUri) async {
-    await _channel.invokeMethod<void>('connect', {'rawUri': rawUri});
+  Future<VpnStatus> connect(
+    String rawUri, {
+    bool allowLan = true,
+    String dns = '1.1.1.1',
+    String routingMode = 'global',
+  }) async {
+    await _channel.invokeMethod<void>('connect', {
+      'rawUri': rawUri,
+      'allowLan': allowLan,
+      'dns': dns,
+      'routingMode': routingMode,
+    });
     for (var i = 0; i < 20; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
       final current = await status();
