@@ -196,9 +196,25 @@ html[dir="rtl"] .cyber-lang-switch{right:auto;left:14px}
 @keyframes dx-orbit{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @media(max-width:760px){
-  html[dir="ltr"] .main{margin-left:0}
-  html[dir="ltr"] .sidebar{left:-100%;right:auto}
-  html[dir="ltr"] .sidebar.open{left:0}
+  /* One mobile drawer mechanism only. The former left:-100% positioning
+     combined with style.css transforms and could leave a Safari-visible sliver. */
+  html[dir="ltr"] .main,html[dir="rtl"] .main{margin-left:0!important;margin-right:0!important}
+  .sidebar{
+    left:auto;right:0;
+    transform:translate3d(105%,0,0)!important;
+    visibility:hidden;pointer-events:none;
+    transition:transform .2s ease,visibility 0s linear .2s!important;
+    will-change:transform;
+  }
+  html[dir="ltr"] .sidebar{
+    left:0;right:auto;
+    transform:translate3d(-105%,0,0)!important;
+  }
+  .sidebar.open,html[dir="ltr"] .sidebar.open,html[dir="rtl"] .sidebar.open{
+    transform:translate3d(0,0,0)!important;
+    visibility:visible;pointer-events:auto;
+    transition:transform .2s ease,visibility 0s linear 0s!important;
+  }
   .cyber-lang-switch{bottom:10px;right:10px}
   .login-card{padding:24px!important}
 }
