@@ -68,6 +68,42 @@ def test_disabled_explicit_local_direct_suppresses_implicit_fallback(env):
     assert [(x['endpointType'],x['runtime']) for x in out['links']]==[('tunnel','local')]
 
 
+def test_one_tunnel_host_exports_multiple_addresses_on_shared_port(env):
+    store,engine,c=env;iid,url=setup_client(c,'multi-address-tunnel-user')
+    dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
+    assert dep.status_code==200,dep.text
+    tunnel=host(iid,runtime='local',endpointType='tunnel',
+                address='iran-a.example.test',
+                addresses=['iran-a.example.test','iran-b.example.test','iran-a.example.test','iran-c.example.test'],
+                port=20001,remark='TURKEY TUNNEL',
+                security='same',sni='',host='',path='',alpn='',fingerprint='',
+                allowInsecure=False,finalMask='',mihomoIpVersion='')
+    r=c.put('/api/settings/hosts',json={'value':[tunnel]});assert r.status_code==200,r.text
+    saved=engine.section('hosts')
+    assert len(saved)==1
+    assert saved[0]['address']=='iran-a.example.test'
+    assert saved[0]['addresses']==['iran-a.example.test','iran-b.example.test','iran-c.example.test']
+
+    out=engine.links('multi-address-tunnel-user',runtime_ready={'local':{iid}})
+    tunnels=[x for x in out['links'] if x['endpointType']=='tunnel']
+    assert len(tunnels)==3
+    assert [urlsplit(x['uri']).hostname for x in tunnels]==[
+        'iran-a.example.test','iran-b.example.test','iran-c.example.test']
+    assert {urlsplit(x['uri']).port for x in tunnels}=={20001}
+    assert len({x['remark'] for x in tunnels})==3
+    assert [x['remark'].split(' | ')[0] for x in tunnels]==[
+        'TURKEY TUNNEL · 1','TURKEY TUNNEL · 2','TURKEY TUNNEL · 3']
+
+
+def test_host_multi_address_validation_rejects_empty_or_unsafe_values(env):
+    store,engine,c=env;iid,_=setup_client(c,'multi-address-validation')
+    bad_empty=host(iid,addresses=[])
+    bad_path=host(iid,addresses=['ok.example.test','bad/path'])
+    for value in (bad_empty,bad_path):
+        r=c.put('/api/settings/hosts',json={'value':[value]})
+        assert r.status_code==422,r.text
+
+
 def test_tunnel_port_contract_waits_for_matching_host_and_allows_multiple_hosts(env):
     store,engine,c=env;iid,url=setup_client(c,'tunnel-contract-user')
     values=[
