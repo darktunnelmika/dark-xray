@@ -5,9 +5,9 @@
 # ==============================================================================
 set -u
 
-RAW="https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/dark-gre.sh"
-DEST="/usr/local/bin/darkgre"
-BASE_DIR="/etc/dark-gre"
+RAW="${DARK_GRE_RAW_URL:-https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/dark-gre.sh}"
+DEST="${DARK_GRE_DEST:-/usr/local/bin/darkgre}"
+BASE_DIR="${DARK_GRE_BASE_DIR:-/etc/dark-gre}"
 
 R=$'\e[38;5;203m'; G=$'\e[38;5;114m'; C=$'\e[38;5;81m'; D=$'\e[38;5;244m'; N=$'\e[0m'
 ok()   { printf '  %s✓%s %s\n' "$G" "$N" "$1"; }
@@ -57,6 +57,6 @@ echo
 printf '  %srun it with:%s  darkgre\n' "$D" "$N"
 echo
 
-if [ -r /dev/tty ]; then
+if [ "${DARK_GRE_INSTALL_ONLY:-0}" != 1 ] && [ -r /dev/tty ]; then
   exec "$DEST" </dev/tty
 fi
