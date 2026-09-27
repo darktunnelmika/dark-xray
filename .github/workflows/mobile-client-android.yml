@@ -76,10 +76,22 @@ jobs:
         working-directory: .mobile-build
         run: flutter build apk --debug --target-platform android-arm64
 
-      - name: Upload APK
+      - name: Build release APK
+        working-directory: .mobile-build
+        run: flutter build apk --release --target-platform android-arm64 --split-debug-info=build/symbols
+
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: dark-xray-client-debug-apk
           path: .mobile-build/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dark-xray-client-release-apk
+          path: .mobile-build/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
