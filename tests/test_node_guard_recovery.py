@@ -59,6 +59,17 @@ def test_duplicate_revision_restores_ports_after_guard_restart_without_xray_rest
         assert engine.process.pid==pid
 
 
+def test_guard_allowlist_includes_shadow_tunnel_port(tmp_path,monkeypatch):
+    guard=RestartableGuard()
+    monkeypatch.setattr(runtime_module,'BrokerClient',lambda *a,**k:guard)
+    with agent(tmp_path/'node') as (_,engine,_,client):
+        body=payload(engine)
+        inbound=body['assignments'][0]['inbound']
+        inbound.setdefault('panelMeta',{})['tunnelPorts']={'local':21185}
+        post_state(client,body)
+        assert guard.ports==sorted([inbound['port'],21185])
+
+
 def test_guard_recovers_locally_without_a_new_hub_request(tmp_path,monkeypatch):
     guard=RestartableGuard()
     monkeypatch.setattr(runtime_module,'BrokerClient',lambda *a,**k:guard)
