@@ -262,7 +262,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     node_reset_lock=threading.RLock()
     manager.remote_reset=lambda email,reset_id:nodes.reset_client_traffic(email,reset_id)
     def _runtime_targets()->list[dict]:
-        rows=[{'id':'hub','kind':'hub','name':'HUB','address':str(config.public_address),'online':True,'latencyMs':0}]
+        hub_name=str(os.environ.get('DARK_HUB_NAME','HUB')).strip() or 'HUB'
+        rows=[{'id':'hub','kind':'hub','name':hub_name,'address':str(config.public_address),'online':True,'latencyMs':0}]
         for node in nodes.list():
             rows.append({'id':'node:'+str(node.get('id')),'nodeId':str(node.get('id')),'kind':'node',
                          'name':str(node.get('name') or node.get('id') or 'Node'),
@@ -872,7 +873,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                     and (h.get('endpointType','direct') or 'direct')!='tunnel'
                                     for h in engine.section('hosts'))
                 if explicit_direct:continue
-                remark=str(item['remark'])+' · '+str(target['name'])+' ['+str(target['node_id'])+']'
+                remark=str(item['remark'])+' · '+str(target['name'])
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
                 source_port=int(engine.inbound(inbound_id)['port'])
