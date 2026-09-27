@@ -23,6 +23,27 @@ class ProxyProfile {
 
   bool get isDirect => name.toUpperCase().contains('DIRECT');
 
+  ProxyProfile copyWith({
+    String? name,
+    String? scheme,
+    String? detail,
+    String? rawUri,
+    String? host,
+    int? port,
+    String? ping,
+  }) {
+    return ProxyProfile(
+      id: id,
+      name: name ?? this.name,
+      scheme: scheme ?? this.scheme,
+      detail: detail ?? this.detail,
+      rawUri: rawUri ?? this.rawUri,
+      host: host ?? this.host,
+      port: port ?? this.port,
+      ping: ping ?? this.ping,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
