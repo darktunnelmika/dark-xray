@@ -12,6 +12,9 @@ class MainActivity : FlutterActivity() {
     private val channelName = "com.darkxray.client/vpn"
     private val vpnRequestCode = 7410
     private var pendingRawUri: String? = null
+    private var pendingAllowLan: Boolean = true
+    private var pendingDns: String = "1.1.1.1"
+    private var pendingRoutingMode: String = "global"
     private var pendingResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -25,10 +28,19 @@ class MainActivity : FlutterActivity() {
                             result.error("NO_PROFILE", "No proxy profile selected.", null)
                             return@setMethodCallHandler
                         }
-                        requestVpnAndConnect(rawUri, result)
+                        val allowLan = call.argument<Boolean>("allowLan") ?: true
+                        val dns = call.argument<String>("dns")?.trim().orEmpty().ifBlank { "1.1.1.1" }
+                        val routingMode = call.argument<String>("routingMode")?.trim().orEmpty().ifBlank { "global" }
+                        requestVpnAndConnect(rawUri, allowLan, dns, routingMode, result)
                     }
                     "disconnect" -> {
-                        startVpnService(DarkXrayVpnService.ACTION_DISCONNECT, null)
+                        startVpnService(
+                            DarkXrayVpnService.ACTION_DISCONNECT,
+                            null,
+                            true,
+                            "1.1.1.1",
+                            "global"
+                        )
                         result.success(null)
                     }
                     "status" -> {
@@ -45,14 +57,29 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    private fun requestVpnAndConnect(rawUri: String, result: MethodChannel.Result) {
+    private fun requestVpnAndConnect(
+        rawUri: String,
+        allowLan: Boolean,
+        dns: String,
+        routingMode: String,
+        result: MethodChannel.Result
+    ) {
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent == null) {
-            startVpnService(DarkXrayVpnService.ACTION_CONNECT, rawUri)
+            startVpnService(
+                DarkXrayVpnService.ACTION_CONNECT,
+                rawUri,
+                allowLan,
+                dns,
+                routingMode
+            )
             result.success(null)
             return
         }
         pendingRawUri = rawUri
+        pendingAllowLan = allowLan
+        pendingDns = dns
+        pendingRoutingMode = routingMode
         pendingResult = result
         startActivityForResult(prepareIntent, vpnRequestCode)
     }
@@ -66,17 +93,32 @@ class MainActivity : FlutterActivity() {
         pendingResult = null
         pendingRawUri = null
         if (resultCode == Activity.RESULT_OK && rawUri != null) {
-            startVpnService(DarkXrayVpnService.ACTION_CONNECT, rawUri)
+            startVpnService(
+                DarkXrayVpnService.ACTION_CONNECT,
+                rawUri,
+                pendingAllowLan,
+                pendingDns,
+                pendingRoutingMode
+            )
             result?.success(null)
         } else {
             result?.error("VPN_PERMISSION", "VPN permission was not granted.", null)
         }
     }
 
-    private fun startVpnService(action: String, rawUri: String?) {
+    private fun startVpnService(
+        action: String,
+        rawUri: String?,
+        allowLan: Boolean,
+        dns: String,
+        routingMode: String
+    ) {
         val intent = Intent(this, DarkXrayVpnService::class.java).apply {
             this.action = action
             if (rawUri != null) putExtra(DarkXrayVpnService.EXTRA_RAW_URI, rawUri)
+            putExtra(DarkXrayVpnService.EXTRA_ALLOW_LAN, allowLan)
+            putExtra(DarkXrayVpnService.EXTRA_DNS, dns)
+            putExtra(DarkXrayVpnService.EXTRA_ROUTING_MODE, routingMode)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             action == DarkXrayVpnService.ACTION_CONNECT) {
