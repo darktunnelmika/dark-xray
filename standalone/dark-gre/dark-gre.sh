@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.7.0-rc7"
+SCRIPT_VER="0.8.0-rc8"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -499,12 +499,12 @@ security_sync_all(){
   : >"$IPSEC_SECRETS"
   chmod 600 "$IPSEC_SECRETS"
 
-  local f pid conn
+  local f pid conn start_mode dpd_mode close_mode
   local conns=()
   declare -A done=()
   shopt -s nullglob
   for f in "$TUN_DIR"/*/meta.conf; do
-    unset SECURITY IPSEC_PSK LOCAL_PUBLIC REMOTE_PUBLIC PEER_ID
+    unset SECURITY IPSEC_PSK LOCAL_PUBLIC REMOTE_PUBLIC PEER_ID ROLE
     . "$f" 2>/dev/null || continue
     [ "${SECURITY:-plain}" = ipsec ] || continue
     [ -n "${IPSEC_PSK:-}" ] || continue
@@ -513,7 +513,16 @@ security_sync_all(){
     [ -n "${done[$pid]:-}" ] && continue
     done[$pid]=1
     conn="darkgre-$pid"
-    conns+=("$conn")
+    if [ "$ROLE" = IRAN ]; then
+      start_mode=start
+      dpd_mode=restart
+      close_mode=restart
+      conns+=("$conn")
+    else
+      start_mode=add
+      dpd_mode=clear
+      close_mode=clear
+    fi
 
     cat >"$IPSEC_DIR/$pid.conf" <<EOF
 conn $conn
@@ -522,16 +531,22 @@ conn $conn
   authby=psk
   left=$LOCAL_PUBLIC
   right=$REMOTE_PUBLIC
+  leftid=$LOCAL_PUBLIC
+  rightid=$REMOTE_PUBLIC
   leftprotoport=47
   rightprotoport=47
   ike=aes256gcm16-prfsha256-modp2048!
   esp=aes256gcm16!
-  dpdaction=restart
-  closeaction=restart
+  forceencaps=yes
+  fragmentation=yes
+  reauth=no
+  rekey=yes
+  dpdaction=$dpd_mode
+  closeaction=$close_mode
   dpddelay=30s
   keyingtries=%forever
   mobike=no
-  auto=route
+  auto=$start_mode
 EOF
     chmod 600 "$IPSEC_DIR/$pid.conf"
     printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
@@ -552,7 +567,7 @@ EOF
   ipsec reload >/dev/null 2>&1 || true
   ipsec rereadsecrets >/dev/null 2>&1 || true
 
-  # Initiate each connection once. strongSwan owns all later retries.
+  # Only IRAN initiates. KHAREJ stays responder-only. strongSwan owns later retries.
   for conn in "${conns[@]}"; do
     timeout 3 ipsec up "$conn" >/dev/null 2>&1 || true
   done
