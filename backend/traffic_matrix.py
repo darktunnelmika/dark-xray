@@ -15,7 +15,7 @@ ADBLOCK_DOMAIN_MATCHERS=[
     "geosite:category-ads-all","domain:doubleclick.net","domain:googleadservices.com",
     "domain:googlesyndication.com","domain:adservice.google.com","domain:ads-twitter.com",
 ]
-POLICIES={"normal","warp_ai","warp_all","adblock","warp_ai_adblock","warp_all_adblock"}
+POLICIES={"normal","warp_ai","warp_all","adblock","warp_ai_adblock","warp_all_adblock","custom"}
 ACCESS_PATHS={"direct","tunnel"}
 
 def normalize_scope(value:str)->str:
@@ -44,6 +44,7 @@ def policy_parts(policy:str)->tuple[bool,str]:
 def compile_rules(*,scope:str,inbound_id:int,access_path:str,policy:str,inbound_tag:str,tunnel_port:int=0)->list[dict]:
     scope=normalize_scope(scope);access_path=str(access_path)
     if access_path not in ACCESS_PATHS: raise ValueError("Unsupported Traffic Matrix access path")
+    if str(policy or "normal")=="custom":return []
     adblock,warp=policy_parts(policy)
     tag=str(inbound_tag or "").strip()
     if not tag: raise ValueError("Traffic Matrix inbound tag is missing")
