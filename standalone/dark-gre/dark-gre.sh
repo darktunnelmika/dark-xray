@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.10.0-rc10"
+SCRIPT_VER="0.11.0-rc11"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -160,7 +160,7 @@ public_ipv4(){
 
 ensure_deps(){
   local need=0 c
-  for c in curl ip iptables systemctl base64 sha256sum awk sed grep ping openssl flock; do
+  for c in curl ip iptables systemctl base64 sha256sum awk sed grep ping openssl; do
     command -v "$c" >/dev/null 2>&1 || need=1
   done
   if [ "$need" -ne 0 ]; then
@@ -380,37 +380,6 @@ ipsec_ready(){
   ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
   ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"
 }
-ike_state(){
-  [ "${SECURITY:-plain}" = ipsec ] || { echo plain; return; }
-  command -v ipsec >/dev/null 2>&1 || { echo missing; return; }
-  local s
-  s="$(ipsec status "darkgre-${PEER_ID}" 2>/dev/null || true)"
-  if grep -qi 'ESTABLISHED' <<<"$s"; then echo established
-  elif grep -qi 'CONNECTING' <<<"$s"; then echo connecting
-  else echo down
-  fi
-}
-ensure_ike_initiator(){
-  [ "${SECURITY:-plain}" = ipsec ] || return 0
-  [ "${ROLE:-}" = IRAN ] || return 0
-
-  local st now last stamp="/run/darkgre-${ID}.ike-last" lock="/run/darkgre-${ID}.ike-lock"
-  exec 9>"$lock"
-  flock -n 9 || return 0
-
-  st="$(ike_state)"
-  case "$st" in established|connecting) flock -u 9; return 0 ;; esac
-
-  now="$(date +%s)"
-  last="$(cat "$stamp" 2>/dev/null || echo 0)"
-  [[ "$last" =~ ^[0-9]+$ ]] || last=0
-  if [ $((now-last)) -lt 30 ]; then flock -u 9; return 0; fi
-
-  printf '%s\n' "$now" >"$stamp"
-  timeout 5 ipsec up "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
-  flock -u 9
-}
-
 gre_exists(){ ip link show "$IFNAME" >/dev/null 2>&1; }
 gre_down(){
   remove_fw
@@ -442,7 +411,6 @@ reconcile(){
 }
 watch_loop(){
   while :; do
-    ensure_ike_initiator || true
     reconcile || true
     sleep 15
   done
@@ -539,8 +507,7 @@ security_sync_all(){
   : >"$IPSEC_SECRETS"
   chmod 600 "$IPSEC_SECRETS"
 
-  local f pid conn dpd_mode close_mode
-  local conns=()
+  local f pid conn start_mode dpd_mode close_mode
   declare -A done=()
   shopt -s nullglob
   for f in "$TUN_DIR"/*/meta.conf; do
@@ -554,9 +521,11 @@ security_sync_all(){
     done[$pid]=1
     conn="darkgre-$pid"
     if [ "$ROLE" = IRAN ]; then
+      start_mode=start
       dpd_mode=restart
       close_mode=restart
     else
+      start_mode=add
       dpd_mode=clear
       close_mode=clear
     fi
@@ -583,7 +552,7 @@ conn $conn
   dpddelay=30s
   keyingtries=%forever
   mobike=no
-  auto=add
+  auto=$start_mode
 EOF
     chmod 600 "$IPSEC_DIR/$pid.conf"
     printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
@@ -604,7 +573,7 @@ EOF
   ipsec reload >/dev/null 2>&1 || true
   ipsec rereadsecrets >/dev/null 2>&1 || true
 
-  # RC10: watcher on IRAN is the only IKE initiator.
+  # RC11: strongSwan is the only IKE initiator; IRAN=start, KHAREJ=add.
 }
 
 migrate_existing_tunnels(){
@@ -1389,27 +1358,33 @@ repair_runtime(){
   ensure_deps
   ensure_system
   migrate_existing_tunnels
-  security_sync_all
 
   local d n
+  # Phase 1: stop DARK GRE services/watchers before changing strongSwan state.
   shopt -s nullglob
   for d in "$TUN_DIR"/*; do
     [ -r "$d/meta.conf" ] || continue
-    . "$d/meta.conf"
-    n="$NAME"
-
-    # Kill stale RC3/early-RC4 restart loops before rearming with RC5 units.
-    systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
-    systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
-    [ "${SECURITY:-plain}" = ipsec ] && ipsec down "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
+    . "$d/meta.conf"; n="$NAME"
     systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
     systemctl disable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
+    systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
+    systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
+  done
+  shopt -u nullglob
 
+  # Phase 2: load the final IPsec config once. IRAN auto=start owns initiation.
+  security_sync_all
+  sleep 1
+
+  # Phase 3: arm GRE and policy watcher. Never tear IPsec down after sync.
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*; do
+    [ -r "$d/meta.conf" ] || continue
+    . "$d/meta.conf"; n="$NAME"
     systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl start "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl enable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
     "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
-
     RESTART_EVERY="${RESTART_EVERY:-off}"
     set_restart_timer "$n" "$RESTART_EVERY"
   done
