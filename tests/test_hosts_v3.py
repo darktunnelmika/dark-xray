@@ -41,6 +41,8 @@ def test_local_tunnel_adds_direct_sibling_without_replacing_inbound_route(env):
                 address='iran.example.test',port=20001,remark='TUNNEL',
                 security='same',sni='',host='',path='',alpn='',fingerprint='',
                 allowInsecure=False,finalMask='',mihomoIpVersion='')
+    dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
+    assert dep.status_code==200,dep.text
     assert c.put('/api/settings/hosts',json={'value':[tunnel]}).status_code==200
     out=engine.links('local-tunnel-user',runtime_ready={'local':{iid}})
     assert [(x['endpointType'],x['runtime']) for x in out['links']]==[
@@ -59,9 +61,51 @@ def test_disabled_explicit_local_direct_suppresses_implicit_fallback(env):
                 address='iran.example.test',port=20001,remark='TUNNEL',
                 security='same',sni='',host='',path='',alpn='',fingerprint='',
                 allowInsecure=False,finalMask='',mihomoIpVersion='')
+    dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
+    assert dep.status_code==200,dep.text
     assert c.put('/api/settings/hosts',json={'value':[direct,tunnel]}).status_code==200
     out=engine.links('local-tunnel-disabled-direct',runtime_ready={'local':{iid}})
     assert [(x['endpointType'],x['runtime']) for x in out['links']]==[('tunnel','local')]
+
+
+def test_tunnel_port_contract_waits_for_matching_host_and_allows_multiple_hosts(env):
+    store,engine,c=env;iid,url=setup_client(c,'tunnel-contract-user')
+    values=[
+        host(iid,runtime='local',endpointType='tunnel',address='iran-a.example.test',port=20001,remark='IRAN A',
+             security='same',sni='',host='',path='',alpn='',fingerprint='',allowInsecure=False,finalMask='',mihomoIpVersion=''),
+        host(iid,runtime='local',endpointType='tunnel',address='iran-b.example.test',port=20001,remark='IRAN B',
+             security='same',sni='',host='',path='',alpn='',fingerprint='',allowInsecure=False,finalMask='',mihomoIpVersion=''),
+        host(iid,runtime='local',endpointType='tunnel',address='wrong.example.test',port=20002,remark='WRONG PORT',
+             security='same',sni='',host='',path='',alpn='',fingerprint='',allowInsecure=False,finalMask='',mihomoIpVersion=''),
+    ]
+    assert c.put('/api/settings/hosts',json={'value':values}).status_code==200
+
+    waiting=engine.links('tunnel-contract-user',runtime_ready={'local':{iid}})
+    assert [(x['endpointType'],x['runtime']) for x in waiting['links']]==[('direct','local')]
+    assert any('waiting for Tunnel Port' in w for w in waiting['warnings'])
+
+    dep=c.put(f'/api/inbounds/{iid}/deployments',json={'local':True,'nodeIds':[],'tunnelPorts':{'local':20001}})
+    assert dep.status_code==200,dep.text
+    route=dep.json()['tunnelRoutes']['local']
+    assert route['state']=='active' and route['matchingHosts']==2 and route['configuredHosts']==3
+
+    active=engine.links('tunnel-contract-user',runtime_ready={'local':{iid}})
+    assert [(x['endpointType'],x['runtime']) for x in active['links']]==[
+        ('direct','local'),('tunnel','local'),('tunnel','local')]
+    hosts=[urlsplit(x['uri']).hostname for x in active['links']]
+    assert hosts==['vpn.example.test','iran-a.example.test','iran-b.example.test']
+    assert any('port mismatch' in w for w in active['warnings'])
+    assert all('wrong.example.test' not in x['uri'] for x in active['links'])
+
+
+def test_tunnel_port_requires_same_deployment_target(env):
+    store,engine,c=env;iid,url=setup_client(c,'tunnel-target-user')
+    r=c.put(f'/api/inbounds/{iid}/deployments',json={
+        'local':False,'nodeIds':[],'tunnelPorts':{'local':20001}})
+    assert r.status_code==400 and 'deployment target' in r.text.lower()
+    r=c.put(f'/api/inbounds/{iid}/deployments',json={
+        'local':True,'nodeIds':[],'tunnelPorts':{'node:missing':20001}})
+    assert r.status_code==400 and 'deployment target' in r.text.lower()
 
 
 def test_host_v3_format_exclusion_has_no_direct_fallback(env):
@@ -101,6 +145,10 @@ def test_host_v3_validation_rejects_fake_or_conflicting_controls(env):
 
 def test_host_v3_endpoint_type_is_persisted_and_exported(env):
     store,engine,c=env;iid,url=setup_client(c,'host-pair-user')
+    inbound=engine.inbound(iid);inbound.pop('id',None);inbound.pop('applied',None)
+    meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
+    meta['tunnelPorts']={'node:pair-node':20001};inbound['panelMeta']=meta
+    engine.save_inbound(inbound,iid)
     values=[
         host(iid,runtime='local',endpointType='direct',address='direct.example.test',port=443,remark='DIRECT'),
         host(iid,runtime='node:pair-node',endpointType='tunnel',address='iran.example.test',port=20001,remark='TUNNEL'),
