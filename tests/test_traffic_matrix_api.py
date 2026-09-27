@@ -66,7 +66,7 @@ def _seed_warp(store):
 
 def test_warp_policy_refuses_unverified_path(env,monkeypatch):
  import server
- store,eng,c,iid=env;_seed_warp(store)
+ store,eng,c,iid=env;_seed_warp(store);monkeypatch.setattr(eng,"_binary",lambda:"/bin/true")
  monkeypatch.setattr(server,"probe_outbounds",lambda *a,**k:[{"success":False,"warpVerified":False,"lossPercent":100.0}])
  r=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"warp_ai"})
  assert r.status_code==409
