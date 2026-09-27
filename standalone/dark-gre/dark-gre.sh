@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.5.0-rc5"
+SCRIPT_VER="0.6.0-rc6"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -22,8 +22,10 @@ RS_TIMER="/etc/systemd/system/darkgre-restart@.timer"
 WATCH_UNIT="/etc/systemd/system/darkgre-watch@.service"
 WATCH_TIMER="/etc/systemd/system/darkgre-watch@.timer"
 SEC_DIR="$BASE_DIR/security"
-IPSEC_DIR="$SEC_DIR/ipsec.d"
-IPSEC_SECRETS="$SEC_DIR/ipsec.secrets"
+IPSEC_DIR="/etc/ipsec.d/dark-gre"
+IPSEC_SECRETS="/etc/ipsec.dark-gre.secrets"
+OLD_IPSEC_DIR="$SEC_DIR/ipsec.d"
+OLD_IPSEC_SECRETS="$SEC_DIR/ipsec.secrets"
 UPDATE_URL_FILE="$BASE_DIR/update.url"
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 
@@ -325,11 +327,6 @@ ipsec_ready(){
   ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
   ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"
 }
-trigger_ipsec(){
-  [ "${SECURITY:-plain}" = ipsec ] || return 0
-  command -v ipsec >/dev/null 2>&1 || return 0
-  timeout 2 ipsec up "darkgre-${PEER_ID}" >/dev/null 2>&1 || true
-}
 gre_exists(){ ip link show "$IFNAME" >/dev/null 2>&1; }
 gre_down(){
   remove_fw
@@ -352,20 +349,25 @@ gre_up(){
 }
 reconcile(){
   if [ "${SECURITY:-plain}" = ipsec ]; then
-    trigger_ipsec
     if ipsec_ready; then
       gre_up
       return 0
     fi
-    # Fail closed: never leave a GRE interface carrying plaintext when IPsec is down.
     gre_exists && gre_down
     return 0
   fi
   gre_up
 }
+watch_loop(){
+  while :; do
+    reconcile || true
+    sleep 5
+  done
+}
 case "$action" in
   arm|up) reconcile ;;
   reconcile) reconcile ;;
+  watch) watch_loop ;;
   down) gre_down ;;
   reload-fw) gre_exists && apply_fw || true ;;
   *) echo "unknown action: $action" >&2; exit 4 ;;
@@ -395,29 +397,20 @@ UNIT_EOF
 
   cat >"$WATCH_UNIT" <<UNIT_EOF
 [Unit]
-Description=DARK GRE peer/security reconcile %i
-After=network-online.target darkgre@%i.service
+Description=DARK GRE peer/security watcher %i
+After=network-online.target strongswan-starter.service darkgre@%i.service
 Requires=darkgre@%i.service
+PartOf=darkgre@%i.service
 
 [Service]
-Type=oneshot
-ExecStart=$RUNNER reconcile %i
-TimeoutStartSec=8
-UNIT_EOF
-
-  cat >"$WATCH_TIMER" <<'EOF'
-[Unit]
-Description=Watch DARK GRE peer/security state %i
-
-[Timer]
-OnBootSec=5s
-OnUnitActiveSec=5s
-AccuracySec=1s
-Unit=darkgre-watch@%i.service
+Type=simple
+ExecStart=$RUNNER watch %i
+Restart=always
+RestartSec=2
 
 [Install]
-WantedBy=timers.target
-EOF
+WantedBy=multi-user.target
+UNIT_EOF
 
   cat >"$RS_UNIT" <<'EOF'
 [Unit]
@@ -441,7 +434,9 @@ EOF
 }
 
 ensure_system(){
-  mkdir -p "$TUN_DIR" "$BASE_DIR" "$SEC_DIR" "$IPSEC_DIR"; chmod 700 "$BASE_DIR" "$TUN_DIR" "$SEC_DIR" "$IPSEC_DIR"
+  mkdir -p "$TUN_DIR" "$BASE_DIR" "$SEC_DIR" "$IPSEC_DIR"
+  chmod 700 "$BASE_DIR" "$TUN_DIR" "$SEC_DIR"
+  chmod 755 "$IPSEC_DIR"
   write_runner; write_unit
   printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-dark-gre.conf
   sysctl -q --system >/dev/null 2>&1 || true
@@ -454,16 +449,29 @@ set_restart_timer(){
 }
 security_sync_all(){
   command -v ipsec >/dev/null 2>&1 || return 0
-  mkdir -p "$IPSEC_DIR" "$SEC_DIR"; chmod 700 "$SEC_DIR" "$IPSEC_DIR"; rm -f "$IPSEC_DIR"/*.conf 2>/dev/null || true
-  : >"$IPSEC_SECRETS"; chmod 600 "$IPSEC_SECRETS"
-  local f pid conn; declare -A done=()
+
+  mkdir -p "$IPSEC_DIR"
+  chmod 755 "$IPSEC_DIR"
+  rm -f "$IPSEC_DIR"/*.conf 2>/dev/null || true
+  : >"$IPSEC_SECRETS"
+  chmod 600 "$IPSEC_SECRETS"
+
+  local f pid conn
+  local conns=()
+  declare -A done=()
   shopt -s nullglob
   for f in "$TUN_DIR"/*/meta.conf; do
     unset SECURITY IPSEC_PSK LOCAL_PUBLIC REMOTE_PUBLIC PEER_ID
     . "$f" 2>/dev/null || continue
-    [ "${SECURITY:-plain}" = ipsec ] || continue; [ -n "${IPSEC_PSK:-}" ] || continue
+    [ "${SECURITY:-plain}" = ipsec ] || continue
+    [ -n "${IPSEC_PSK:-}" ] || continue
+
     pid="${PEER_ID:-$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")}"
-    [ -n "${done[$pid]:-}" ] && continue; done[$pid]=1; conn="darkgre-$pid"
+    [ -n "${done[$pid]:-}" ] && continue
+    done[$pid]=1
+    conn="darkgre-$pid"
+    conns+=("$conn")
+
     cat >"$IPSEC_DIR/$pid.conf" <<EOF
 conn $conn
   keyexchange=ikev2
@@ -481,13 +489,29 @@ conn $conn
   mobike=no
   auto=start
 EOF
+    chmod 600 "$IPSEC_DIR/$pid.conf"
     printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
   done
   shopt -u nullglob
-  grep -qF 'include /etc/dark-gre/security/ipsec.d/*.conf' /etc/ipsec.conf 2>/dev/null || printf '\n# DARK GRE managed\ninclude /etc/dark-gre/security/ipsec.d/*.conf\n' >>/etc/ipsec.conf
-  grep -qF 'include /etc/dark-gre/security/ipsec.secrets' /etc/ipsec.secrets 2>/dev/null || printf '\n# DARK GRE managed\ninclude /etc/dark-gre/security/ipsec.secrets\n' >>/etc/ipsec.secrets
+
+  # Remove all old DARK GRE includes, including the AppArmor-blocked RC3/RC4 path.
+  sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/ipsec.d/dark-gre/\*.conf|d' /etc/ipsec.conf 2>/dev/null || true
+  sed -i '\|include /etc/dark-gre/security/ipsec.secrets|d;\|include /etc/ipsec.dark-gre.secrets|d' /etc/ipsec.secrets 2>/dev/null || true
+
+  printf '\n# DARK GRE managed\ninclude /etc/ipsec.d/dark-gre/*.conf\n' >>/etc/ipsec.conf
+  printf '\n# DARK GRE managed\ninclude /etc/ipsec.dark-gre.secrets\n' >>/etc/ipsec.secrets
+
+  # Old files are no longer consumed; remove them so AppArmor errors cannot recur.
+  rm -rf "$OLD_IPSEC_DIR" "$OLD_IPSEC_SECRETS" 2>/dev/null || true
+
   systemctl enable --now strongswan-starter >/dev/null 2>&1 || systemctl enable --now strongswan >/dev/null 2>&1 || true
-  ipsec rereadsecrets >/dev/null 2>&1 || true; ipsec reload >/dev/null 2>&1 || true
+  ipsec reload >/dev/null 2>&1 || true
+  ipsec rereadsecrets >/dev/null 2>&1 || true
+
+  # Initiate each connection once. strongSwan owns all later retries.
+  for conn in "${conns[@]}"; do
+    timeout 3 ipsec up "$conn" >/dev/null 2>&1 || true
+  done
 }
 
 migrate_existing_tunnels(){
@@ -533,20 +557,22 @@ service_start(){
   local n="$1"
   systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || return 1
   systemctl start "darkgre@$n.service" >/dev/null 2>&1 || return 1
-  systemctl enable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || return 1
+  systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+  systemctl enable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || return 1
   "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
   return 0
 }
 service_restart(){
   local n="$1"
   systemctl restart "darkgre@$n.service" >/dev/null 2>&1 || return 1
-  systemctl enable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+  systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+  systemctl enable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
   "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
 }
 service_stop(){
   local n="$1"
   systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
-  systemctl stop "darkgre-watch@$n.service" >/dev/null 2>&1 || true
+  systemctl disable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
   systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
 }
 service_state(){
@@ -831,6 +857,7 @@ delete_tunnel(){
   read -r -p "  type the tunnel name to remove $n: " v; [ "$v" = "$n" ] || { warn "cancelled"; return; }
   systemctl disable "darkgre@$n.service" >/dev/null 2>&1 || true
   systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+  systemctl disable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
   set_restart_timer "$n" off; service_stop "$n"; rm -rf "$d"; security_sync_all
   ok "deleted $n"
 }
@@ -1209,8 +1236,9 @@ uninstall_all(){
   for d in "$TUN_DIR"/*; do [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; systemctl disable "darkgre@$NAME.service" >/dev/null 2>&1 || true; set_restart_timer "$NAME" off; service_stop "$NAME"; done
   shopt -u nullglob
   rm -f "$UNIT_FILE" "$RS_UNIT" "$RS_TIMER" "$WATCH_UNIT" "$WATCH_TIMER" "$RUNNER" /etc/sysctl.d/99-dark-gre.conf
-  sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/dark-gre/security/ipsec.secrets|d' /etc/ipsec.conf /etc/ipsec.secrets 2>/dev/null || true
-  rm -rf "$BASE_DIR"; systemctl daemon-reload; command -v ipsec >/dev/null 2>&1 && ipsec reload >/dev/null 2>&1 || true
+  sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/ipsec.d/dark-gre/\*.conf|d' /etc/ipsec.conf 2>/dev/null || true
+  sed -i '\|include /etc/dark-gre/security/ipsec.secrets|d;\|include /etc/ipsec.dark-gre.secrets|d' /etc/ipsec.secrets 2>/dev/null || true
+  rm -rf "$IPSEC_DIR" "$IPSEC_SECRETS" "$BASE_DIR"; systemctl daemon-reload; command -v ipsec >/dev/null 2>&1 && ipsec reload >/dev/null 2>&1 || true
   ok "DARK GRE uninstalled; strongSwan package was left installed"; pause; exit 0
 }
 
@@ -1232,11 +1260,11 @@ repair_runtime(){
     systemctl stop "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl reset-failed "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl disable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
-    systemctl stop "darkgre-watch@$n.service" >/dev/null 2>&1 || true
+    systemctl disable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
 
     systemctl enable "darkgre@$n.service" >/dev/null 2>&1 || true
     systemctl start "darkgre@$n.service" >/dev/null 2>&1 || true
-    systemctl enable --now "darkgre-watch@$n.timer" >/dev/null 2>&1 || true
+    systemctl enable --now "darkgre-watch@$n.service" >/dev/null 2>&1 || true
     "$RUNNER" reconcile "$n" >/dev/null 2>&1 || true
 
     RESTART_EVERY="${RESTART_EVERY:-off}"
