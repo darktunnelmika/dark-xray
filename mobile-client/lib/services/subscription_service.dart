@@ -83,7 +83,10 @@ class SubscriptionService {
     return lower.contains('vless://') ||
         lower.contains('vmess://') ||
         lower.contains('trojan://') ||
-        lower.contains('ss://');
+        lower.contains('ss://') ||
+        lower.contains('hysteria2://') ||
+        lower.contains('hy2://') ||
+        lower.contains('socks://');
   }
 
   ProxyProfile? _parseLine(String line) {
@@ -99,6 +102,12 @@ class SubscriptionService {
     }
     if (lower.startsWith('vmess://')) {
       return _parseVmess(line);
+    }
+    if (lower.startsWith('hysteria2://') || lower.startsWith('hy2://')) {
+      return _parseSimpleModernUri(line, 'HYSTERIA2', 'QUIC | TLS');
+    }
+    if (lower.startsWith('socks://')) {
+      return _parseSimpleModernUri(line, 'SOCKS', 'TCP/UDP');
     }
     return null;
   }
@@ -125,6 +134,35 @@ class SubscriptionService {
       );
     } catch (_) {
       return null;
+    }
+  }
+
+
+  ProxyProfile? _parseSimpleModernUri(
+    String raw,
+    String schemeLabel,
+    String transport,
+  ) {
+    try {
+      final uri = Uri.parse(raw);
+      final title = _profileName(uri.fragment, uri.host, schemeLabel);
+      return ProxyProfile(
+        id: _stableId(raw),
+        name: title,
+        scheme: schemeLabel.toLowerCase(),
+        detail: '$schemeLabel | $transport',
+        rawUri: raw,
+        host: uri.host.isEmpty ? null : uri.host,
+        port: uri.hasPort ? uri.port : null,
+      );
+    } catch (_) {
+      return ProxyProfile(
+        id: _stableId(raw),
+        name: schemeLabel,
+        scheme: schemeLabel.toLowerCase(),
+        detail: '$schemeLabel | $transport',
+        rawUri: raw,
+      );
     }
   }
 
