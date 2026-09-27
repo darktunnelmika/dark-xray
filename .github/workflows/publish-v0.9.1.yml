@@ -49,63 +49,64 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm -rf release-artifacts release-artifacts-second verify-release
-          python3 tools/release_snapshot.py             --commit "$STABLE_COMMIT"             --accepted-runtime-commit "$STABLE_COMMIT"             --accepted-runtime-stage stable-production-gate             --output "$GITHUB_WORKSPACE/release-artifacts"             --json-only
-          python3 tools/release_snapshot.py             --commit "$STABLE_COMMIT"             --accepted-runtime-commit "$STABLE_COMMIT"             --accepted-runtime-stage stable-production-gate             --output "$GITHUB_WORKSPACE/release-artifacts-second"             --json-only
+          A="$RUNNER_TEMP/dark-xray-release-a"
+          B="$RUNNER_TEMP/dark-xray-release-b"
+          VERIFY="$RUNNER_TEMP/verify-release"
+          rm -rf "$A" "$B" "$VERIFY"
+          python3 tools/release_snapshot.py --commit "$STABLE_COMMIT" --accepted-runtime-commit "$STABLE_COMMIT" --accepted-runtime-stage stable-production-gate --output "$A" --json-only
+          python3 tools/release_snapshot.py --commit "$STABLE_COMMIT" --accepted-runtime-commit "$STABLE_COMMIT" --accepted-runtime-stage stable-production-gate --output "$B" --json-only
           for f in "$STEM.tar.gz" "$STEM.zip" "$STEM.manifest.json" SHA256SUMS.release; do
-            cmp "release-artifacts/$f" "release-artifacts-second/$f"
+            cmp "$A/$f" "$B/$f"
           done
-          cd release-artifacts
-          sha256sum -c SHA256SUMS.release
-          cd ..
-          mkdir verify-release
-          tar -xzf "release-artifacts/$STEM.tar.gz" -C verify-release
-          python3 "verify-release/dark-xray-$VERSION/release-install.py" verify
+          (cd "$A" && sha256sum -c SHA256SUMS.release)
+          mkdir "$VERIFY"
+          tar -xzf "$A/$STEM.tar.gz" -C "$VERIFY"
+          python3 "$VERIFY/dark-xray-$VERSION/release-install.py" verify
 
       - name: Write stable acceptance evidence
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat > release-artifacts/STABLE-ACCEPTANCE.txt <<'EOF'
-          DARK XRAY 0.9.1 Stable
-          release_commit=31abf2d708c2c766a20c8b8089123f63387a0b62
-          release_tree=b826fde6cb6233d7f0e6fb62d66932b1a52ad4ca
-          rc_source_commit=81934b69ec52c57c8387c621a7f889c25b5a6517
-          rc_to_stable_runtime_code_changed=false
-          rc_to_stable_changed_files=VERSION,SHA256SUMS
-          full_regression_junit_tests=1189
-          full_regression_failures=0
-          full_regression_errors=0
-          full_regression_skipped=1
-          stable_targeted_tests=15
-          stable_targeted_failures=0
-          load_scale_clients=5000
-          load_scale_concurrency=32
-          load_scale_passed=true
-          production_gate_passed=true
-          remote_nodes_fresh=3/3
-          source_files_verified=355
-          reproducible_artifacts=true
-          EOF
-          cat > release-notes.md <<'EOF'
-          ## DARK XRAY v0.9.1 Stable
-
-          Final hardening release promoted from `v0.9.1-rc1`.
-
-          - Exact stable commit: `31abf2d708c2c766a20c8b8089123f63387a0b62`
-          - Release tree: `b826fde6cb6233d7f0e6fb62d66932b1a52ad4ca`
-          - Full regression: 1189 tests, 0 failures, 0 errors
-          - Load-scale gate: 5000 clients / concurrency 32 — PASS
-          - Production Gate: PASS
-          - Remote Nodes: 3/3 fresh
-          - Source verification: 355 files
-          - ZIP/TAR/Manifest reproducibility: byte-for-byte PASS
-
-          `SHA256SUMS.release` is attached for artifact verification.
-          EOF
+          A="$RUNNER_TEMP/dark-xray-release-a"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          printf "%s\n" \
+            "DARK XRAY 0.9.1 Stable" \
+            "release_commit=31abf2d708c2c766a20c8b8089123f63387a0b62" \
+            "release_tree=b826fde6cb6233d7f0e6fb62d66932b1a52ad4ca" \
+            "rc_source_commit=81934b69ec52c57c8387c621a7f889c25b5a6517" \
+            "rc_to_stable_runtime_code_changed=false" \
+            "rc_to_stable_changed_files=VERSION,SHA256SUMS" \
+            "full_regression_junit_tests=1189" \
+            "full_regression_failures=0" \
+            "full_regression_errors=0" \
+            "full_regression_skipped=1" \
+            "stable_targeted_tests=15" \
+            "stable_targeted_failures=0" \
+            "load_scale_clients=5000" \
+            "load_scale_concurrency=32" \
+            "load_scale_passed=true" \
+            "production_gate_passed=true" \
+            "remote_nodes_fresh=3/3" \
+            "source_files_verified=355" \
+            "reproducible_artifacts=true" > "$A/STABLE-ACCEPTANCE.txt"
+          printf "%s\n" \
+            "## DARK XRAY v0.9.1 Stable" \
+            "" \
+            "Final hardening release promoted from v0.9.1-rc1." \
+            "" \
+            "- Exact stable commit: 31abf2d708c2c766a20c8b8089123f63387a0b62" \
+            "- Release tree: b826fde6cb6233d7f0e6fb62d66932b1a52ad4ca" \
+            "- Full regression: 1189 tests, 0 failures, 0 errors" \
+            "- Load-scale gate: 5000 clients / concurrency 32 — PASS" \
+            "- Production Gate: PASS" \
+            "- Remote Nodes: 3/3 fresh" \
+            "- Source verification: 355 files" \
+            "- ZIP/TAR/Manifest reproducibility: byte-for-byte PASS" \
+            "" \
+            "SHA256SUMS.release is attached for artifact verification." > "$NOTES"
           (
-            cd release-artifacts
-            sha256sum               "$STEM.tar.gz"               "$STEM.zip"               "$STEM.manifest.json"               SHA256SUMS.release               STABLE-ACCEPTANCE.txt               > PUBLISH-SHA256SUMS
+            cd "$A"
+            sha256sum "$STEM.tar.gz" "$STEM.zip" "$STEM.manifest.json" SHA256SUMS.release STABLE-ACCEPTANCE.txt > PUBLISH-SHA256SUMS
           )
 
       - name: Publish GitHub tag and release
@@ -114,22 +115,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
+          A="$RUNNER_TEMP/dark-xray-release-a"
+          NOTES="$RUNNER_TEMP/release-notes.md"
           assets=(
-            "release-artifacts/$STEM.tar.gz"
-            "release-artifacts/$STEM.zip"
-            "release-artifacts/$STEM.manifest.json"
-            "release-artifacts/SHA256SUMS.release"
-            "release-artifacts/PUBLISH-SHA256SUMS"
-            "release-artifacts/STABLE-ACCEPTANCE.txt"
+            "$A/$STEM.tar.gz"
+            "$A/$STEM.zip"
+            "$A/$STEM.manifest.json"
+            "$A/SHA256SUMS.release"
+            "$A/PUBLISH-SHA256SUMS"
+            "$A/STABLE-ACCEPTANCE.txt"
           )
 
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
             ref_sha="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha')"
             test "$ref_sha" = "$STABLE_COMMIT"
-            gh release upload "$TAG" "${assets[@]}" --clobber --repo "$REPO"
-            gh release edit "$TAG" --repo "$REPO" --title "DARK XRAY v0.9.1" --notes-file release-notes.md --latest
           else
-            gh release create "$TAG" "${assets[@]}"               --repo "$REPO"               --target "$STABLE_COMMIT"               --title "DARK XRAY v0.9.1"               --notes-file release-notes.md               --latest
+            gh api --method POST "repos/$REPO/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$STABLE_COMMIT" >/dev/null
+          fi
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber --repo "$REPO"
+            gh release edit "$TAG" --repo "$REPO" --title "DARK XRAY v0.9.1" --notes-file "$NOTES" --latest
+          else
+            gh release create "$TAG" "${assets[@]}" --repo "$REPO" --verify-tag --title "DARK XRAY v0.9.1" --notes-file "$NOTES" --latest
           fi
 
           gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease,url,targetCommitish
