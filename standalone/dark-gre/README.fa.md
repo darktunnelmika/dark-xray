@@ -2,9 +2,9 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.7.0-rc7` — Draft / Test
+> وضعیت: `v0.8.0-rc8` — Draft / Test
 
-## تغییرات RC7
+## تغییرات RC8
 
 - Installer بعد از هر نصب/آپدیت **runtime repair** اجرا می‌کند تا unit/runner قدیمی باقی نماند
 - سرویس اصلی در Secure Mode در حالت **armed/active** می‌ماند و منتظر Peer fail نمی‌شود
@@ -75,6 +75,10 @@ Manage tunnels
 روی KHAREJ کد جدید را اعمال می‌کند و نیازی به حذف تانل نیست.
 
 ## Security
+
+RC8 برای مسیرهای محدودکننده، ESP را با `forceencaps=yes` همیشه داخل **UDP/4500** می‌فرستد. IRAN تنها Initiator است و KHAREJ فقط Responder می‌ماند تا IKE collision و SA churn کمتر شود.
+
+
 
 RC7 از مدل **policy-gated Secure GRE** استفاده می‌کند: رابط GRE ثابت می‌ماند، اما برای Peer امن فقط GRE دارای policy واقعی IPsec اجازه عبور دارد و GRE بدون رمزنگاری Drop می‌شود. بنابراین نوسان کوتاه IKE/CHILD_SA باعث حذف و ساخت دوباره Interface نمی‌شود.
 
@@ -172,7 +176,7 @@ ADVANCED
 - Speed responder
 - IPsec / XFRM status
 
-## نصب RC7
+## نصب RC8
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
@@ -206,4 +210,4 @@ darkgre
 /etc/sysctl.d/99-dark-gre.conf
 ```
 
-RC7 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
+RC8 تا زمان تست واقعی **Public Port -> GRE -> Xray** و تست Secure Mode روی دو VPS در Draft می‌ماند.
