@@ -73,10 +73,19 @@ def run():
                             page.locator('#login-form button[type=submit]').click();page.locator('.ov4-commandbar').wait_for(state='visible')
                             if width<=760:page.locator('.mobile-menu').click()
                             page.locator('.sidebar [data-page="darkrestore"]').click();page.locator('.drs-panel').wait_for(state='visible')
+                            # A slow safety request previously let an old HTML snapshot
+                            # erase search text typed while changing the group. Delay only
+                            # response delivery, not data content; exercise the real handlers.
+                            page.evaluate('''()=>{const previous=api;globalThis.api=async function(path,...rest){const result=await previous(path,...rest);if(path.startsWith('/api/dark-restore/safety'))await new Promise(r=>setTimeout(r,700));return result;};}''')
                             page.locator('[data-dr-filter-group]').select_option(gid)
                             page.wait_for_function('gid=>DarkRestoreGroups.state.group===gid',arg=gid)
+                            page.wait_for_timeout(100)
                             page.locator('[data-dr-search]').fill('partial-'+suffix)
                             page.wait_for_function('()=>document.querySelectorAll(".dr-user").length===1&&document.querySelector(".drs-user-status")')
+                            page.wait_for_function('()=>document.querySelector("#content").getAttribute("aria-busy")!=="true"')
+                            assert page.locator('[data-dr-search]').input_value()=='partial-'+suffix
+                            assert page.locator('.dr-user').count()==1
+                            assert page.locator('[data-dr-search]').evaluate('(el)=>document.activeElement===el')
                             assert page.locator('.drs-user-status .tag').inner_text()==('Needs source review' if lang=='en' else 'نیازمند بررسی مبدا')
                             assert not writes
                             page.locator('[data-act=drsreview]').click();form=page.locator('#dialog-form')
@@ -109,8 +118,18 @@ def run():
                             if width==390 and lang=='en':
                                 args.report.parent.mkdir(parents=True,exist_ok=True);page.screenshot(path=str(args.report.with_suffix('.png')))
                             check={'width':width,'language':lang,'group_clients':53,'review_requires_confirmation':True,
-                                   'cancel_readonly':True,'suspension_saved':True,'identity_usage_delivery_preserved':True,'errors':errors}
+                                   'cancel_readonly':True,'suspension_saved':True,'late_search_and_focus_preserved':True,
+                                   'identity_usage_delivery_preserved':True,'errors':errors}
                             checks.append(check);print(json.dumps(check),flush=True);context.close()
+                except BaseException as ex:
+                    args.report.parent.mkdir(parents=True,exist_ok=True)
+                    detail={'passed':False,'error':type(ex).__name__,'completed':checks}
+                    try:
+                        detail['view']=page.evaluate('()=>({page:state.page,modelQuery:DarkRestoreGroups.state.query,visibleQuery:document.querySelector("[data-dr-search]")?.value,rows:document.querySelectorAll(".dr-user").length,busy:document.querySelector("#content")?.getAttribute("aria-busy")})')
+                        page.screenshot(path=str(args.report.with_suffix('.failure.png')))
+                    except Exception:pass
+                    args.report.write_text(json.dumps(detail,indent=2)+'\n')
+                    raise
                 finally:browser.close()
         finally:
             server.should_exit=True;thread.join(10);store.close()
