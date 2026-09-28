@@ -192,6 +192,7 @@ def test_unassigned_node_snapshot_never_charges_restore(env,monkeypatch):
 def test_anonymous_and_reseller_cannot_manage_restore_groups(env,monkeypatch):
     _,_,c,_,inbound=prepare(env,monkeypatch)
     store,engine,manager,auth,_=env
+    manager.owner_put(OWNER,'rep',name='Representative',allowed=[inbound])
     auth.admin_create(OWNER,'rep','RepPassword12345','reseller',{})
     c.post('/api/auth/logout')
     assert c.get('/api/dark-restore').status_code==401
