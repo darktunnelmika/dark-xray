@@ -7,10 +7,13 @@ import 'package:flutter/services.dart';
 import '../models/proxy_profile.dart';
 import '../services/import_resolver.dart';
 import '../services/profile_store.dart';
+import '../services/play_compliance_store.dart';
+import '../services/play_security.dart';
 import '../services/settings_store.dart';
 import '../services/subscription_service.dart';
 import '../services/vpn_bridge.dart';
 import '../ui/cyber.dart';
+import '../widgets/vpn_disclosure_dialog.dart';
 import 'add_configuration_page.dart';
 import 'qr_scanner_page.dart';
 import 'settings_page.dart';
@@ -26,6 +29,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final _profileStore = ProfileStore();
+  final _playCompliance = PlayComplianceStore();
   final _settingsStore = SettingsStore();
   final _vpn = VpnBridge();
   final _resolver = const ImportResolver();
@@ -178,6 +182,23 @@ class _HomePageState extends State<HomePage>
     if (!_connected && (profile == null || profile.rawUri.trim().isEmpty)) {
       _show('Add a real configuration first.');
       return;
+    }
+
+    if (!_connected) {
+      final securityError =
+          PlaySecurity.validateEncryptedEndpoint(profile!.rawUri);
+      if (securityError != null) {
+        _show(securityError);
+        return;
+      }
+
+      final accepted = await _playCompliance.hasAcceptedVpnDisclosure();
+      if (!accepted) {
+        if (!mounted) return;
+        final consented = await VpnDisclosureDialog.show(context);
+        if (!consented) return;
+        await _playCompliance.acceptVpnDisclosure();
+      }
     }
 
     setState(() => _vpnBusy = true);
