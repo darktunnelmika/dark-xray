@@ -9,6 +9,8 @@ const index=fs.readFileSync(path.join(__dirname,'..','web','index.html'),'utf8')
 
 test('Traffic Matrix is the owner entry point for runtime Direct and Tunnel policy',()=>{
  assert.match(inbound,/data-act="tmopen"/);
+ assert.match(inbound,/iv3-matrix-link/);
+ assert.match(inbound,/WARP \/ AdBlock/);
  assert.match(matrix,/DARK TRAFFIC MATRIX/);
  assert.match(matrix,/warp_ai_adblock/);
  assert.match(matrix,/warp_all_adblock/);
