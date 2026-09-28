@@ -1,8 +1,7 @@
 from __future__ import annotations
-import base64, json, ipaddress, re, secrets, socket, ssl, time, uuid
+import json, ipaddress, re, secrets, socket, time, uuid
 from typing import Any, Literal
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener, HTTPSHandler, HTTPRedirectHandler
 
 from fastapi import Depends, HTTPException, Request as FastAPIRequest
 from fastapi.responses import Response
@@ -12,6 +11,8 @@ from dark_policy import PolicyError
 from restore_groups import RestoreGroupsMixin
 from restore_frontend import inspect_domain
 from restore_targets import RestoreTargetsMixin
+from restore_safety import RestoreSafetyMixin
+from restore_scan import scan_subscription
 
 _HOST_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
 
@@ -35,14 +36,7 @@ class RestoreDomainBody(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
     acme_email:str=Field(default='',max_length=254)
 
-class _SafeRedirect(HTTPRedirectHandler):
-    def __init__(self,validator):
-        super().__init__();self.validator=validator
-    def redirect_request(self,req,fp,code,msg,headers,newurl):
-        self.validator(newurl)
-        return super().redirect_request(req,fp,code,msg,headers,newurl)
-
-class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
+class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
     def __init__(self,store,engine,nodes):
         self.store,self.engine,self.nodes=store,engine,nodes
         with store.lock:
@@ -72,13 +66,16 @@ class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
             """)
         self._init_groups()
         self._init_targets()
+        self._init_safety()
 
     @staticmethod
     def _safe_url(value:str):
-        try:u=urlsplit(value.strip())
-        except Exception:raise PolicyError('Invalid subscription URL')
+        try:
+            u=urlsplit(value.strip());port=u.port
+        except Exception:raise PolicyError('Invalid subscription URL or port')
         if u.scheme not in ('http','https') or not u.hostname or u.username or u.password:
             raise PolicyError('Subscription URL must be http/https without embedded credentials')
+        if port is not None and not 1<=port<=65535:raise PolicyError('Invalid subscription port')
         host=(u.hostname or '').rstrip('.').lower()
         if not _HOST_RE.fullmatch(host):raise PolicyError('Subscription host must be a public DNS name')
         path=u.path or '/'
@@ -103,26 +100,7 @@ class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
         _,host,_,_=self._safe_url(url);self._public_addresses(host)
 
     def _scan(self,url:str)->dict[str,Any]:
-        self._validate_fetch_url(url)
-        req=Request(url,headers={'User-Agent':'DARK-XRAY-Restore/1.0','Accept':'*/*'},method='GET')
-        try:
-            ctx=ssl.create_default_context()
-            opener=build_opener(HTTPSHandler(context=ctx),_SafeRedirect(self._validate_fetch_url))
-            with opener.open(req,timeout=10) as r:
-                header=r.headers.get('subscription-userinfo','')
-        except Exception as ex:
-            return {'status':'partial','error':str(ex)[:300],'upload':0,'download':0,'total':0,'expire':0}
-        vals={}
-        for part in header.split(';'):
-            if '=' not in part:continue
-            k,v=part.split('=',1);k=k.strip().lower();v=v.strip()
-            if k in {'upload','download','total','expire'}:
-                try:vals[k]=max(0,int(v))
-                except Exception:pass
-        if not vals:return {'status':'no_usage_data','error':'subscription-userinfo header is missing','upload':0,'download':0,'total':0,'expire':0}
-        return {'status':'verified' if {'total','expire'}<=set(vals) else 'partial','error':'',
-                'upload':vals.get('upload',0),'download':vals.get('download',0),
-                'total':vals.get('total',0),'expire':vals.get('expire',0)}
+        return scan_subscription(self,url)
 
     def _validate_targets(self,inbounds:list[int],nodes:list[str]):
         if not inbounds or len(set(inbounds))!=len(inbounds) or any(type(x)is not int or x<1 for x in inbounds):
@@ -160,10 +138,10 @@ class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
         host=(host_header or '').split(':',1)[0].lower().rstrip('.')
         with self.store.lock:
             row=self.store.db.execute("""SELECT id,public_token FROM restore_subscriptions
-              WHERE legacy_host=? AND legacy_path=? AND legacy_query=? AND enabled=1""",(host,path,query)).fetchone()
+              WHERE legacy_host=? AND legacy_path=? AND legacy_query=?""",(host,path,query)).fetchone()
             if not row and query:
                 row=self.store.db.execute("""SELECT id,public_token FROM restore_subscriptions
-                  WHERE legacy_host=? AND legacy_path=? AND legacy_query='' AND enabled=1""",(host,path)).fetchone()
+                  WHERE legacy_host=? AND legacy_path=? AND legacy_query=''""",(host,path)).fetchone()
         return dict(row) if row else None
 
     def _runtime_ready(self,inbound_ids:list[int],node_ids:list[str],*,node_mode:str='selected',include_local:bool=True)->dict[str,set[int]]:
@@ -171,10 +149,10 @@ class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
             'nodeMode':node_mode,'includeLocal':include_local})[0]
 
     def subscription(self,token:str,fmt:str,*,record_access:bool=True)->tuple[bytes,dict]:
-        with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=? AND enabled=1',(token,)).fetchone()
+        with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=?',(token,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
+        self.require_eligible(r)
         now=time.time()
-        if int(r['legacy_expire']) and int(r['legacy_expire'])<=int(now):raise HTTPException(403,'Subscription expired')
         view,ready=self.render_view(self.target_selection(r),fmt)
         body,headers=view.subscription(str(r['core_email']),fmt,runtime_ready=ready)
         usage=self.usage(str(r['id']))
@@ -190,6 +168,7 @@ class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
 def install_dark_restore(app,restore,current,owner,writable,audit):
     restore.install_group_routes(app,owner,writable,audit)
     restore.install_target_routes(app,owner,writable,audit)
+    restore.install_safety_routes(app,owner,writable,audit)
 
     @app.get('/api/dark-restore')
     def list_restore(groupId:str='',p=Depends(owner)):

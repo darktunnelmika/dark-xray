@@ -15,7 +15,7 @@ from auth import Auth
 from core import Config,CoreEngine
 from dark_policy import Actor,Store
 from manager import Manager
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 
 def run():
@@ -93,7 +93,7 @@ def run():
                             page.wait_for_function('rid=>{const x=DarkRestoreGroups.state.data.items.find(x=>x.id===rid);const n=document.querySelector("[data-dr-dark-usage]");return x?.dark_used===3072&&n?.textContent===bytes(3072)}',arg=rid)
                             assert page.locator('[data-dr-dark-usage]').inner_text()==page.evaluate('bytes(3072)')
                             second=import_one('Rep B '+suffix,'b-'+suffix);gid_b=second['group']['id']
-                            assert page.locator('.dr-user').count()==1
+                            expect(page.locator('.dr-user')).to_have_count(1)
                             page.locator('[data-dr-filter-group]').select_option(gid_a)
                             page.wait_for_function('id=>DarkRestoreGroups.state.group===id',arg=gid_a)
                             page.locator('[data-dr-select="'+rid+'"]').wait_for(state='visible')
@@ -105,8 +105,10 @@ def run():
                             current=next(x for x in app.state.dark_restore.rows() if x['id']==rid)
                             assert current['public_token']==original['public_token'] and current['core_email']==original['core_email']
                             assert current['dark_used']==3072 and current['legacy_used']==3*1024*1024
-                            assert page.locator('.dr-user').count()==2
-                            assert page.locator('.dr-result-head strong').inner_text()==page.evaluate('bytes(3072)')
+                            # Data arrives before the safety/destination decorators finish rendering.
+                            # Wait for the real visible result, not just the in-memory group update.
+                            expect(page.locator('.dr-user')).to_have_count(2)
+                            expect(page.locator('.dr-result-head strong')).to_have_text(page.evaluate('bytes(3072)'))
                             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
                             assert store.db.execute('SELECT count(*) FROM managed_clients').fetchone()[0]==0
                             assert not errors,errors
