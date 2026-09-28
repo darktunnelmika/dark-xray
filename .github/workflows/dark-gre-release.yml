@@ -1,6 +1,13 @@
 name: DARK GRE Release
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'standalone/dark-gre/**'
+      - 'tests/dark-gre-smoke.sh'
+      - '.github/workflows/dark-gre-release.yml'
   workflow_dispatch:
     inputs:
       version:
@@ -8,13 +15,10 @@ on:
         required: true
         default: "v0.12.0-rc12"
       publish_release:
-        description: "Create GitHub Release"
+        description: "Create GitHub Release if this version is not already published"
         required: true
         type: boolean
-        default: false
-  push:
-    tags:
-      - "dark-gre-v*"
+        default: true
 
 permissions:
   contents: write
@@ -25,18 +29,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-            v="${GITHUB_REF_NAME#dark-gre-}"
-          else
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             v="${{ inputs.version }}"
+          else
+            raw="$(grep -m1 '^SCRIPT_VER=' standalone/dark-gre/dark-gre.sh | cut -d'"' -f2)"
+            test -n "$raw"
+            v="v$raw"
           fi
+          [[ "$v" == v* ]] || v="v$v"
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=dark-gre-$v" >> "$GITHUB_OUTPUT"
 
       - name: Verify DARK GRE
         shell: bash
@@ -44,6 +54,7 @@ jobs:
           set -euo pipefail
           bash -n standalone/dark-gre/dark-gre.sh
           bash -n standalone/dark-gre/install.sh
+          bash -n tests/dark-gre-smoke.sh
           bash tests/dark-gre-smoke.sh
 
       - name: Build archives
@@ -62,7 +73,7 @@ jobs:
           (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/$name.zip" "$name")
           sha256sum "$name.tar.gz" "$name.zip" > SHA256SUMS
 
-      - name: Upload build artifacts
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: dark-gre-${{ steps.version.outputs.version }}
@@ -72,19 +83,27 @@ jobs:
             SHA256SUMS
           if-no-files-found: error
 
-      - name: Publish GitHub Release
-        if: github.ref_type == 'tag' || inputs.publish_release == true
+      - name: Publish independent DARK GRE release
+        if: github.event_name == 'push' || inputs.publish_release == true
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
           v="${{ steps.version.outputs.version }}"
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-            release_tag="$GITHUB_REF_NAME"
-          else
-            release_tag="dark-gre-$v"
-            git tag "$release_tag" "$GITHUB_SHA"
-            git push origin "$release_tag"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; keeping the immutable published version."
+            exit 0
           fi
-          gh release create "$release_tag"             dark-gre-*.tar.gz dark-gre-*.zip SHA256SUMS             --title "DARK GRE Direct $v"             --notes "Plain GRE standalone release. See standalone/dark-gre/README.fa.md for install and validation notes."
+
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "$tag"
+          fi
+
+          gh release create "$tag" \
+            dark-gre-*.tar.gz dark-gre-*.zip SHA256SUMS \
+            --title "DARK GRE Direct $v" \
+            --notes "Plain GRE standalone release. Live validation includes IRAN/KHAREJ reboot recovery, inner GRE connectivity, and TCP/1190 reachability. See standalone/dark-gre/README.fa.md."
