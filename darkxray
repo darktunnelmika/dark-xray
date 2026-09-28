@@ -27,7 +27,7 @@ case "${1:-menu}" in
  settings-apply) shift; exec "$PY" "$ROOT/tools/settings_apply.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  stage-runtime|stage-panel-path) shift; exec "$PY" "$ROOT/tools/runtime_stage.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  reset-password) shift; exec "$PY" "$ROOT/backend/owner_recovery.py" --data "$DATA" --action password "$@" ;;
- account) shift; exec "$PY" "$ROOT/backend/owner_recovery.py" --data "$DATA" --action password "$@" ;;
+ account) shift; exec "$PY" "$ROOT/backend/owner_recovery.py" --data "$DATA" "$@" ;;
  selftest) shift; exec "$PY" "$ROOT/tools/smoke-real.py" "$@" ;;
  update) shift; exec "$PY" "$ROOT/tools/update.py" "$@" ;;
  *) exec "$PY" "$ROOT/backend/server.py" --config "$CONFIG" --data "$DATA" "$@" ;;
