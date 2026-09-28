@@ -208,6 +208,7 @@ class DarkXrayVpnService : VpnService() {
 
         try {
             if (rawUri.isBlank()) error("Selected profile is empty.")
+            validatePlayProfile(rawUri)?.let { error(it) }
 
             if (running) {
                 stopCoreAndVpn()
@@ -445,6 +446,43 @@ class DarkXrayVpnService : VpnService() {
                     .put("domainStrategy", "AsIs")
                     .put("rules", rules),
             )
+    }
+
+    private fun validatePlayProfile(rawUri: String): String? {
+        val lower = rawUri.trim().lowercase()
+
+        if (lower.startsWith("socks://")) {
+            return "Google Play builds do not allow plain SOCKS endpoints."
+        }
+
+        if (lower.startsWith("vless://")) {
+            return try {
+                val uri = android.net.Uri.parse(rawUri)
+                val security = uri.getQueryParameter("security")
+                    ?.trim()
+                    ?.lowercase()
+                    .orEmpty()
+                if (security == "tls" || security == "reality") {
+                    null
+                } else {
+                    "Google Play builds require VLESS with TLS or Reality."
+                }
+            } catch (_: Throwable) {
+                "Invalid VLESS profile."
+            }
+        }
+
+        if (
+            lower.startsWith("trojan://") ||
+            lower.startsWith("vmess://") ||
+            lower.startsWith("ss://") ||
+            lower.startsWith("hysteria2://") ||
+            lower.startsWith("hy2://")
+        ) {
+            return null
+        }
+
+        return "Unsupported profile type for the Google Play build."
     }
 
     private fun parseOutbound(rawUri: String): JSONObject {
