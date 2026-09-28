@@ -15,6 +15,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, StrictBool, StrictInt
 from restore_scan import FIELDS, MAX_BYTES, MAX_EXPIRE
 from restore_safety_status import safety_snapshot
+from restore_reconcile import reconcile
 
 
 class RestoreReviewBody(BaseModel):
@@ -95,43 +96,7 @@ class RestoreSafetyMixin:
             FROM restore_subscriptions r LEFT JOIN core_clients c ON c.email=r.core_email''', (state,))
 
     def reconcile_safety(self, records=None):
-        if not self.engine.config.writes_enabled:
-            return {'changed': 0, 'paused': True}
-        record_map = {r['email']: r for r in records or []}
-        changed = 0; now = time.time()
-        with self.engine.lock, self.store.transaction() as db:
-            self._seed_safety(db)
-            rows = list(db.execute('''SELECT r.*,s.metadata_state,s.checked_at,s.note,
-                s.expected_enable,s.external_disabled,s.decision old_decision,c.body core_body,
-                COALESCE(u.used,0) dark_used
-                FROM restore_subscriptions r JOIN restore_safety s ON s.restore_id=r.id
-                LEFT JOIN core_clients c ON c.email=r.core_email
-                LEFT JOIN (SELECT restore_id,SUM(up+down) used FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id'''))
-            for raw in rows:
-                r = dict(raw); client = json.loads(r['core_body']) if r['core_body'] else None
-                metadata_state = r['metadata_state']
-                if metadata_state == 'review' and r['scan_status'] == 'verified':
-                    metadata_state = r['metadata_state'] = 'verified'
-                external = int(r['external_disabled'])
-                if client is not None and not client.get('enable', True) and r['expected_enable']:
-                    external = r['external_disabled'] = 1
-                reason = decision(r, r, client, int(r['dark_used']), now=now)
-                desired = reason == 'eligible'
-                observed = bool(client.get('enable', True)) if client is not None else False
-                if client is not None and observed != desired:
-                    client['enable'] = desired
-                    db.execute('UPDATE core_clients SET body=? WHERE email=?', (json.dumps(client), r['core_email']))
-                    changed += 1
-                if r['core_email'] in record_map:
-                    record_map[r['core_email']]['enable'] = desired
-                if (r['old_decision'] != reason or r['expected_enable'] != int(desired)
-                        or raw['external_disabled'] != external or raw['metadata_state'] != metadata_state):
-                    db.execute('''UPDATE restore_safety SET metadata_state=?,expected_enable=?,external_disabled=?,
-                        decision=?,decision_at=? WHERE restore_id=?''',
-                        (metadata_state, int(desired), external, reason, now, r['id']))
-                    db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
-                        (r['id'], 'eligibility.changed', json.dumps({'status': reason, 'enabled': desired}), now))
-        return {'changed': changed, 'paused': False}
+        return reconcile(self, decision, records)
 
     def _safety_records(self):
         with self.store.lock:
@@ -204,8 +169,8 @@ class RestoreSafetyMixin:
             body = json.loads(c['body']); body['totalGB'] = value['total']; body['expiryTime'] = value['expire'] * 1000
             now = time.time()
             db.execute('UPDATE core_clients SET body=? WHERE email=?', (json.dumps(body), r['core_email']))
-            # verified here means a complete accepted snapshot, not an upstream
-            # scan claim: metadata_state=manual and the review event retain provenance.
+            # verified means an accepted complete snapshot; manual provenance is
+            # retained explicitly and protects against re-importing our own traffic.
             db.execute('''UPDATE restore_subscriptions SET legacy_upload=?,legacy_download=?,legacy_total=?,legacy_expire=?,
                 scan_status='verified',scan_error='',updated_at=? WHERE id=?''',
                 (value['upload'], value['download'], value['total'], value['expire'], now, restore_id))
