@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse,json,secrets,socket,sys,tempfile,threading,time
 from pathlib import Path
+from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'backend'))
 import uvicorn
@@ -14,6 +15,25 @@ from manager import Manager
 from playwright.sync_api import sync_playwright
 
 
+def fixture_port():
+    # Some VPS ephemeral ranges include browser-blocked ports such as 4045.
+    for _ in range(100):
+        with socket.socket() as sock:
+            port=20000+secrets.randbelow(30000)
+            try:sock.bind(('127.0.0.1',port))
+            except OSError:continue
+            return port
+    raise RuntimeError('No free browser-safe fixture port')
+
+
+def unexpected_api_response(response):
+    path=urlsplit(response.url).path
+    # Initial session discovery is unauthenticated; the isolated fixture has
+    # no privileged update broker. Do not exempt other paths or error codes.
+    expected={('/api/me',401),('/api/update/status',503)}
+    return path.startswith('/api/') and response.status>=400 and (path,response.status) not in expected
+
+
 def run():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app-root',type=Path,default=ROOT,help='Read-only source of web assets')
@@ -23,9 +43,7 @@ def run():
     server_module.ROOT=args.app_root.resolve()
     checks=[]
     with tempfile.TemporaryDirectory(prefix='dark-xray-settings-test-') as tmpdir:
-        tmp=Path(tmpdir)
-        with socket.socket() as sock:
-            sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+        tmp=Path(tmpdir);port=fixture_port()
         origin=f'http://127.0.0.1:{port}'
         store=Store(tmp/'dark.sqlite3')
         engine=CoreEngine(Config(public_origin=origin,bind_port=port,public_address='example.test',
@@ -58,8 +76,7 @@ def run():
                             page.on('pageerror',lambda err:errors.append(str(err)))
                             page.on('request',lambda req:writes.append(req.url) if '/api/' in req.url and
                                 req.method not in ('GET','HEAD') and '/api/auth/' not in req.url else None)
-                            page.on('response',lambda res:failures.append([res.status,res.url]) if
-                                '/api/' in res.url and res.status>=400 and '/api/me' not in res.url else None)
+                            page.on('response',lambda res:failures.append([res.status,res.url]) if unexpected_api_response(res) else None)
                             page.goto(origin,wait_until='networkidle')
                             page.locator('#login-form [name=username]').fill('dark')
                             page.locator('#login-form [name=password]').fill(password)
