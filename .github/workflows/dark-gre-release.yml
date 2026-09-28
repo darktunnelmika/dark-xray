@@ -94,7 +94,10 @@ jobs:
           v="${{ steps.version.outputs.version }}"
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; keeping the immutable published version."
+            if [[ "$v" == *-rc* || "$v" == *-beta* || "$v" == *-alpha* ]]; then
+              gh release edit "$tag" --prerelease
+            fi
+            echo "Release $tag already exists; keeping the published assets immutable."
             exit 0
           fi
 
@@ -103,7 +106,13 @@ jobs:
             git push origin "$tag"
           fi
 
+          release_flags=()
+          if [[ "$v" == *-rc* || "$v" == *-beta* || "$v" == *-alpha* ]]; then
+            release_flags+=(--prerelease)
+          fi
+
           gh release create "$tag" \
             dark-gre-*.tar.gz dark-gre-*.zip SHA256SUMS \
             --title "DARK GRE Direct $v" \
-            --notes "Plain GRE standalone release. Live validation includes IRAN/KHAREJ reboot recovery, inner GRE connectivity, and TCP/1190 reachability. See standalone/dark-gre/README.fa.md."
+            --notes "Plain GRE standalone release. Live validation includes IRAN/KHAREJ reboot recovery, inner GRE connectivity, and TCP/1190 reachability. See standalone/dark-gre/README.fa.md." \
+            "${release_flags[@]}"
