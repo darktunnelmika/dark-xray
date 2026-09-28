@@ -488,83 +488,9 @@ set_restart_timer(){
   systemctl daemon-reload >/dev/null 2>&1; systemctl enable --now "darkgre-restart@$name.timer" >/dev/null 2>&1
 }
 security_sync_all(){
-  command -v ipsec >/dev/null 2>&1 || return 0
-
-  mkdir -p "$IPSEC_DIR"
-  chmod 755 "$IPSEC_DIR"
-  rm -f "$IPSEC_DIR"/*.conf 2>/dev/null || true
-  : >"$IPSEC_SECRETS"
-  chmod 600 "$IPSEC_SECRETS"
-
-  local f pid conn start_mode dpd_mode close_mode
-  declare -A done=()
-  shopt -s nullglob
-  for f in "$TUN_DIR"/*/meta.conf; do
-    unset SECURITY IPSEC_PSK LOCAL_PUBLIC REMOTE_PUBLIC PEER_ID ROLE
-    . "$f" 2>/dev/null || continue
-    [ "${SECURITY:-plain}" = ipsec ] || continue
-    [ -n "${IPSEC_PSK:-}" ] || continue
-
-    pid="${PEER_ID:-$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")}"
-    [ -n "${done[$pid]:-}" ] && continue
-    done[$pid]=1
-    conn="darkgre-$pid"
-    if [ "$ROLE" = IRAN ]; then
-      start_mode=start
-      dpd_mode=restart
-      close_mode=restart
-    else
-      start_mode=add
-      dpd_mode=clear
-      close_mode=clear
-    fi
-
-    cat >"$IPSEC_DIR/$pid.conf" <<EOF
-conn $conn
-  keyexchange=ikev2
-  type=transport
-  authby=psk
-  left=$LOCAL_PUBLIC
-  right=$REMOTE_PUBLIC
-  leftid=$LOCAL_PUBLIC
-  rightid=$REMOTE_PUBLIC
-  leftprotoport=47
-  rightprotoport=47
-  ike=aes256gcm16-prfsha256-modp2048!
-  esp=aes256gcm16!
-  forceencaps=yes
-  fragmentation=yes
-  reauth=no
-  rekey=yes
-  dpdaction=$dpd_mode
-  closeaction=$close_mode
-  dpddelay=30s
-  keyingtries=%forever
-  mobike=no
-  auto=$start_mode
-EOF
-    chmod 600 "$IPSEC_DIR/$pid.conf"
-    printf '%s %s : PSK "%s"\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" "$IPSEC_PSK" >>"$IPSEC_SECRETS"
-  done
-  shopt -u nullglob
-
-  # Remove all old DARK GRE includes, including the AppArmor-blocked RC3/RC4 path.
-  sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/ipsec.d/dark-gre/\*.conf|d' /etc/ipsec.conf 2>/dev/null || true
-  sed -i '\|include /etc/dark-gre/security/ipsec.secrets|d;\|include /etc/ipsec.dark-gre.secrets|d' /etc/ipsec.secrets 2>/dev/null || true
-
-  printf '\n# DARK GRE managed\ninclude /etc/ipsec.d/dark-gre/*.conf\n' >>/etc/ipsec.conf
-  printf '\n# DARK GRE managed\ninclude /etc/ipsec.dark-gre.secrets\n' >>/etc/ipsec.secrets
-
-  # Old files are no longer consumed; remove them so AppArmor errors cannot recur.
-  rm -rf "$OLD_IPSEC_DIR" "$OLD_IPSEC_SECRETS" 2>/dev/null || true
-
-  systemctl enable --now strongswan-starter >/dev/null 2>&1 || systemctl enable --now strongswan >/dev/null 2>&1 || true
-  ipsec reload >/dev/null 2>&1 || true
-  ipsec rereadsecrets >/dev/null 2>&1 || true
-
-  # RC11: strongSwan is the only IKE initiator; IRAN=start, KHAREJ=add.
+  rm -f "$IPSEC_DIR"/*.conf "$IPSEC_SECRETS" 2>/dev/null || true
+  return 0
 }
-
 migrate_existing_tunnels(){
   local f
   shopt -s nullglob
@@ -580,9 +506,13 @@ migrate_existing_tunnels(){
     # RC9 migration: existing secure auto tunnels from RC7/RC8 used MTU 1436.
     unset SECURITY MTU_MODE MTU PATH_MTU NAME LOCAL_PUBLIC REMOTE_PUBLIC LOCAL_TUN REMOTE_TUN PREFIX PROFILE TXQLEN GRE_KEY IPSEC_PSK
     . "$f" 2>/dev/null || continue
-    if [ "${SECURITY:-plain}" = ipsec ] && [ "${MTU_MODE:-custom}" = auto ] && [ "${MTU:-0}" -gt 1400 ] 2>/dev/null; then
-      sed -i 's|^MTU=.*|MTU=1400|' "$f"
-      MTU=1400
+    sed -i 's|^SECURITY=.*|SECURITY=plain|' "$f"
+    sed -i 's|^IPSEC_PSK=.*|IPSEC_PSK=""|' "$f"
+    SECURITY=plain
+    IPSEC_PSK=""
+    if [ "${MTU_MODE:-custom}" = auto ] && [ "${PATH_MTU:-0}" -ge 1280 ] 2>/dev/null; then
+      MTU="$(calc_inner_mtu "$PATH_MTU" plain)"
+      sed -i "s|^MTU=.*|MTU=$MTU|" "$f"
     fi
 
     if ! grep -q '^PEER_ID=' "$f"; then
@@ -1330,11 +1260,10 @@ repair_runtime(){
   done
   shopt -u nullglob
 
-  # Phase 2: load the final IPsec config once. IRAN auto=start owns initiation.
+  # Phase 2: clear legacy DARK GRE IPsec files.
   security_sync_all
-  sleep 1
 
-  # Phase 3: arm GRE and policy watcher. Never tear IPsec down after sync.
+  # Phase 3: arm Plain GRE and watcher.
   shopt -s nullglob
   for d in "$TUN_DIR"/*; do
     [ -r "$d/meta.conf" ] || continue
