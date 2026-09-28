@@ -4,6 +4,7 @@ import pytest
 from test_standalone import env,IB
 from dark_policy import PolicyError
 import restore_frontend
+from restore_scan import parse_userinfo
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
@@ -13,8 +14,10 @@ import restore_tls
 def imported(env):
     store,engine,_,_,client=env
     inbound=client.post('/api/inbounds',json=IB).json()['id']
+    # HEAD delivery needs an eligible fixture, not unknown values defaulted to zero.
+    client.app.state.dark_restore._scan=lambda url:parse_userinfo('upload=0;download=0;total=0;expire=0')
     out=client.post('/api/dark-restore/import',json={'urls':['https://legacy.example:2096/sub/original?token=kept'],
-        'inboundIds':[inbound],'scan':False,'groupName':'Representative A'})
+        'inboundIds':[inbound],'scan':True,'groupName':'Representative A'})
     assert out.status_code==200,out.text
     return client.get('/api/dark-restore').json()['items'][0]
 
