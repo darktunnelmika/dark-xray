@@ -257,17 +257,17 @@ choose_mtu(){
   item 4 "Custom" "manual value"
   bot; echo; getkey
   case "$KEY" in
-    2) MTU_MODE=safe; PATH_MTU=1500; [ "$SECURITY" = ipsec ] && MTU=1360 || MTU=1400 ;;
+    2) MTU_MODE=safe; PATH_MTU=1500; MTU=1400 ;;
     3) MTU_MODE=maximum; PATH_MTU=1500; MTU="$(calc_inner_mtu 1500 "$SECURITY")" ;;
     4) MTU_MODE=custom; PATH_MTU=0
-       ask "inner MTU" "$([ "$SECURITY" = ipsec ] && echo 1400 || echo 1450)"
+       ask "inner MTU" "1450"
        [[ "$ANS" =~ ^[0-9]+$ ]] && [ "$ANS" -ge 1200 ] && [ "$ANS" -le 1472 ] || { bad "invalid MTU"; return 1; }
        MTU="$ANS" ;;
     *) MTU_MODE=auto
        info "scanning Path MTU to $REMOTE_PUBLIC"
        PATH_MTU="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"
        if [ "${PATH_MTU:-0}" -ge 1280 ]; then MTU="$(calc_inner_mtu "$PATH_MTU" "$SECURITY")"; ok "Path MTU $PATH_MTU -> GRE MTU $MTU"
-       else PATH_MTU=0; [ "$SECURITY" = ipsec ] && MTU=1360 || MTU=1400; warn "PMTU scan unavailable - safe MTU $MTU selected"; fi ;;
+       else PATH_MTU=0; MTU=1400; warn "PMTU scan unavailable - safe MTU $MTU selected"; fi ;;
   esac
 }
 pick_restart(){
@@ -796,8 +796,10 @@ decode_pair(){
   P_SECURITY=plain; P_IPSEC_PSK=""; P_MTU_MODE=custom; P_PATH_MTU=0; P_RESTART=off; P_GRE_KEY=0
   if [[ "$code" =~ ^DGR2-([0-9a-f]{12})-(.+)$ ]]; then
     sum="${BASH_REMATCH[1]}"; enc="${BASH_REMATCH[2]}"; payload="$(printf '%s' "$enc" | b64dec)" || return 1; calc="$(sha12 "$payload")"; [ "$calc" = "$sum" ] || return 1
-    IFS='|' read -r ver P_NAME P_IRAN_PUBLIC P_KHAREJ_PUBLIC P_IRAN_TUN P_KHAREJ_TUN P_PREFIX P_PROFILE P_MTU_MODE P_PATH_MTU P_MTU P_TXQLEN P_GRE_KEY P_SECURITY P_IPSEC_PSK P_RESTART <<<"$payload"
+    IFS='|' read -r ver P_NAME P_IRAN_PUBLIC P_KHAREJ_PUBLIC P_IRAN_TUN P_KHAREJ_TUN P_PREFIX P_PROFILE P_MTU_MODE P_PATH_MTU P_MTU P_TXQLEN P_GRE_KEY _OLD_SECURITY _OLD_PSK P_RESTART <<<"$payload"
     [ "$ver" = 2 ] || return 1
+    P_SECURITY=plain
+    P_IPSEC_PSK=""
   elif [[ "$code" =~ ^DGR1-([0-9a-f]{12})-(.+)$ ]]; then
     sum="${BASH_REMATCH[1]}"; enc="${BASH_REMATCH[2]}"; payload="$(printf '%s' "$enc" | b64dec)" || return 1; calc="$(sha12 "$payload")"; [ "$calc" = "$sum" ] || return 1
     IFS='|' read -r ver P_NAME P_IRAN_PUBLIC P_KHAREJ_PUBLIC P_IRAN_TUN P_KHAREJ_TUN P_PREFIX P_PROFILE P_MTU P_TXQLEN <<<"$payload"
@@ -807,8 +809,7 @@ decode_pair(){
   [[ "$P_PREFIX" =~ ^[0-9]+$ ]] && [ "$P_PREFIX" -ge 8 ] && [ "$P_PREFIX" -le 32 ] &&
   [[ "$P_MTU" =~ ^[0-9]+$ ]] && [ "$P_MTU" -ge 1200 ] && [ "$P_MTU" -le 1476 ] &&
   [[ "$P_TXQLEN" =~ ^[0-9]+$ ]] && [[ "$P_PROFILE" =~ ^(balanced|stable|lowping|turbo)$ ]] &&
-  [[ "$P_MTU_MODE" =~ ^(auto|safe|maximum|custom)$ ]] && [[ "$P_SECURITY" =~ ^(plain|ipsec)$ ]] && [[ "$P_RESTART" =~ ^(off|1h|6h|12h|24h)$ ]] || return 1
-  [ "$P_SECURITY" != ipsec ] || [[ "$P_IPSEC_PSK" =~ ^[0-9a-fA-F]{64}$ ]]
+  [[ "$P_MTU_MODE" =~ ^(auto|safe|maximum|custom)$ ]] && [ "$P_SECURITY" = plain ] && [[ "$P_RESTART" =~ ^(off|1h|6h|12h|24h)$ ]] || return 1
   [ "$P_GRE_KEY" = 0 ] || [[ "$P_GRE_KEY" =~ ^[0-9]+$ ]]
 }
 
@@ -841,15 +842,11 @@ new_iran(){
   mkdir -p "$dir"; PARTIAL_TUNNEL="$NAME"; prompt_initial_ports "$NAME"
   save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "PAIR_HASH=$(pair_shared_hash)" "RESTART_EVERY=$RESTART_EVERY"
   printf '%s\n' "$(pair_code)" >"$dir/pair.code"; chmod 600 "$dir/pair.code"; PARTIAL_TUNNEL=""
-  [ "$SECURITY" = ipsec ] && security_sync_all
   echo; top; sect "CREATED - $NAME"; blank
   kv "role" "$W IRAN / pair owner$N"; kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"; kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"; kv "security" "$W$SECURITY$N"; kv "mtu" "$W$MTU$N $D($MTU_MODE)$N"; kv "profile" "$W$PROFILE$N"; kv "restart" "$W$RESTART_EVERY$N"; bot; echo
   if service_start "$NAME"; then
     if ip link show "$IFNAME" >/dev/null 2>&1; then
       ok "GRE interface is up"
-    elif [ "$SECURITY" = ipsec ]; then
-      ok "Secure GRE armed - waiting for KHAREJ / IPsec peer"
-      dim "watcher checks every 5s; service stays healthy while waiting"
     else
       warn "GRE armed but interface is not ready yet"
     fi
@@ -857,7 +854,7 @@ new_iran(){
     bad "service could not be armed - config and Pair Code were kept"
   fi
   set_restart_timer "$NAME" "$RESTART_EVERY"; show_pair_code "$NAME"
-  [ "$SECURITY" = ipsec ] && warn "provider firewall must allow IKE/IPsec (UDP 500/4500 + ESP)" || warn "provider firewall/security-group must allow GRE protocol 47"
+  warn "provider firewall/security-group must allow GRE protocol 47"
   pause
 }
 
@@ -873,11 +870,9 @@ new_kharej(){
   NAME="$P_NAME"; dir="$TUN_DIR/$NAME"; [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
   detected="$(public_ipv4)"; [ -n "$detected" ] && [ "$detected" != "$P_KHAREJ_PUBLIC" ] && warn "Pair Code expects $P_KHAREJ_PUBLIC but this server reports $detected"
   LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"; LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"; PREFIX="$P_PREFIX"
-  PROFILE="$P_PROFILE"; MTU_MODE="$P_MTU_MODE"; PATH_MTU="$P_PATH_MTU"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"; GRE_KEY="$P_GRE_KEY"; SECURITY="$P_SECURITY"; IPSEC_PSK="$P_IPSEC_PSK"; RESTART_EVERY="$P_RESTART"
-  if [ "$SECURITY" = ipsec ]; then ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }; oldpsk="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"; [ -z "$oldpsk" ] || [ "$oldpsk" = "$IPSEC_PSK" ] || { bad "this peer already uses a different IPsec key"; pause; return; }; fi
+  PROFILE="$P_PROFILE"; MTU_MODE="$P_MTU_MODE"; PATH_MTU="$P_PATH_MTU"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"; GRE_KEY="$P_GRE_KEY"; SECURITY=plain; IPSEC_PSK=""; RESTART_EVERY="$P_RESTART"
   id="$(printf '%s' "$NAME" | sha256sum | cut -c1-8)"; IFNAME="$(iface_for "$NAME")"; ROLE=KHAREJ; ID="$id"; PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
   save_meta "$dir" "NAME=$NAME" "ROLE=$ROLE" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "PAIR_HASH=$(pair_shared_hash)" "RESTART_EVERY=$RESTART_EVERY"
-  [ "$SECURITY" = ipsec ] && security_sync_all
   if service_start "$NAME"; then
     "$RUNNER" reconcile "$NAME" >/dev/null 2>&1 || true
     if ip link show "$IFNAME" >/dev/null 2>&1; then
@@ -1044,30 +1039,10 @@ screen_endpoint(){
   pause
 }
 screen_security(){
-  local n="$1" d="$TUN_DIR/$1" old
-  . "$d/meta.conf"; SECURITY="${SECURITY:-plain}"; IPSEC_PSK="${IPSEC_PSK:-}"
-  header "SECURITY - $n"
-  top; sect "CURRENT"; blank
-  kv "mode" "$W$SECURITY$N"; [ "$SECURITY" = ipsec ] && kv "IPsec" "$W$(ipsec_state "$n")$N"
-  mid
-  if [ "$ROLE" = IRAN ]; then item 1 "GRE + IPsec" "AES-256-GCM / IKEv2"; item 2 "Plain GRE" "no encryption"; else row "$(printf '%ssecurity is controlled by the IRAN Pair Code%s' "$D" "$N")"; fi
-  item 0 "Back" ""; bot; echo; getkey
-  [ "$ROLE" = IRAN ] || return
-  old="$SECURITY"
-  case "$KEY" in
-    1) SECURITY=ipsec; ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }
-       [ -n "$IPSEC_PSK" ] || IPSEC_PSK="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"; [ -n "$IPSEC_PSK" ] || IPSEC_PSK="$(openssl rand -hex 32)" ;;
-    2) SECURITY=plain; IPSEC_PSK="" ;;
-    *) return ;;
-  esac
-  if [ "${MTU_MODE:-custom}" = auto ] || [ "$old" != "$SECURITY" ]; then
-    PATH_MTU="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"
-    [ "$PATH_MTU" -gt 0 ] && MTU="$(calc_inner_mtu "$PATH_MTU" "$SECURITY")" || { PATH_MTU=0; [ "$SECURITY" = ipsec ] && MTU=1360 || MTU=1400; }
-    MTU_MODE=auto
-  fi
-  sed -i "s|^SECURITY=.*|SECURITY=$(printf %q "$SECURITY")|; s|^IPSEC_PSK=.*|IPSEC_PSK=$(printf %q "$IPSEC_PSK")|; s|^MTU_MODE=.*|MTU_MODE=$MTU_MODE|; s|^PATH_MTU=.*|PATH_MTU=$PATH_MTU|; s|^MTU=.*|MTU=$MTU|" "$d/meta.conf"
-  security_sync_all; service_restart "$n" >/dev/null 2>&1 || true
-  ok "security mode: $SECURITY"; warn "Pair Code changed - re-pair KHAREJ"; show_pair_code "$n"; pause
+  header "SECURITY"
+  info "DARK GRE uses Plain GRE only"
+  dim "IPsec / strongSwan encryption was removed for stability."
+  pause
 }
 screen_restart(){
   local n="$1" d="$TUN_DIR/$1"; . "$d/meta.conf"; RESTART_EVERY="${RESTART_EVERY:-off}"
@@ -1191,14 +1166,9 @@ apply_pair_code_existing(){
   [ "$P_NAME" = "$n" ] || { bad "Pair Code belongs to tunnel $P_NAME, not $n"; pause; return; }
   LOCAL_PUBLIC="$P_KHAREJ_PUBLIC"; REMOTE_PUBLIC="$P_IRAN_PUBLIC"; LOCAL_TUN="$P_KHAREJ_TUN"; REMOTE_TUN="$P_IRAN_TUN"; PREFIX="$P_PREFIX"
   PROFILE="$P_PROFILE"; MTU_MODE="$P_MTU_MODE"; PATH_MTU="$P_PATH_MTU"; MTU="$P_MTU"; TXQLEN="$P_TXQLEN"; GRE_KEY="$P_GRE_KEY"; SECURITY="$P_SECURITY"; IPSEC_PSK="$P_IPSEC_PSK"; RESTART_EVERY="$P_RESTART"
-  if [ "$SECURITY" = ipsec ]; then
-    ensure_ipsec_deps || { bad "strongSwan install failed"; pause; return; }
-    oldpsk="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"
-    [ -z "$oldpsk" ] || [ "$oldpsk" = "$IPSEC_PSK" ] || warn "replacing the shared IPsec key for this peer"
-  fi
   PEER_ID="$(peer_id_for "$LOCAL_PUBLIC" "$REMOTE_PUBLIC")"
   save_meta "$d" "NAME=$n" "ROLE=KHAREJ" "ID=$ID" "IFNAME=$IFNAME" "LOCAL_PUBLIC=$LOCAL_PUBLIC" "REMOTE_PUBLIC=$REMOTE_PUBLIC" "LOCAL_TUN=$LOCAL_TUN" "REMOTE_TUN=$REMOTE_TUN" "PREFIX=$PREFIX" "PROFILE=$PROFILE" "MTU_MODE=$MTU_MODE" "PATH_MTU=$PATH_MTU" "MTU=$MTU" "TXQLEN=$TXQLEN" "GRE_KEY=$GRE_KEY" "SECURITY=$SECURITY" "IPSEC_PSK=$IPSEC_PSK" "PEER_ID=$PEER_ID" "PAIR_HASH=$(pair_shared_hash)" "RESTART_EVERY=$RESTART_EVERY"
-  security_sync_all; set_restart_timer "$n" "$RESTART_EVERY"
+  set_restart_timer "$n" "$RESTART_EVERY"
   service_restart "$n" >/dev/null 2>&1 && ok "Pair Code applied and tunnel restarted" || bad "re-pair saved but service did not start"
   pause
 }
@@ -1215,19 +1185,19 @@ manage(){
     kv "state" "$(case "$(service_state "$n")" in active) badge ACTIVE "$BG_OK$W";; failed) badge FAILED "$BG_ERR$W";; *) badge INACTIVE "$BG_WARN$W";; esac)  $D uptime $(svc_uptime_short "$n")$N"
     kv "role" "$W$([ "$ROLE" = IRAN ] && echo 'IRAN (pair owner)' || echo 'KHAREJ (peer)')$N"
     kv "outer" "$W$LOCAL_PUBLIC -> $REMOTE_PUBLIC$N"; kv "inner" "$W$LOCAL_TUN/$PREFIX -> $REMOTE_TUN$N"
-    kv "security" "$W$SECURITY$N $D$(ipsec_state "$n")$N"; kv "profile" "$W$PROFILE$N"; kv "mtu" "$W$MTU$N $D$MTU_MODE$N"
+    kv "mode" "$WPlain GRE$N"; kv "profile" "$W$PROFILE$N"; kv "mtu" "$W$MTU$N $D$MTU_MODE$N"
     kv "traffic" "$L4$(human_bytes "$rx") rx$N  $L6$(human_bytes "$tx") tx$N"; kv "restart" "$W$RESTART_EVERY$N"
     if [ -n "${PAIR_HASH:-}" ]; then kv "pair hash" "$W$PAIR_HASH$N"; else kv "pair hash" "$Y legacy / re-pair recommended$N"; fi
     mid; sect "CONTROL"; item 1 "Start" ""; item 2 "Stop" ""; item 3 "Restart" ""
     mid; sect "PAIRING"
     if [ "$ROLE" = IRAN ]; then item p "Pair code" "paste this on KHAREJ"; else item p "Apply Pair Code" "re-pair without deleting"; fi
-    mid; sect "CONFIGURE"; [ "$ROLE" = IRAN ] && item 4 "Ports" "user-facing ports"; item 5 "Tuning" "profile + MTU / PMTU"; item 6 "Endpoint" "local / peer IP"; item 7 "Security" "GRE + IPsec"; item 8 "Scheduled restart" ""
+    mid; sect "CONFIGURE"; [ "$ROLE" = IRAN ] && item 4 "Ports" "user-facing ports"; item 5 "Tuning" "profile + MTU / PMTU"; item 6 "Endpoint" "local / peer IP"; item 8 "Scheduled restart" ""
     mid; sect "INSPECT"; item s "Speed test" "latency + throughput"; [ "$ROLE" = IRAN ] && item c "Live connections" ""; item L "Logs + interface" ""; item f "Config fingerprint" ""; item v "Show config" ""
     mid; sect "ADVANCED"; item e "Edit metadata" "advanced / manual"; item d "Delete tunnel" ""; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) service_start "$n"; pause ;; 2) service_stop "$n"; pause ;; 3) service_restart "$n"; pause ;;
       4) [ "$ROLE" = IRAN ] && screen_ports "$n" || { info "ports are managed on IRAN"; pause; } ;;
-      5) screen_tuning "$n" ;; 6) screen_endpoint "$n" ;; 7) screen_security "$n" ;; 8) screen_restart "$n" ;;
+      5) screen_tuning "$n" ;; 6) screen_endpoint "$n" ;; 8) screen_restart "$n" ;;
       p|P) if [ "$ROLE" = IRAN ]; then show_pair_code "$n"; pause; else apply_pair_code_existing "$n"; fi ;;
       s|S) speed_screen "$n" ;; c|C) [ "$ROLE" = IRAN ] && screen_connections "$n" || { info "connections are visible on IRAN"; pause; } ;;
       l|L) screen_logs "$n" ;; f|F) header "FINGERPRINT - $n"; kv "fingerprint" "$W$(config_fingerprint "$n")$N"; pause ;;
@@ -1247,7 +1217,7 @@ dashboard(){
     local d st lat rx tx sec
     shopt -s nullglob
     for d in "$TUN_DIR"/*; do
-      [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; st="$(service_state "$NAME")"; sec="$(ipsec_state "$NAME")"; read -r rx tx <<<"$(tunnel_traffic "$NAME")"
+      [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; st="$(service_state "$NAME")"; sec="plain"; read -r rx tx <<<"$(tunnel_traffic "$NAME")"
       lat="$(ping -c1 -W1 "$REMOTE_TUN" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n1)"; [ -n "$lat" ] || lat="-"
       row "$(printf '%s %-11s %-6s %-9s %-8s %-8s %-9s %-8s' "$(dot "$st")" "${NAME:0:11}" "$ROLE" "$st" "$MTU" "${sec:0:8}" "$lat" "$(human_bytes $((rx+tx)))")"
     done
@@ -1282,7 +1252,7 @@ diagnostics(){
     header "DIAGNOSTICS"
     top; sect "LOGS"; blank; item 1 "Live log" ""; item 2 "Last 60 lines" ""
     mid; sect "TESTS"; item 3 "Health check" "all tunnels"; item 4 "Link test" "inner peer + MTU"; item 5 "Config fingerprint" "compare both servers"; item 6 "Path MTU scan" "outer DF probe"; item 7 "Pair integrity" "GRE key / stale Pair detection"; item r "Speed responder" "run on KHAREJ"
-    mid; sect "SECURITY"; item i "IPsec / XFRM status" ""; item 0 "Back" ""; bot; echo; getkey
+    mid; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) pick_tunnel && journalctl -u "darkgre@$SELECTED" -f -n 30 --no-pager; pause ;;
       2) pick_tunnel && { header "LOG - $SELECTED"; journalctl -u "darkgre@$SELECTED" -n 60 --no-pager -o cat | sed 's/^/    /'; }; pause ;;
@@ -1292,7 +1262,6 @@ diagnostics(){
       6) pick_tunnel || continue; . "$TUN_DIR/$SELECTED/meta.conf"; header "PMTU - $SELECTED"; info "scanning $REMOTE_PUBLIC"; local p; p="$(scan_path_mtu "$REMOTE_PUBLIC" 2>/dev/null || echo 0)"; [ "$p" -gt 0 ] && { ok "Path MTU: $p"; ok "recommended GRE MTU: $(calc_inner_mtu "$p" "${SECURITY:-plain}")"; } || bad "scan failed"; pause ;;
       7) pick_tunnel && { header "PAIR INTEGRITY - $SELECTED"; pair_integrity_check "$SELECTED"; pause; } ;;
       r|R) speed_responder ;;
-      i|I) header "IPSEC / XFRM"; command -v ipsec >/dev/null 2>&1 && ipsec statusall | sed 's/^/    /' || dim "strongSwan not installed"; echo; ip xfrm state 2>/dev/null | sed 's/^/    /'; pause ;;
       0|_) return ;;
     esac
   done
@@ -1317,7 +1286,7 @@ update_self(){
 screen_update(){
   while :; do
     header "UPDATE"; top; sect "VERSIONS"; blank
-    kv "core" "$WLinux GRE$N"; kv "security" "$W$(command -v ipsec >/dev/null 2>&1 && echo strongSwan || echo optional)$N"; kv "script" "$Wv$SCRIPT_VER$N"; kv "source" "$D$(cat "$UPDATE_URL_FILE" 2>/dev/null || echo 'not set')$N"
+    kv "core" "$WLinux GRE$N"; kv "mode" "$WPlain GRE$N"; kv "script" "$Wv$SCRIPT_VER$N"; kv "source" "$D$(cat "$UPDATE_URL_FILE" 2>/dev/null || echo 'not set')$N"
     mid; item 1 "Core" "install / repair"; item 2 "Update script" "from source url"; item 3 "Set source url" ""; item 4 "Install as command" "run as: darkgre"; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) screen_core ;;
@@ -1391,8 +1360,8 @@ main(){
     header
     local tot run; tot="$(find "$TUN_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"; run="$(systemctl list-units 'darkgre@*' --state=active --no-legend 2>/dev/null | grep -c .)"
     top; row "$(printf '%s%s%s tunnels   %s%s%s running   %s%s%s' "$W$BD" "$tot" "$N" "$G$BD" "$run" "$N" "$D" "$(gre_core_ready && echo 'core ready' || echo 'core check')" "$N")"
-    mid; sect "SETUP"; item 1 "Core" "GRE + security cores"; item 2 "New tunnel - IRAN" "makes Pair Code"; item 3 "New tunnel - KHAREJ" "takes Pair Code"
-    mid; sect "OPERATE"; item 4 "Manage tunnels" "ports, security, MTU, endpoint"; item 5 "Dashboard" ""; item 6 "Diagnostics" "logs, tests, fingerprint"
+    mid; sect "SETUP"; item 1 "Core" "GRE kernel + dependencies"; item 2 "New tunnel - IRAN" "makes Pair Code"; item 3 "New tunnel - KHAREJ" "takes Pair Code"
+    mid; sect "OPERATE"; item 4 "Manage tunnels" "ports, MTU, endpoint"; item 5 "Dashboard" ""; item 6 "Diagnostics" "logs, tests, fingerprint"
     mid; sect "MAINTENANCE"; item 7 "Update" ""; item 8 "Uninstall" ""; item 0 "Exit" ""; bot; echo; getkey
     case "$KEY" in
       1) screen_core ;; 2) new_iran ;; 3) new_kharej ;; 4) manage ;; 5) dashboard ;; 6) diagnostics ;; 7) screen_update ;; 8) uninstall_all ;;
