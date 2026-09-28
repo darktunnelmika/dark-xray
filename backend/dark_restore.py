@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from dark_policy import PolicyError
 from restore_groups import RestoreGroupsMixin
+from restore_frontend import inspect_domain
 
 _HOST_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
 
@@ -147,20 +148,7 @@ class DarkRestore(RestoreGroupsMixin):
         return rows
 
     def check_domain(self,domain:str)->dict:
-        domain=domain.lower().rstrip('.')
-        self.ensure_domain(domain)
-        try:ips=self._public_addresses(domain);dns='ok'
-        except Exception as ex:ips=[];dns='error';err=str(ex)
-        cert=f'/etc/letsencrypt/live/{domain}/fullchain.pem';key=f'/etc/letsencrypt/live/{domain}/privkey.pem'
-        import os
-        ssl_status='ready' if os.path.isfile(cert) and os.path.isfile(key) else 'missing'
-        now=time.time()
-        with self.store.transaction() as db:
-            db.execute('UPDATE restore_domains SET dns_status=?,ssl_status=?,cert_path=?,key_path=?,last_checked=?,updated_at=? WHERE domain=?',
-                       (dns,ssl_status,cert if ssl_status=='ready' else '',key if ssl_status=='ready' else '',now,now,domain))
-        return {'domain':domain,'dns_status':dns,'addresses':ips,'ssl_status':ssl_status,
-                'error':locals().get('err',''),'requires_root_apply':ssl_status!='ready',
-                'apply_command':f"sudo darkxray restore-tls {domain}" if ssl_status!='ready' else ''}
+        return inspect_domain(self,domain)
 
     def match_request(self,host_header:str,path:str,query:str)->dict|None:
         host=(host_header or '').split(':',1)[0].lower().rstrip('.')
@@ -186,7 +174,7 @@ class DarkRestore(RestoreGroupsMixin):
                     ready.setdefault('node:'+node_id,set()).add(inbound_id)
         return ready
 
-    def subscription(self,token:str,fmt:str)->tuple[bytes,dict]:
+    def subscription(self,token:str,fmt:str,*,record_access:bool=True)->tuple[bytes,dict]:
         with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=? AND enabled=1',(token,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
         now=time.time()
@@ -195,12 +183,12 @@ class DarkRestore(RestoreGroupsMixin):
         body,headers=self.engine.subscription(str(r['core_email']),fmt,runtime_ready=self._runtime_ready(inbound_ids,node_ids))
         usage=self.usage(str(r['id']))
         dark_up=int(usage['up']);dark_down=int(usage['down'])
-        # Preserve legacy subscription quota headers; the Restore dashboard shows
-        # DARK-only usage separately and must never reset a customer's old quota.
+        # Legacy metadata preserves remaining quota; dashboard usage is DARK-only.
         headers['subscription-userinfo']=f"upload={int(r['legacy_upload'])+dark_up}; download={int(r['legacy_download'])+dark_down}; total={int(r['legacy_total'])}; expire={int(r['legacy_expire'])}"
-        with self.store.transaction() as db:
-            db.execute('UPDATE restore_subscriptions SET first_seen=CASE WHEN first_seen=0 THEN ? ELSE first_seen END,last_seen=?,updated_at=? WHERE id=?',(now,now,now,r['id']))
-            db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',(r['id'],'subscription.update',fmt,now))
+        if record_access:
+            with self.store.transaction() as db:
+                db.execute('UPDATE restore_subscriptions SET first_seen=CASE WHEN first_seen=0 THEN ? ELSE first_seen END,last_seen=?,updated_at=? WHERE id=?',(now,now,now,r['id']))
+                db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',(r['id'],'subscription.update',fmt,now))
         return body,headers
 
 def install_dark_restore(app,restore,current,owner,writable,audit):
@@ -253,9 +241,11 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
     def check_domain(domain:str,p=Depends(owner)):
         return restore.check_domain(domain)
 
-    @app.get('/restore/sub/{token}')
+    @app.api_route('/restore/sub/{token}',methods=['GET','HEAD'])
     def restore_sub(token:str,request:FastAPIRequest):
         ua=request.headers.get('user-agent','').lower();fmt=request.query_params.get('format','')
         if fmt not in ('raw','base64','json','clash'):fmt='clash' if ('clash' in ua or 'mihomo' in ua) else 'base64'
-        body,headers=restore.subscription(token,fmt)
+        body,headers=restore.subscription(token,fmt,record_access=request.method=='GET')
+        if request.method=='HEAD':
+            headers['Content-Length']=str(len(body));body=b''
         return Response(content=body,headers=headers,media_type=None)

@@ -18,6 +18,7 @@ case "${1:-menu}" in
  load-gate) shift; exec "$PY" "$ROOT/tools/load-scale-gate.py" "$@" ;;
  production-gate) shift; exec "$PY" "$ROOT/tools/production-gate.py" --config "$CONFIG" --data "$DATA" "$@" ;;
  domain) shift; exec "$PY" "$ROOT/tools/domain.py" "$@" ;;
+ restore-tls) shift; exec "$PY" "$ROOT/tools/restore_tls.py" --config "${DARK_CONFIG:-/etc/dark-xray/config.json}" --data "${DARK_DATA:-/var/lib/dark-xray}" "$@" ;;
  guard-enable) shift; exec "$PY" "$ROOT/tools/guard-enable.py" "$@" ;;
  guard-control) shift; exec "$PY" "$ROOT/tools/guard-control.py" --config "$CONFIG" "$@" ;;
  backup) shift; exec "$PY" "$ROOT/tools/backup_cli.py" backup --config "$CONFIG" --data "$DATA" "$@" ;;
