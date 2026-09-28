@@ -14,6 +14,7 @@ import time
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, StrictBool, StrictInt
 from restore_scan import FIELDS, MAX_BYTES, MAX_EXPIRE
+from restore_safety_status import safety_snapshot
 
 
 class RestoreReviewBody(BaseModel):
@@ -83,8 +84,8 @@ class RestoreSafetyMixin:
         engine.apply = apply
 
     def _seed_safety(self, db, *, legacy=False):
-        # Only pre-existing verified scans are grandfathered, explicitly marked
-        # legacy_saved: their original header field-presence was not persisted.
+        # Pre-existing scans are explicitly legacy_saved: their original header
+        # field-presence was not persisted. Never invent a fresh verification.
         state = 'legacy_saved' if legacy else 'verified'
         db.execute('''INSERT OR IGNORE INTO restore_safety
             (restore_id,metadata_state,checked_at,expected_enable,external_disabled)
@@ -109,8 +110,6 @@ class RestoreSafetyMixin:
             for raw in rows:
                 r = dict(raw); client = json.loads(r['core_body']) if r['core_body'] else None
                 metadata_state = r['metadata_state']
-                # A successful explicit re-scan may complete a previously partial
-                # import; existing verified/migrated snapshots remain frozen.
                 if metadata_state == 'review' and r['scan_status'] == 'verified':
                     metadata_state = r['metadata_state'] = 'verified'
                 external = int(r['external_disabled'])
@@ -145,8 +144,7 @@ class RestoreSafetyMixin:
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
 
     def rows(self, group_id=None):
-        rows = super().rows(group_id)
-        metadata = self._safety_records()
+        rows = super().rows(group_id); metadata = self._safety_records()
         with self.store.lock:
             clients = {r['email']: json.loads(r['body']) for r in self.store.db.execute('SELECT email,body FROM core_clients')}
         now = time.time()
@@ -186,34 +184,10 @@ class RestoreSafetyMixin:
             raise HTTPException(403, {'code': 'restore_' + reason, 'message': 'Restore subscription is not eligible: ' + reason})
 
     def safety_status(self, group_id=None):
-        rows = self.rows(group_id); now = time.time()
-        counts = {}
-        for row in rows:
-            key = row['service_status']; counts[key] = counts.get(key, 0) + 1
-        nodes = self.nodes.list()
-        selected = set()
-        for row in rows:
-            for target in self.resolved_targets(self.target_selection(row)):
-                if target['runtime'].startswith('node:'):
-                    selected.add(target['runtime'][5:])
-        runtimes = []
-        for node in nodes:
-            if node['id'] not in selected:
-                continue
-            desired = node.get('desired_state') or {}
-            online = bool(node.get('online'))
-            state = 'offline' if not online else 'pending' if desired.get('pending') or desired.get('last_error') else 'synced'
-            runtimes.append({'id': node['id'], 'name': node['name'], 'state': state,
-                'last_seen': node.get('last_seen', 0), 'error': bool(node.get('last_error'))})
-        return {'counts': counts, 'clients': len(rows), 'subscription_received': sum(r['subscription_received'] for r in rows),
-                'traffic_observed': sum(r['traffic_observed'] for r in rows),
-                'legacy_unconfirmed': sum(r['metadata_state'] == 'legacy_saved' for r in rows),
-                'hub_running': self.engine.running, 'writes_enabled': self.engine.config.writes_enabled,
-                'nodes': runtimes, 'sampled_at': now, 'enforcement_model': 'hub_reconciliation',
-                'offline_enforcement_guaranteed': False, 'byte_exact_quota': False}
+        return safety_snapshot(self, group_id)
 
     def review_metadata(self, restore_id, value):
-        if not value['confirmed'] or not value['note'].strip():
+        if not value['confirmed'] or len(value['note'].strip()) < 5:
             raise HTTPException(400, 'Explicit source metadata confirmation is required')
         if value['upload'] + value['download'] > MAX_BYTES:
             raise HTTPException(400, 'Source traffic counter overflow')
@@ -230,7 +204,10 @@ class RestoreSafetyMixin:
             body = json.loads(c['body']); body['totalGB'] = value['total']; body['expiryTime'] = value['expire'] * 1000
             now = time.time()
             db.execute('UPDATE core_clients SET body=? WHERE email=?', (json.dumps(body), r['core_email']))
-            db.execute('''UPDATE restore_subscriptions SET legacy_upload=?,legacy_download=?,legacy_total=?,legacy_expire=?,updated_at=? WHERE id=?''',
+            # verified here means a complete accepted snapshot, not an upstream
+            # scan claim: metadata_state=manual and the review event retain provenance.
+            db.execute('''UPDATE restore_subscriptions SET legacy_upload=?,legacy_download=?,legacy_total=?,legacy_expire=?,
+                scan_status='verified',scan_error='',updated_at=? WHERE id=?''',
                 (value['upload'], value['download'], value['total'], value['expire'], now, restore_id))
             db.execute("UPDATE restore_safety SET metadata_state='manual',checked_at=?,note=? WHERE restore_id=?", (now, value['note'].strip(), restore_id))
             detail = {'before': {k: r['legacy_' + k] for k in FIELDS}, 'after': {k: value[k] for k in FIELDS}, 'note': value['note'].strip()}
@@ -246,8 +223,7 @@ class RestoreSafetyMixin:
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Restore state changed. Reopen before saving.')
-            # Resuming clears a manual/external suspension only; quota, expiry and
-            # incomplete source metadata still block eligibility independently.
+            # Resume clears manual suspension only; quota and expiry still apply.
             now = time.time()
             db.execute('UPDATE restore_subscriptions SET enabled=?,updated_at=? WHERE id=?', (int(not value['suspended']), now, restore_id))
             db.execute('UPDATE restore_safety SET external_disabled=0,expected_enable=0 WHERE restore_id=?', (restore_id,))
