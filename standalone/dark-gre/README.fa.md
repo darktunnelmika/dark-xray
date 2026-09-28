@@ -2,7 +2,7 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.12.0-rc12` — Draft / Test
+> وضعیت: `v0.12.0-rc12` — Live Validated / Plain GRE
 
 ## وضعیت RC12
 
@@ -214,4 +214,4 @@ Mode    Plain GRE
 
 هر دو سمت بعد از Reboot بدون Start دستی Tunnel را بازیابی کردند و Inner Ping و پورت Xray سالم ماندند.
 
-PR تا زمان آخرین Smoke/CI و تثبیت نهایی همچنان Draft می‌ماند.
+RC12 پس از تست واقعی Reboot دو سمت، Inner Ping، TCP/1190 و Smoke CI روی `main` به‌عنوان نسخهٔ Live-Validated نگه‌داری می‌شود.
