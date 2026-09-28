@@ -1,0 +1,8 @@
+/* Group target edits remain readable on narrow screens and in RTL. */
+.drm-group-summary{padding:16px;display:flex;align-items:center;justify-content:space-between;gap:16px;min-width:0}
+.drm-group-summary>div{min-width:0}.drm-group-summary h3{font-size:16px;margin:0 0 8px}.drm-group-summary p,.drm-group-summary small{font-size:13px;line-height:1.7;overflow-wrap:anywhere}.drm-group-summary small{display:block;color:var(--muted)}
+.drm-group-summary .btn{min-height:44px;font-size:13px;white-space:normal;flex-shrink:0}
+.drm-dialog{max-width:850px!important}.drm-dialog .dr-editor{gap:14px}.drm-dialog .field-input{font-size:16px;min-height:44px}.drm-dialog .tg-switch{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:44px;font-size:13px;line-height:1.6}.drm-dialog .tg-switch input{flex:0 0 auto;width:18px;height:18px}.drm-dialog .tg-switch span{overflow-wrap:anywhere;min-width:0}
+.drm-targets{display:grid;gap:14px;min-width:0}.drm-targets h3{font-size:16px;margin:0}.drm-targets label{font-size:13px}.drm-node-set[hidden]{display:none!important}.drm-node-set{border:1px solid var(--border);padding:10px;max-height:260px;overflow-y:auto}.drm-node-set input:disabled+span{opacity:.5}
+.drm-target{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px;line-height:1.6;min-width:0}.drm-target span{overflow-wrap:anywhere;min-width:0}.drm-target b{flex-shrink:0;font-size:12px}.drm-preview-list{min-width:0}
+@media(max-width:760px){.drm-group-summary{flex-direction:column;align-items:stretch;padding:14px}.drm-group-summary .btn{width:100%;justify-content:center}.drm-target{flex-wrap:wrap;gap:6px}.drm-dialog .dr-group-form{grid-template-columns:1fr}}

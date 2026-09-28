@@ -216,8 +216,11 @@ class RestoreGroupsMixin:
                 g[key] += int(r[key])
         return groups
 
-    def import_urls(self, urls, inbounds, nodes, scan, *, group_id='', group_name=''):
+    def import_urls(self, urls, inbounds, nodes, scan, *, group_id='', group_name='', node_mode=None, include_local=None):
         self._validate_targets(inbounds, nodes)
+        self.validate_selection({'inboundIds': inbounds, 'nodeIds': nodes,
+            'nodeMode': node_mode or ('selected' if nodes else 'all'),
+            'includeLocal': True if include_local is None else include_local})
         if group_id and group_name.strip():
             raise PolicyError('Choose an existing group OR a new group name')
         # Validate the entire batch before creating a group or mutating a client.
@@ -267,6 +270,7 @@ class RestoreGroupsMixin:
                             (rid,token,legacy,host,path,query,core_email,json.dumps(inbounds),json.dumps(nodes),probe['upload'],probe['download'],probe['total'],probe['expire'],probe['status'],probe['error'],1,now,now,gid))
                         db.execute('INSERT INTO restore_usage(restore_id,scope,updated_at) VALUES(?,?,?)',(rid,'local',now))
                         created += 1
+                    self._store_import_targets(db, rid, old, nodes, node_mode, include_local)
                 self.ensure_domain(host)
                 items.append({'id':rid,'group_id':gid,'scan_status':probe['status'] if refresh_metadata else old['scan_status']})
             applied = True; apply_error = ''
