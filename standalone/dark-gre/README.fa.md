@@ -157,6 +157,30 @@ curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/da
 darkgre
 ```
 
+## انتشار مستقل DARK GRE
+
+نسخه‌بندی DARK GRE از نسخهٔ اصلی DARK XRAY جداست.
+
+Tag پیشنهادی:
+
+```text
+dark-gre-v0.12.0-rc12
+```
+
+Workflow زیر بستهٔ مستقل می‌سازد:
+
+```text
+.github/workflows/dark-gre-release.yml
+```
+
+خروجی‌ها:
+
+- `dark-gre-<version>.tar.gz`
+- `dark-gre-<version>.zip`
+- `SHA256SUMS`
+
+Workflow هم با Tagهای `dark-gre-v*` و هم به‌صورت دستی قابل اجراست. در اجرای دستی می‌توان فقط Artifact ساخت یا GitHub Release مستقل DARK GRE را منتشر کرد.
+
 ## مسیر فایل‌ها
 
 ```text
