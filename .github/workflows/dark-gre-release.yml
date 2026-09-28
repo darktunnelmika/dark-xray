@@ -1,0 +1,91 @@
+name: DARK GRE Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, e.g. v0.12.0-rc12"
+        required: true
+        default: "v0.12.0-rc12"
+      publish_release:
+        description: "Create GitHub Release"
+        required: true
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "dark-gre-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#dark-gre-}"
+          else
+            v="${{ inputs.version }}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Verify DARK GRE
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n standalone/dark-gre/dark-gre.sh
+          bash -n standalone/dark-gre/install.sh
+          bash tests/dark-gre-smoke.sh
+
+      - name: Build archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          name="dark-gre-${v#v}"
+          stage="$RUNNER_TEMP/$name"
+          mkdir -p "$stage"
+          cp standalone/dark-gre/dark-gre.sh "$stage/"
+          cp standalone/dark-gre/install.sh "$stage/"
+          cp standalone/dark-gre/README.fa.md "$stage/README.fa.md"
+
+          tar -C "$RUNNER_TEMP" -czf "$name.tar.gz" "$name"
+          (cd "$RUNNER_TEMP" && zip -qr "$GITHUB_WORKSPACE/$name.zip" "$name")
+          sha256sum "$name.tar.gz" "$name.zip" > SHA256SUMS
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dark-gre-${{ steps.version.outputs.version }}
+          path: |
+            dark-gre-*.tar.gz
+            dark-gre-*.zip
+            SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          tag="${GITHUB_REF_TYPE:-}" == "tag"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            release_tag="dark-gre-$v"
+            git tag "$release_tag" "$GITHUB_SHA"
+            git push origin "$release_tag"
+          fi
+          gh release create "$release_tag"             dark-gre-*.tar.gz dark-gre-*.zip SHA256SUMS             --title "DARK GRE Direct $v"             --notes "Plain GRE standalone release. See standalone/dark-gre/README.fa.md for install and validation notes."
