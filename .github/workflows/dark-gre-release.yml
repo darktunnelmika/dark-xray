@@ -80,7 +80,6 @@ jobs:
         run: |
           set -euo pipefail
           v="${{ steps.version.outputs.version }}"
-          tag="${GITHUB_REF_TYPE:-}" == "tag"
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
             release_tag="$GITHUB_REF_NAME"
           else
