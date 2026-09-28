@@ -133,14 +133,12 @@ b64enc(){ base64 -w0 2>/dev/null || base64 | tr -d '\n'; }
 b64dec(){ base64 -d 2>/dev/null; }
 sha12(){ printf '%s' "$1" | sha256sum | awk '{print substr($1,1,12)}'; }
 pair_shared_hash(){
-  local pubs inns pskh
+  local pubs inns
   pubs="$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | paste -sd, -)"
   inns="$(printf '%s\n%s\n' "$LOCAL_TUN" "$REMOTE_TUN" | sort | paste -sd, -)"
-  pskh="$(printf '%s' "${IPSEC_PSK:-}" | sha256sum | awk '{print substr($1,1,12)}')"
-  printf '%s' "$NAME|$pubs|$inns|$PREFIX|$PROFILE|$MTU|$TXQLEN|$GRE_KEY|${SECURITY:-plain}|$pskh" |
+  printf '%s' "$NAME|$pubs|$inns|$PREFIX|$PROFILE|$MTU|$TXQLEN|$GRE_KEY" |
     sha256sum | awk '{print substr($1,1,16)}'
 }
-
 primary_ipv4(){
   local dev addr
   dev="$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')"
@@ -175,18 +173,6 @@ ensure_deps(){
   fi
   modprobe ip_gre >/dev/null 2>&1 || true
 }
-ensure_ipsec_deps(){
-  command -v ipsec >/dev/null 2>&1 && return 0
-  info "installing strongSwan security core"
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq >/dev/null 2>&1
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq strongswan >/dev/null 2>&1
-  elif command -v dnf >/dev/null 2>&1; then dnf install -y strongswan >/dev/null 2>&1
-  elif command -v yum >/dev/null 2>&1; then yum install -y strongswan >/dev/null 2>&1
-  elif command -v apk >/dev/null 2>&1; then apk add --no-cache strongswan >/dev/null 2>&1
-  else bad "cannot install strongSwan automatically"; return 1; fi
-  command -v ipsec >/dev/null 2>&1
-}
 install_iperf3(){
   command -v iperf3 >/dev/null 2>&1 && return 0
   info "installing iperf3"
@@ -216,18 +202,6 @@ gen_gre_key(){
   [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -gt 0 ] && echo "$v" || echo "$(( (RANDOM<<16) ^ RANDOM ^ 1 ))"
 }
 peer_id_for(){ printf '%s\n%s\n' "$1" "$2" | sort | tr '\n' '|' | sha256sum | cut -c1-12; }
-existing_peer_psk(){
-  local remote="$1" d
-  shopt -s nullglob
-  for d in "$TUN_DIR"/*/meta.conf; do
-    unset SECURITY IPSEC_PSK REMOTE_PUBLIC
-    . "$d" 2>/dev/null || continue
-    if [ "${SECURITY:-plain}" = ipsec ] && [ "${REMOTE_PUBLIC:-}" = "$remote" ] && [ -n "${IPSEC_PSK:-}" ]; then
-      printf '%s\n' "$IPSEC_PSK"; shopt -u nullglob; return 0
-    fi
-  done
-  shopt -u nullglob; return 1
-}
 scan_path_mtu(){
   local remote="$1" lo=1100 hi=1472 mid best=0
   ping -4 -c 1 -W 1 "$remote" >/dev/null 2>&1 || { echo 0; return 1; }
@@ -288,7 +262,7 @@ action="${1:-up}"; name="${2:-}"
 [ -n "$name" ] || { echo "missing tunnel name" >&2; exit 2; }
 conf="$TUN_DIR/$name/meta.conf"; [ -r "$conf" ] || { echo "missing $conf" >&2; exit 3; }
 . "$conf"
-SECURITY="${SECURITY:-plain}"; IPSEC_PSK="${IPSEC_PSK:-}"; GRE_KEY="${GRE_KEY:-0}"
+GRE_KEY="${GRE_KEY:-0}"
 MTU_MODE="${MTU_MODE:-custom}"; PATH_MTU="${PATH_MTU:-0}"; RESTART_EVERY="${RESTART_EVERY:-off}"
 PEER_ID="${PEER_ID:-$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | tr '\n' '|' | sha256sum | cut -c1-12)}"
 nat_chain="DGRN_${ID}"; post_chain="DGRP_${ID}"; fw_chain="DGRF_${ID}"; mss_chain="DGRM_${ID}"
@@ -320,26 +294,7 @@ apply_mss(){
     iptables -t mangle -A "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 }
 apply_outer_guard(){
-  [ "${SECURITY:-plain}" = ipsec ] || { remove_outer_guard; return 0; }
-  modprobe xt_policy 2>/dev/null || true
-  iptables -m policy -h >/dev/null 2>&1 || { echo "xt_policy unavailable; refusing insecure GRE" >&2; return 1; }
-
-  iptables -N "$sec_in_chain" 2>/dev/null || true
-  iptables -N "$sec_out_chain" 2>/dev/null || true
-  iptables -C INPUT -j "$sec_in_chain" 2>/dev/null || iptables -I INPUT 1 -j "$sec_in_chain"
-  iptables -C OUTPUT -j "$sec_out_chain" 2>/dev/null || iptables -I OUTPUT 1 -j "$sec_out_chain"
-
-  iptables -C "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -m policy --dir in --pol ipsec -j RETURN 2>/dev/null ||
-    iptables -A "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -m policy --dir in --pol ipsec -j RETURN
-  iptables -C "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -j DROP 2>/dev/null ||
-    iptables -A "$sec_in_chain" -p 47 -s "$REMOTE_PUBLIC" -j DROP
-  iptables -C "$sec_in_chain" -j RETURN 2>/dev/null || iptables -A "$sec_in_chain" -j RETURN
-
-  iptables -C "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -m policy --dir out --pol ipsec -j RETURN 2>/dev/null ||
-    iptables -A "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -m policy --dir out --pol ipsec -j RETURN
-  iptables -C "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -j DROP 2>/dev/null ||
-    iptables -A "$sec_out_chain" -p 47 -d "$REMOTE_PUBLIC" -j DROP
-  iptables -C "$sec_out_chain" -j RETURN 2>/dev/null || iptables -A "$sec_out_chain" -j RETURN
+  remove_outer_guard
 }
 apply_fw(){
   remove_data_fw
@@ -362,12 +317,6 @@ apply_fw(){
         ;;
     esac
   done <"$TUN_DIR/$name/ports.list"
-}
-ipsec_ready(){
-  [ "${SECURITY:-plain}" != ipsec ] && return 0
-  command -v ipsec >/dev/null 2>&1 || return 1
-  ip xfrm state 2>/dev/null | grep -q "$REMOTE_PUBLIC" &&
-  ip xfrm policy 2>/dev/null | grep -q "$REMOTE_PUBLIC"
 }
 gre_exists(){ ip link show "$IFNAME" >/dev/null 2>&1; }
 gre_down(){
@@ -474,9 +423,8 @@ EOF
 }
 
 ensure_system(){
-  mkdir -p "$TUN_DIR" "$BASE_DIR" "$SEC_DIR" "$IPSEC_DIR"
-  chmod 700 "$BASE_DIR" "$TUN_DIR" "$SEC_DIR"
-  chmod 755 "$IPSEC_DIR"
+  mkdir -p "$TUN_DIR" "$BASE_DIR"
+  chmod 700 "$BASE_DIR" "$TUN_DIR"
   write_runner; write_unit
   printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-dark-gre.conf
   sysctl -q --system >/dev/null 2>&1 || true
@@ -614,45 +562,28 @@ tunnel_traffic(){
   tx="$(cat "/sys/class/net/$IFNAME/statistics/tx_bytes" 2>/dev/null || echo 0)"
   echo "$rx $tx"
 }
-ipsec_state(){
-  local d="$TUN_DIR/$1"; [ -r "$d/meta.conf" ] || { echo "-"; return; }; . "$d/meta.conf"
-  [ "${SECURITY:-plain}" = ipsec ] || { echo plain; return; }
-  command -v ipsec >/dev/null 2>&1 || { echo missing; return; }
-  ipsec status "darkgre-$PEER_ID" 2>/dev/null | grep -qi ESTABLISHED && echo encrypted || echo down
-}
+ipsec_state(){ echo plain; }
 config_fingerprint(){
-  local n="$1" d="$TUN_DIR/$1" pubs inns ph sec
+  local n="$1" d="$TUN_DIR/$1" pubs inns
   . "$d/meta.conf"
   pubs="$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | paste -sd, -)"
   inns="$(printf '%s\n%s\n' "$LOCAL_TUN" "$REMOTE_TUN" | sort | paste -sd, -)"
-  ph="$(printf '%s' "${IPSEC_PSK:-}" | sha256sum | cut -c1-12)"
-  sec="${SECURITY:-plain}"
-  printf '%s' "$pubs|$inns|$PREFIX|$PROFILE|$MTU|$GRE_KEY|$sec|$ph" | sha256sum | cut -c1-20
+  printf '%s' "$pubs|$inns|$PREFIX|$PROFILE|$MTU|$GRE_KEY" | sha256sum | cut -c1-20
 }
 pair_integrity_check(){
-  local n="$1" d="$TUN_DIR/$1" rx tx xbytes
+  local n="$1" d="$TUN_DIR/$1" rx tx
   [ -r "$d/meta.conf" ] || return 1
   . "$d/meta.conf"
   read -r rx tx <<<"$(tunnel_traffic "$n")"
-  xbytes="$(ip -s xfrm state 2>/dev/null | awk -v peer="$REMOTE_PUBLIC" '
-    $0 ~ ("dst " peer) {hit=1}
-    hit && /bytes/ {for(i=1;i<=NF;i++) if($i=="bytes"){sum+=$(i+1); hit=0}}
-    END{print sum+0}')"
   echo
   top; sect "PAIR INTEGRITY"; blank
   kv "pair hash" "$W${PAIR_HASH:-legacy}$N"
   kv "gre key" "$W$GRE_KEY$N"
   kv "GRE rx/tx" "$W$(human_bytes "$rx") / $(human_bytes "$tx")$N"
-  kv "XFRM bytes" "$W${xbytes:-0}$N"
-  if [ "${SECURITY:-plain}" = ipsec ] && [ "${xbytes:-0}" -gt 0 ] 2>/dev/null && [ "${rx:-0}" -eq 0 ] 2>/dev/null; then
-    blank
-    row "$(printf '%sIPsec is moving packets but GRE RX is zero.%s' "$R" "$N")"
-    row "$(printf '%slikely stale/mismatched GRE key or Pair Code.%s' "$Y" "$N")"
-    row "$(printf '%sKHAREJ: Manage -> PAIRING -> Apply Pair Code%s' "$D" "$N")"
-  elif ping -c1 -W1 "$REMOTE_TUN" >/dev/null 2>&1; then
+  if ping -c1 -W1 "$REMOTE_TUN" >/dev/null 2>&1; then
     blank; row "$(printf '%spair data plane looks healthy%s' "$G" "$N")"
   else
-    blank; row "$(printf '%spair not healthy yet - inspect XFRM and peer fingerprint%s' "$Y" "$N")"
+    blank; row "$(printf '%spair not healthy - compare Pair Hash, GRE Key and endpoints%s' "$Y" "$N")"
   fi
   bot
 }
@@ -664,9 +595,9 @@ health_check(){
     [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; st="$(service_state "$NAME")"
     read -r rx tx <<<"$(tunnel_traffic "$NAME")"
     if [ "$st" = active ] && ip link show "$IFNAME" >/dev/null 2>&1 && ping -c1 -W1 "$REMOTE_TUN" >/dev/null 2>&1; then
-      ok "$NAME  $ROLE  peer ok  mtu=$MTU  security=$(ipsec_state "$NAME")  traffic $(human_bytes "$rx")/$(human_bytes "$tx")"; okn=$((okn+1))
+      ok "$NAME  $ROLE  peer ok  mtu=$MTU  mode=plain  traffic $(human_bytes "$rx")/$(human_bytes "$tx")"; okn=$((okn+1))
     else
-      bad "$NAME  state=$st  peer=$REMOTE_TUN  security=$(ipsec_state "$NAME")"; badn=$((badn+1))
+      bad "$NAME  state=$st  peer=$REMOTE_TUN  mode=plain"; badn=$((badn+1))
     fi
   done
   shopt -u nullglob
@@ -968,12 +899,6 @@ screen_endpoint(){
   if [ "$ROLE" = IRAN ]; then warn "endpoint changed - use the new Pair Code on KHAREJ"; show_pair_code "$n"; else ok "endpoint applied"; fi
   pause
 }
-screen_security(){
-  header "SECURITY"
-  info "DARK GRE uses Plain GRE only"
-  dim "IPsec / strongSwan encryption was removed for stability."
-  pause
-}
 screen_restart(){
   local n="$1" d="$TUN_DIR/$1"; . "$d/meta.conf"; RESTART_EVERY="${RESTART_EVERY:-off}"
   header "SCHEDULED RESTART - $n"; kv "current" "$W$RESTART_EVERY$N"; pick_restart
@@ -985,14 +910,13 @@ screen_logs(){
   while :; do
     header "LOGS + INTERFACE - $n"
     top; sect "STATUS"; blank
-    kv "state" "$W$(service_state "$n")$N"; kv "interface" "$W$IFNAME$N"; kv "inner peer" "$W$REMOTE_TUN$N"; kv "security" "$W$(ipsec_state "$n")$N"
+    kv "state" "$W$(service_state "$n")$N"; kv "interface" "$W$IFNAME$N"; kv "inner peer" "$W$REMOTE_TUN$N"
     bot; echo
     ip -d link show "$IFNAME" 2>/dev/null | sed 's/^/    /' || true
-    echo; top; item 1 "Last 60 lines" ""; item L "Live journal" ""; item x "XFRM / IPsec" ""; item 0 "Back" ""; bot; echo; getkey
+    echo; top; item 1 "Last 60 lines" ""; item L "Live journal" ""; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) journalctl -u "darkgre@$n" -n 60 --no-pager -o cat 2>/dev/null | sed 's/^/    /'; pause ;;
       l|L) journalctl -u "darkgre@$n" -f -n 30 --no-pager ;;
-      x|X) header "XFRM - $n"; ip xfrm state 2>/dev/null | sed 's/^/    /'; echo; ip xfrm policy 2>/dev/null | sed 's/^/    /'; pause ;;
       0|_) return ;;
     esac
   done
