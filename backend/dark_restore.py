@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from dark_policy import PolicyError
+from restore_groups import RestoreGroupsMixin
 
 _HOST_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
 
@@ -17,6 +18,8 @@ class RestoreImportBody(BaseModel):
     inboundIds:list[int]=Field(default_factory=list,max_length=256)
     nodeIds:list[str]=Field(default_factory=list,max_length=256)
     scan:bool=True
+    groupId:str=Field(default='',max_length=80)
+    groupName:str=Field(default='',max_length=80)
 
 class RestoreMappingBody(BaseModel):
     inboundIds:list[int]=Field(min_length=1,max_length=256)
@@ -33,7 +36,7 @@ class _SafeRedirect(HTTPRedirectHandler):
         self.validator(newurl)
         return super().redirect_request(req,fp,code,msg,headers,newurl)
 
-class DarkRestore:
+class DarkRestore(RestoreGroupsMixin):
     def __init__(self,store,engine,nodes):
         self.store,self.engine,self.nodes=store,engine,nodes
         with store.lock:
@@ -61,6 +64,7 @@ class DarkRestore:
               id INTEGER PRIMARY KEY AUTOINCREMENT, restore_id TEXT NOT NULL,
               event TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', at REAL NOT NULL);
             """)
+        self._init_groups()
 
     @staticmethod
     def _safe_url(value:str):
@@ -131,60 +135,12 @@ class DarkRestore:
         if protos=={'shadowsocks'}:body['password']=password
         return body
 
-    def import_urls(self,urls:list[str],inbounds:list[int],nodes:list[str],scan:bool)->dict:
-        self._validate_targets(inbounds,nodes)
-        created=updated=0;items=[];now=time.time()
-        for raw in urls:
-            u,host,path,query=self._safe_url(raw)
-            legacy=u.geturl();probe=self._scan(legacy) if scan else {'status':'pending','error':'','upload':0,'download':0,'total':0,'expire':0}
-            with self.store.lock:
-                old=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE legacy_host=? AND legacy_path=? AND legacy_query=?',(host,path,query)).fetchone()
-            if old:
-                rid=str(old['id']);core_email=str(old['core_email']);updated+=1
-                with self.store.transaction() as db:
-                    db.execute("""UPDATE restore_subscriptions SET legacy_url=?,inbound_ids=?,node_ids=?,
-                      legacy_upload=?,legacy_download=?,legacy_total=?,legacy_expire=?,scan_status=?,scan_error=?,enabled=1,updated_at=?
-                      WHERE id=?""",(legacy,json.dumps(inbounds),json.dumps(nodes),probe['upload'],probe['download'],probe['total'],probe['expire'],probe['status'],probe['error'],now,rid))
-                with self.store.lock:core_row=self.store.db.execute('SELECT body FROM core_clients WHERE email=?',(core_email,)).fetchone()
-                if core_row:
-                    body=json.loads(core_row['body']);body['totalGB']=int(probe['total']);body['expiryTime']=int(probe['expire'])*1000;body['enable']=True
-                    with self.store.transaction() as db:
-                        db.execute('UPDATE core_clients SET body=?,inbounds=? WHERE email=?',(json.dumps(body),json.dumps(inbounds),core_email))
-                else:
-                    self.engine.create(self._client_body(core_email,inbounds,probe['total'],probe['expire']),inbounds)
-            else:
-                rid='rst_'+secrets.token_hex(12);token=secrets.token_urlsafe(24);core_email='restore_'+secrets.token_hex(10)+'@dark.restore'
-                self.engine.create(self._client_body(core_email,inbounds,probe['total'],probe['expire']),inbounds)
-                with self.store.transaction() as db:
-                    db.execute("""INSERT INTO restore_subscriptions(id,public_token,legacy_url,legacy_host,legacy_path,legacy_query,core_email,
-                      inbound_ids,node_ids,legacy_upload,legacy_download,legacy_total,legacy_expire,scan_status,scan_error,enabled,created_at,updated_at)
-                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                      (rid,token,legacy,host,path,query,core_email,json.dumps(inbounds),json.dumps(nodes),probe['upload'],probe['download'],
-                       probe['total'],probe['expire'],probe['status'],probe['error'],1,now,now))
-                created+=1
-            self.ensure_domain(host)
-            items.append({'id':rid,'host':host,'path':path,'scan_status':probe['status']})
-        try:self.engine.apply(start=self.engine.running)
-        except Exception:pass
-        return {'created':created,'updated':updated,'items':items}
-
     def ensure_domain(self,domain:str,acme_email:str=''):
         now=time.time()
         with self.store.transaction() as db:
             db.execute("""INSERT INTO restore_domains(domain,acme_email,created_at,updated_at) VALUES(?,?,?,?)
               ON CONFLICT(domain) DO UPDATE SET acme_email=CASE WHEN excluded.acme_email<>'' THEN excluded.acme_email ELSE restore_domains.acme_email END,
               updated_at=excluded.updated_at""",(domain,acme_email,now,now))
-
-    def rows(self)->list[dict]:
-        with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM restore_subscriptions ORDER BY created_at DESC')]
-        for r in rows:
-            r['inbound_ids']=json.loads(r['inbound_ids']);r['node_ids']=json.loads(r['node_ids']);r['enabled']=bool(r['enabled'])
-            with self.store.lock:
-                c=self.store.db.execute('SELECT up,down FROM core_clients WHERE email=?',(r['core_email'],)).fetchone()
-            r['dark_used']=int(c['up']+c['down']) if c else 0
-            r['effective_used']=int(r['legacy_upload'])+int(r['legacy_download'])+r['dark_used']
-            r['remaining']=max(0,int(r['legacy_total'])-r['effective_used']) if int(r['legacy_total']) else 0
-        return rows
 
     def domains(self)->list[dict]:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM restore_domains ORDER BY domain')]
@@ -237,8 +193,10 @@ class DarkRestore:
         if int(r['legacy_expire']) and int(r['legacy_expire'])<=int(now):raise HTTPException(403,'Subscription expired')
         inbound_ids=json.loads(r['inbound_ids']);node_ids=json.loads(r['node_ids'])
         body,headers=self.engine.subscription(str(r['core_email']),fmt,runtime_ready=self._runtime_ready(inbound_ids,node_ids))
-        with self.store.lock:c=self.store.db.execute('SELECT up,down FROM core_clients WHERE email=?',(r['core_email'],)).fetchone()
-        dark_up=int(c['up']) if c else 0;dark_down=int(c['down']) if c else 0
+        usage=self.usage(str(r['id']))
+        dark_up=int(usage['up']);dark_down=int(usage['down'])
+        # Preserve legacy subscription quota headers; the Restore dashboard shows
+        # DARK-only usage separately and must never reset a customer's old quota.
         headers['subscription-userinfo']=f"upload={int(r['legacy_upload'])+dark_up}; download={int(r['legacy_download'])+dark_down}; total={int(r['legacy_total'])}; expire={int(r['legacy_expire'])}"
         with self.store.transaction() as db:
             db.execute('UPDATE restore_subscriptions SET first_seen=CASE WHEN first_seen=0 THEN ? ELSE first_seen END,last_seen=?,updated_at=? WHERE id=?',(now,now,now,r['id']))
@@ -246,13 +204,17 @@ class DarkRestore:
         return body,headers
 
 def install_dark_restore(app,restore,current,owner,writable,audit):
+    restore.install_group_routes(app,owner,writable,audit)
+
     @app.get('/api/dark-restore')
-    def list_restore(p=Depends(owner)):
-        return {'items':restore.rows(),'domains':restore.domains()}
+    def list_restore(groupId:str='',p=Depends(owner)):
+        return {'items':restore.rows(groupId or None),'groups':restore.groups(),
+                'domains':restore.domains(),'usage_scope':'since_migration'}
 
     @app.post('/api/dark-restore/import')
     def import_restore(body:RestoreImportBody,p=Depends(owner)):
-        writable();result=restore.import_urls(body.urls,body.inboundIds,body.nodeIds,body.scan)
+        writable();result=restore.import_urls(body.urls,body.inboundIds,body.nodeIds,body.scan,
+                                            group_id=body.groupId,group_name=body.groupName)
         audit(p.actor,p.actor.id,'dark_restore.import',str(len(body.urls)),'isolated restore users')
         return result
 

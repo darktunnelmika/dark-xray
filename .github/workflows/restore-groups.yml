@@ -1,0 +1,42 @@
+name: DARK Restore groups
+on:
+  pull_request:
+    paths:
+      - 'backend/dark_restore.py'
+      - 'backend/restore_groups.py'
+      - 'web/dark-restore*'
+      - 'web/index.html'
+      - 'tests/*restore*'
+      - '.github/workflows/restore-groups.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  restore-groups:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated test dependencies
+        run: python -m pip install -r requirements.txt pytest playwright
+      - name: Install browser
+        run: python -m playwright install --with-deps chromium
+      - name: Restore accounting and isolation regression
+        run: PYTHONPATH=backend python -m pytest -q tests/test_dark_restore.py tests/test_restore*.py tests/test_nodes_v2.py
+      - name: Restore frontend regression
+        run: node --test tests/dark-restore-groups.test.cjs
+      - name: Real HTTP group import and mobile usage view
+        run: PYTHONPATH=backend python tests/restore-groups-browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: restore-groups-evidence
+          path: |
+            qa/restore-groups-browser.json
+            qa/restore-groups-browser.png
