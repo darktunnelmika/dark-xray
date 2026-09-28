@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/settings_store.dart';
 import '../services/vpn_bridge.dart';
 import '../ui/cyber.dart';
+import 'privacy_policy_page.dart';
 import 'routing_rules_page.dart';
 import 'subscriptions_page.dart';
 
@@ -358,14 +359,26 @@ class _SettingsPageState extends State<SettingsPage> {
                         onTap: _resetApp,
                       ),
                       CyberMenuTile(
+                        icon: Icons.privacy_tip_outlined,
+                        title: 'Privacy Policy',
+                        subtitle: 'Data handling, VpnService use, retention and contact',
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const PrivacyPolicyPage(),
+                            ),
+                          );
+                        },
+                      ),
+                      CyberMenuTile(
                         icon: Icons.info_outline_rounded,
                         title: 'About DarkXray',
-                        subtitle: 'DarkXray Android v0.5.0 Stability V1',
+                        subtitle: 'DarkXray Android v1.0.0 Play Release',
                         onTap: () {
                           showAboutDialog(
                             context: context,
                             applicationName: 'DarkXray',
-                            applicationVersion: '0.5.0',
+                            applicationVersion: '1.0.0',
                             applicationLegalese:
                                 'Dedicated Xray client • Cyber Red UI',
                           );
