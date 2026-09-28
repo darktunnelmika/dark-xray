@@ -3,6 +3,7 @@ name: DARK GRE RC
 on:
   push:
     branches:
+      - main
       - feature/dark-gre-direct-v1
     paths:
       - 'standalone/dark-gre/**'
