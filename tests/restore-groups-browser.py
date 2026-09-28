@@ -90,7 +90,7 @@ def run():
                             with store.transaction() as db:
                                 db.execute('UPDATE core_clients SET up=1024,down=2048 WHERE email=?',(original['core_email'],))
                             page.locator('.topbar [data-act=refresh]').click()
-                            page.wait_for_function('()=>DarkRestoreGroups.state.data.items.some(x=>x.dark_used===3072)')
+                            page.wait_for_function('rid=>{const x=DarkRestoreGroups.state.data.items.find(x=>x.id===rid);const n=document.querySelector("[data-dr-dark-usage]");return x?.dark_used===3072&&n?.textContent===bytes(3072)}',arg=rid)
                             assert page.locator('[data-dr-dark-usage]').inner_text()==page.evaluate('bytes(3072)')
                             second=import_one('Rep B '+suffix,'b-'+suffix);gid_b=second['group']['id']
                             assert page.locator('.dr-user').count()==1
