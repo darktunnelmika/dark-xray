@@ -52,7 +52,7 @@ class PrivacyPolicyPage extends StatelessWidget {
           'their operators. Review the policy of the provider whose endpoint you '
           'choose.\n\n'
           'Contact\n'
-          'Privacy inquiries: mikakhadmi@gmail.com\n\n'
+          'Privacy inquiries: https://github.com/darktunnelmika/dark-xray/issues/new\n\n'
           'Public policy URL:\n'
           'https://darktunnelmika.github.io/dark-xray/privacy/',
           style: TextStyle(
