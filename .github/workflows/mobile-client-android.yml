@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/dark-xray-client-bootstrap
+      - release/darkxray-play-v1.0.0
     paths:
       - "mobile-client/**"
       - ".github/workflows/mobile-client-android.yml"
@@ -41,6 +42,37 @@ jobs:
           rm -rf .mobile-build/android/app/src/main/kotlin/com/darkxray/dark_xray_client
           mkdir -p .mobile-build/android/app/src/main/kotlin/com/darkxray/dark_xray_client
           cp mobile-client/android/app/src/main/kotlin/com/darkxray/dark_xray_client/*.kt .mobile-build/android/app/src/main/kotlin/com/darkxray/dark_xray_client/
+
+      - name: Configure Google Play Android target
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path(".mobile-build/android/app/build.gradle.kts")
+          text = p.read_text()
+          text = text.replace(
+              'compileSdk = flutter.compileSdkVersion',
+              'compileSdk = 36',
+          )
+          text = text.replace(
+              'applicationId = "com.darkxray.dark_xray_client"',
+              'applicationId = "com.darkxray.client"',
+          )
+          text = text.replace(
+              'targetSdk = flutter.targetSdkVersion',
+              'targetSdk = 36',
+          )
+          p.write_text(text)
+
+          text = p.read_text()
+          required = [
+              'compileSdk = 36',
+              'applicationId = "com.darkxray.client"',
+              'targetSdk = 36',
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit("Play Gradle patch failed: " + ", ".join(missing))
+          PY
 
       - name: Download official XTLS libXray
         run: |
@@ -80,6 +112,18 @@ jobs:
         working-directory: .mobile-build
         run: flutter build apk --release --split-per-abi --target-platform android-arm64 --split-debug-info=build/symbols
 
+      - name: Build Google Play AAB
+        working-directory: .mobile-build
+        run: flutter build appbundle --release --split-debug-info=build/play-symbols
+
+      - name: Verify final package and API level
+        working-directory: .mobile-build
+        run: |
+          grep -q 'applicationId = "com.darkxray.client"' android/app/build.gradle.kts
+          grep -q 'targetSdk = 36' android/app/build.gradle.kts
+          grep -q 'compileSdk = 36' android/app/build.gradle.kts
+          test -s build/app/outputs/bundle/release/app-release.aab
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -93,5 +137,13 @@ jobs:
         with:
           name: dark-xray-client-release-arm64-apk
           path: .mobile-build/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Google Play AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: dark-xray-play-aab-unsigned
+          path: .mobile-build/build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 14
