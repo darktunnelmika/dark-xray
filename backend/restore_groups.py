@@ -116,18 +116,19 @@ class RestoreGroupsMixin:
                 total_down = (int(old['down']) if old else 0) + dd
                 if total_up + total_down > MAX_COUNTER:
                     raise PolicyError('Restore traffic counter overflow')
-                if not old or du or dd or up != old['raw_up'] or down != old['raw_down']:
-                    db.execute('''INSERT INTO restore_usage VALUES(?,?,?,?,?,?,?)
-                        ON CONFLICT(restore_id,scope) DO UPDATE SET up=excluded.up,down=excluded.down,
-                        raw_up=excluded.raw_up,raw_down=excluded.raw_down,updated_at=excluded.updated_at''',
-                        (rid, scope, total_up, total_down, up, down, now))
+                # Record the watermark even without new bytes, so a delayed older
+                # sample cannot later be mistaken for a counter reset.
+                db.execute('''INSERT INTO restore_usage VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT(restore_id,scope) DO UPDATE SET up=excluded.up,down=excluded.down,
+                    raw_up=excluded.raw_up,raw_down=excluded.raw_down,updated_at=excluded.updated_at''',
+                    (rid, scope, total_up, total_down, up, down, now))
                 counted += 1
         return {'clients': counted}
 
     @staticmethod
     def _group_name(value):
         name = ' '.join(unicodedata.normalize('NFKC', str(value)).split())
-        if not name or len(name) > 80 or any(unicodedata.category(c).startswith('C') for c in name):
+        if not name or len(name) > 80 or any(unicodedata.category(c).startswith('C') and c!='\u200c' for c in name):
             raise PolicyError('Group name must contain 1..80 visible characters')
         return name, name.casefold()
 
