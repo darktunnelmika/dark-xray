@@ -20,12 +20,17 @@ class SubscriptionService {
     if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
       throw const SubscriptionException('Subscription URL is not valid.');
     }
+    if (uri.scheme.toLowerCase() != 'https') {
+      throw const SubscriptionException(
+        'Google Play builds require HTTPS subscription URLs.',
+      );
+    }
 
     final response = await http
         .get(
           uri,
           headers: const {
-            'User-Agent': 'DarkXray/0.2 Android',
+            'User-Agent': 'DarkXray/1.0 Android',
             'Accept': 'text/plain,*/*',
           },
         )
