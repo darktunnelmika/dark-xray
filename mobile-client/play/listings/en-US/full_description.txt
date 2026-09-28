@@ -1,0 +1,39 @@
+DarkXray is a secure VPN client built for Xray-compatible connections.
+
+Connect using your own authorized VPN or proxy configuration, import subscriptions over HTTPS, scan QR codes, and manage multiple profiles from a focused cyber-style interface.
+
+CORE FEATURES
+
+• Android device-level VPN using VpnService
+• XTLS Xray core integration
+• VLESS with TLS or Reality
+• VMess
+• Trojan
+• Shadowsocks
+• Hysteria2
+• QR code and clipboard import
+• HTTPS subscription import and refresh
+• Smart reconnect when the underlying network changes
+• Real Xray route latency testing with fallback checks
+• Profile sorting by latency
+• Session duration and local traffic counters
+• IPv4 and IPv6 tunnel support
+• Configurable DNS and private-LAN bypass
+• Android Always-on VPN / kill-switch support
+• Local profile and settings management
+
+VPN SERVICE DISCLOSURE
+
+VPN connectivity is the core functionality of DarkXray. The app uses Android VpnService to create a device-level tunnel when you explicitly connect. Network traffic is routed through the VPN or proxy endpoint you selected.
+
+DarkXray does not use VpnService to inject advertising, redirect advertising traffic, or monetize browsing activity.
+
+The Google Play build only connects to profile types that provide an encrypted path to the VPN/proxy endpoint.
+
+PRIVACY
+
+The current mobile client contains no advertising SDK and no analytics SDK. Profiles and app settings are stored locally on your device. Subscription requests are sent directly to the HTTPS subscription address you provide.
+
+VPN servers and subscription endpoints can be operated by independent providers. Their logging and privacy practices are controlled by those providers.
+
+DarkXray does not provide VPN servers by itself. You are responsible for using configurations and services you are authorized to access.
