@@ -35,11 +35,22 @@ def assert_language_surface(page,name):
 
 
 def visit(page,name):
-    button=page.locator(f'.nav-btn[data-page="{name}"]')
+    if name in ('outbounds','routing','trafficmatrix'):
+        visit(page,'xray')
+        button=page.locator(f'.xray-settings-nav [data-page="{name}"]')
+        parent='xray'
+    else:
+        button=page.locator(f'.sidebar .nav-btn[data-page="{name}"]')
+        parent=name
+    if not button.is_visible() and page.locator('.mobile-menu').is_visible():
+        page.locator('.mobile-menu').click()
     button.wait_for(state='visible',timeout=10000)
     button.click()
-    page.wait_for_function("p=>document.querySelector('.nav-btn.active')?.dataset.page===p",arg=name,timeout=10000)
+    page.wait_for_function("p=>document.querySelector('.sidebar .nav-btn.active')?.dataset.page===p",arg=parent,timeout=10000)
+    page.wait_for_function("p=>state.page===p",arg=name,timeout=10000)
     page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
+    if name in ('xray','outbounds','routing','trafficmatrix'):
+        page.locator(f'[data-xray-section="{name}"]').wait_for(state='visible',timeout=10000)
     report['pages'].append(name)
 
 def open_guided(page,locator,stage):
