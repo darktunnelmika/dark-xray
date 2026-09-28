@@ -1,6 +1,6 @@
 from __future__ import annotations
 import base64, json, ipaddress, re, secrets, socket, ssl, time, uuid
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPSHandler, HTTPRedirectHandler
 
@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from dark_policy import PolicyError
 from restore_groups import RestoreGroupsMixin
 from restore_frontend import inspect_domain
+from restore_targets import RestoreTargetsMixin
 
 _HOST_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
 
@@ -21,10 +22,14 @@ class RestoreImportBody(BaseModel):
     scan:bool=True
     groupId:str=Field(default='',max_length=80)
     groupName:str=Field(default='',max_length=80)
+    nodeMode:Literal['all','selected']|None=None
+    includeLocal:bool|None=None
 
 class RestoreMappingBody(BaseModel):
     inboundIds:list[int]=Field(min_length=1,max_length=256)
     nodeIds:list[str]=Field(default_factory=list,max_length=256)
+    nodeMode:Literal['all','selected']|None=None
+    includeLocal:bool=True
 
 class RestoreDomainBody(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
@@ -37,7 +42,7 @@ class _SafeRedirect(HTTPRedirectHandler):
         self.validator(newurl)
         return super().redirect_request(req,fp,code,msg,headers,newurl)
 
-class DarkRestore(RestoreGroupsMixin):
+class DarkRestore(RestoreTargetsMixin,RestoreGroupsMixin):
     def __init__(self,store,engine,nodes):
         self.store,self.engine,self.nodes=store,engine,nodes
         with store.lock:
@@ -66,6 +71,7 @@ class DarkRestore(RestoreGroupsMixin):
               event TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', at REAL NOT NULL);
             """)
         self._init_groups()
+        self._init_targets()
 
     @staticmethod
     def _safe_url(value:str):
@@ -160,27 +166,17 @@ class DarkRestore(RestoreGroupsMixin):
                   WHERE legacy_host=? AND legacy_path=? AND legacy_query='' AND enabled=1""",(host,path)).fetchone()
         return dict(row) if row else None
 
-    def _runtime_ready(self,inbound_ids:list[int],node_ids:list[str])->dict[str,set[int]]:
-        ids={int(x) for x in inbound_ids};selected={str(x) for x in node_ids};ready={'local':set()}
-        for inbound_id in ids:
-            inbound=self.engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
-            if meta.get('deployLocal',True) is not False:ready['local'].add(inbound_id)
-        for node in self.nodes.list():
-            node_id=str(node.get('id'))
-            if node_id not in selected or not node.get('enabled') or not node.get('online') or node.get('last_error'):continue
-            for a in node.get('assignments',[]):
-                inbound_id=int(a.get('local_inbound_id') or 0)
-                if inbound_id in ids and a.get('deployed') and not a.get('last_error'):
-                    ready.setdefault('node:'+node_id,set()).add(inbound_id)
-        return ready
+    def _runtime_ready(self,inbound_ids:list[int],node_ids:list[str],*,node_mode:str='selected',include_local:bool=True)->dict[str,set[int]]:
+        return self.runtime_ready_selection({'inboundIds':inbound_ids,'nodeIds':node_ids,
+            'nodeMode':node_mode,'includeLocal':include_local})[0]
 
     def subscription(self,token:str,fmt:str,*,record_access:bool=True)->tuple[bytes,dict]:
         with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=? AND enabled=1',(token,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
         now=time.time()
         if int(r['legacy_expire']) and int(r['legacy_expire'])<=int(now):raise HTTPException(403,'Subscription expired')
-        inbound_ids=json.loads(r['inbound_ids']);node_ids=json.loads(r['node_ids'])
-        body,headers=self.engine.subscription(str(r['core_email']),fmt,runtime_ready=self._runtime_ready(inbound_ids,node_ids))
+        view,ready=self.render_view(self.target_selection(r),fmt)
+        body,headers=view.subscription(str(r['core_email']),fmt,runtime_ready=ready)
         usage=self.usage(str(r['id']))
         dark_up=int(usage['up']);dark_down=int(usage['down'])
         # Legacy metadata preserves remaining quota; dashboard usage is DARK-only.
@@ -193,6 +189,7 @@ class DarkRestore(RestoreGroupsMixin):
 
 def install_dark_restore(app,restore,current,owner,writable,audit):
     restore.install_group_routes(app,owner,writable,audit)
+    restore.install_target_routes(app,owner,writable,audit)
 
     @app.get('/api/dark-restore')
     def list_restore(groupId:str='',p=Depends(owner)):
@@ -202,22 +199,18 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
     @app.post('/api/dark-restore/import')
     def import_restore(body:RestoreImportBody,p=Depends(owner)):
         writable();result=restore.import_urls(body.urls,body.inboundIds,body.nodeIds,body.scan,
-                                            group_id=body.groupId,group_name=body.groupName)
+                                            group_id=body.groupId,group_name=body.groupName,
+                                            node_mode=body.nodeMode,include_local=body.includeLocal)
         audit(p.actor,p.actor.id,'dark_restore.import',str(len(body.urls)),'isolated restore users')
         return result
 
     @app.put('/api/dark-restore/{restore_id}/mapping')
     def mapping(restore_id:str,body:RestoreMappingBody,p=Depends(owner)):
-        writable();restore._validate_targets(body.inboundIds,body.nodeIds)
-        with restore.store.lock:r=restore.store.db.execute('SELECT * FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
-        if not r:raise HTTPException(404,'Restore subscription not found')
-        with restore.store.transaction() as db:
-            db.execute('UPDATE restore_subscriptions SET inbound_ids=?,node_ids=?,updated_at=? WHERE id=?',
-                       (json.dumps(body.inboundIds),json.dumps(body.nodeIds),time.time(),restore_id))
-            db.execute('UPDATE core_clients SET inbounds=? WHERE email=?',(json.dumps(body.inboundIds),r['core_email']))
-        restore.engine.apply(start=restore.engine.running)
+        writable()
+        value=body.model_dump();value['nodeMode']=body.nodeMode or ('selected' if body.nodeIds else 'all')
+        result=restore.set_targets(value,restore_id=restore_id)
         audit(p.actor,p.actor.id,'dark_restore.mapping',restore_id,'targets changed')
-        return {'updated':True}
+        return result
 
     @app.delete('/api/dark-restore/{restore_id}')
     def delete_restore(restore_id:str,p=Depends(owner)):
