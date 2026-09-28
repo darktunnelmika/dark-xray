@@ -1088,14 +1088,12 @@ screen_core(){
     command -v iptables >/dev/null 2>&1 && kv "iptables" "$G ready$N" || kv "iptables" "$R missing$N"
     [ -d /sys/module/ip_gre ] && kv "ip_gre" "$G loaded$N" || kv "ip_gre" "$Y not loaded$N"
     command -v conntrack >/dev/null 2>&1 && kv "conntrack" "$G ready$N" || kv "conntrack" "$Y optional$N"
-    command -v ipsec >/dev/null 2>&1 && kv "strongSwan" "$G ready$N" || kv "strongSwan" "$D not installed$N"
     kv "forwarding" "$W$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo '?')$N"
-    mid; item 1 "Install / repair" "GRE dependencies"; item 2 "Load GRE module" ""; item 3 "Security core" "install strongSwan"; item 4 "iperf3" "speed-test core"; item 0 "Back" ""; bot; echo; getkey
+    mid; item 1 "Install / repair" "GRE dependencies"; item 2 "Load GRE module" ""; item 3 "iperf3" "speed-test core"; item 0 "Back" ""; bot; echo; getkey
     case "$KEY" in
       1) ensure_deps; ensure_system; ok "GRE core checked"; pause ;;
       2) modprobe ip_gre >/dev/null 2>&1 && ok "ip_gre loaded" || bad "could not load ip_gre"; pause ;;
-      3) ensure_ipsec_deps && { security_sync_all; ok "strongSwan ready"; } || bad "security core install failed"; pause ;;
-      4) install_iperf3 && ok "iperf3 ready" || bad "iperf3 install failed"; pause ;;
+      3) install_iperf3 && ok "iperf3 ready" || bad "iperf3 install failed"; pause ;;
       0|_) return ;;
     esac
   done
@@ -1161,8 +1159,8 @@ uninstall_all(){
   rm -f "$UNIT_FILE" "$RS_UNIT" "$RS_TIMER" "$WATCH_UNIT" "$WATCH_TIMER" "$RUNNER" /etc/sysctl.d/99-dark-gre.conf
   sed -i '\|include /etc/dark-gre/security/ipsec.d/\*.conf|d;\|include /etc/ipsec.d/dark-gre/\*.conf|d' /etc/ipsec.conf 2>/dev/null || true
   sed -i '\|include /etc/dark-gre/security/ipsec.secrets|d;\|include /etc/ipsec.dark-gre.secrets|d' /etc/ipsec.secrets 2>/dev/null || true
-  rm -rf "$IPSEC_DIR" "$IPSEC_SECRETS" "$BASE_DIR"; systemctl daemon-reload; command -v ipsec >/dev/null 2>&1 && ipsec reload >/dev/null 2>&1 || true
-  ok "DARK GRE uninstalled; strongSwan package was left installed"; pause; exit 0
+  rm -rf "$IPSEC_DIR" "$IPSEC_SECRETS" "$BASE_DIR"; systemctl daemon-reload
+  ok "DARK GRE uninstalled"; pause; exit 0
 }
 
 repair_runtime(){
@@ -1172,7 +1170,7 @@ repair_runtime(){
   migrate_existing_tunnels
 
   local d n
-  # Phase 1: stop DARK GRE services/watchers before changing strongSwan state.
+  # Phase 1: stop DARK GRE services/watchers before rebuilding runtime.
   shopt -s nullglob
   for d in "$TUN_DIR"/*; do
     [ -r "$d/meta.conf" ] || continue
