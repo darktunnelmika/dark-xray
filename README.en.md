@@ -110,6 +110,33 @@ sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
 
 The WAN gate uses the production pinned HTTPS/TLS node client. It does **not** inject the outage itself and only reports outage recovery as passed after it observes a real Down → Recovery transition.
 
+## Standalone DARK GRE Direct
+
+The repository also ships **DARK GRE Direct RC12** for direct IRAN ↔ KHAREJ tunneling.
+
+Current scope:
+
+- stable Plain GRE
+- Pair Code
+- GRE Key
+- Auto PMTU / MTU modes
+- TCP MSS Clamp
+- IRAN-side port forwarding
+- Scheduled Restart
+- Runtime Repair and watcher
+- Diagnostics / Pair Integrity / Speed Test
+- in-place KHAREJ re-pair
+
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-gre/install.sh | bash
+```
+
+Full guide: [standalone/dark-gre/README.fa.md](standalone/dark-gre/README.fa.md)
+
+RC12 was validated on a real IRAN ↔ Poland pair, including reboot recovery on both peers, inner GRE ping, and TCP/1190 reachability.
+
 ## What is exercised on `main`?
 
 - **Python 3.12 / 3.13:** API, owner/representative scope, legacy-role hardening, TOTP, accounting, settings, backup/update recovery, nodes and security regressions.
