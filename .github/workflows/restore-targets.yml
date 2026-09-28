@@ -1,0 +1,35 @@
+name: Restore group destinations
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  restore-targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated dependencies
+        run: python -m pip install -r requirements.txt pytest playwright
+      - name: Install browser
+        run: python -m playwright install --with-deps chromium
+      - name: Restore target, isolation and Direct duplicate regressions
+        run: python -m pytest -q tests/test_restore_targets.py tests/test_dark_restore.py tests/test_restore_groups.py tests/test_restore_node_observer.py tests/test_restore_frontend.py tests/test_hosts_v3.py tests/test_nodes_v2.py
+      - name: Frontend selection and confirmation boundaries
+        run: node --test tests/restore-targets.test.cjs tests/dark-restore-groups.test.cjs
+      - name: Whole-group edit through real owner HTTP login
+        run: python tests/restore-targets-browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: restore-group-destinations
+          path: |
+            qa/restore-targets-browser.json
+            qa/restore-targets-browser.png
