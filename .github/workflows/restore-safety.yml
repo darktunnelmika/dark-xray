@@ -33,7 +33,7 @@ jobs:
       - name: Install browser
         run: python -m playwright install --with-deps chromium
       - name: Strict source metadata and policy isolation
-        run: python -m pytest tests/test_restore_safety.py tests/test_restore_groups.py tests/test_restore_targets.py tests/test_restore_frontend.py -q --junitxml=qa/junit/restore-safety.xml
+        run: python -m pytest tests/test_restore_safety.py tests/test_restore_safety_stability.py tests/test_restore_groups.py tests/test_restore_targets.py tests/test_restore_frontend.py tests/test_meter_write_amplification.py -q --junitxml=qa/junit/restore-safety.xml
       - name: Frontend permissions and exact numeric inputs
         run: node --test tests/restore-safety.test.cjs tests/restore-targets.test.cjs
       - name: Confirmed review and suspension through real owner login
