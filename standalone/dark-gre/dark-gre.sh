@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.11.0-rc11"
+SCRIPT_VER="0.12.0-rc12"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -239,26 +239,15 @@ scan_path_mtu(){
   echo $((best+28))
 }
 calc_inner_mtu(){
-  local p="$1" sec="$2" overhead mtu
-  [ "$sec" = ipsec ] && overhead=100 || overhead=28
-  mtu=$((p-overhead))
+  local p="$1" mtu
+  mtu=$((p-28))
   [ "$mtu" -lt 1280 ] && mtu=1280
-  [ "$sec" = ipsec ] && [ "$mtu" -gt 1400 ] && mtu=1400
-  [ "$sec" != ipsec ] && [ "$mtu" -gt 1472 ] && mtu=1472
+  [ "$mtu" -gt 1472 ] && mtu=1472
   echo "$mtu"
 }
 choose_security(){
-  echo; top; sect "SECURITY"; blank
-  item 1 "GRE + IPsec" "AES-256-GCM / IKEv2 - recommended"
-  item 2 "Plain GRE" "fastest - no encryption"
-  bot; echo; getkey
-  case "$KEY" in
-    2) SECURITY=plain; IPSEC_PSK="" ;;
-    *) SECURITY=ipsec
-       ensure_ipsec_deps || { bad "strongSwan install failed"; return 1; }
-       IPSEC_PSK="$(existing_peer_psk "$REMOTE_PUBLIC" 2>/dev/null || true)"
-       [ -n "$IPSEC_PSK" ] || IPSEC_PSK="$(openssl rand -hex 32)" ;;
-  esac
+  SECURITY=plain
+  IPSEC_PSK=""
 }
 choose_mtu(){
   echo; top; sect "MTU"; blank
@@ -431,7 +420,7 @@ write_unit(){
   cat >"$UNIT_FILE" <<UNIT_EOF
 [Unit]
 Description=DARK GRE Direct tunnel %i
-After=network-online.target strongswan-starter.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -449,7 +438,7 @@ UNIT_EOF
   cat >"$WATCH_UNIT" <<UNIT_EOF
 [Unit]
 Description=DARK GRE peer/security watcher %i
-After=network-online.target strongswan-starter.service darkgre@%i.service
+After=network-online.target darkgre@%i.service
 Requires=darkgre@%i.service
 PartOf=darkgre@%i.service
 
