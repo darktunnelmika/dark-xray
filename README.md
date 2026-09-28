@@ -85,6 +85,33 @@ Node فقط **DARK Node Agent + Xray-core + Guard + Updater + TLS runtime** را
 
 Xray رسمی در هر دو مسیر به نسخه pin‌شده دریافت می‌شود و SHA-256 رسمی Release بررسی می‌شود.
 
+## DARK GRE Direct مستقل
+
+برای ساخت تونل مستقیم بین IRAN و KHAREJ، پروژه شامل **DARK GRE Direct RC12** به‌صورت مستقل است.
+
+ویژگی‌های نسخه فعلی:
+
+- Plain GRE پایدار
+- Pair Code
+- GRE Key
+- Auto PMTU / MTU Profiles
+- TCP MSS Clamp
+- Port Forward سمت IRAN
+- Scheduled Restart
+- Runtime Repair و Watcher
+- Diagnostics / Pair Integrity / Speed Test
+- Re-pair بدون حذف Tunnel
+
+نصب:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-gre/install.sh | bash
+```
+
+راهنمای کامل: [standalone/dark-gre/README.fa.md](standalone/dark-gre/README.fa.md)
+
+RC12 روی Pair واقعی IRAN ↔ Poland با Reboot هر دو سمت، Ping داخلی و TCP/1190 تست شده است.
+
 ## گیت‌های سلامت روی سرور
 
 Readiness بدون تغییر سرویس/DB/firewall:
