@@ -36,4 +36,4 @@ The current mobile client contains no advertising SDK and no analytics SDK. Prof
 
 VPN servers and subscription endpoints can be operated by independent providers. Their logging and privacy practices are controlled by those providers.
 
-DarkXray does not provide VPN servers by itself. You are responsible for using configurations and services you are authorized to access.
+DarkXray connects to VPN/proxy endpoints supplied by you or your service provider. Availability, server-side logging, and retention depend on the endpoint operator. Use only configurations and services you are authorized to access.
