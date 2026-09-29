@@ -166,6 +166,7 @@ class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
         self.stop=threading.Event();self.thread:threading.Thread|None=None
+        self.monitor_interval=60.0
         self._operation_locks={};self._operation_locks_guard=threading.Lock()
         with store.lock:
             store.db.executescript('''
@@ -174,7 +175,7 @@ class NodeRegistry:
               token_enc TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,
               created_at REAL NOT NULL,updated_at REAL NOT NULL,last_seen REAL NOT NULL DEFAULT 0,
               last_latency_ms INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',
-              last_health TEXT NOT NULL DEFAULT '{}',failure_count INTEGER NOT NULL DEFAULT 0,
+              last_health TEXT NOT NULL DEFAULT '{}',last_health_at REAL NOT NULL DEFAULT 0,failure_count INTEGER NOT NULL DEFAULT 0,
               recovery_count INTEGER NOT NULL DEFAULT 0,last_offline_at REAL NOT NULL DEFAULT 0,
               last_recovered_at REAL NOT NULL DEFAULT 0,
               data_address TEXT NOT NULL DEFAULT '',priority INTEGER NOT NULL DEFAULT 100,
@@ -230,6 +231,7 @@ class NodeRegistry:
             ''')
             node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
             for name,ddl in (
+                ('last_health_at',"ALTER TABLE remote_nodes ADD COLUMN last_health_at REAL NOT NULL DEFAULT 0"),
                 ('failure_count',"ALTER TABLE remote_nodes ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0"),
                 ('recovery_count',"ALTER TABLE remote_nodes ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0"),
                 ('last_offline_at',"ALTER TABLE remote_nodes ADD COLUMN last_offline_at REAL NOT NULL DEFAULT 0"),
@@ -313,6 +315,59 @@ class NodeRegistry:
                 assigned=[dict(x) for x in self.store.db.execute(
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
             r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180 and not r['last_error'])
+            health_at=float(r.get('last_health_at') or 0)
+            age=max(0.0,now-health_at) if health_at else None
+            stale_after=max(15.0,min(180.0,float(self.monitor_interval)*3.0))
+            fresh=bool(r['enabled'] and age is not None and age<=stale_after and not r['last_error'])
+            health=r['health'] if isinstance(r.get('health'),dict) else {}
+            system=health.get('system') if isinstance(health.get('system'),dict) else {}
+            def metric_percent(name,legacy):
+                item=system.get(name)
+                if isinstance(item,dict):
+                    value=item.get('percent')
+                else:value=system.get(legacy)
+                try:return max(0.0,min(100.0,float(value)))
+                except (TypeError,ValueError):return None
+            cpu=None
+            try:cpu=max(0.0,min(100.0,float(system.get('cpu'))))
+            except (TypeError,ValueError):pass
+            mem=metric_percent('memory','memory_percent');disk=metric_percent('disk','disk_percent')
+            load_pressure=None
+            try:
+                logical=max(1,int((system.get('cpu_info') or {}).get('logical') or 0))
+                loads=system.get('loads') or []
+                if logical and loads:load_pressure=max(0.0,min(100.0,100.0*float(loads[0])/logical))
+            except (TypeError,ValueError,AttributeError):pass
+            capacity_values=[x for x in (cpu,mem,disk,load_pressure) if x is not None]
+            capacity_score=round(max(capacity_values),1) if fresh and capacity_values else None
+            capacity_status=('overloaded' if capacity_score is not None and capacity_score>=90 else
+                             'busy' if capacity_score is not None and capacity_score>=70 else
+                             'healthy' if capacity_score is not None else 'unknown')
+            alerts=[]
+            def alert(code,severity,label,value=''):
+                alerts.append({'code':code,'severity':severity,'label':label,'value':value})
+            if r['enabled'] and r['last_error']:alert('agent_error','critical','Agent unreachable',r['last_error'])
+            elif r['enabled'] and not fresh:alert('telemetry_stale','warning','Telemetry stale',
+                                                  ('%.0fs'%age) if age is not None else 'never')
+            if fresh:
+                if cpu is not None and cpu>=90:alert('cpu_high','critical' if cpu>=97 else 'warning','High CPU','%.1f%%'%cpu)
+                if mem is not None and mem>=90:alert('memory_high','critical' if mem>=97 else 'warning','High memory','%.1f%%'%mem)
+                if disk is not None and disk>=85:alert('disk_high','critical' if disk>=95 else 'warning','Disk pressure','%.1f%%'%disk)
+                core=health.get('core') if isinstance(health.get('core'),dict) else {}
+                if core.get('state') and core.get('state')!='running':alert('xray_state','critical','Xray not running',str(core.get('state')))
+                lease=health.get('hub_lease') if isinstance(health.get('hub_lease'),dict) else {}
+                if lease.get('required') and not lease.get('valid'):alert('hub_lease','critical','Hub accounting lease invalid',str(lease.get('state') or 'invalid'))
+                maintenance=health.get('maintenance') if isinstance(health.get('maintenance'),dict) else {}
+                if maintenance.get('statistics_error'):alert('accounting_stats','critical','Accounting checkpoint error',str(maintenance.get('statistics_error'))[:160])
+            r['telemetry']={'fresh':fresh,'age_seconds':round(age,1) if age is not None else None,
+                            'stale_after_seconds':round(stale_after,1),'sampled_at':health_at,
+                            'live_state':('disabled' if not r['enabled'] else 'error' if r['last_error'] else
+                                          'online' if fresh else 'stale' if r['last_seen'] else 'offline'),
+                            'system':system if fresh else None,
+                            'agent_version':str(health.get('version') or '') if fresh else '',
+                            'source':health.get('installed_source') if fresh and isinstance(health.get('installed_source'),dict) else {},
+                            'capacity':{'score':capacity_score,'status':capacity_status},
+                            'alerts':alerts}
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
@@ -390,9 +445,10 @@ class NodeRegistry:
               last_seen=CASE WHEN ? THEN 0 ELSE remote_nodes.last_seen END,
               last_latency_ms=CASE WHEN ? THEN 0 ELSE remote_nodes.last_latency_ms END,
               last_error=CASE WHEN ? THEN '' ELSE remote_nodes.last_error END,
-              last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END''',
+              last_health=CASE WHEN ? THEN '{}' ELSE remote_nodes.last_health END,
+              last_health_at=CASE WHEN ? THEN 0 ELSE remote_nodes.last_health_at END''',
               (node_id,name,origin,enc,int(enabled),now,now,data_address,priority,int(failover_enabled),
-               int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
+               int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe),int(reset_probe)))
             binding=self.installations.ensure(db,node_id)
             if old and old['origin']!=origin and not binding['installation_id']:
                 db.execute('UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,initialized=0 WHERE node_id=?',(node_id,))
@@ -527,7 +583,7 @@ class NodeRegistry:
             from node_replacement_deployment import assert_deployment_allows
             if enabled:assert_deployment_allows(db,node_id,'enable')
             if not db.execute('SELECT 1 FROM remote_nodes WHERE id=?',(node_id,)).fetchone():raise PolicyError('Node not found')
-            db.execute("UPDATE remote_nodes SET enabled=?,updated_at=?,last_seen=0,last_latency_ms=0,last_error='',last_health='{}' WHERE id=?",(int(enabled),time.time(),node_id))
+            db.execute("UPDATE remote_nodes SET enabled=?,updated_at=?,last_seen=0,last_latency_ms=0,last_error='',last_health='{}',last_health_at=0 WHERE id=?",(int(enabled),time.time(),node_id))
         return self.get(node_id)
 
     def delete(self,node_id:str)->dict:
@@ -603,7 +659,7 @@ class NodeRegistry:
             self._request_failed(node_id,'Remote endpoint is not a DARK node agent')
             raise PolicyError('Remote endpoint is not a DARK node agent')
         self.installations.observe(node_id,health)
-        with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
+        with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,last_health_at=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,now,node_id))
         return {'node':self.get(node_id),'latency_ms':ms,'health':health}
 
 
@@ -1012,6 +1068,7 @@ class NodeRegistry:
     def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None,lease_callback=None):
         if self.thread and self.thread.is_alive():return
         if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
+        self.monitor_interval=float(interval)
         if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
         if desired_provider is not None and not callable(desired_provider):raise ValueError('desired_provider must be callable')
         if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
@@ -1075,6 +1132,26 @@ class NodeRegistry:
         self.stop.set()
         if self.thread:self.thread.join(timeout=6.0)
         self.thread=None
+
+    @installation_operation
+    def diagnostics(self,node_id:str)->dict:
+        doc,ms=self._request(node_id,'/node/api/v1/diagnostics',timeout=12.0)
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or doc.get('node_id') not in (None,node_id):
+            raise PolicyError('Invalid Node diagnostics response')
+        raw=doc.get('checks')
+        if not isinstance(raw,list) or len(raw)>64:raise PolicyError('Invalid Node diagnostics checks')
+        checks=[]
+        for item in raw:
+            if not isinstance(item,dict):raise PolicyError('Invalid Node diagnostics check')
+            check_id=str(item.get('id') or '')[:64];label=str(item.get('label') or '')[:120]
+            status=str(item.get('status') or '')
+            if not check_id or not label or status not in {'pass','warn','fail'}:
+                raise PolicyError('Invalid Node diagnostics check')
+            checks.append({'id':check_id,'label':label,'status':status,
+                           'detail':str(item.get('detail') or '')[:300],'value':item.get('value')})
+        return {'latency_ms':ms,'generated_at':float(doc.get('generated_at') or time.time()),
+                'checks':checks,'system':doc.get('system') if isinstance(doc.get('system'),dict) else {},
+                'boundary':str(doc.get('boundary') or '')[:200]}
 
     @installation_operation
     def remote_logs(self,node_id:str,kind:str='process',limit:int=300)->dict:
