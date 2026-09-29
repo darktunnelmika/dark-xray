@@ -15,12 +15,12 @@ test('Nodes V5 uses lightweight Pair Code as the primary add workflow',()=>{
 });
 
 test('Node Fleet surfaces online state and Hub desired-state drift',()=>{
-  for(const token of ['desired_state','Pending changes','desiredLabel','Deployment'])assert.ok(src.includes(token),token);
+  for(const token of ['desired_state','Pending','desiredLabel','Deployment'])assert.ok(src.includes(token),token);
   assert.ok(src.includes('Sync Now')||src.includes("L('Sync'"));
 });
 
 test('Node Manage keeps daily operations in the Hub',()=>{
-  for(const token of ['Health Check','Remote Inbounds','Sync Security','Validate Xray','Restart Xray','Logs','Update to Hub Version','Delete Node'])
+  for(const token of ['Diagnostics','Remote Inbounds','Sync Security','Validate Xray','Restart Xray','Logs','Update to Hub Version','Delete Node'])
     assert.ok(src.includes(token),token);
   for(const route of ['/update/check','/update/start','/logs/'])assert.ok(src.includes(route),route);
 });
@@ -43,4 +43,23 @@ test('Detailed orchestration remains available but is no longer the main surface
 
 test('Node editor can still manage inbound assignments for recovery/admin use',()=>{
   for(const token of ['Inbound deployments','name="inboundIds"',"getAll('inboundIds')"])assert.ok(src.includes(token),token);
+});
+
+
+test('Nodes V6 exposes live resource telemetry without pretending stale data is live',()=>{
+  for(const token of ['telemetry_state','telemetry_age_seconds','NV6_FRESH_SECONDS','CPU','RAM','Disk','Uptime','↓ RX','↑ TX','Connections'])
+    assert.ok(src.includes(token),token);
+  for(const token of ["api('/api/nodes')",'setInterval(nv6RefreshLive,5000)','nv6-not-fresh','STALE','data-nv6-node'])
+    assert.ok(src.includes(token),token);
+});
+
+test('Nodes V6 diagnostics explicitly excludes tunnel health',()=>{
+  for(const token of ['Node Diagnostics','Live Agent/Xray/system diagnostics only','Tunnel health is not tested here'])
+    assert.ok(src.includes(token),token);
+});
+
+test('Nodes V6 live refresh is read-only and preserves extension actions',()=>{
+  assert.ok(!src.includes('/api/nodes/telemetry/refresh'));
+  assert.ok(src.includes("document.querySelector('dialog[open]')"));
+  assert.ok(src.includes("!String(x.dataset.act||'').startsWith('nv2')"));
 });

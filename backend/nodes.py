@@ -312,7 +312,10 @@ class NodeRegistry:
             with self.store.lock:
                 assigned=[dict(x) for x in self.store.db.execute(
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
-            r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180 and not r['last_error'])
+            age=max(0.0,now-float(r['last_seen'] or 0)) if r['last_seen'] else None
+            r['telemetry_age_seconds']=round(age,1) if age is not None else None
+            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
+            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
