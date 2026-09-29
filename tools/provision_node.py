@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Provision only the DARK XRAY Node Agent runtime on a clean Linux VPS."""
 from __future__ import annotations
+from update_node import service_import_probe
 import argparse,base64,hashlib,json,os,pwd,re,secrets,shutil,subprocess,sys,time
 from pathlib import Path
 
@@ -170,6 +171,7 @@ exec "$PY" "$MANAGER" "$@"
     pair_path=DATA/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
     os.chmod(pair_path,0o600);os.chown(pair_path,account.pw_uid,account.pw_gid)
 
+    service_import_probe(APP/'.venv/bin/python',APP/'backend')
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node-update.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',
                       'origin':cfg['public_origin'],'nodeId':node_id,'pairCode':pair_code,'directSourceVerified':bool(a.verified_direct_sources)},indent=2))

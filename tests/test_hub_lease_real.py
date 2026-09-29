@@ -117,3 +117,34 @@ def test_real_pending_start_cannot_deadlock_accounting_recovery(real_fleet):
     result=f.reg.deliver_pending_control(node.id)
     assert not result['queued'] and node.engine.running
     transfer(f.clients[0].port,f.target)
+
+
+def test_real_wall_clock_lease_expiry_and_recovery(real_fleet):
+    """Real elapsed 60-second deadline; no injected clock, all loopback fixtures."""
+    import time
+    f=real_fleet;guards=[];loops=[]
+    for node in f.agents:
+        assert grant(f,node)['valid']
+        loop=EngineLoop(node.engine,2,node.runtime);loop.start();loops.append(loop)
+        guard=LeaseGuard(node.runtime);guard.start();guards.append(guard)
+    began=time.monotonic()
+    try:
+        with existing_connections(f) as sockets:
+            deadline=began+70
+            while any(n.engine.running for n in f.agents) and time.monotonic()<deadline:
+                time.sleep(.25)
+            assert all(not n.engine.running for n in f.agents),'real-time expiry did not stop Xray'
+            elapsed=time.monotonic()-began
+            assert 45<elapsed<70,elapsed
+            for node,s in zip(f.agents,sockets):
+                health,_=f.reg._request(node.id,'/node/api/health')
+                assert health['hub_lease']['state']=='expired'
+                try:s.sendall(b'AFTER');assert s.recv(64)==b''
+                except (ConnectionResetError,BrokenPipeError):pass
+            for client in f.clients:transfer(client.port,f.target,allowed=False)
+        for node in f.agents:assert grant(f,node)['valid']
+        for client in f.clients:transfer(client.port,f.target)
+        f.evidence.update(wall_clock_expiry=True,elapsed_seconds=elapsed,management_survived=True)
+    finally:
+        for guard in guards:guard.close()
+        for loop in loops:loop.close()

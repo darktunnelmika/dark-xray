@@ -108,6 +108,7 @@ def main():
     p.add_argument('--report',type=Path,default=ROOT/'qa/node-update-systemd.json')
     a=p.parse_args()
     require(os.geteuid()==0 and os.environ.get('GITHUB_ACTIONS')=='true','Only the disposable root CI fixture is allowed')
+    os.umask(0o077)  # Exercise the real root-broker permissions, not the CI default.
     require(bool(re.fullmatch(r'[0-9a-f]{40}',a.expected_commit)),'Exact expected source SHA required')
     cfg=json.loads((CONF/'config.json').read_text())
     source=json.loads((DATA/'installed-source.json').read_text())
@@ -189,6 +190,24 @@ def main():
                 require(metadata.st_gid==pwd.getpwnam('darkxray').pw_gid and metadata.st_mode&0o777==0o640,'Agent source readability was lost')
                 report['checks'].extend(['injected failure restores source, environment and SQLite',
                                          'real VLESS traffic after rollback','revision and source metadata preserved'])
+        # Disposable fixed-identity CI Node only. Suspend the entire Agent,
+        # not just an HTTP route; systemd must reap its owned Xray cgroup.
+        import signal
+        fixture_accounting_grant(digest)
+        before_pid=int(subprocess.check_output(['systemctl','show','dark-xray-node.service','--property=MainPID','--value'],text=True).strip())
+        children=subprocess.run(['pgrep','-P',str(before_pid),'xray'],capture_output=True,text=True).stdout.split()
+        require(before_pid>1 and children,'Missing owned processes for hang test')
+        os.kill(before_pid,signal.SIGSTOP)
+        deadline=time.monotonic()+45
+        while time.monotonic()<deadline:
+            new_pid=int(subprocess.check_output(['systemctl','show','dark-xray-node.service','--property=MainPID','--value'],text=True).strip())
+            if new_pid>1 and new_pid!=before_pid:break
+            time.sleep(.5)
+        require(new_pid>1 and new_pid!=before_pid,'systemd watchdog did not replace hung Agent')
+        wait_health(a.expected_commit,running=False)
+        for pid in children:require(not Path('/proc/'+pid).exists(),'Orphan Xray survived Agent watchdog')
+        fixture_accounting_grant(digest);wait_health(a.expected_commit)
+        report['checks'].append('real SIGSTOP Agent hang: watchdog reaps Xray and restart waits for fresh Hub grant')
         report['passed']=True
     except Exception as exc:
         report['error']=type(exc).__name__+': '+str(exc)[:800]

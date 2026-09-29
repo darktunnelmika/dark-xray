@@ -1,4 +1,4 @@
-# Hub accounting lease — 0.10.0-rc17
+# Hub accounting lease — 0.10.0-rc18
 
 ## Contract
 
@@ -82,6 +82,29 @@ and an explicit fake core; they are not a real packet proof.
 isolated Agents over certificate-verified HTTPS, real VLESS/SOCKS transfers and
 already-open TCP echo streams. It verifies offline checkpoints, existing/new
 connection closure, management availability, exact cumulative reconciliation,
-no duplicate charge, quota-before-recovery and pending Start recovery. Expiry
-uses an injected monotonic clock; this is not a full production outage or forced
-whole-Agent-hang experiment. CI runs these with the existing real data-plane job.
+no duplicate charge, quota-before-recovery and pending Start recovery. The focused expiry cases use an injected monotonic clock; an additional test waits
+for the actual 60-second wall-clock deadline with live TCP streams and independent
+Node loops. These remain isolated tests, not a production outage. The disposable
+Node systemd CI also suspends the Agent with SIGSTOP and verifies that the OS
+watchdog removes the entire owned Xray cgroup and restarts in awaiting-Hub state.
+
+
+## rc18 updater permission boundary
+
+The root update broker uses umask 077. Candidate venv creation and dependency
+installation now use an explicit public-code umask, and permissions are normalized
+only inside the new staged runtime. Interpreter symlink targets, state, credentials
+and rollback permissions are never recursively widened.
+
+Before stopping a live Node, the updater stages the exact install allowlist and
+executes Python imports with the real darkxray UID/GID, no supplementary groups
+and no user-site/PYTHONPATH inheritance. Failed execution/import leaves the running
+Node untouched. A second service-account import checks the final installed path.
+Fresh installation uses the same final-path check before enabling the service.
+The root disposable CI update/rollback fixture now runs under umask 077.
+
+Existing rc9 updaters cannot fix their own in-flight permission handling. For the
+first upgrade, execute tools/update_node.py from the reviewed, exact rc18 commit
+using system Python, with --ref set to that same immutable commit. It performs
+normal snapshots, installation and rollback and installs the corrected updater
+permanently. Do not chmod the live application recursively or delete its venv.

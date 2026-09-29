@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exact-SHA Node updater with source, environment and SQLite rollback."""
 from __future__ import annotations
-import argparse,fcntl,http.client,json,os,re,shutil,socket,sqlite3,ssl,stat,subprocess,sys,tarfile,tempfile,time,uuid
+import argparse,contextlib,fcntl,http.client,json,os,pwd,re,shutil,socket,sqlite3,ssl,stat,subprocess,sys,tarfile,tempfile,time,uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,9 +15,10 @@ ROOT_FILES=('requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md'
 SOURCE_FILES=tuple('backend/'+x for x in BACKEND)+tuple('tools/'+x for x in TOOLS)+tuple('deploy/'+x for x in DEPLOY)+ROOT_FILES
 
 
-def run(args,*,timeout=90,cwd=None,check=True,stdout=None):
+def run(args,*,timeout=90,cwd=None,check=True,stdout=None,umask=None):
     options={'cwd':cwd,'text':True,'check':False,'timeout':timeout,
              'env':{k:v for k,v in os.environ.items() if k not in {'PYTHONHOME','PYTHONPATH'}}}
+    if umask is not None:options['umask']=umask
     if stdout is None:options['capture_output']=True
     else:options.update(stdout=stdout,stderr=subprocess.STDOUT)
     cp=subprocess.run([str(x) for x in args],**options)
@@ -58,15 +59,64 @@ def current_source()->dict:
 
 def build_candidate_venv(src:Path,temp:Path)->Path:
     venv=temp/'venv'
-    run([sys.executable,'-m','venv',venv],timeout=60)
+    run([sys.executable,'-m','venv',venv],timeout=60,umask=0o022)
     py=venv/'bin/python'
-    run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',src/'requirements-node.txt'],timeout=180)
+    run([py,'-m','pip','install','-q','--disable-pip-version-check','-r',src/'requirements-node.txt'],timeout=180,umask=0o022)
     run([py,'-m','pip','check'],timeout=30)
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONHOME','PYTHONPATH'}}
     env['PYTHONPATH']=str(src/'backend')
     cp=subprocess.run([str(py),'-c','import node_agent,node_runtime,guardd'],cwd=src/'backend',env=env,capture_output=True,text=True,timeout=30)
     if cp.returncode:raise RuntimeError('Candidate Node Agent import failed: '+(cp.stderr or '')[-500:])
+    normalize_runtime_permissions(venv)
     return venv
+
+
+def normalize_runtime_permissions(root:Path):
+    """Normalize only a newly staged public runtime, never state or rollback."""
+    if root.is_symlink() or not root.is_dir():raise RuntimeError('Unsafe staged runtime directory')
+    root.chmod(0o755)
+    for base,dirs,files in os.walk(root,followlinks=False):
+        for name in dirs:
+            path=Path(base)/name
+            if not path.is_symlink():path.chmod(0o755)
+        for name in files:
+            path=Path(base)/name
+            if path.is_symlink():continue
+            info=path.lstat()
+            if not stat.S_ISREG(info.st_mode):raise RuntimeError('Unsafe staged runtime file')
+            path.chmod(0o755 if info.st_mode&0o111 else 0o644)
+
+
+def service_import_probe(python:Path,backend:Path):
+    """Execute with the unit's unprivileged identity before activation."""
+    account=pwd.getpwnam('darkxray')
+    env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','HOME':'/',
+         'PYTHONNOUSERSITE':'1','PYTHONDONTWRITEBYTECODE':'1'}
+    code='import sys; assert sys.prefix != sys.base_prefix; import node_agent,node_runtime,guardd'
+    try:
+        cp=subprocess.run([str(python),'-B','-s','-c',code],cwd=backend,env=env,
+                          user=account.pw_uid,group=account.pw_gid,extra_groups=[],
+                          umask=0o077,capture_output=True,text=True,timeout=30)
+    except (OSError,subprocess.SubprocessError) as exc:
+        raise RuntimeError('Node service-account preflight failed: '+type(exc).__name__) from exc
+    if cp.returncode:
+        raise RuntimeError('Node service-account import failed: '+(cp.stderr or '')[-500:])
+
+
+@contextlib.contextmanager
+def service_preflight(src:Path,new_venv:Path):
+    # Stage only public source/environment; never widen state/secret parents.
+    with tempfile.TemporaryDirectory(prefix='.node-preflight-',dir=APP) as td:
+        stage=Path(td);stage.chmod(0o755)
+        backend=stage/'backend';backend.mkdir(mode=0o755);backend.chmod(0o755)
+        for name in BACKEND:
+            source=src/'backend'/name;regular(source)
+            shutil.copy2(source,backend/name);(backend/name).chmod(0o644)
+        regular(src/'VERSION');shutil.copy2(src/'VERSION',stage/'VERSION');(stage/'VERSION').chmod(0o644)
+        staged=stage/'venv';shutil.copytree(new_venv,staged,symlinks=True)
+        normalize_runtime_permissions(staged)
+        service_import_probe(staged/'bin/python',backend)
+        yield staged
 
 
 def regular(path:Path):
@@ -121,7 +171,7 @@ def copy_source(src:Path):
     for sub,names in [('backend',BACKEND),('tools',TOOLS),('deploy',DEPLOY)]:
         base=APP/sub
         if base.is_symlink():raise RuntimeError('Unsafe Node source directory')
-        base.mkdir(parents=True,exist_ok=True,mode=0o755)
+        base.mkdir(parents=True,exist_ok=True,mode=0o755);base.chmod(0o755)
         cache=base/'__pycache__'
         if cache.is_dir() and not cache.is_symlink():shutil.rmtree(cache)
         for name in names:
@@ -207,6 +257,11 @@ def atomic_source(commit:str,version:str,ref:str):
 
 
 def activate_candidate(src:Path,new_venv:Path,commit:str,version:str,ref:str,transaction:Path):
+    with service_preflight(src,new_venv) as staged:
+        return _activate_preflighted(src,staged,commit,version,ref,transaction)
+
+
+def _activate_preflighted(src:Path,new_venv:Path,commit:str,version:str,ref:str,transaction:Path):
     archive=transaction/'source.tar.gz';database=transaction/'node.sqlite3'
     old_venv=APP/'.venv';saved_venv=transaction/'venv'
     meta=DATA/'installed-source.json';meta_info=regular(meta);meta_bytes=meta.read_bytes()
@@ -217,7 +272,8 @@ def activate_candidate(src:Path,new_venv:Path,commit:str,version:str,ref:str,tra
         database_info=snapshot_database(database)
         mutation_started=True;copy_source(src)
         os.rename(old_venv,saved_venv);moved_venv=True
-        shutil.copytree(new_venv,old_venv,symlinks=True)
+        os.rename(new_venv,old_venv)
+        service_import_probe(old_venv/'bin/python',APP/'backend')
         install_units();install_wrapper()
         run(['systemctl','restart','dark-xray-node-guard.service'],timeout=30)
         run(['systemctl','start','dark-xray-node.service'],timeout=30)
