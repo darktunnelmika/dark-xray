@@ -62,6 +62,59 @@ def test_live_telemetry_freshness_preserves_system_snapshot(env,monkeypatch):
  offline={x['id']:x for x in c.get('/api/nodes').json()}['live1']
  assert offline['telemetry_state']=='offline' and offline['online'] is False
 
+
+def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
+ store,_,app,c=env
+ out=c.post('/api/nodes',json={'id':'health1','name':'health1','origin':'https://health1.example.com',
+   'token':'dkn_'+('H'*60),'enabled':True,'inboundIds':[]})
+ assert out.status_code==200,out.text
+ fresh_health={
+   'service':'DARK XRAY NODE','agent_only':True,'version':'0.10.0-rc20',
+   'core':{'state':'running','version':'test','dirty':False,'last_error':''},
+   'system':{'cpu':40.0,'memory_percent':50.0,'disk_percent':60.0,'uptime':1000,
+             'cpu_info':{'logical':4},'loads':[2.0,1.5,1.0],
+             'memory':{'used':500,'total':1000,'percent':50.0},
+             'disk':{'used':600,'total':1000,'free':400,'percent':60.0}},
+   'hub_lease':{'required':True,'valid':True},
+   'maintenance':{'statistics_error':'','checkpoint_age_seconds':3.0}}
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_health=? WHERE id='health1'",
+             (time.time(),__import__('json').dumps(fresh_health)))
+ node={x['id']:x for x in c.get('/api/nodes').json()}['health1']
+ ops=node['operational_health']
+ assert ops['state']=='healthy' and ops['score']==100 and ops['alerts']==[]
+ assert ops['capacity_percent']==46.5 and ops['capacity_state']=='healthy'
+
+ warning=__import__('copy').deepcopy(fresh_health)
+ warning['system']['cpu']=88.0
+ warning['system']['disk']['percent']=87.0
+ warning['system']['disk_percent']=87.0
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_health=? WHERE id='health1'",
+             (time.time(),__import__('json').dumps(warning)))
+ ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
+ assert ops['state']=='warning' and ops['score']==80
+ assert {x['code'] for x in ops['alerts']}=={'cpu_high','disk_high'}
+ assert ops['capacity_percent']>60
+
+ critical=__import__('copy').deepcopy(fresh_health)
+ critical['system']['memory']['percent']=97.0
+ critical['system']['memory_percent']=97.0
+ critical['core']['state']='stopped'
+ critical['hub_lease']['valid']=False
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_health=? WHERE id='health1'",
+             (time.time(),__import__('json').dumps(critical)))
+ ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
+ assert ops['state']=='critical' and ops['score']==16
+ assert {'memory_critical','xray_not_running','hub_lease_invalid'} <= {x['code'] for x in ops['alerts']}
+
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-30,))
+ ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
+ assert ops['state']=='warning' and ops['score']==55 and ops['capacity_percent'] is None
+ assert ops['alerts'][0]['code']=='telemetry_stale'
+
 def test_pair_code_is_bootstrap_only_and_rotates_remote_credential(env,monkeypatch,tmp_path):
  # Keep the bootstrap/encryption/duplicate-registration contract, but use the
  # real Agent's pinned guarded handoff instead of a legacy unversioned mock.
