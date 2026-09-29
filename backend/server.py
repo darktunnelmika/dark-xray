@@ -1500,6 +1500,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                       'checks='+str(len(result.get('checks',[]))))
         return result
 
+    @app.get('/api/nodes/{node_id}/metrics')
+    def remote_node_metrics(node_id:str,window:str='1h',p:Principal=Depends(owner)):
+        return nodes.metrics(node_id,window)
+
     @app.get('/api/nodes/{node_id}/logs/{kind}')
     def remote_node_logs(node_id:str,kind:Literal['process','error','access'],limit:int=300,p:Principal=Depends(owner)):
         return nodes.remote_logs(node_id,kind,max(1,min(1000,limit)))
