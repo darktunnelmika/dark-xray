@@ -45,18 +45,37 @@ def agent_request(path,body=None):
     finally:c.close()
 
 
-def wait_health(expected):
+def wait_health(expected, *, running=True):
     deadline=time.monotonic()+25
     while True:
         try:
             d=agent_request('/node/api/health')
             require(d.get('node_id')==NODE and d.get('agent_only') is True,'Wrong Node identity')
             require(d.get('installed_source',{}).get('commit')==expected,'Wrong installed SHA')
-            require(d.get('core',{}).get('state')=='running','Owned Xray is not running')
+            require(d.get('core',{}).get('state')==('running' if running else 'stopped'),'Unexpected owned Xray run state')
+            if not running:
+                require(d.get('hub_lease',{}).get('required') is True and not d.get('hub_lease',{}).get('valid'),'Restart must wait for Hub accounting')
             return d
         except (OSError,ValueError,RuntimeError,http.client.HTTPException):
             if time.monotonic()>=deadline:raise
             time.sleep(.5)
+
+
+def fixture_accounting_grant(digest):
+    # Emulate only the authenticated Hub acknowledgement in this deployment
+    # fixture. Full Hub quota reconciliation is tested by test_hub_lease_real.py.
+    snapshot=agent_request('/node/api/mirrors/traffic')
+    ledger=ROOT/'qa/node-update-accounting.sqlite3';ledger.parent.mkdir(parents=True,exist_ok=True)
+    with sqlite3.connect(ledger) as db:
+        db.execute('PRAGMA synchronous=FULL')
+        db.execute('CREATE TABLE IF NOT EXISTS receipts(snapshot TEXT NOT NULL)')
+        db.execute('INSERT INTO receipts VALUES(?)',(json.dumps(snapshot),))
+    state=agent_request('/node/api/v1/state')
+    require(state.get('appliedHash')==digest,'Refuse grant for an unexpected configuration')
+    result=agent_request('/node/api/v1/accounting/lease',{
+        'challenge':snapshot['accountingLease'],'revision':state['appliedRevision'],
+        'hash':digest,'controlRevision':state['control_receipt']['revision']})
+    require(result.get('lease',{}).get('valid') is True,'Accounting grant was rejected')
 
 
 class Target(http.server.BaseHTTPRequestHandler):
@@ -89,6 +108,7 @@ def main():
     p.add_argument('--report',type=Path,default=ROOT/'qa/node-update-systemd.json')
     a=p.parse_args()
     require(os.geteuid()==0 and os.environ.get('GITHUB_ACTIONS')=='true','Only the disposable root CI fixture is allowed')
+    os.umask(0o077)  # Exercise the real root-broker permissions, not the CI default.
     require(bool(re.fullmatch(r'[0-9a-f]{40}',a.expected_commit)),'Exact expected source SHA required')
     cfg=json.loads((CONF/'config.json').read_text())
     source=json.loads((DATA/'installed-source.json').read_text())
@@ -98,7 +118,7 @@ def main():
             'tls_fixture_only':True,'wan_tested':False,'checks':[]}
     proxy=None;target=None;thread=None
     try:
-        wait_health(a.expected_commit)
+        wait_health(a.expected_commit,running=False)
         data_port=port();proxy_port=port()
         payload={'schema':1,'nodeId':NODE,'desiredRunning':True,'files':[],
           'sections':{'outbounds':[{'tag':'direct','protocol':'freedom','settings':{}},{'tag':'block','protocol':'blackhole','settings':{}}],
@@ -112,7 +132,9 @@ def main():
         digest=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
         applied=agent_request('/node/api/v1/state/apply',{'revision':1,'hash':digest,'payload':payload})
         require(applied.get('appliedHash')==digest and applied.get('appliedRevision')==1,'Wrong deployment acknowledgement')
-        report['checks'].append('real Node desired-state apply')
+        require(applied.get('core',{}).get('state')=='stopped','Fresh Node started without accounting authority')
+        fixture_accounting_grant(digest);wait_health(a.expected_commit)
+        report['checks'].append('real Node desired-state apply and fresh accounting grant')
         target=http.server.ThreadingHTTPServer(('127.0.0.1',0),Target)
         thread=threading.Thread(target=target.serve_forever,daemon=True);thread.start()
         with tempfile.TemporaryDirectory(prefix='dark-node-update-ci.') as td:
@@ -134,7 +156,9 @@ def main():
                 rollback_root=APP/'.rollback';rollback_root.mkdir(mode=0o700,exist_ok=True)
                 first=rollback_root/('ci-success-'+uuid.uuid4().hex);first.mkdir(mode=0o700)
                 updater.activate_candidate(ROOT,venv,a.expected_commit,version,'ci-node-update',first)
-                wait_health(a.expected_commit);proxy_request(proxy_port,target.server_port)
+                wait_health(a.expected_commit,running=False)
+                fixture_accounting_grant(digest);wait_health(a.expected_commit)
+                proxy_request(proxy_port,target.server_port)
                 report['checks'].append('real Node update and VLESS traffic after service restart')
                 second=rollback_root/('ci-failure-'+uuid.uuid4().hex);second.mkdir(mode=0o700)
                 real_probe=updater.health_probe;injected=False
@@ -154,7 +178,9 @@ def main():
                     require('previous source, environment and database restored' in str(exc),'Rollback did not complete')
                 finally:updater.health_probe=real_probe
                 require(injected,'Fault injection did not execute')
-                wait_health(a.expected_commit);proxy_request(proxy_port,target.server_port)
+                wait_health(a.expected_commit,running=False)
+                fixture_accounting_grant(digest);wait_health(a.expected_commit)
+                proxy_request(proxy_port,target.server_port)
                 with sqlite3.connect(DATA/'node.sqlite3') as db:
                     require(db.execute('PRAGMA quick_check').fetchone()[0]=='ok','Rollback SQLite is corrupt')
                     require(not db.execute("SELECT 1 FROM sqlite_master WHERE name='ci_new_schema_probe'").fetchone(),'Candidate schema was not rolled back')
@@ -164,6 +190,24 @@ def main():
                 require(metadata.st_gid==pwd.getpwnam('darkxray').pw_gid and metadata.st_mode&0o777==0o640,'Agent source readability was lost')
                 report['checks'].extend(['injected failure restores source, environment and SQLite',
                                          'real VLESS traffic after rollback','revision and source metadata preserved'])
+        # Disposable fixed-identity CI Node only. Suspend the entire Agent,
+        # not just an HTTP route; systemd must reap its owned Xray cgroup.
+        import signal
+        fixture_accounting_grant(digest)
+        before_pid=int(subprocess.check_output(['systemctl','show','dark-xray-node.service','--property=MainPID','--value'],text=True).strip())
+        children=subprocess.run(['pgrep','-P',str(before_pid),'xray'],capture_output=True,text=True).stdout.split()
+        require(before_pid>1 and children,'Missing owned processes for hang test')
+        os.kill(before_pid,signal.SIGSTOP)
+        deadline=time.monotonic()+45
+        while time.monotonic()<deadline:
+            new_pid=int(subprocess.check_output(['systemctl','show','dark-xray-node.service','--property=MainPID','--value'],text=True).strip())
+            if new_pid>1 and new_pid!=before_pid:break
+            time.sleep(.5)
+        require(new_pid>1 and new_pid!=before_pid,'systemd watchdog did not replace hung Agent')
+        wait_health(a.expected_commit,running=False)
+        for pid in children:require(not Path('/proc/'+pid).exists(),'Orphan Xray survived Agent watchdog')
+        fixture_accounting_grant(digest);wait_health(a.expected_commit)
+        report['checks'].append('real SIGSTOP Agent hang: watchdog reaps Xray and restart waits for fresh Hub grant')
         report['passed']=True
     except Exception as exc:
         report['error']=type(exc).__name__+': '+str(exc)[:800]
@@ -175,7 +219,7 @@ def main():
             except subprocess.TimeoutExpired:proxy.kill();proxy.wait()
         if target is not None:target.shutdown();target.server_close()
         if thread is not None:thread.join(timeout=5)
-        a.report.parent.mkdir(parents=True,exist_ok=True);a.report.write_text(json.dumps(report,indent=2)+'\n')
+        a.report.parent.mkdir(parents=True,exist_ok=True);a.report.write_text(json.dumps(report,indent=2)+'\n');a.report.chmod(0o644)  # Public fixture evidence, never credentials.
         print(json.dumps(report,indent=2))
 
 

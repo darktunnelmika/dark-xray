@@ -29,13 +29,13 @@ jobs:
       - name: Fetch and verify pinned official Xray
         run: python tools/fetch-core.py --version v26.3.27 --destination "$GITHUB_WORKSPACE/.test-core"
       - name: Real two-node SOCKS VLESS HTTP and accounting acceptance
-        run: python -m pytest tests/test_node_real_data_plane.py -q --junitxml=qa/junit/node-real-data-plane.xml
+        run: python -m pytest tests/test_node_real_data_plane.py tests/test_hub_lease_real.py -q --junitxml=qa/junit/node-real-data-plane.xml
       - name: Preserve exact source and report boundaries
         if: always()
         run: |
           mkdir -p qa/node-real-data-plane
           git rev-parse HEAD > qa/node-real-data-plane/source-commit.txt
-          sha256sum tests/test_node_real_data_plane.py .github/workflows/node-real-data-plane.yml docs/node-real-data-plane.md > qa/node-real-data-plane/source-sha256.txt
+          sha256sum tests/test_node_real_data_plane.py tests/test_hub_lease_real.py docs/hub-lease-accounting.md .github/workflows/node-real-data-plane.yml docs/node-real-data-plane.md > qa/node-real-data-plane/source-sha256.txt
           if test -f .test-core/DARK-CORE-PROVENANCE.json; then
             cp .test-core/DARK-CORE-PROVENANCE.json qa/node-real-data-plane/core-provenance.json
           fi

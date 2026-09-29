@@ -52,6 +52,7 @@ class Config:
     secure_cookie: bool = False
     poll_seconds: int = 5
     core_autostart: bool = False
+    hub_lease_required: bool = False
     ip_window_seconds: int = 120
     direct_source_verified: bool = False
     protected_ports: list[int] = field(default_factory=lambda:[22,2087,10085])
@@ -85,7 +86,7 @@ class Config:
             try: local=ipaddress.ip_address(p.hostname).is_loopback
             except ValueError: local=p.hostname=='localhost'
             if not local: raise ValueError('Plain HTTP is only allowed on loopback')
-        for key in ('writes_enabled','secure_cookie','core_autostart','direct_source_verified','test_engine'):
+        for key in ('writes_enabled','secure_cookie','core_autostart','direct_source_verified','test_engine','hub_lease_required'):
             if type(getattr(self,key)) is not bool: raise ValueError(key+' must be boolean')
         for key,low,high in [('poll_seconds',1,3600),('xray_api_port',1024,65535),('ip_window_seconds',10,3600),('ip_ban_seconds',10,86400),('bind_port',1024,65535)]:
             if type(getattr(self,key)) is not int or not low<=getattr(self,key)<=high: raise ValueError('Invalid '+key)
@@ -1014,6 +1015,9 @@ class CoreEngine:
             return {'validated':True,'hash':self.config_hash(cfg),'applied':False}
 
     def _spawn(self):
+        guard=getattr(self,'start_guard',None)
+        if guard is not None and not guard():
+            raise CoreError('Node is waiting for a valid Hub accounting lease',status=503)
         # Only a child started by this object may be stopped; no system-wide pkill.
         if self.process is not None and self.process.poll() is not None:self._stop_child()
         log=self.runtime/'process.log'
@@ -1021,6 +1025,7 @@ class CoreEngine:
         if log.exists() and log.stat().st_size>8*1024*1024:os.replace(log,self.runtime/'process.previous.log')
         fd=os.open(log,os.O_WRONLY|os.O_APPEND|os.O_CREAT,0o600);self.log_handle=os.fdopen(fd,'ab',buffering=0)
         env=os.environ.copy();env['XRAY_LOCATION_ASSET']=self.config.xray_assets
+        for key in ('NOTIFY_SOCKET','WATCHDOG_USEC','WATCHDOG_PID'):env.pop(key,None)
         self.last_samples={};self.last_stats=0
         self.process=subprocess.Popen([self._binary(),'run','-config',str(self.runtime/'active.json')],
             stdin=subprocess.DEVNULL,stdout=self.log_handle,stderr=subprocess.STDOUT,env=env,cwd=self.runtime,start_new_session=True)

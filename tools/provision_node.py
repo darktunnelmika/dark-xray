@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Provision only the DARK XRAY Node Agent runtime on a clean Linux VPS."""
 from __future__ import annotations
+from update_node import service_import_probe
 import argparse,base64,hashlib,json,os,pwd,re,secrets,shutil,subprocess,sys,time
 from pathlib import Path
 
@@ -114,7 +115,7 @@ def main():
     cfg={'public_origin':f'https://{domain}'+(f':{a.port}' if a.port!=443 else ''),
          'panel_path':'/','xray_binary':str(core/'xray'),'xray_assets':str(core),'xray_api_port':10085,
          'public_address':data_address,'writes_enabled':True,'secure_cookie':True,'poll_seconds':5,
-         'core_autostart':True,'ip_window_seconds':120,'direct_source_verified':bool(a.verified_direct_sources),
+         'core_autostart':True,'hub_lease_required':True,'ip_window_seconds':120,'direct_source_verified':bool(a.verified_direct_sources),
          'protected_ports':protected,'test_engine':False,'bind_host':'0.0.0.0','bind_port':a.port,
          'tls_certificate':str(cert),'tls_private_key':str(key),'guard_socket':'/run/dark-xray-guard/control.sock',
          'ip_ban_seconds':1800,'ip_exempt_ips':[]}
@@ -170,6 +171,7 @@ exec "$PY" "$MANAGER" "$@"
     pair_path=DATA/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
     os.chmod(pair_path,0o600);os.chown(pair_path,account.pw_uid,account.pw_gid)
 
+    service_import_probe(APP/'.venv/bin/python',APP/'backend')
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node-update.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',
                       'origin':cfg['public_origin'],'nodeId':node_id,'pairCode':pair_code,'directSourceVerified':bool(a.verified_direct_sources)},indent=2))

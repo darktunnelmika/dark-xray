@@ -14,6 +14,13 @@ ExecStart=/opt/dark-xray-node/.venv/bin/python /opt/dark-xray-node/backend/node_
 Restart=on-failure
 RestartSec=4
 TimeoutStopSec=60
+# Kill the complete owned cgroup if the safety loop stalls; never an unconditional feed.
+NotifyAccess=main
+WatchdogSec=30
+WatchdogSignal=SIGKILL
+TimeoutAbortSec=1
+KillMode=control-group
+SendSIGKILL=yes
 UMask=0077
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE

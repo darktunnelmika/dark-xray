@@ -5,6 +5,7 @@ state, observations, cumulative counters and revision acknowledgements.
 """
 from __future__ import annotations
 
+
 from pathlib import Path
 import base64
 import copy
@@ -68,6 +69,8 @@ class NodeRuntime:
                 'SELECT installation_id FROM node_runtime_identity WHERE scope=?',(self.scope,)).fetchone()[0]
         if not isinstance(self.installation_id,str) or not re.fullmatch(r'[0-9a-f]{32}',self.installation_id):
             raise PolicyError('Invalid persisted Node installation identity')
+        self.hub_lease=HubLease(store,self.scope,required=engine.config.hub_lease_required)
+        self.engine.start_guard=lambda:self.hub_lease.allowed
         self.engine.wants_running=self.control_status()['effective_running']
 
     def control_status(self)->dict:
@@ -77,7 +80,7 @@ class NodeRuntime:
                 (self.scope,)).fetchone()
         desired=bool(row['desired_running']) if row else bool(self.engine.config.core_autostart)
         paused=bool(row['manual_stop']) if row else False
-        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused,
+        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused and self.hub_lease.allowed,
                 'persisted':row is not None,'updated_at':float(row['updated_at']) if row else 0.0}
 
     def _write_control(self,db,desired:bool,paused:bool)->None:
@@ -183,6 +186,7 @@ class NodeRuntime:
             # restart. Maintenance retries the safe stop later.
             self.engine.wants_running=False
             return self.engine.command('stop')
+        if not self.hub_lease.allowed:raise CoreError('Waiting for Hub accounting lease before Start/Restart',status=503)
         with self.store.transaction() as db:self._write_control(db,True,False)
         try:return self.engine.command(action)
         except Exception:
@@ -192,14 +196,29 @@ class NodeRuntime:
             raise
 
     def reconcile_control(self)->bool:
-        # Restore the last accepted control intent from local SQLite, with no
-        # Hub connectivity needed. Never start a child here: flush/start owns it.
+        # Restore intent, but an armed Agent also requires a fresh accounting lease.
+        # Never start a child here: flush/start owns it.
         with self.engine.lock:
             self.engine.wants_running=False
             wanted=self.control_status()['effective_running']
             self.engine.wants_running=wanted
-            if not wanted and self.engine.running:self.engine.command('stop')
+            if self.hub_lease.required and not self.hub_lease.allowed:self.pause_expired_lease()
+            elif not wanted and self.engine.running:self.engine.command('stop')
             return wanted
+
+    def pause_expired_lease(self):
+        # Lease expiry is NOT a manual Stop. Keep intent for acknowledged recovery.
+        with self.engine.lock:
+            if self.hub_lease.allowed:return
+            self.engine.wants_running=False
+            if not self.engine.running:return
+            error=''
+            try:self.engine.collect_stats(force=True,strict=True)
+            except Exception as exc:error='Final lease-expiry traffic snapshot failed: '+str(exc)
+            finally:
+                # A broken stats API must never grant unlimited unpaid traffic.
+                self.engine._stop_child();self.engine.applied_hash=''
+            self.hub_lease.record_trip(error)
 
     def mirror_email(self,source_email:str)->str:
         if not isinstance(source_email,str) or not source_email or len(source_email)>128:
@@ -472,7 +491,7 @@ class NodeRuntime:
         # Failed Start/Restart leaves the previous effective intent authoritative.
         desired_running=(control['desired_running'] if self.command_status()['persisted']
                          else payload.get('desiredRunning',True))
-        effective_running=desired_running and not control['manual_stop']
+        effective_running=desired_running and not control['manual_stop'] and self.hub_lease.allowed
         was_running=self.engine.running;wanted_running=self.engine.wants_running
         guard=None;old_guard_ports=None;snap=None
         try:
@@ -612,3 +631,204 @@ class NodeRuntime:
         with self.store.lock:
             row=self.store.db.execute('SELECT mirror_email FROM node_runtime_clients WHERE scope=? AND source_email=?',(self.scope,source)).fetchone()
         return str(row[0]) if row else None
+
+
+# Accounting lease authority and independent process-safety guard.
+import hmac
+import os
+import re
+import secrets
+import socket
+import threading
+import time
+
+from dark_policy import PolicyError
+
+LEASE_SECONDS = 60.0
+CHALLENGE_SECONDS = 30.0
+
+
+def lease_clock():
+    # CLOCK_BOOTTIME includes suspend; wall-clock changes must never grant time.
+    if hasattr(time, 'CLOCK_BOOTTIME'):
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    return time.monotonic()
+
+
+class HubLease:
+    def __init__(self, store, scope, *, required=False, clock=lease_clock):
+        self.store, self.scope, self.clock = store, scope, clock
+        self.lock = threading.RLock()
+        self.pending = {}
+        self.deadline = 0.0
+        self.last_issued = -1.0
+        self.sequence = self.last_sequence = 0
+        self.accepted = None
+        self.last_grant_at = 0.0
+        self.trip_recorded = False
+        with store.transaction() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS node_hub_lease(
+                scope TEXT PRIMARY KEY, required INTEGER NOT NULL,
+                trips INTEGER NOT NULL DEFAULT 0, last_trip REAL NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '')""")
+            db.execute('INSERT OR IGNORE INTO node_hub_lease(scope,required) VALUES(?,?)',
+                       (scope, int(required)))
+            if required:
+                db.execute('UPDATE node_hub_lease SET required=1 WHERE scope=?', (scope,))
+            row = db.execute('SELECT * FROM node_hub_lease WHERE scope=?', (scope,)).fetchone()
+        self.required = bool(row['required'])
+        self.trips, self.last_trip, self.last_error = int(row['trips']), float(row['last_trip']), row['last_error']
+
+    @property
+    def allowed(self):
+        with self.lock:
+            return not self.required or self.clock() < self.deadline
+
+    def status(self):
+        with self.lock:
+            remaining = max(0.0, self.deadline - self.clock())
+            state = ('legacy' if not self.required else 'active' if remaining > 0
+                     else 'expired' if self.deadline else 'awaiting_hub')
+            return {'required': self.required, 'valid': self.allowed, 'state': state,
+                    'max_seconds': int(LEASE_SECONDS), 'remaining_seconds': round(remaining, 2),
+                    'last_grant_at': self.last_grant_at, 'trips': self.trips,
+                    'last_trip': self.last_trip, 'last_error': self.last_error}
+
+    def challenge(self):
+        with self.lock:
+            now = self.clock()
+            self.pending = {key: value for key, value in self.pending.items()
+                            if now - value[0] <= CHALLENGE_SECONDS}
+            # Bounded, concurrent UI reads must not indefinitely grow memory.
+            while len(self.pending) >= 64:
+                self.pending.pop(next(iter(self.pending)))
+            token = secrets.token_hex(32)
+            self.sequence += 1
+            self.pending[token] = (now, self.sequence)
+            return token
+
+    def renew(self, body, state, control_revision):
+        with self.lock:
+            if not isinstance(body, dict) or set(body) != {'challenge', 'revision', 'hash', 'controlRevision'}:
+                raise PolicyError('Invalid accounting lease acknowledgement')
+            token = body.get('challenge')
+            if (not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token) or
+                    type(body.get('revision')) is not int or body['revision'] < 1 or
+                    type(body.get('controlRevision')) is not int or
+                    not isinstance(body.get('hash'), str)):
+                raise PolicyError('Invalid accounting lease identity')
+            if (body['revision'] != state.get('appliedRevision') or
+                    body['hash'] != state.get('appliedHash') or state.get('lastError') or
+                    body['controlRevision'] != control_revision):
+                raise PolicyError('Accounting lease configuration or control revision changed')
+            if self.accepted is not None and hmac.compare_digest(token, self.accepted['challenge']):
+                if body != self.accepted:
+                    raise PolicyError('Conflicting duplicate accounting acknowledgement')
+                return {'duplicate': True, **self.status()}
+            record = self.pending.get(token)
+            issued, sequence = record if record is not None else (0.0, 0)
+            now = self.clock()
+            if (record is None or sequence <= self.last_sequence or
+                    now - issued > CHALLENGE_SECONDS or issued > now):
+                raise PolicyError('Accounting lease challenge is expired, stale or unknown')
+            # Persist the enforcement latch BEFORE granting; NEVER persist authority.
+            with self.store.transaction() as db:
+                db.execute('UPDATE node_hub_lease SET required=1 WHERE scope=?', (self.scope,))
+            self.required = True
+            self.deadline = issued + LEASE_SECONDS
+            self.last_issued = issued
+            self.last_sequence = sequence
+            self.last_grant_at = time.time()
+            self.accepted = dict(body)
+            self.trip_recorded = False
+            self.pending = {key: value for key, value in self.pending.items() if value[1] > sequence}
+            return {'duplicate': False, **self.status()}
+
+    def record_trip(self, error=''):
+        with self.lock:
+            if self.trip_recorded:
+                return
+            at = time.time()
+            message = str(error)[:500]
+            with self.store.transaction() as db:
+                db.execute('UPDATE node_hub_lease SET trips=trips+1,last_trip=?,last_error=? WHERE scope=?',
+                           (at, message, self.scope))
+            self.trips += 1
+            self.last_trip, self.last_error = at, message
+            self.trip_recorded = True
+
+
+class SystemdWatchdog:
+    """Only the main Agent's safety guard may send keepalives."""
+    def __init__(self):
+        self.address = os.environ.get('NOTIFY_SOCKET', '')
+        try:
+            self.seconds = int(os.environ.get('WATCHDOG_USEC', '0')) / 1000000.0
+            pid = int(os.environ.get('WATCHDOG_PID', str(os.getpid())))
+        except ValueError:
+            self.seconds, pid = 0.0, -1
+        self.enabled = bool(self.address and self.address[0] in ('/', '@') and
+                            self.seconds > 0 and pid == os.getpid())
+        self.last_notify = 0.0
+
+    def notify(self):
+        if not self.enabled:
+            return
+        address = '\0' + self.address[1:] if self.address.startswith('@') else self.address
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(.2)
+            sock.sendto(b'WATCHDOG=1', address)
+        self.last_notify = time.monotonic()
+
+
+class LeaseGuard:
+    def __init__(self, runtime):
+        self.runtime, self.engine = runtime, runtime.engine
+        self.stop = threading.Event()
+        self.thread = None
+        self.watchdog = SystemdWatchdog()
+        self.last_error = ''
+        self.seen_pid, self.pid_seen_at = None, 0.0
+
+    def tick(self):
+        # A stuck engine lock MUST NOT feed systemd's watchdog.
+        if not self.engine.lock.acquire(timeout=.1):
+            return
+        try:
+            lease = self.runtime.hub_lease
+            if lease.required and not lease.allowed:
+                self.runtime.pause_expired_lease()
+            running = self.engine.running
+            pid = self.engine.process.pid if running else None
+            now = time.monotonic()
+            if pid != self.seen_pid:
+                self.seen_pid, self.pid_seen_at = pid, now
+            fresh = (not running or (not self.engine.stats_error and
+                     ((self.engine.last_stats > 0 and now - self.engine.last_stats < 15) or
+                      (self.engine.last_stats == 0 and now - self.pid_seen_at < 10))))
+            # Stop feeding BEFORE the remaining lease is shorter than the OS
+            # watchdog. A frozen Python process cannot extend the 60-second grant.
+            enough = (not lease.required or lease.status()['remaining_seconds'] > self.watchdog.seconds + 2)
+            if not running or (lease.allowed and enough and fresh):
+                self.watchdog.notify()
+            self.last_error = ''
+        except Exception as exc:
+            self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
+        finally:
+            self.engine.lock.release()
+
+    def start(self):
+        if self.thread and self.thread.is_alive():
+            return
+        self.stop.clear()
+        def run():
+            while not self.stop.is_set():
+                self.tick()
+                self.stop.wait(1.0)
+        self.thread = threading.Thread(target=run, name='dark-node-lease-guard', daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=2)

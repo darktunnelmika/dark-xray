@@ -36,6 +36,7 @@ from outbound_probe import OutboundProbeError,probe_outbounds
 from warp_paths import WarpPathError,warp_endpoint_candidates,validate_warp_endpoint
 from dark_policy import Store,PolicyError
 from node_runtime import NodeRuntime
+from node_runtime import LeaseGuard
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -233,7 +234,7 @@ class AgentRequestBoundary:
 class EngineLoop:
     def __init__(self,engine:CoreEngine,interval:float,runtime:NodeRuntime|None=None):
         self.runtime=runtime;self.last_error='';self.last_success=0.0
-        self.engine=engine;self.interval=max(1.0,min(60.0,float(interval)));self.stop=threading.Event();self.thread=None
+        self.engine=engine;self.interval=max(1.0,min(5.0,float(interval)));self.stop=threading.Event();self.thread=None
     def start(self):
         if self.thread and self.thread.is_alive():return
         self.stop.clear()
@@ -250,8 +251,10 @@ class EngineLoop:
                     self.runtime.reconcile_control()
                     self.runtime.reconcile_guard()
             finally:
-                # Guard outages must not also stop cumulative traffic collection.
+                # Checkpoint independently of Hub requests AND unchanged config.
+                self.engine.collect_stats()
                 self.engine.flush()
+                if self.engine.stats_error:raise CoreError(self.engine.stats_error,status=503)
             self.last_error='';self.last_success=time.time()
         except Exception as exc:
             self.last_error=type(exc).__name__+': '+str(exc)[:400]
@@ -265,6 +268,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
     if not isinstance(node_id,str) or not re.fullmatch(r'[A-Za-z0-9_.@+-]{1,128}',node_id):
         raise PolicyError('Invalid stable Node identity')
     runtime=NodeRuntime(store,engine,node_id);loop=EngineLoop(engine,engine.config.poll_seconds,runtime)
+    lease_guard=LeaseGuard(runtime)
     public=urlsplit(engine.config.public_origin)
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -275,12 +279,12 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 if wanted:engine.command('start')
             except Exception as exc:
                 loop.last_error=type(exc).__name__+': '+str(exc)[:400]
-            loop.start()
+            loop.start();lease_guard.start()
         yield
-        loop.close();engine.close()
+        loop.close();lease_guard.close();engine.close()
 
     app=FastAPI(title='DARK XRAY NODE',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
-    app.state.engine=engine;app.state.store=store;app.state.runtime=runtime;app.state.loop=loop
+    app.state.engine=engine;app.state.store=store;app.state.runtime=runtime;app.state.loop=loop;app.state.lease_guard=lease_guard
 
     app.add_middleware(AgentRequestBoundary,token=token,authority=public.netloc,node_id=node_id,installation_id=runtime.installation_id)
 
@@ -322,8 +326,11 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
                           'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
-                'installation_id':runtime.installation_id,'capabilities':{'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'traffic_matrix_probe':1,'warp_endpoint_probe':1},'control_receipt':runtime.command_status(),
-                'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success},
+                'installation_id':runtime.installation_id,'hub_lease':runtime.hub_lease.status(),'lease_watchdog':{'systemd_enabled':lease_guard.watchdog.enabled,'last_error':lease_guard.last_error},
+                'capabilities':{'accounting_lease':1,'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'traffic_matrix_probe':1,'warp_endpoint_probe':1},'control_receipt':runtime.command_status(),
+                'desired_state':state,'run_control':runtime.control_status(),'maintenance':{'last_error':loop.last_error,'last_success':loop.last_success,
+                               'statistics_error':engine.stats_error,
+                               'checkpoint_age_seconds':round(max(0,time.monotonic()-engine.last_stats),2) if engine.last_stats else None},
                 'direct_source_verified':bool(engine.config.direct_source_verified),'guard':guard}
 
     @app.get('/node/api/v1/state')
@@ -402,12 +409,28 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
 
     @app.get('/node/api/mirrors/traffic')
     def traffic(_scope:str=Depends(auth)):
-        rows=engine.clients();items=[]
-        for row in rows:
-            source=runtime.source_for_mirror(str(row.get('email','')))
-            if not source:continue
-            up,down=CoreEngine.counters(row);items.append({'sourceEmail':source,'up':up,'down':down})
-        return {'items':items,'capturedAt':time.time()}
+        with engine.lock:
+            try:engine.collect_stats(force=True,strict=True)
+            except CoreError as exc:raise HTTPException(503,str(exc))
+            if engine.stats_error:raise HTTPException(503,'Node traffic checkpoint is unhealthy')
+            rows=engine.clients();items=[]
+            for row in rows:
+                source=runtime.source_for_mirror(str(row.get('email','')))
+                if not source:continue
+                up,down=CoreEngine.counters(row);items.append({'sourceEmail':source,'up':up,'down':down})
+            return {'items':items,'capturedAt':time.time(),'accountingLease':runtime.hub_lease.challenge()}
+
+    @app.post('/node/api/v1/accounting/lease')
+    @current_mutation
+    def accounting_lease(body:dict,request:Request,_scope:str=Depends(auth)):
+        try:
+            if engine.stats_error:raise PolicyError('Node traffic checkpoint is unhealthy')
+            result=runtime.hub_lease.renew(body,runtime.status(),runtime.command_status()['revision'])
+            runtime.reconcile_control()
+            if runtime.control_status()['effective_running']:engine.command('start')
+            return {'lease':result,'engine':engine.runtime_state()}
+        except (PolicyError,CoreError) as exc:raise HTTPException(409,str(exc))
+
 
     @app.post('/node/api/mirrors/traffic/reset')
     @current_mutation

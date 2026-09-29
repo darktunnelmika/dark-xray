@@ -37,3 +37,24 @@ def test_mixed_native_and_restore_snapshots_keep_native_ledger_intact(env,monkey
     ledger=store.db.execute("SELECT client_id,SUM(up_bytes+down_bytes) FROM traffic_ledger WHERE event_id LIKE 'node:%' GROUP BY client_id").fetchall()
     assert [tuple(x) for x in ledger]==[('native-user',50)]
     assert store.db.execute("SELECT used_bytes FROM clients WHERE id='native-user'").fetchone()[0]==50
+
+
+def test_restore_lease_accepts_both_committed_ledgers_but_not_unknown(env,monkeypatch):
+    import pytest
+    from dark_policy import PolicyError
+    from node_lease_sync import require_accounted_snapshot
+    store,c,inbound,record,registry=node(env,monkeypatch)
+    response=c.post('/api/clients',json={'owner':'dark','client':{'email':'native-user'},'inboundIds':[inbound]})
+    assert response.status_code==202,response.text
+    items=[{'sourceEmail':'native-user','up':10,'down':0},
+           {'sourceEmail':record['core_email'],'up':20,'down':0}]
+    accepted=registry.apply_traffic_snapshot('n1',items,captured_at=1000)
+    assert accepted['ignored_clients']==1 and accepted['restore_usage']['clients']==1
+    require_accounted_snapshot(registry,c.app.state.manager,'n1',accepted)
+    rejected=registry.apply_traffic_snapshot('n1',items+[{'sourceEmail':'unknown','up':30,'down':0}],captured_at=1010)
+    with pytest.raises(PolicyError,match='unmanaged'):
+        require_accounted_snapshot(registry,c.app.state.manager,'n1',rejected)
+    with store.transaction() as db:
+        db.execute('UPDATE restore_subscriptions SET core_email=? WHERE id=?',('native-user',record['id']))
+    with pytest.raises(PolicyError,match='ambiguous'):
+        require_accounted_snapshot(registry,c.app.state.manager,'n1',accepted)

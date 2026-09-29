@@ -98,7 +98,10 @@ def health(expected:str,ca:Path)->dict:
             status,headers,raw=request('/node/api/health',token)
             require(status==200,'Authenticated Node health did not return HTTP 200')
             doc=json.loads(raw)
-            require(doc.get('core',{}).get('state')=='running','Owned Xray process is not running')
+            require(doc.get('core',{}).get('state')=='stopped','Unpaired Node must not serve customer traffic')
+            require(doc.get('hub_lease',{}).get('required') is True,'Fresh Node must require Hub accounting')
+            require(doc.get('hub_lease',{}).get('valid') is False,'Fresh Node unexpectedly has a grant')
+            require(doc.get('lease_watchdog',{}).get('systemd_enabled') is True,'Installed safety watchdog is inactive')
             break
         except (OSError,ValueError,RuntimeError,http.client.HTTPException):
             if time.monotonic()>=deadline:raise

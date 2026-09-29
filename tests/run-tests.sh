@@ -56,6 +56,7 @@ python -m pytest tests/test_node_replacement_current.py -q --junitxml=qa/junit/r
 python -m pytest tests/test_node_recovery.py -q --junitxml=qa/junit/node-recovery.xml
 python -m pytest tests/test_node_replacement_activation.py -q --junitxml=qa/junit/node-replacement-activation.xml
 python -m pytest tests/test_node_token_handoff.py -q --junitxml=qa/junit/node-token-handoff.xml
+python -m pytest tests/test_hub_lease.py -q --junitxml=qa/junit/hub-lease.xml
 python -m pytest tests/test_node_monitor.py -q --junitxml=qa/junit/node-monitor.xml
 python -m pytest tests/test_owner_recovery.py -q --junitxml=qa/junit/owner-recovery.xml
 python -m pytest tests/test_menu_owner_selection.py -q --junitxml=qa/junit/menu-owner-selection.xml
@@ -110,3 +111,5 @@ node --test tests/node-credentials-ui.test.cjs
 python -m pytest tests/test_credential_loss_regression.py -q --junitxml=qa/junit/credential-loss.xml
 
 python -m pytest tests/test_node_credential_concurrency.py -q --junitxml=qa/junit/node-credential-concurrency.xml
+
+python -m pytest tests/test_node_update_permissions.py -q --junitxml=qa/junit/node-update-permissions.xml
