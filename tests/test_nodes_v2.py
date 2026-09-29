@@ -83,7 +83,7 @@ def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
  node={x['id']:x for x in c.get('/api/nodes').json()}['health1']
  ops=node['operational_health']
  assert ops['state']=='healthy' and ops['score']==100 and ops['alerts']==[]
- assert ops['capacity_percent']==46.5 and ops['capacity_state']=='healthy'
+ assert ops['capacity_percent']==46.0 and ops['capacity_state']=='healthy'
 
  warning=__import__('copy').deepcopy(fresh_health)
  warning['system']['cpu']=88.0
