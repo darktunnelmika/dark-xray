@@ -112,7 +112,7 @@ The WAN gate uses the production pinned HTTPS/TLS node client. It does **not** i
 
 ## Standalone DARK GRE Direct
 
-The repository also ships **DARK GRE Direct RC12** for direct IRAN ↔ KHAREJ tunneling.
+The repository also ships **DARK GRE Direct RC14** for direct IRAN ↔ KHAREJ tunneling.
 
 Current scope:
 
@@ -130,12 +130,12 @@ Current scope:
 Install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-gre/install.sh | bash
+curl -4 -fsSL --retry 3 https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.2-rc14/standalone/dark-gre/install.sh | bash
 ```
 
 Full guide: [standalone/dark-gre/README.fa.md](standalone/dark-gre/README.fa.md)
 
-RC12 was validated on a real IRAN ↔ Poland pair, including reboot recovery on both peers, inner GRE ping, and TCP/1190 reachability.
+RC14 was validated on a real IRAN ↔ Poland pair, including reboot recovery on both peers, inner GRE ping, and TCP/1190 reachability.
 
 ## What is exercised on `main`?
 
