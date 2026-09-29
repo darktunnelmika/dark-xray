@@ -124,6 +124,48 @@ def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
  assert ops['state']=='warning' and ops['score']==55 and ops['capacity_percent'] is None
  assert ops['alerts'][0]['code']=='telemetry_stale'
 
+
+def test_node_metric_history_is_bounded_bucketed_and_excludes_tunnel_probes(env):
+ store,_,app,c=env
+ out=c.post('/api/nodes',json={'id':'history1','name':'history1','origin':'https://history1.example.com',
+   'token':'dkn_'+('J'*60),'enabled':True,'inboundIds':[]})
+ assert out.status_code==200,out.text
+ health={
+   'service':'DARK XRAY NODE','agent_only':True,'version':'0.10.0-rc21','managed_clients':4,
+   'core':{'state':'running','version':'test','dirty':False,'last_error':''},
+   'system':{'cpu':20.0,'memory_percent':30.0,'disk_percent':40.0,'uptime':1000,
+             'cpu_info':{'logical':4},'loads':[1.0,0.8,0.5],
+             'memory':{'used':300,'total':1000,'percent':30.0},
+             'disk':{'used':400,'total':1000,'free':600,'percent':40.0},
+             'network':{'sent':1000,'recv':2000,'up_bps':100.0,'down_bps':200.0},
+             'connections':{'open':5,'tcp':4,'udp':1,'available':True}},
+   'hub_lease':{'required':True,'valid':True},
+   'maintenance':{'statistics_error':'','checkpoint_age_seconds':2.0}}
+ now=time.time()
+ reg=app.state.nodes
+ assert reg._record_metric('history1',health,10,captured_at=now-35,min_interval=0) is True
+ health['system']['cpu']=40.0;health['system']['network']['down_bps']=400.0
+ assert reg._record_metric('history1',health,20,captured_at=now-20,min_interval=0) is True
+ health['system']['cpu']=60.0;health['system']['connections']['open']=9
+ assert reg._record_metric('history1',health,30,captured_at=now-5,min_interval=0) is True
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_health=?,last_latency_ms=30 WHERE id='history1'",
+             (time.time(),__import__('json').dumps(health)))
+ live=c.get('/api/nodes/history1/metrics?window=live')
+ assert live.status_code==200,live.text
+ doc=live.json()
+ assert doc['window']=='live' and doc['bucket_seconds']==10
+ assert len(doc['points'])==3
+ assert doc['points'][-1]['cpu']==60.0 and doc['points'][-1]['connections']==9.0
+ assert 'Tunnel/WARP/path health is excluded' in doc['boundary']
+ hour=c.get('/api/nodes/history1/metrics?window=1h')
+ assert hour.status_code==200 and hour.json()['bucket_seconds']==30
+ bad=c.get('/api/nodes/history1/metrics?window=7d')
+ assert bad.status_code==422
+ with store.lock:
+  columns={r[1] for r in store.db.execute('PRAGMA table_info(remote_node_metrics)')}
+ assert 'tunnel' not in {x.lower() for x in columns} and 'warp' not in {x.lower() for x in columns}
+
 def test_pair_code_is_bootstrap_only_and_rotates_remote_credential(env,monkeypatch,tmp_path):
  # Keep the bootstrap/encryption/duplicate-registration contract, but use the
  # real Agent's pinned guarded handoff instead of a legacy unversioned mock.
