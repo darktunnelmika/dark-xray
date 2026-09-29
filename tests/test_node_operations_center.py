@@ -97,6 +97,31 @@ def test_capacity_and_resource_alerts_only_use_fresh_health(tmp_path, monkeypatc
     store.close()
 
 
+
+def test_node_metrics_history_is_bounded_and_downsampled(tmp_path, monkeypatch):
+    _public_dns(monkeypatch)
+    store = Store(tmp_path / 'hub.sqlite3')
+    auth = Auth(store, tmp_path / 'secret.key')
+    registry = NodeRegistry(store, auth.cipher)
+    registry.put('n1', 'Node One', 'https://node.example', 'dkn_' + ('E' * 60), True)
+    base = time.time() - 300
+    for index in range(10):
+        health = _health(cpu=10 + index)
+        health['system']['memory']['percent'] = 20 + index
+        health['system']['disk']['percent'] = 30 + index
+        health['system']['network']['down_bps'] = 1000 * index
+        health['system']['network']['up_bps'] = 500 * index
+        health['system']['connections']['open'] = index
+        with store.transaction() as db:
+            registry._record_metric_locked(db, 'n1', health, base + index * 31)
+    history = registry.metrics('n1', '1h')
+    assert len(history['points']) == 10
+    assert history['points'][-1]['connections'] == 9
+    assert history['sample_interval_seconds'] == 30
+    assert history['retention_seconds'] == 31 * 86400
+    store.close()
+
+
 def test_agent_health_exports_full_system_and_diagnostics_skip_tunnel_health(tmp_path):
     token_value = 'dkn_' + ('C' * 60)
     token_path = tmp_path / 'token'
@@ -118,7 +143,7 @@ def test_agent_health_exports_full_system_and_diagnostics_skip_tunnel_health(tmp
         system = response.json()['system']
         for key in (
             'cpu', 'cpu_info', 'memory', 'disk', 'swap', 'uptime', 'loads',
-            'network', 'connections', 'addresses', 'agent', 'xray',
+            'host', 'interfaces', 'network', 'connections', 'addresses', 'agent', 'xray',
         ):
             assert key in system
 
