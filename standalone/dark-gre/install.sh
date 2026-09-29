@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
 #  DARK VPN · GRE DIRECT - installer
-#  curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
+#  Iran-friendly bootstrap:
+#  curl -fsSL https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.1-rc13/standalone/dark-gre/install.sh | bash
 # ==============================================================================
 set -u
 
-RAW="${DARK_GRE_RAW_URL:-https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/dark-gre.sh}"
+VERSION="v0.12.1-rc13"
 DEST="${DARK_GRE_DEST:-/usr/local/bin/darkgre}"
 BASE_DIR="${DARK_GRE_BASE_DIR:-/etc/dark-gre}"
 
@@ -35,24 +36,49 @@ fi
 tmp="$(mktemp)" || { bad "cannot create temp file"; exit 1; }
 trap 'rm -f "$tmp"' EXIT
 
-info "downloading manager"
-if ! curl -fsSL --retry 3 --max-time 60 -o "$tmp" "$RAW"; then
-  bad "download failed - check connectivity to raw.githubusercontent.com"
-  exit 1
+download_one() {
+  local url="$1"
+  info "trying: $url"
+  curl -4 -fsSL --retry 2 --retry-all-errors --connect-timeout 8 --max-time 60 -o "$tmp" "$url"
+}
+
+if [ -n "${DARK_GRE_RAW_URL:-}" ]; then
+  URLS=("$DARK_GRE_RAW_URL")
+else
+  URLS=(
+    "https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.1-rc13/standalone/dark-gre/dark-gre.sh"
+    "https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@main/standalone/dark-gre/dark-gre.sh"
+    "https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-gre/dark-gre.sh"
+  )
 fi
 
-sed -i 's/\r$//' "$tmp"
-grep -q 'DARKVPN-GRE-SCRIPT' "$tmp" || { bad "downloaded file is not DARK GRE"; exit 1; }
-bash -n "$tmp" 2>/dev/null || { bad "downloaded file has syntax errors"; exit 1; }
+SELECTED_URL=""
+for url in "${URLS[@]}"; do
+  : >"$tmp"
+  if download_one "$url"; then
+    sed -i 's/\r$//' "$tmp"
+    if grep -q 'DARKVPN-GRE-SCRIPT' "$tmp" && bash -n "$tmp" 2>/dev/null; then
+      SELECTED_URL="$url"
+      break
+    fi
+  fi
+done
+
+if [ -z "$SELECTED_URL" ]; then
+  bad "all download mirrors failed"
+  bad "check outbound HTTPS/DNS connectivity"
+  exit 1
+fi
 
 ver="$(grep -m1 '^SCRIPT_VER=' "$tmp" | cut -d'"' -f2)"
 mkdir -p "$BASE_DIR" && chmod 700 "$BASE_DIR"
 [ -f "$DEST" ] && cp -f "$DEST" "$DEST.bak" 2>/dev/null
 install -m 0755 "$tmp" "$DEST" || { bad "could not write $DEST"; exit 1; }
-echo "$RAW" > "$BASE_DIR/update.url"
+echo "$SELECTED_URL" > "$BASE_DIR/update.url"
 chmod 600 "$BASE_DIR/update.url"
 
 ok "installed v${ver:-?} to $DEST"
+ok "source mirror: $SELECTED_URL"
 
 if [ "${DARK_GRE_INSTALL_ONLY:-0}" != 1 ]; then
   info "repairing runtime units"
