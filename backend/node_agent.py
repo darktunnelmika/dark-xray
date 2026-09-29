@@ -328,6 +328,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 'core':{'state':core['state'],'version':core['version'],'dirty':core['dirty'],'last_error':core['last_error']},
                 'system':{
                     'cpu':float(system['cpu']),'cpu_info':system.get('cpuInfo',{}),
+                    'host':system.get('host',{}),'interfaces':system.get('interfaces',[])[:32],
                     'memory':{'used':int(system['mem']['current']),'total':int(system['mem']['total']),'percent':round(mem_percent,1)},
                     'disk':{'used':int(system['disk']['current']),'total':int(system['disk']['total']),
                             'free':int(system['disk'].get('free',0)),'percent':round(disk_percent,1)},
@@ -397,6 +398,7 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         return {'service':'DARK XRAY NODE','node_id':node_id,'generated_at':time.time(),'checks':checks,
                 'system':{'cpu':round(cpu,1),'memory_percent':round(mem_percent,1),'disk_percent':round(disk_percent,1),
                           'uptime':int(system['uptime']),'connections':system.get('connections',{}),
+                          'host':system.get('host',{}),'interfaces':system.get('interfaces',[])[:32],
                           'addresses':addresses[:16]},
                 'boundary':'local Agent/Xray/accounting/system diagnostics; tunnel health is not tested'}
 
