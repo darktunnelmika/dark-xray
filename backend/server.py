@@ -1359,6 +1359,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/nodes')
     def remote_nodes(p:Principal=Depends(owner)):return nodes.list()
 
+    @app.get('/api/nodes/{node_id}/metrics')
+    def remote_node_metrics(node_id:str,window:Literal['live','1h','24h']='live',p:Principal=Depends(owner)):
+        return nodes.metrics_history(node_id,window)
+
     @app.post('/api/nodes/{node_id}/replacement/prepare')
     def prepare_node_replacement(node_id:str,body:NodePair,p:Principal=Depends(owner)):
         writable()
