@@ -2,11 +2,11 @@
 
 مدیر مستقل **GRE Direct** با همان روال اپراتوری DARK Backhaul.
 
-> وضعیت: `v0.12.0-rc12` — Live Validated / Plain GRE
+> وضعیت: `v0.12.2-rc14` — Live Validated / Plain GRE
 
-## وضعیت RC12
+## وضعیت RC14
 
-RC12 بعد از تست واقعی ایران ↔ لهستان روی **Plain GRE** تثبیت شد:
+RC14 بعد از تست واقعی ایران ↔ لهستان روی **Plain GRE** تثبیت شد:
 
 - Boot Recovery سمت KHAREJ: PASS
 - Boot Recovery سمت IRAN: PASS
@@ -81,7 +81,7 @@ IRAN صاحب Pair است:
 - TX Queue
 - Scheduled Restart
 
-Pair Codeهای قدیمی DGR2 که فیلد Security داشته‌اند همچنان Decode می‌شوند، اما RC12 آن‌ها را فقط به **Plain GRE** تبدیل می‌کند و IPsec دوباره فعال نمی‌شود.
+Pair Codeهای قدیمی DGR2 که فیلد Security داشته‌اند همچنان Decode می‌شوند، اما RC14 آن‌ها را فقط به **Plain GRE** تبدیل می‌کند و IPsec دوباره فعال نمی‌شود.
 
 ## MTU
 
@@ -145,11 +145,13 @@ ADVANCED
 - Pair Integrity
 - Speed responder
 
-## نصب RC12
+## نصب RC14
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/feature/dark-gre-direct-v1/standalone/dark-gre/install.sh | bash
 ```
+
+برای سرورهایی که دسترسی به `raw.githubusercontent.com` ناپایدار است (از جمله بعضی مسیرهای ایران)، نصب پیشنهادی عمداً از **jsDelivr CDN** و Tag ثابت نسخه استفاده می‌کند. Installer داخل خودش چند Mirror دارد و در صورت شکست یک مسیر، مسیر بعدی را امتحان می‌کند.
 
 اجرای مجدد:
 
@@ -164,7 +166,7 @@ darkgre
 Tag پیشنهادی:
 
 ```text
-dark-gre-v0.12.0-rc12
+dark-gre-v0.12.2-rc14
 ```
 
 Workflow زیر بستهٔ مستقل می‌سازد:
@@ -214,4 +216,4 @@ Mode    Plain GRE
 
 هر دو سمت بعد از Reboot بدون Start دستی Tunnel را بازیابی کردند و Inner Ping و پورت Xray سالم ماندند.
 
-RC12 پس از تست واقعی Reboot دو سمت، Inner Ping، TCP/1190 و Smoke CI روی `main` به‌عنوان نسخهٔ Live-Validated نگه‌داری می‌شود.
+RC14 پس از تست واقعی Reboot دو سمت، Inner Ping، TCP/1190 و Smoke CI روی `main` به‌عنوان نسخهٔ Live-Validated نگه‌داری می‌شود.
