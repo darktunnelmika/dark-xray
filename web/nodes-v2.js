@@ -99,7 +99,7 @@ function nodeCard(n){
   ${healthMetric(L('Connections','اتصال‌ها'),nv6Live(n,conn.open,v=>fa(Number(v)||0)))}
   ${healthMetric(L('Clients','کاربران'),fresh?fa(Number(h.managed_clients||0)):'—')}
  </div>
- <div class="nv6-secondary"><span>${e(L('Traffic tracked','ترافیک ثبت‌شده'))}: <b>${e(bytes(Number(n.traffic_current_bytes||0)))}</b></span><span>${e(L('Inbounds','اینباندها'))}: <b>${e(assigned.length)}</b></span><span>${e(L('Deployment','استقرار'))}: <b>${e(desiredLabel)}</b></span></div>
+ <div class="nv6-secondary"><span>Agent: <b>${fresh?e(h.version||h.installed_source?.version||'—'):'—'}</b></span><span>Xray: <b>${fresh?e(core.version||'—'):'—'}</b></span><span>${e(L('Traffic tracked','ترافیک ثبت‌شده'))}: <b>${e(bytes(Number(n.traffic_current_bytes||0)))}</b></span><span>${e(L('Inbounds','اینباندها'))}: <b>${e(assigned.length)}</b></span><span>${e(L('Deployment','استقرار'))}: <b>${e(desiredLabel)}</b></span></div>
  <div class="notice ${fresh?'':'warning'}"><small>${e(L('Hub protection (fresh report only)','محافظ هاب (فقط گزارش تازه)'))}: <b>${e(leaseLabel)}</b></small></div>
  ${controlBanner(n)}
  ${assigned.length?`<div class="nv2-assigned"><span>${L('DEPLOYED / ASSIGNED','تخصیص اینباند')}</span><div>${assigned.map(x=>`<span class="nv4-assignment ${pending?'warn':'ready'}"><b>${e(x)}</b></span>`).join('')}</div></div>`:''}
@@ -237,15 +237,20 @@ async function showNodeLogs(id,kind='process'){
 }
 function nv6DiagnosticDialog(n,latency){
  const h=n.health||{},sys=h.system||{},core=h.core||{},lease=h.hub_lease||{},maint=h.maintenance||{},net=sys.network||{},conn=sys.connections||{},mem=sys.memory||{},disk=sys.disk||{};
- const fresh=nv6Fresh(n),items=[
+ const fresh=nv6Fresh(n),cpuInfo=sys.cpu_info||{},loads=sys.loads||[],source=h.installed_source||{},items=[
   [L('Telemetry','تله‌متری'),fresh?L('FRESH','تازه'):nv6TelemetryLabel(n)],
   [L('Latency','تأخیر'),latency?latency+' ms':'—'],['Xray',fresh?(core.state||'—'):'—'],
-  ['CPU',fresh?nv6Pct(sys.cpu):'—'],['RAM',fresh?nv6Pct(mem.percent??sys.memory_percent):'—'],
-  [L('Disk','دیسک'),fresh?nv6Pct(disk.percent??sys.disk_percent):'—'],[L('Uptime','آپ‌تایم'),fresh?nv6Duration(sys.uptime):'—'],
-  ['RX',fresh?nv6Rate(net.down_bps):'—'],['TX',fresh?nv6Rate(net.up_bps):'—'],
-  [L('Connections','اتصال‌ها'),fresh?String(conn.open??'—'):'—'],
+  [L('Agent version','نسخه Agent'),fresh?(h.version||source.version||'—'):'—'],[L('Xray version','نسخه Xray'),fresh?(core.version||'—'):'—'],
+  ['CPU',fresh?nv6Pct(sys.cpu):'—'],[L('CPU cores','هسته CPU'),fresh?String(cpuInfo.logical??'—'):'—'],
+  [L('Load 1m','لود ۱ دقیقه'),fresh&&loads.length?Number(loads[0]).toFixed(2):'—'],
+  ['RAM',fresh?nv6Pct(mem.percent??sys.memory_percent):'—'],[L('RAM used','RAM مصرفی'),fresh&&mem.used!=null?bytes(mem.used):'—'],
+  [L('RAM total','RAM کل'),fresh&&mem.total!=null?bytes(mem.total):'—'],
+  [L('Disk','دیسک'),fresh?nv6Pct(disk.percent??sys.disk_percent):'—'],[L('Disk free','فضای آزاد'),fresh&&disk.free!=null?bytes(disk.free):'—'],
+  [L('Uptime','آپ‌تایم'),fresh?nv6Duration(sys.uptime):'—'],['RX',fresh?nv6Rate(net.down_bps):'—'],['TX',fresh?nv6Rate(net.up_bps):'—'],
+  [L('Connections','اتصال‌ها'),fresh?String(conn.open??'—'):'—'],[L('Hostname','نام میزبان'),fresh?(sys.hostname||'—'):'—'],
   [L('Hub lease','مجوز هاب'),fresh?(lease.valid?L('ACTIVE','فعال'):L('BLOCKED / WAITING','متوقف / منتظر')):'—'],
-  [L('Stats checkpoint','چک‌پوینت آمار'),fresh&&maint.checkpoint_age_seconds!=null?Number(maint.checkpoint_age_seconds).toFixed(1)+'s':'—']
+  [L('Stats checkpoint','چک‌پوینت آمار'),fresh&&maint.checkpoint_age_seconds!=null?Number(maint.checkpoint_age_seconds).toFixed(1)+'s':'—'],
+  [L('Source commit','کامیت سورس'),fresh&&source.commit?String(source.commit).slice(0,12):'—']
  ];
  const addresses=(sys.addresses||[]).map(x=>`<span class="nv6-address"><b>${e(x.interface||'')}</b> ${e(x.address||'')}</span>`).join('');
  dialog(L('Node Diagnostics','عیب‌یابی نود'),`<div class="notice">${L('Live Agent/Xray/system diagnostics only. Tunnel health is not tested here.','فقط عیب‌یابی زنده Agent/Xray/سیستم؛ سلامت Tunnel در اینجا تست نمی‌شود.')}</div><div class="nv6-diagnostics">${items.map(x=>`<div><small>${e(x[0])}</small><b>${e(x[1])}</b></div>`).join('')}</div>${addresses?`<div class="nv6-addresses">${addresses}</div>`:''}${core.last_error?`<div class="nv2-error">${e(core.last_error)}</div>`:''}${maint.statistics_error?`<div class="nv2-error">${e(maint.statistics_error)}</div>`:''}`,null);
