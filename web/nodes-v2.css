@@ -41,3 +41,20 @@
 .nv5-manage-actions{border-top:1px solid rgba(255,255,255,.055);padding-top:11px}.nv5-manage-actions>div:last-child{display:flex;gap:6px;flex-wrap:wrap}
 .nv5-log-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px}.nv5-node-log{max-height:58vh;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:12px;border:1px solid rgba(255,255,255,.06);background:#020708;border-radius:8px;font:9px/1.65 var(--mono)}
 @media(max-width:650px){.nv5-fleet-head>div{grid-template-columns:1fr 1fr}.nv5-manage-actions>div:last-child .btn{flex:1 1 45%}}
+
+
+/* Nodes V6 — live operations telemetry */
+.nv2-status.stale{color:#e8b45b}.nv2-status.stale i{background:#f59e0b;box-shadow:0 0 11px rgba(245,158,11,.55)}
+.nv2-status.offline i{background:#64748b;box-shadow:none}.nv6-node.nv6-not-fresh .nv6-resource-grid{opacity:.72}
+.nv6-live-strip,.nv6-secondary{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+.nv6-live-strip span,.nv6-secondary span{border:1px solid rgba(255,255,255,.05);background:#03090c;border-radius:6px;padding:5px 7px;font-size:8px;color:#627d84}
+.nv6-live-strip b,.nv6-secondary b{color:#b7d7d1;font:9px var(--mono)}
+.nv6-resource-grid{grid-template-columns:repeat(4,minmax(86px,1fr))}
+.nv6-resource-grid b{font-family:var(--mono)}
+.nv6-fleet-head>div{grid-template-columns:repeat(5,minmax(82px,1fr))}
+.nv6-diagnostics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px}
+.nv6-diagnostics>div{padding:9px;border:1px solid rgba(255,255,255,.055);background:#03090c;border-radius:8px;min-width:0}
+.nv6-diagnostics small,.nv6-diagnostics b{display:block}.nv6-diagnostics small{font-size:8px;color:#617c83}.nv6-diagnostics b{font:11px var(--mono);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nv6-addresses{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.nv6-address{padding:5px 7px;border:1px solid rgba(44,232,189,.12);border-radius:6px;background:#031012;font:8px var(--mono);color:#78a8a0}.nv6-address b{color:#bfe9e1}
+@media(max-width:900px){.nv6-resource-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.nv6-fleet-head>div{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){.nv6-diagnostics{grid-template-columns:repeat(2,minmax(0,1fr))}.nv6-fleet-head>div{grid-template-columns:repeat(2,minmax(0,1fr))}.nv6-live-strip span,.nv6-secondary span{flex:1 1 44%}}
