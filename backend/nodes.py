@@ -302,6 +302,90 @@ class NodeRegistry:
         return {**assignment,'remote_inbound_id':remote_id,'deployment_state':deployment_state,
                 'deployed':deployed,'failover_ready':reason=='ready','failover_reason':reason}
 
+    @staticmethod
+    def _operations_health(node:dict)->dict:
+        """Summarize fresh Node telemetry without probing any data path.
+
+        Capacity is a utilization estimate from CPU, RAM and normalized 1m load.
+        Disk, Xray, Hub lease and accounting health affect the Health score only.
+        Tunnel/WARP/routing health is intentionally outside this calculation.
+        """
+        def number(value):
+            try:
+                out=float(value)
+                return out if out==out and abs(out)!=float('inf') else None
+            except (TypeError,ValueError):return None
+        def percent(value):
+            value=number(value)
+            return None if value is None else max(0.0,min(100.0,value))
+        def add(items,severity,code,value=None,threshold=None):
+            item={'severity':severity,'code':code}
+            if value is not None:item['value']=round(float(value),1)
+            if threshold is not None:item['threshold']=round(float(threshold),1)
+            items.append(item)
+
+        enabled=bool(node.get('enabled'));telemetry=str(node.get('telemetry_state') or 'offline')
+        if not enabled:
+            return {'score':None,'state':'disabled','capacity_percent':None,'capacity_state':'unknown','alerts':[]}
+        if telemetry=='offline':
+            return {'score':0,'state':'critical','capacity_percent':None,'capacity_state':'unknown',
+                    'alerts':[{'severity':'critical','code':'telemetry_offline'}]}
+        if telemetry!='fresh':
+            age=number(node.get('telemetry_age_seconds'))
+            item={'severity':'warning','code':'telemetry_stale'}
+            if age is not None:item['value']=round(age,1)
+            return {'score':55,'state':'warning','capacity_percent':None,'capacity_state':'unknown','alerts':[item]}
+
+        health=node.get('health') if isinstance(node.get('health'),dict) else {}
+        system=health.get('system') if isinstance(health.get('system'),dict) else {}
+        core=health.get('core') if isinstance(health.get('core'),dict) else {}
+        memory=system.get('memory') if isinstance(system.get('memory'),dict) else {}
+        disk=system.get('disk') if isinstance(system.get('disk'),dict) else {}
+        cpu_info=system.get('cpu_info') if isinstance(system.get('cpu_info'),dict) else {}
+        maintenance=health.get('maintenance') if isinstance(health.get('maintenance'),dict) else {}
+        lease=health.get('hub_lease') if isinstance(health.get('hub_lease'),dict) else {}
+
+        cpu=percent(system.get('cpu'))
+        mem=percent(memory.get('percent',system.get('memory_percent')))
+        disk_pct=percent(disk.get('percent',system.get('disk_percent')))
+        loads=system.get('loads') if isinstance(system.get('loads'),list) else []
+        load1=number(loads[0]) if loads else None
+        logical=number(cpu_info.get('logical'))
+        load_raw_pct=max(0.0,100.0*load1/logical) if load1 is not None and logical and logical>0 else None
+        load_capacity_pct=min(100.0,load_raw_pct) if load_raw_pct is not None else None
+
+        weighted=[(cpu,.40),(mem,.35),(load_capacity_pct,.25)]
+        present=[(value,weight) for value,weight in weighted if value is not None]
+        capacity=round(sum(value*weight for value,weight in present)/sum(weight for _,weight in present),1) if present else None
+        capacity_state='unknown' if capacity is None else ('overloaded' if capacity>=90 else 'busy' if capacity>=70 else 'healthy')
+
+        alerts=[]
+        for value,warn,critical,wcode,ccode in (
+            (cpu,80,95,'cpu_high','cpu_critical'),
+            (mem,85,95,'memory_high','memory_critical'),
+            (disk_pct,85,95,'disk_high','disk_critical'),
+        ):
+            if value is None:continue
+            if value>=critical:add(alerts,'critical',ccode,value,critical)
+            elif value>=warn:add(alerts,'warning',wcode,value,warn)
+        if load_raw_pct is not None:
+            if load_raw_pct>=150:add(alerts,'critical','load_critical',load_raw_pct,150)
+            elif load_raw_pct>=100:add(alerts,'warning','load_high',load_raw_pct,100)
+
+        core_state=str(core.get('state') or '')
+        if core_state and core_state!='running':add(alerts,'critical','xray_not_running')
+        if core.get('last_error'):add(alerts,'critical','xray_error')
+        if lease.get('required') is True and lease.get('valid') is not True:add(alerts,'critical','hub_lease_invalid')
+        if maintenance.get('statistics_error'):add(alerts,'critical','accounting_checkpoint_error')
+        checkpoint=number(maintenance.get('checkpoint_age_seconds'))
+        if checkpoint is not None and checkpoint>15:add(alerts,'warning','accounting_checkpoint_stale',checkpoint,15)
+        if node.get('last_error'):add(alerts,'critical','node_error')
+
+        penalty=sum(28 if x['severity']=='critical' else 10 for x in alerts)
+        score=max(0,100-min(100,penalty))
+        state='critical' if any(x['severity']=='critical' for x in alerts) else ('warning' if alerts else 'healthy')
+        return {'score':int(score),'state':state,'capacity_percent':capacity,'capacity_state':capacity_state,'alerts':alerts}
+
     def list(self)->list[dict]:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM remote_nodes ORDER BY name,id')]
         now=time.time()
@@ -316,6 +400,7 @@ class NodeRegistry:
             r['telemetry_age_seconds']=round(age,1) if age is not None else None
             r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
             r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
+            r['operational_health']=self._operations_health(r)
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
