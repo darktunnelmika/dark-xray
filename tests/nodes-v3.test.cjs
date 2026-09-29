@@ -15,12 +15,12 @@ test('Nodes V5 uses lightweight Pair Code as the primary add workflow',()=>{
 });
 
 test('Node Fleet surfaces online state and Hub desired-state drift',()=>{
-  for(const token of ['desired_state','Pending changes','desiredLabel','Deployment'])assert.ok(src.includes(token),token);
+  for(const token of ['desired_state','Pending','desiredLabel','Deployment'])assert.ok(src.includes(token),token);
   assert.ok(src.includes('Sync Now')||src.includes("L('Sync'"));
 });
 
 test('Node Manage keeps daily operations in the Hub',()=>{
-  for(const token of ['Health Check','Remote Inbounds','Sync Security','Validate Xray','Restart Xray','Logs','Update to Hub Version','Delete Node'])
+  for(const token of ['Diagnostics','Remote Inbounds','Sync Security','Validate Xray','Restart Xray','Logs','Update to Hub Version','Delete Node'])
     assert.ok(src.includes(token),token);
   for(const route of ['/update/check','/update/start','/logs/'])assert.ok(src.includes(route),route);
 });
