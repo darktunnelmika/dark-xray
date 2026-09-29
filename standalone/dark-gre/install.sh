@@ -2,11 +2,11 @@
 # ==============================================================================
 #  DARK VPN · GRE DIRECT - installer
 #  Iran-friendly bootstrap:
-#  curl -fsSL https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.1-rc13/standalone/dark-gre/install.sh | bash
+#  curl -fsSL https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.2-rc14/standalone/dark-gre/install.sh | bash
 # ==============================================================================
 set -u
 
-VERSION="v0.12.1-rc13"
+VERSION="v0.12.2-rc14"
 DEST="${DARK_GRE_DEST:-/usr/local/bin/darkgre}"
 BASE_DIR="${DARK_GRE_BASE_DIR:-/etc/dark-gre}"
 
@@ -46,7 +46,7 @@ if [ -n "${DARK_GRE_RAW_URL:-}" ]; then
   URLS=("$DARK_GRE_RAW_URL")
 else
   URLS=(
-    "https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.1-rc13/standalone/dark-gre/dark-gre.sh"
+    "https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.2-rc14/standalone/dark-gre/dark-gre.sh"
     "https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@main/standalone/dark-gre/dark-gre.sh"
     "https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-gre/dark-gre.sh"
   )
