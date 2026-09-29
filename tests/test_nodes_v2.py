@@ -85,6 +85,15 @@ def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
  assert ops['state']=='healthy' and ops['score']==100 and ops['alerts']==[]
  assert ops['capacity_percent']==46.0 and ops['capacity_state']=='healthy'
 
+ load_warning=__import__('copy').deepcopy(fresh_health)
+ load_warning['system']['loads']=[4.2,2.0,1.0]
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_health=? WHERE id='health1'",
+             (time.time(),__import__('json').dumps(load_warning)))
+ ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
+ assert ops['state']=='warning' and ops['score']==90
+ assert ops['alerts'][0]['code']=='load_high' and ops['alerts'][0]['threshold']==100.0
+
  warning=__import__('copy').deepcopy(fresh_health)
  warning['system']['cpu']=88.0
  warning['system']['disk']['percent']=87.0
