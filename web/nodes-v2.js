@@ -14,6 +14,45 @@ async function loadNodes(){
  state.nv2={nodes,orchestration,nodeError,orchestrationError};return state.nv2;
 }
 function healthMetric(label,value){return `<div><small>${e(label)}</small><b>${e(value??'—')}</b></div>`;}
+const nodeLive={timer:0,busy:false};
+function finite(v){const n=Number(v);return Number.isFinite(n)?n:null;}
+function percent(v){const n=finite(v);return n===null?'—':Math.max(0,Math.min(100,n)).toFixed(1)+'%';}
+function liveAge(v){const n=finite(v);if(n===null)return L('never','هرگز');if(n<60)return Math.round(n)+'s';if(n<3600)return Math.round(n/60)+'m';return Math.round(n/3600)+'h';}
+function duration(v){let n=Math.max(0,Math.floor(finite(v)||0));if(!n)return '—';const d=Math.floor(n/86400);n%=86400;const h=Math.floor(n/3600);n%=3600;const m=Math.floor(n/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`;}
+function rate(v){const n=finite(v);return n===null?'—':bytes(Math.max(0,n))+'/s';}
+function sysOf(n){return n.telemetry?.fresh&&n.telemetry?.system&&typeof n.telemetry.system==='object'?n.telemetry.system:{};}
+function memPercent(s){return finite(s.memory?.percent??s.memory_percent);}
+function diskPercent(s){return finite(s.disk?.percent??s.disk_percent);}
+function fleetSummary(nodes){
+ const live=nodes.filter(n=>n.telemetry?.fresh).length,attention=nodes.filter(n=>(n.telemetry?.alerts||[]).length).length;
+ const cpus=nodes.map(n=>finite(sysOf(n).cpu)).filter(v=>v!==null),avg=cpus.length?(cpus.reduce((a,b)=>a+b,0)/cpus.length).toFixed(1)+'%':'—';
+ const pending=nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
+ return `${healthMetric(L('Nodes','نودها'),nodes.length)}${healthMetric(L('Live','زنده'),live)}${healthMetric(L('Attention','نیازمند بررسی'),attention)}${healthMetric(L('Avg CPU','میانگین CPU'),avg)}${healthMetric(L('Pending','در انتظار'),pending)}`;
+}
+function renderLiveFleet(nodes){
+ const grid=document.querySelector('.nv2-grid'),summary=document.getElementById('nv2-fleet-summary'),stamp=document.getElementById('nv2-live-stamp');
+ if(grid)grid.innerHTML=nodes.length?nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'));
+ if(summary)summary.innerHTML=fleetSummary(nodes);
+ if(stamp)stamp.textContent=L('Live refresh · ','تازه‌سازی زنده · ')+new Date().toLocaleTimeString();
+}
+function armNodeLiveRefresh(){
+ if(nodeLive.timer)clearTimeout(nodeLive.timer);
+ if(state.page==='nodes')nodeLive.timer=setTimeout(refreshNodeLive,5000);
+}
+async function refreshNodeLive(){
+ nodeLive.timer=0;if(state.page!=='nodes')return;
+ if(nodeLive.busy){armNodeLiveRefresh();return;}nodeLive.busy=true;
+ try{
+  const nodes=await api('/api/nodes');if(state.page!=='nodes')return;
+  state.nv2.nodes=nodes;renderLiveFleet(nodes);
+ }catch(ex){
+  if(state.page==='nodes'){
+   const now=Date.now()/1000;
+   const stale=(state.nv2.nodes||[]).map(n=>{const t=n.telemetry||{},sample=finite(t.sampled_at);return {...n,telemetry:{...t,fresh:false,live_state:n.enabled?'stale':'disabled',system:null,age_seconds:sample?Math.max(0,now-sample):t.age_seconds,alerts:[{code:'hub_refresh',severity:'warning',label:L('Hub refresh failed','تازه‌سازی هاب ناموفق'),value:String(ex.message||ex)}]}};});
+   state.nv2.nodes=stale;renderLiveFleet(stale);
+  }
+ }finally{nodeLive.busy=false;armNodeLiveRefresh();}
+}
 function assignedNames(n){return (n.inboundIds||[]).map(id=>{let ib=state.inbounds.find(x=>x.id===id);return ib?(ib.remark||ib.tag):'#'+id;});}
 const reasonLabels={
  control_pending:['COMMAND PENDING','فرمان در انتظار'],control_stopped:['STOP REQUESTED','توقف درخواست شده'],
@@ -46,17 +85,24 @@ function controlMessage(r,action){
  return L('No execution acknowledgement for this request; refresh Node status.','برای این درخواست تأیید اجرا دریافت نشد؛ وضعیت نود را تازه‌سازی کن.');
 }
 function nodeCard(n){
- const h=n.health||{},core=h.core||{},status=!n.enabled?'disabled':n.online?'online':n.last_error?'error':'offline';
- const desired=n.desired_state||{},assigned=assignedNames(n),pending=!!desired.pending;
- const lease=h.hub_lease,leaseLabel=!n.online?L('No fresh report','گزارش تازه ندارد'):!lease?L('Agent update required','نیازمند آپدیت نود'):!lease.required?L('Awaiting activation','در انتظار فعال‌سازی'):lease.valid?L('Active · 60s limit','فعال · مهلت ۶۰ ثانیه'):L('Blocked · awaiting Hub','متوقف · در انتظار هاب');
+ const h=n.health||{},t=n.telemetry||{},s=sysOf(n),core=t.fresh&&h.core&&typeof h.core==='object'?h.core:{},status=t.live_state||(!n.enabled?'disabled':n.online?'online':'offline');
+ const desired=n.desired_state||{},assigned=assignedNames(n),pending=!!desired.pending,mem=memPercent(s),disk=diskPercent(s),cpu=finite(s.cpu);
+ const net=s.network||{},conn=s.connections||{},cap=t.capacity||{},alerts=t.alerts||[];
+ const lease=t.fresh&&h.hub_lease&&typeof h.hub_lease==='object'?h.hub_lease:null;
+ const leaseLabel=!t.fresh?L('No fresh report','گزارش تازه ندارد'):!lease?L('Agent update required','نیازمند آپدیت Agent'):!lease.required?L('Legacy / not required','قدیمی / اجباری نیست'):lease.valid?L('Active','فعال'):L('Blocked','مسدود');
  const desiredLabel=desired.last_error?L('ERROR','خطا'):pending?L('PENDING r','در انتظار r')+String(desired.revision||0):desired.revision?L('SYNCED','همگام'):L('NOT DEPLOYED','مستقر نشده');
- return `<article class="panel nv2-node"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(status)}</b></div></div>
- <div class="nv2-metrics">${healthMetric(L('Latency','تأخیر'),n.last_latency_ms?`${n.last_latency_ms} ms`:'—')}${healthMetric('Xray',core.state||'—')}${healthMetric(L('Inbounds','اینباندها'),assigned.length)}${healthMetric(L('Deployment','استقرار'),desiredLabel)}</div>
- <div class="notice"><small>${e(L('Hub protection (last report)','محافظ هاب (آخرین گزارش)'))}: <b>${e(leaseLabel)}</b></small></div>
+ const freshness=!n.enabled?L('DISABLED','غیرفعال'):t.fresh?L('LIVE','زنده')+' · '+liveAge(t.age_seconds):status==='stale'?L('STALE','قدیمی')+' · '+liveAge(t.age_seconds):status==='error'?L('ERROR','خطا'):L('OFFLINE','آفلاین');
+ const capacity=cap.score===null||cap.score===undefined?'—':percent(cap.score);
+ return `<article class="panel nv2-node nv6-${e(status)}" data-node-id="${e(n.id)}"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.id)} · ${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${e(status)}"><i></i><b>${e(freshness)}</b></div></div>
+ <div class="nv6-version"><span>Agent <b>${e(t.fresh?(t.agent_version||h.version||'—'):'—')}</b></span><span>Xray <b>${e(t.fresh?(core.version||'—'):'—')}</b></span><span>${L('Uptime','آپ‌تایم')} <b>${e(t.fresh?duration(s.uptime):'—')}</b></span></div>
+ <div class="nv2-metrics nv6-metrics">${healthMetric('CPU',t.fresh?percent(cpu):'—')}${healthMetric('RAM',t.fresh?percent(mem):'—')}${healthMetric(L('Disk','دیسک'),t.fresh?percent(disk):'—')}${healthMetric('↓ RX',t.fresh?rate(net.down_bps):'—')}${healthMetric('↑ TX',t.fresh?rate(net.up_bps):'—')}${healthMetric(L('Connections','اتصال‌ها'),t.fresh?(conn.available===false?'—':conn.open??'—'):'—')}${healthMetric(L('Clients','کلاینت‌ها'),t.fresh?(h.managed_clients??'—'):'—')}${healthMetric(L('Ping','پینگ'),t.fresh&&n.last_latency_ms?`${n.last_latency_ms} ms`:'—')}${healthMetric('Xray',t.fresh?(core.state||'—'):'—')}${healthMetric(L('Deployment','استقرار'),desiredLabel)}</div>
+ <div class="nv6-capacity ${e(cap.status||'unknown')}"><div><span>${L('Capacity pressure','فشار ظرفیت')}</span><b>${e(capacity)} · ${e(String(cap.status||'unknown').toUpperCase())}</b></div><i><span style="width:${e(cap.score===null||cap.score===undefined?0:Math.max(0,Math.min(100,Number(cap.score))))}%"></span></i></div>
+ <div class="nv6-healthline"><span>${L('Hub accounting','حسابداری هاب')}: <b>${e(leaseLabel)}</b></span><span>${L('Report age','سن گزارش')}: <b>${e(liveAge(t.age_seconds))}</b></span></div>
+ ${alerts.length?`<div class="nv6-alerts">${alerts.map(a=>`<span class="${e(a.severity||'warning')}"><b>${e(a.label||a.code)}</b>${a.value?`<small>${e(a.value)}</small>`:''}</span>`).join('')}</div>`:''}
  ${controlBanner(n)}
  ${assigned.length?`<div class="nv2-assigned"><span>${L('DEPLOYED / ASSIGNED','تخصیص اینباند')}</span><div>${assigned.map(x=>`<span class="nv4-assignment ${pending?'warn':'ready'}"><b>${e(x)}</b></span>`).join('')}</div></div>`:''}
  ${n.last_error?`<div class="nv2-error">${e(n.last_error)}</div>`:''}${desired.last_error?`<div class="nv2-error">${e(desired.last_error)}</div>`:''}
- <div class="nv2-actions">${n.enabled?button(L('Sync','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`,pending):''}${button(L('Manage','مدیریت'),'nv2edit','settings',`data-id="${e(n.id)}"`,true)}${button(L('Check','بررسی'),'nv2probe','activity',`data-id="${e(n.id)}"`)}</div></article>`;
+ <div class="nv2-actions">${button(L('Details','جزئیات'),'nv2details','server',`data-id="${e(n.id)}"`,true)}${button(L('Diagnostics','عیب‌یابی'),'nv2diagnostics','activity',`data-id="${e(n.id)}"`)}${n.enabled?button(L('Sync','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`,pending):''}${button(L('Manage','مدیریت'),'nv2edit','settings',`data-id="${e(n.id)}"`,true)}</div></article>`;
 }
 function tokenList(tokens){const now=Date.now()/1000;return tokens.length?`<div class="xv2-list">${tokens.map(t=>{const active=!!t.enabled&&Number(t.expires_at)>now,stateLabel=!t.enabled?L('Revoked','باطل'):active?L('Enabled','فعال'):L('Expired','منقضی');return `<div class="xv2-item"><div class="xv2-item-head"><div><b>${e(t.name)}</b><br><small>${e(t.id)} · ${stateLabel} · ${L('expires','انقضا')} ${date(t.expires_at)}</small></div>${active?button(L('Revoke','ابطال'),'nv2tokenrevoke','trash',`data-id="${e(t.id)}"`):''}</div></div>`;}).join('')}</div>`:empty(L('No agent tokens on this server.','توکن عاملی روی این سرور وجود ندارد.'));}
 
@@ -85,16 +131,16 @@ function inboundOrchestration(row){
 async function nodesPage(){
  let d=await loadNodes(),errs='';
  if(d.nodeError)errs+=`<div class="notice error">${L('Node registry could not be loaded: ','فهرست نودها دریافت نشد: ')}${e(d.nodeError)}</div>`;
- const online=d.nodes.filter(x=>x.online).length,pending=d.nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
- return heading(L('Nodes','نودها'),L('Install the lightweight agent once, pair it here, then manage deployments from this Hub.','Agent سبک را یک‌بار نصب و Pair کن؛ بعد همه استقرارها را از همین Hub مدیریت کن.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
- `<div class="nv2">${errs}<section class="nv5-fleet-head"><div>${healthMetric(L('Nodes','نودها'),d.nodes.length)}${healthMetric(L('Online','آنلاین'),online)}${healthMetric(L('Pending changes','تغییر در انتظار'),pending)}</div><p>${L('Nodes do not need a second control panel. Inbounds, clients, traffic and security are owned by this Hub.','نودها پنل دوم لازم ندارند؛ اینباند، کاربر، ترافیک و امنیت از همین Hub مدیریت می‌شود.')}</p></section>
- <section><div class="nv4-section-title"><div><small>DARK NODE FLEET</small><h2>${L('Servers','سرورها')}</h2></div><span>${fa(d.nodes.length)}</span></div><div class="nv2-grid">${d.nodes.length?d.nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'))}</div></section>
+ armNodeLiveRefresh();
+ return heading(L('Nodes','نودها'),L('Live server resources, Xray state, accounting protection and remote operations from one fleet view.','منابع زنده سرورها، وضعیت Xray، محافظ حسابداری و عملیات راه‌دور در یک نمای واحد.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
+ `<div class="nv2">${errs}<section class="nv5-fleet-head"><div id="nv2-fleet-summary">${fleetSummary(d.nodes)}</div><p>${L('Live metrics refresh every 5 seconds. If a report becomes stale or Hub refresh fails, old CPU/RAM/Disk/Network values are hidden instead of being presented as live.','داده‌های زنده هر ۵ ثانیه تازه می‌شوند. اگر گزارش قدیمی شود یا تازه‌سازی هاب خطا بدهد، CPU/RAM/Disk/Network قدیمی به‌عنوان دادهٔ زنده نمایش داده نمی‌شود.')}</p><small id="nv2-live-stamp">${L('Live refresh armed','تازه‌سازی زنده فعال')}</small></section>
+ <section><div class="nv4-section-title"><div><small>DARK NODE OPERATIONS CENTER</small><h2>${L('Servers','سرورها')}</h2></div><span>${fa(d.nodes.length)}</span></div><div class="nv2-grid">${d.nodes.length?d.nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'))}</div></section>
  <details class="panel nv5-advanced"><summary>${L('Deployment & failover details','جزئیات استقرار و فیل‌اور')}</summary>${d.orchestrationError?`<div class="notice warning">${e(d.orchestrationError)}</div>`:`${orchestrationBoard(d.orchestration)}`}</details></div>`;
 }
 enginePage=async function(){if(state.page==='nodes')return nodesPage();return baseEnginePage();};
 function inboundPicker(selected=[]){return `<div class="nv2-picker">${state.inbounds.map(ib=>{let on=selected.includes(ib.id);return `<label class="${on?'active':''}"><input type="checkbox" name="inboundIds" value="${ib.id}" ${on?'checked':''}><span class="nv2-pick-dot"></span><span><b>${e(ib.remark||ib.tag)}</b><small>#${ib.id} · ${e(ib.protocol)} · ${e(ib.network||'tcp')} / ${e(ib.security||'none')} · :${ib.port}</small></span></label>`;}).join('')}</div>`;}
 function manageActions(n){
- return `${controlBanner(n)}<div class="span-2 nv5-manage-actions"><div class="nv2-form-title"><b>${L('Remote operations','عملیات راه‌دور')}</b><small>${L('Daily Node operations stay in the Hub; SSH is only for recovery.','عملیات روزمره Node از Hub انجام می‌شود؛ SSH فقط برای بازیابی است.')}</small></div><div>${button(L('Health Check','بررسی سلامت'),'nv2probe','activity',`data-id="${e(n.id)}"`)}${button(L('Sync Now','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`)}${button(L('Remote Inbounds','اینباندهای Node'),'nv2inbounds','server',`data-id="${e(n.id)}"`)}${button(L('Sync Security','همگام‌سازی امنیت'),'nv2security','shield',`data-id="${e(n.id)}"`)}${button(L('Validate Xray','اعتبارسنجی Xray'),'nv2core','check',`data-id="${e(n.id)}" data-core="validate"`)}${button(L('Start Xray','شروع Xray'),'nv2core','play',`data-id="${e(n.id)}" data-core="start"`)}${button(L('Stop Xray','توقف Xray'),'nv2core','stop',`data-id="${e(n.id)}" data-core="stop"`)}${button(L('Restart Xray','ری‌استارت Xray'),'nv2core','refresh',`data-id="${e(n.id)}" data-core="restart"`)}${button(L('Logs','لاگ‌ها'),'nv2logs','log',`data-id="${e(n.id)}"`)}${button(L('Update to Hub Version','آپدیت به نسخه Hub'),'nv2update','download',`data-id="${e(n.id)}"`,true)}${button(L('Delete Node','حذف Node'),'nv2delete','trash',`data-id="${e(n.id)}"`)}</div></div>`;
+ return `${controlBanner(n)}<div class="span-2 nv5-manage-actions"><div class="nv2-form-title"><b>${L('Remote operations','عملیات راه‌دور')}</b><small>${L('Daily Node operations stay in the Hub; SSH is only for recovery.','عملیات روزمره Node از Hub انجام می‌شود؛ SSH فقط برای بازیابی است.')}</small></div><div>${button(L('Details','جزئیات'),'nv2details','server',`data-id="${e(n.id)}"`)}${button(L('Diagnostics','عیب‌یابی'),'nv2diagnostics','activity',`data-id="${e(n.id)}"`)}${button(L('Health Check','بررسی سلامت'),'nv2probe','activity',`data-id="${e(n.id)}"`)}${button(L('Sync Now','همگام‌سازی'),'nv2sync','refresh',`data-id="${e(n.id)}"`)}${button(L('Remote Inbounds','اینباندهای Node'),'nv2inbounds','server',`data-id="${e(n.id)}"`)}${button(L('Sync Security','همگام‌سازی امنیت'),'nv2security','shield',`data-id="${e(n.id)}"`)}${button(L('Validate Xray','اعتبارسنجی Xray'),'nv2core','check',`data-id="${e(n.id)}" data-core="validate"`)}${button(L('Start Xray','شروع Xray'),'nv2core','play',`data-id="${e(n.id)}" data-core="start"`)}${button(L('Stop Xray','توقف Xray'),'nv2core','stop',`data-id="${e(n.id)}" data-core="stop"`)}${button(L('Restart Xray','ری‌استارت Xray'),'nv2core','refresh',`data-id="${e(n.id)}" data-core="restart"`)}${button(L('Logs','لاگ‌ها'),'nv2logs','log',`data-id="${e(n.id)}"`)}${button(L('Update to Hub Version','آپدیت به نسخه Hub'),'nv2update','download',`data-id="${e(n.id)}"`,true)}${button(L('Delete Node','حذف Node'),'nv2delete','trash',`data-id="${e(n.id)}"`)}</div></div>`;
 }
 async function nodeDialog(id){
  if(!isOwner())return;
@@ -181,6 +227,30 @@ async function pairNodeDialog(){
  });
 }
 async function createToken(){dialog(L('New node agent token','توکن عامل جدید'),`<div class="nv2-form">${field(L('Token name','نام توکن'),'name','central','text','required maxlength="64"')}${field(L('Validity days','اعتبار روز'),'days',365,'number','required min="1" max="3650"')}</div>`,async f=>{let r=await api('/api/node-agent/tokens','POST',{name:f.get('name'),days:Number(f.get('days'))});await renderPage();dialog(L('Copy this token now','این توکن را همین حالا کپی کن'),`<div class="notice warning">${L('The plaintext token will never be shown again.','متن اصلی توکن دیگر نمایش داده نمی‌شود.')}</div><div class="nv2-token">${e(r.token)}</div>`);});}
+function detailTabs(id,tab){
+ const one=(key,en,fa)=>`<button type="button" class="btn ${tab===key?'active':''}" data-act="nv2detailtab" data-id="${e(id)}" data-tab="${e(key)}">${e(L(en,fa))}</button>`;
+ return `<div class="nv6-detail-tabs">${one('overview','Overview','نمای کلی')}${one('system','System','سیستم')}${one('diagnostics','Diagnostics','عیب‌یابی')}</div>`;
+}
+function overviewDetail(n){
+ const h=n.health||{},t=n.telemetry||{},s=sysOf(n),net=s.network||{},conn=s.connections||{},lease=t.fresh&&h.hub_lease||{},desired=n.desired_state||{},sec=n.security||{};
+ if(!t.fresh)return `<div class="notice warning">${L('Live telemetry is unavailable. Last report age: ','دادهٔ زنده در دسترس نیست. سن آخرین گزارش: ')}${e(liveAge(t.age_seconds))}. ${L('Old resource values are intentionally hidden.','مقادیر قدیمی منابع عمداً مخفی شده‌اند.')}</div><div class="nv6-detail-grid">${healthMetric(L('Last ping','آخرین پینگ'),n.last_latency_ms?`${n.last_latency_ms} ms`:'—')}${healthMetric(L('Failures','خطاها'),n.failure_count||0)}${healthMetric(L('Recoveries','بازیابی‌ها'),n.recovery_count||0)}${healthMetric(L('Deployment','استقرار'),desired.pending?L('Pending','در انتظار'):L('Synced','همگام'))}</div>`;
+ return `<div class="nv6-detail-grid">${healthMetric('CPU',percent(s.cpu))}${healthMetric('RAM',percent(memPercent(s)))}${healthMetric(L('Disk','دیسک'),percent(diskPercent(s)))}${healthMetric(L('Uptime','آپ‌تایم'),duration(s.uptime))}${healthMetric('↓ RX',rate(net.down_bps))}${healthMetric('↑ TX',rate(net.up_bps))}${healthMetric(L('Connections','اتصال‌ها'),conn.available===false?'—':conn.open??'—')}${healthMetric(L('Managed clients','کلاینت مدیریت‌شده'),h.managed_clients??'—')}${healthMetric(L('Accounted traffic','ترافیک ثبت‌شده'),bytes(n.traffic_current_bytes||0))}${healthMetric(L('Hub lease','مجوز هاب'),lease.required?(lease.valid?L('Active','فعال'):L('Blocked','مسدود')):L('Legacy','قدیمی'))}${healthMetric(L('Security sync','همگام‌سازی امنیت'),sec.last_sync?liveAge(Date.now()/1000-sec.last_sync):'—')}${healthMetric(L('Direct source','منبع Direct'),h.direct_source_verified?L('Verified','تأییدشده'):L('Not verified','تأییدنشده'))}</div>`;
+}
+function systemDetail(n){
+ const t=n.telemetry||{},s=sysOf(n);if(!t.fresh)return overviewDetail(n);
+ const cpu=s.cpu_info||{},mem=s.memory||{},disk=s.disk||{},swap=s.swap||{},net=s.network||{},conn=s.connections||{},agent=s.agent||{},xray=s.xray||{},source=t.source||{};
+ const addresses=(s.addresses||[]).map(a=>`<span class="nv6-address"><b>${e(a.interface||'')}</b><code>${e(a.address||'')}</code></span>`).join('');
+ return `<div class="nv6-system"><div class="nv6-detail-grid">${healthMetric(L('CPU cores','هسته CPU'),`${cpu.physical||'—'} / ${cpu.logical||'—'}`)}${healthMetric(L('CPU MHz','فرکانس CPU'),cpu.mhz?Math.round(cpu.mhz):'—')}${healthMetric(L('Load 1/5/15','لود ۱/۵/۱۵'),(s.loads||[]).join(' / ')||'—')}${healthMetric(L('Memory','رم'),`${bytes(mem.used||0)} / ${bytes(mem.total||0)}`)}${healthMetric(L('Disk','دیسک'),`${bytes(disk.used||0)} / ${bytes(disk.total||0)}`)}${healthMetric(L('Swap','Swap'),`${bytes(swap.used||0)} / ${bytes(swap.total||0)}`)}${healthMetric(L('Network received','دریافت شبکه'),bytes(net.recv||0))}${healthMetric(L('Network sent','ارسال شبکه'),bytes(net.sent||0))}${healthMetric(L('TCP / UDP','TCP / UDP'),`${conn.tcp??'—'} / ${conn.udp??'—'}`)}${healthMetric(L('Agent memory','رم Agent'),bytes(agent.memory||0))}${healthMetric(L('Xray memory','رم Xray'),bytes(xray.memory||0))}${healthMetric(L('Xray uptime','آپ‌تایم Xray'),duration(xray.uptime))}</div><div class="nv6-source"><span>Commit</span><code>${e(source.commit||'—')}</code><span>Ref</span><code>${e(source.ref||'—')}</code></div><div class="nv6-addresses">${addresses||`<span>${L('No address reported.','آدرسی گزارش نشده است.')}</span>`}</div></div>`;
+}
+function diagnosticsDetail(doc){
+ const checks=doc?.checks||[];return `<div class="nv6-diag-head">${L('Local Agent, Xray, accounting and system diagnostics.','عیب‌یابی محلی Agent، Xray، حسابداری و سیستم.')} · ${doc?.latency_ms?e(doc.latency_ms)+' ms':''}</div><div class="nv6-diagnostics">${checks.map(c=>`<div class="nv6-check ${e(c.status)}"><i></i><div><b>${e(c.label)}</b><small>${e(c.detail||'')}</small></div><strong>${e(c.value??c.status)}</strong></div>`).join('')||empty(L('No diagnostic checks returned.','هیچ نتیجهٔ عیب‌یابی دریافت نشد.'))}</div>`;
+}
+async function showNodeDetails(id,tab='overview'){
+ const nodes=await api('/api/nodes');state.nv2.nodes=nodes;const n=nodes.find(x=>x.id===id);if(!n)throw Error(L('Node not found.','نود پیدا نشد.'));
+ let body=tab==='system'?systemDetail(n):overviewDetail(n);
+ if(tab==='diagnostics'){try{body=diagnosticsDetail(await api('/api/nodes/'+enc(id)+'/diagnostics'));}catch(ex){body=`<div class="notice error">${e(ex.message||String(ex))}</div>`;}}
+ dialog(`${L('Node','نود')} · ${e(n.name)}`,detailTabs(id,tab)+body,null);
+}
 async function showNodeInbounds(id){let r=await api('/api/nodes/'+enc(id)+'/inbounds');dialog(L('Remote inbounds','اینباندهای راه‌دور'),`<div class="notice">${L('Read live from the remote DARK node.','به‌صورت زنده از نود راه‌دور DARK خوانده شده است.')} · ${r.latency_ms} ms</div><div class="nv2-inbounds">${r.items.length?r.items.map(i=>`<div class="nv2-inbound"><span><b>${e(i.remark||i.tag)}</b><br><small>${e(i.protocol)} · ${e(i.listen||'0.0.0.0')}:${i.port}</small></span><span class="tag ${i.enable?'green':'red'}">${i.enable?L('ON','روشن'):L('OFF','خاموش')}</span></div>`).join(''):empty(L('No inbounds on node.','اینباندی روی نود نیست.'))}</div>`);}
 async function showNodeLogs(id,kind='process'){
  const r=await api('/api/nodes/'+enc(id)+'/logs/'+kind+'?limit=400');
@@ -190,6 +260,9 @@ async function showNodeLogs(id,kind='process'){
 async function refreshAfterRemote(fn){try{return await fn();}finally{if(state.page==='nodes')await renderPage();}}
 runAction=async function(act,el){
  if(act==='nv2new'){await pairNodeDialog();return;}if(act==='nv2edit'){await nodeDialog(el.dataset.id);return;}
+ if(act==='nv2details'){await showNodeDetails(el.dataset.id,'overview');return;}
+ if(act==='nv2diagnostics'){await showNodeDetails(el.dataset.id,'diagnostics');return;}
+ if(act==='nv2detailtab'){await showNodeDetails(el.dataset.id,el.dataset.tab||'overview');return;}
  if(act==='nv2probe'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/probe','POST',{});toast(`${L('Node online','نود آنلاین')} · ${r.latency_ms} ms`);});return;}
  if(act==='nv2inbounds'){await refreshAfterRemote(()=>showNodeInbounds(el.dataset.id));return;}
  if(act==='nv2sync'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/sync','POST',{});if(r.queued||r.sync_deferred){toast(controlMessage(r));return;}toast(`${L('Node synchronized','نود همگام شد')} · ${(r.items||[]).length} ${L('inbounds','اینباند')} · ${bytes(r.traffic?.charged_bytes||0)} ${L('new traffic','ترافیک جدید')}`);});return;}
