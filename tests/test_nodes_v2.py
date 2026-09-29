@@ -166,6 +166,76 @@ def test_node_metric_history_is_bounded_bucketed_and_excludes_tunnel_probes(env)
   columns={r[1] for r in store.db.execute('PRAGMA table_info(remote_node_metrics)')}
  assert 'tunnel' not in {x.lower() for x in columns} and 'warp' not in {x.lower() for x in columns}
 
+
+def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env):
+ store,_,app,c=env
+ inbound=c.post('/api/inbounds',json=_test_vless('MAINTENANCE',24410,'maintenance')).json()['id']
+ _managed_client(c,'maintenance-user',inbound)
+ out=c.post('/api/nodes',json={'id':'maint1','name':'Maintenance Node','origin':'https://maint1.example.com',
+   'dataAddress':'maint-data.example.com','token':'dkn_'+('Q'*60),'enabled':True,'inboundIds':[inbound]})
+ assert out.status_code==200,out.text
+ health={'service':'DARK XRAY NODE','agent_only':True,'version':'0.10.0-rc22',
+         'core':{'state':'running','version':'test','dirty':False,'last_error':''},
+         'system':{'cpu':20.0,'memory_percent':30.0,'disk_percent':40.0,'uptime':1000,
+                   'cpu_info':{'logical':4},'loads':[1.0],
+                   'memory':{'used':300,'total':1000,'percent':30.0},
+                   'disk':{'used':400,'total':1000,'free':600,'percent':40.0}},
+         'hub_lease':{'required':True,'valid':True},'maintenance':{'statistics_error':'','checkpoint_age_seconds':2.0}}
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=77,last_sync=? WHERE node_id='maint1' AND local_inbound_id=?",(time.time(),inbound))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_health=?,last_latency_ms=11 WHERE id='maint1'",
+             (time.time(),__import__('json').dumps(health)))
+ before={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
+ assert before['enabled']==1 and before['online'] is True
+ assert before['assignments'][0]['failover_ready'] is True
+ last_seen=before['last_seen']
+ enabled=c.post('/api/nodes/maint1/maintenance',json={'enabled':True,'note':'kernel work'})
+ assert enabled.status_code==200,enabled.text
+ node=enabled.json()
+ assert node['maintenance']==1 and node['maintenance_note']=='kernel work' and node['enabled']==1
+ assert node['last_seen']==last_seen and node['health']['core']['state']=='running'
+ assert node['assignments'][0]['failover_ready'] is False
+ assert node['assignments'][0]['failover_reason']=='node_maintenance'
+ assert app.state.nodes.failover_targets('maintenance-user')==[]
+ disabled=c.post('/api/nodes/maint1/maintenance',json={'enabled':False,'note':''})
+ assert disabled.status_code==200,disabled.text
+ node=disabled.json()
+ assert node['maintenance']==0 and node['maintenance_since']==0 and node['enabled']==1
+ assert node['assignments'][0]['failover_ready'] is True
+ assert len(app.state.nodes.failover_targets('maintenance-user'))==1
+
+
+def test_node_alert_lifecycle_tracks_first_and_last_observation(env):
+ store,_,app,c=env
+ out=c.post('/api/nodes',json={'id':'alert1','name':'Alert Node','origin':'https://alert1.example.com',
+   'token':'dkn_'+('R'*60),'enabled':True,'inboundIds':[]})
+ assert out.status_code==200,out.text
+ now=time.time()
+ health={'service':'DARK XRAY NODE','agent_only':True,'version':'0.10.0-rc22',
+         'core':{'state':'running','version':'test','dirty':False,'last_error':''},
+         'system':{'cpu':88.0,'memory_percent':30.0,'disk_percent':40.0,'uptime':1000,
+                   'cpu_info':{'logical':4},'loads':[1.0],
+                   'memory':{'used':300,'total':1000,'percent':30.0},
+                   'disk':{'used':400,'total':1000,'free':600,'percent':40.0},
+                   'network':{'sent':100,'recv':200,'up_bps':10.0,'down_bps':20.0},
+                   'connections':{'open':2,'tcp':2,'udp':0,'available':True}},
+         'hub_lease':{'required':True,'valid':True},'maintenance':{'statistics_error':'','checkpoint_age_seconds':2.0}}
+ reg=app.state.nodes
+ assert reg._record_metric('alert1',health,9,captured_at=now-30,min_interval=0)
+ assert reg._record_metric('alert1',health,9,captured_at=now-5,min_interval=0)
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_health=? WHERE id='alert1'",
+             (time.time(),__import__('json').dumps(health)))
+ node={x['id']:x for x in c.get('/api/nodes').json()}['alert1']
+ alert=next(x for x in node['operational_health']['alerts'] if x['code']=='cpu_high')
+ assert abs(alert['started_at']-(now-30))<1
+ assert abs(alert['last_observed_at']-(now-5))<1
+ healthy=__import__('copy').deepcopy(health);healthy['system']['cpu']=20.0
+ assert reg._record_metric('alert1',healthy,8,captured_at=now,min_interval=0)
+ with store.lock:
+  row=store.db.execute("SELECT active FROM remote_node_alerts WHERE node_id='alert1' AND code='cpu_high'").fetchone()
+ assert row and row['active']==0
+
 def test_pair_code_is_bootstrap_only_and_rotates_remote_credential(env,monkeypatch,tmp_path):
  # Keep the bootstrap/encryption/duplicate-registration contract, but use the
  # real Agent's pinned guarded handoff instead of a legacy unversioned mock.
