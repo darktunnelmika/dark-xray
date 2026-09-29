@@ -17,6 +17,7 @@ import ssl
 import threading
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor,as_completed
 from typing import Any
 
 from dark_policy import PolicyError, NAME_RE, Store, normalize_ip
@@ -312,7 +313,10 @@ class NodeRegistry:
             with self.store.lock:
                 assigned=[dict(x) for x in self.store.db.execute(
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
-            r['online']=bool(r['enabled'] and r['last_seen'] and now-r['last_seen']<180 and not r['last_error'])
+            age=max(0.0,now-float(r['last_seen'] or 0)) if r['last_seen'] else None
+            r['telemetry_age_seconds']=round(age,1) if age is not None else None
+            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
+            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
@@ -606,6 +610,30 @@ class NodeRegistry:
         with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
         return {'node':self.get(node_id),'latency_ms':ms,'health':health}
 
+
+    def refresh_telemetry(self,*,timeout:float=4.0,max_workers:int=8)->dict:
+        """Refresh lightweight health telemetry for enabled Nodes in parallel.
+
+        This deliberately calls only /node/api/health. It does not run tunnel,
+        WARP, routing, traffic-matrix, or other path health probes.
+        """
+        with self.store.lock:
+            node_ids=[str(r['id']) for r in self.store.db.execute(
+                'SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY name,id')]
+        refreshed=[];errors=[]
+        if node_ids:
+            workers=max(1,min(int(max_workers),len(node_ids),16))
+            with ThreadPoolExecutor(max_workers=workers,thread_name_prefix='dark-node-live') as pool:
+                futures={pool.submit(self.probe,node_id,timeout=timeout):node_id for node_id in node_ids}
+                for future in as_completed(futures):
+                    node_id=futures[future]
+                    try:
+                        result=future.result()
+                        refreshed.append({'node_id':node_id,'latency_ms':result.get('latency_ms',0)})
+                    except Exception as ex:
+                        errors.append({'node_id':node_id,'error':str(ex)[:300]})
+        refreshed.sort(key=lambda x:x['node_id']);errors.sort(key=lambda x:x['node_id'])
+        return {'generated_at':time.time(),'refreshed':refreshed,'errors':errors,'nodes':self.list()}
 
     def _allowed_traffic_clients(self,node_id:str)->set[str]:
         with self.store.lock:
