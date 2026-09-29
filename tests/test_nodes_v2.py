@@ -30,6 +30,41 @@ def test_central_node_token_encrypted_and_probe(env,monkeypatch):
  rows=c.get('/api/nodes').json();assert rows[0]['online'] is True and rows[0]['health']['inbounds']==3 and 'token' not in rows[0]
 
 
+
+def test_live_telemetry_refresh_is_freshness_aware_and_preserves_system_snapshot(env,monkeypatch):
+ store,_,app,c=env
+ for node_id,ch in [('live1','X'),('live2','Y')]:
+  out=c.post('/api/nodes',json={'id':node_id,'name':node_id,'origin':'https://'+node_id+'.example.com',
+    'token':'dkn_'+(ch*60),'enabled':True,'inboundIds':[]})
+  assert out.status_code==200,out.text
+ def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
+  assert path=='/node/api/health'
+  return {'service':'DARK XRAY NODE','agent_only':True,'node_id':node_id,
+          'core':{'state':'running','version':'test','dirty':False,'last_error':''},
+          'system':{'cpu':12.5,'memory_percent':34.0,'disk_percent':45.0,'uptime':3600,
+                    'memory':{'used':340,'total':1000,'percent':34.0},
+                    'disk':{'used':450,'total':1000,'free':550,'percent':45.0},
+                    'network':{'sent':1000,'recv':2000,'up_bps':128.0,'down_bps':256.0},
+                    'connections':{'open':7,'tcp':5,'udp':2,'available':True},
+                    'addresses':[{'interface':'eth0','address':'203.0.113.8','family':4}]},
+          'inbounds':0,'managed_clients':3},11
+ monkeypatch.setattr(app.state.nodes,'_request',fake_request)
+ refreshed=c.post('/api/nodes/telemetry/refresh')
+ assert refreshed.status_code==200,refreshed.text
+ doc=refreshed.json()
+ assert len(doc['refreshed'])==2 and not doc['errors']
+ assert all(x['telemetry_state']=='fresh' for x in doc['nodes'])
+ assert all(x['telemetry_age_seconds']<=2 for x in doc['nodes'])
+ assert doc['nodes'][0]['health']['system']['network']['down_bps']==256.0
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-30,))
+ stale={x['id']:x for x in c.get('/api/nodes').json()}['live1']
+ assert stale['telemetry_state']=='stale' and stale['online'] is True and stale['telemetry_age_seconds']>=29
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-181,))
+ offline={x['id']:x for x in c.get('/api/nodes').json()}['live1']
+ assert offline['telemetry_state']=='offline' and offline['online'] is False
+
 def test_pair_code_is_bootstrap_only_and_rotates_remote_credential(env,monkeypatch,tmp_path):
  # Keep the bootstrap/encryption/duplicate-registration contract, but use the
  # real Agent's pinned guarded handoff instead of a legacy unversioned mock.
