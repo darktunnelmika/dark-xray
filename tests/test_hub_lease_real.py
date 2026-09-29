@@ -148,3 +148,28 @@ def test_real_wall_clock_lease_expiry_and_recovery(real_fleet):
     finally:
         for guard in guards:guard.close()
         for loop in loops:loop.close()
+
+
+def test_real_restore_and_native_share_lease_without_bypassing_quota(real_fleet,monkeypatch):
+    from test_restore_real_limits import restored,assert_only_restore_blocked,assert_saved_identity
+    f=real_fleet
+    with restored(f,monkeypatch) as r:
+        clocks=arm(f)
+        for client in f.clients:transfer(client.port,f.target)
+        received=sum(transfer(client.port,f.target) for client in r.clients)
+        for node,clock in zip(f.agents,clocks):
+            node.engine.last_stats=0;EngineLoop(node.engine,5,node.runtime).tick()
+            clock[0]=161;LeaseGuard(node.runtime).tick();assert not node.engine.running
+        # Import every closed Node's retained tail before asserting the shared
+        # quota decision. Leases are not atomic byte reservations across a
+        # still-unobserved Node (the documented per-cycle overshoot boundary).
+        for node in f.agents:f.reg.sync_traffic(node.id)
+        for node in f.agents:
+            assert grant(f,node)['valid'] and node.engine.running
+        item=assert_saved_identity(f,r)
+        assert item['dark_used']>=received and item['service_status']=='exhausted',item
+        assert_only_restore_blocked(f,r)
+        before=r.restore.usage(r.rid)
+        for node in f.agents:grant(f,node)
+        assert r.restore.usage(r.rid)==before,'Restore was charged twice on repeated snapshots'
+        f.evidence.update(mixed_restore_native_lease=True,restore_quota_before_recovery=True)

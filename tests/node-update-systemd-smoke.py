@@ -219,7 +219,7 @@ def main():
             except subprocess.TimeoutExpired:proxy.kill();proxy.wait()
         if target is not None:target.shutdown();target.server_close()
         if thread is not None:thread.join(timeout=5)
-        a.report.parent.mkdir(parents=True,exist_ok=True);a.report.write_text(json.dumps(report,indent=2)+'\n')
+        a.report.parent.mkdir(parents=True,exist_ok=True);a.report.write_text(json.dumps(report,indent=2)+'\n');a.report.chmod(0o644)  # Public fixture evidence, never credentials.
         print(json.dumps(report,indent=2))
 
 

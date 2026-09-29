@@ -220,7 +220,7 @@ def test_hub_failure_or_ignored_identity_never_renews():
     nodes=SimpleNamespace(installations=SimpleNamespace(operation=lambda _:contextlib.nullcontext()),_request=Mock())
     manager=SimpleNamespace(tick=Mock(side_effect=RuntimeError('ledger unavailable')))
     with pytest.raises(PolicyError,match='withheld'):
-        renew_accounting_lease(nodes,manager,None,'n',{'accounting_lease':'a'*64},None,None)
+        renew_accounting_lease(nodes,manager,SimpleNamespace(collect_stats=Mock()),'n',{'accounting_lease':'a'*64},None,None)
     with pytest.raises(PolicyError,match='unmanaged'):
         renew_accounting_lease(nodes,manager,None,'n',{'accounting_lease':'a'*64,'ignored_clients':1},None,None)
     nodes._request.assert_not_called()
