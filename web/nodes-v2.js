@@ -27,7 +27,7 @@ function fleetSummary(nodes){
  const live=nodes.filter(n=>n.telemetry?.fresh).length,attention=nodes.filter(n=>(n.telemetry?.alerts||[]).length).length;
  const cpus=nodes.map(n=>finite(sysOf(n).cpu)).filter(v=>v!==null),avg=cpus.length?(cpus.reduce((a,b)=>a+b,0)/cpus.length).toFixed(1)+'%':'—';
  const pending=nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
- return `${healthMetric(L('Nodes','نودها'),nodes.length)}${healthMetric(L('Live','زنده'),live)}${healthMetric(L('Attention','نیازمند بررسی'),attention)}${healthMetric(L('Avg CPU','میانگین CPU'),avg)}${healthMetric(L('Pending','در انتظار'),pending)}`;
+ return `${healthMetric(L('Nodes','نودها'),nodes.length)}${healthMetric(L('Live','زنده'),live)}${healthMetric(L('Attention','نیازمند بررسی'),attention)}${healthMetric(L('Avg CPU','میانگین CPU'),avg)}${healthMetric(L('Pending changes','تغییر در انتظار'),pending)}`;
 }
 function renderLiveFleet(nodes){
  const grid=document.querySelector('.nv2-grid'),summary=document.getElementById('nv2-fleet-summary'),stamp=document.getElementById('nv2-live-stamp');
