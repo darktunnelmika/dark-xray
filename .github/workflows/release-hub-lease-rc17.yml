@@ -13,20 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: fix/hub-lease-accounting-rc17
-      - name: Fetch immutable public-source candidate and verify complete tree
+          ref: b0fb031386c01c01e04f665c3a07111dd7c776c2
+      - name: Verify and publish manifest and fixture correction
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location --proto '=https' --max-time 40 --retry 2 'https://steven.darkvpn.info:2087/assets/release-source-075ec4ce5880559d.patch.gz' -o /tmp/dark-candidate.patch.gz
-          echo '075ec4ce5880559d2ee1627bbb1004f8f6948c63be8cd4d5ba5e106623da2121  /tmp/dark-candidate.patch.gz' | sha256sum --check --strict
-          gzip -dc /tmp/dark-candidate.patch.gz > /tmp/dark-candidate.patch
-          echo 'f6f9a148b4fee63c0d1c111802a997325c678ff4327531b0309142cebf70b284  /tmp/dark-candidate.patch' | sha256sum --check --strict
-          git rm .github/workflows/release-hub-lease-rc17.yml
-          git apply --index /tmp/dark-candidate.patch
+          curl --fail --silent --show-error --location --proto '=https' --max-time 40 --retry 2 'https://steven.darkvpn.info:2087/assets/release-fix-859018956ce5910f.patch.gz' -o /tmp/dark-fix.patch.gz
+          echo '859018956ce5910fc6d5165d154b8446608f49a44dd283b649a7c63d0614cec8  /tmp/dark-fix.patch.gz' | sha256sum --check --strict
+          gzip -dc /tmp/dark-fix.patch.gz > /tmp/dark-fix.patch
+          echo 'e43a706ce82a67b485cf228cc24a0c166a9c9990de98d52aa55f3ffd663c06ee  /tmp/dark-fix.patch' | sha256sum --check --strict
+          git apply --index /tmp/dark-fix.patch
           git diff --cached --check
-          test "$(git write-tree)" = '4b3df9a93bc48885f1b72a2ad844f6a73591326f'
-          python -m py_compile backend/core.py backend/node_runtime.py backend/node_agent.py backend/nodes.py backend/node_lease_sync.py backend/server.py backend/restore_groups.py tests/test_hub_lease.py tests/test_hub_lease_real.py
-          git -c user.name='darktunnelmika' -c user.email='321545960+darktunnelmika@users.noreply.github.com' commit -m 'fix: checkpoint Node traffic and enforce accounting-backed Hub leases (rc17)'
-          git push origin HEAD:refs/heads/fix/hub-lease-accounting-rc17
+          test "$(git write-tree)" = 'a6a337f6efc86a5ce181e79dd3e7903eba1bed2a'
+          sha256sum -c SHA256SUMS
+          python -m py_compile tests/node-update-systemd-smoke.py
+          git -c user.name='darktunnelmika' -c user.email='321545960+darktunnelmika@users.noreply.github.com' commit -m 'test: reconcile installed Node leases and regenerate complete rc17 manifest'
+          git push origin HEAD:refs/heads/fix/hub-accounting-failclosed-rc17
           echo "Verified candidate $(git rev-parse HEAD) tree $(git rev-parse HEAD^{tree})"
