@@ -44,3 +44,16 @@ test('Detailed orchestration remains available but is no longer the main surface
 test('Node editor can still manage inbound assignments for recovery/admin use',()=>{
   for(const token of ['Inbound deployments','name="inboundIds"',"getAll('inboundIds')"])assert.ok(src.includes(token),token);
 });
+
+
+test('Nodes V6 exposes live resource telemetry without pretending stale data is live',()=>{
+  for(const token of ['telemetry_state','telemetry_age_seconds','NV6_FRESH_SECONDS','CPU','RAM','Disk','Uptime','↓ RX','↑ TX','Connections'])
+    assert.ok(src.includes(token),token);
+  for(const token of ['/api/nodes/telemetry/refresh','setInterval(nv6RefreshLive,5000)','nv6-not-fresh','STALE'])
+    assert.ok(src.includes(token),token);
+});
+
+test('Nodes V6 diagnostics explicitly excludes tunnel health',()=>{
+  for(const token of ['Node Diagnostics','Live Agent/Xray/system diagnostics only','Tunnel health is not tested here'])
+    assert.ok(src.includes(token),token);
+});
