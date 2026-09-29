@@ -87,7 +87,7 @@ Xray رسمی در هر دو مسیر به نسخه pin‌شده دریافت م
 
 ## DARK GRE Direct مستقل
 
-برای ساخت تونل مستقیم بین IRAN و KHAREJ، پروژه شامل **DARK GRE Direct RC12** به‌صورت مستقل است.
+برای ساخت تونل مستقیم بین IRAN و KHAREJ، پروژه شامل **DARK GRE Direct RC14** به‌صورت مستقل است.
 
 ویژگی‌های نسخه فعلی:
 
@@ -105,12 +105,12 @@ Xray رسمی در هر دو مسیر به نسخه pin‌شده دریافت م
 نصب:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-gre/install.sh | bash
+curl -4 -fsSL --retry 3 https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dark-gre-v0.12.2-rc14/standalone/dark-gre/install.sh | bash
 ```
 
 راهنمای کامل: [standalone/dark-gre/README.fa.md](standalone/dark-gre/README.fa.md)
 
-RC12 روی Pair واقعی IRAN ↔ Poland با Reboot هر دو سمت، Ping داخلی و TCP/1190 تست شده است.
+RC14 روی Pair واقعی IRAN ↔ Poland با Reboot هر دو سمت، Ping داخلی و TCP/1190 تست شده است.
 
 ## گیت‌های سلامت روی سرور
 
