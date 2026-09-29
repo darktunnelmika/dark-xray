@@ -16,6 +16,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -1193,7 +1194,22 @@ class CoreEngine:
                     if len(addresses)>=16:break
                 if len(addresses)>=16:break
         except (psutil.Error,OSError):pass
+        interfaces=[]
+        try:
+            for name,stat in psutil.net_if_stats().items():
+                interfaces.append({'name':str(name)[:64],'up':bool(stat.isup),
+                                   'mtu':int(stat.mtu or 0),'speed_mbps':int(stat.speed or 0)})
+                if len(interfaces)>=32:break
+        except (psutil.Error,OSError):pass
+        try:
+            release=platform.freedesktop_os_release()
+            os_name=str(release.get('PRETTY_NAME') or release.get('NAME') or platform.system())[:160]
+        except (OSError,ValueError):
+            os_name=platform.system()[:160]
+        host={'hostname':socket.gethostname()[:255],'os':os_name,
+              'kernel':platform.release()[:160],'machine':platform.machine()[:80]}
         return {'cpu':self._host_cpu_percent(now),'cpuInfo':cpu_info,
+                'host':host,'interfaces':interfaces,
                 'mem':{'current':vm.used,'total':vm.total},
                 'disk':{'current':disk.used,'total':disk.total,'free':disk.free},
                 'swap':{'current':swap.used,'total':swap.total},
