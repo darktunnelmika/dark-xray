@@ -228,6 +228,11 @@ class NodeRegistry:
               updated_at REAL NOT NULL DEFAULT 0,applied_revision INTEGER NOT NULL DEFAULT 0,
               applied_hash TEXT NOT NULL DEFAULT '',applied_at REAL NOT NULL DEFAULT 0,
               last_error TEXT NOT NULL DEFAULT '');
+            CREATE TABLE IF NOT EXISTS remote_node_metrics(
+              node_id TEXT NOT NULL,at REAL NOT NULL,cpu REAL,memory_percent REAL,disk_percent REAL,
+              rx_bps REAL,tx_bps REAL,connections INTEGER,
+              PRIMARY KEY(node_id,at));
+            CREATE INDEX IF NOT EXISTS remote_node_metrics_time ON remote_node_metrics(node_id,at);
             ''')
             node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
             for name,ddl in (
@@ -359,7 +364,10 @@ class NodeRegistry:
                 if lease.get('required') and not lease.get('valid'):alert('hub_lease','critical','Hub accounting lease invalid',str(lease.get('state') or 'invalid'))
                 maintenance=health.get('maintenance') if isinstance(health.get('maintenance'),dict) else {}
                 if maintenance.get('statistics_error'):alert('accounting_stats','critical','Accounting checkpoint error',str(maintenance.get('statistics_error'))[:160])
+            health_state=('disabled' if not r['enabled'] else 'critical' if any(x['severity']=='critical' for x in alerts) else
+                          'degraded' if alerts else 'healthy' if fresh else 'unknown')
             r['telemetry']={'fresh':fresh,'age_seconds':round(age,1) if age is not None else None,
+                            'health_state':health_state,
                             'stale_after_seconds':round(stale_after,1),'sampled_at':health_at,
                             'live_state':('disabled' if not r['enabled'] else 'error' if r['last_error'] else
                                           'online' if fresh else 'stale' if r['last_seen'] else 'offline'),
@@ -595,6 +603,7 @@ class NodeRegistry:
             db.execute('DELETE FROM remote_node_installations WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_inbounds WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_client_usage WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_metrics WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_ips WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_devices WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_security_state WHERE node_id=?',(node_id,))
@@ -647,6 +656,61 @@ class NodeRegistry:
         self._request_ok(node_id,elapsed)
         return doc,elapsed
 
+    @staticmethod
+    def _metric_values(health:dict)->dict:
+        system=health.get('system') if isinstance(health,dict) and isinstance(health.get('system'),dict) else {}
+        def number(value,*,percent=False):
+            try:value=float(value)
+            except (TypeError,ValueError):return None
+            if value!=value or value in (float('inf'),float('-inf')):return None
+            if percent:value=max(0.0,min(100.0,value))
+            return value
+        memory=system.get('memory') if isinstance(system.get('memory'),dict) else {}
+        disk=system.get('disk') if isinstance(system.get('disk'),dict) else {}
+        network=system.get('network') if isinstance(system.get('network'),dict) else {}
+        connections=system.get('connections') if isinstance(system.get('connections'),dict) else {}
+        memory_value=memory.get('percent',system.get('memory_percent'))
+        disk_value=disk.get('percent',system.get('disk_percent'))
+        conn=connections.get('open')
+        try:conn=max(0,int(conn)) if conn is not None else None
+        except (TypeError,ValueError):conn=None
+        return {'cpu':number(system.get('cpu'),percent=True),
+                'memory_percent':number(memory_value,percent=True),
+                'disk_percent':number(disk_value,percent=True),
+                'rx_bps':number(network.get('down_bps')),
+                'tx_bps':number(network.get('up_bps')),
+                'connections':conn}
+
+    def _record_metric_locked(self,db,node_id:str,health:dict,now:float)->None:
+        last=db.execute('SELECT MAX(at) FROM remote_node_metrics WHERE node_id=?',(node_id,)).fetchone()[0]
+        if last and now-float(last)<30.0:return
+        values=self._metric_values(health)
+        if not any(value is not None for value in values.values()):return
+        db.execute('''INSERT INTO remote_node_metrics
+                      (node_id,at,cpu,memory_percent,disk_percent,rx_bps,tx_bps,connections)
+                      VALUES(?,?,?,?,?,?,?,?)''',
+                   (node_id,now,values['cpu'],values['memory_percent'],values['disk_percent'],
+                    values['rx_bps'],values['tx_bps'],values['connections']))
+        db.execute('DELETE FROM remote_node_metrics WHERE node_id=? AND at<?',
+                   (node_id,now-31*86400))
+
+    def metrics(self,node_id:str,window:str='1h',*,max_points:int=240)->dict:
+        self.get(node_id)
+        windows={'1h':3600,'24h':86400,'7d':7*86400,'30d':30*86400}
+        if window not in windows:raise PolicyError('Invalid Node metrics window')
+        if type(max_points)is not int or not 30<=max_points<=600:raise PolicyError('Invalid Node metrics point limit')
+        now=time.time();start=now-windows[window];bucket=max(30.0,windows[window]/max_points)
+        with self.store.lock:
+            rows=self.store.db.execute('''SELECT MAX(at) at,AVG(cpu) cpu,AVG(memory_percent) memory_percent,
+                AVG(disk_percent) disk_percent,AVG(rx_bps) rx_bps,AVG(tx_bps) tx_bps,
+                CAST(AVG(connections) AS INTEGER) connections
+                FROM remote_node_metrics WHERE node_id=? AND at>=?
+                GROUP BY CAST((at-?)/? AS INTEGER) ORDER BY at''',
+                (node_id,start,start,bucket)).fetchall()
+        return {'node_id':node_id,'window':window,'generated_at':now,'retention_seconds':31*86400,
+                'sample_interval_seconds':30,'bucket_seconds':round(bucket,2),
+                'points':[dict(row) for row in rows]}
+
     @installation_operation
     def probe(self,node_id:str,*,timeout:float=8.0)->dict:
         with self._node_operation(node_id):
@@ -659,7 +723,10 @@ class NodeRegistry:
             self._request_failed(node_id,'Remote endpoint is not a DARK node agent')
             raise PolicyError('Remote endpoint is not a DARK node agent')
         self.installations.observe(node_id,health)
-        with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,last_health_at=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,now,node_id))
+        with self._node_transaction(node_id) as db:
+            db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,last_health_at=?,updated_at=? WHERE id=?',
+                       (now,ms,'',json.dumps(health),now,now,node_id))
+            self._record_metric_locked(db,node_id,health,now)
         return {'node':self.get(node_id),'latency_ms':ms,'health':health}
 
 
