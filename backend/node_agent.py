@@ -321,10 +321,27 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                 raw=json.loads(source_path.read_text(encoding='utf-8'))
                 if isinstance(raw,dict):source={k:raw.get(k) for k in ('commit','version','ref','role')}
         except (OSError,ValueError):source={}
+        mem_percent=100*system['mem']['current']/max(1,system['mem']['total'])
+        disk_percent=100*system['disk']['current']/max(1,system['disk']['total'])
         return {'service':'DARK XRAY NODE','agent_only':True,'version':VERSION,'node_id':node_id,'installed_source':source,
+                'sampled_at':time.time(),
                 'core':{'state':core['state'],'version':core['version'],'dirty':core['dirty'],'last_error':core['last_error']},
-                'system':{'cpu':system['cpu'],'memory_percent':100*system['mem']['current']/max(1,system['mem']['total']),
-                          'disk_percent':100*system['disk']['current']/max(1,system['disk']['total']),'uptime':system['uptime']},
+                'system':{
+                    'cpu':float(system['cpu']),'cpu_info':system.get('cpuInfo',{}),
+                    'memory':{'used':int(system['mem']['current']),'total':int(system['mem']['total']),'percent':round(mem_percent,1)},
+                    'disk':{'used':int(system['disk']['current']),'total':int(system['disk']['total']),
+                            'free':int(system['disk'].get('free',0)),'percent':round(disk_percent,1)},
+                    'swap':{'used':int(system.get('swap',{}).get('current',0)),'total':int(system.get('swap',{}).get('total',0))},
+                    'uptime':int(system['uptime']),'loads':[round(float(x),2) for x in system.get('loads',[])[:3]],
+                    'network':{'sent':int(system.get('netTraffic',{}).get('sent',0)),
+                               'recv':int(system.get('netTraffic',{}).get('recv',0)),
+                               'up_bps':round(float(system.get('netIO',{}).get('up',0)),1),
+                               'down_bps':round(float(system.get('netIO',{}).get('down',0)),1)},
+                    'connections':system.get('connections',{}),'addresses':system.get('addresses',[])[:16],
+                    'agent':{'memory':int(system.get('panel',{}).get('mem',0)),
+                             'threads':int(system.get('panel',{}).get('threads',0))},
+                    'xray':{'memory':int(system.get('xray',{}).get('mem',0)),
+                            'uptime':int(system.get('xray',{}).get('uptime',0))}},
                 'inbounds':int(assigned),'managed_clients':int(clients),'writes_enabled':engine.config.writes_enabled,
                 'installation_id':runtime.installation_id,'hub_lease':runtime.hub_lease.status(),'lease_watchdog':{'systemd_enabled':lease_guard.watchdog.enabled,'last_error':lease_guard.last_error},
                 'capabilities':{'accounting_lease':1,'credential_rotation':1,'ordered_control':1,'installation_identity':1,'replacement_prepare':1,'conditional_activation':1,'guard_status':1,'traffic_matrix_probe':1,'warp_endpoint_probe':1},'control_receipt':runtime.command_status(),
@@ -332,6 +349,56 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                                'statistics_error':engine.stats_error,
                                'checkpoint_age_seconds':round(max(0,time.monotonic()-engine.last_stats),2) if engine.last_stats else None},
                 'direct_source_verified':bool(engine.config.direct_source_verified),'guard':guard}
+
+    @app.get('/node/api/v1/diagnostics')
+    def diagnostics(_scope:str=Depends(auth)):
+        system=engine.system();core=engine.runtime_state();lease=runtime.hub_lease.status()
+        mem_percent=100*system['mem']['current']/max(1,system['mem']['total'])
+        disk_percent=100*system['disk']['current']/max(1,system['disk']['total'])
+        cpu=float(system['cpu']);checkpoint_age=(max(0,time.monotonic()-engine.last_stats) if engine.last_stats else None)
+        checks=[]
+        def add(check_id,label,status,detail='',value=None):
+            checks.append({'id':check_id,'label':label,'status':status,'detail':str(detail)[:300],'value':value})
+        add('agent','Node Agent','pass','Authenticated Agent API is responding',VERSION)
+        xray_state=str(core.get('state') or 'unknown')
+        add('xray','Xray','pass' if xray_state=='running' else 'warn',
+            'Xray runtime is '+xray_state,xray_state)
+        if not lease.get('required'):
+            add('hub_lease','Hub accounting lease','pass','Lease enforcement is not required by this Agent','legacy')
+        elif lease.get('valid'):
+            add('hub_lease','Hub accounting lease','pass',
+                'Accounting authority is active; remaining %.1fs'%float(lease.get('remaining_seconds') or 0),lease.get('state'))
+        else:
+            add('hub_lease','Hub accounting lease','fail',
+                'Accounting authority is not valid; Xray must remain fenced',lease.get('state'))
+        add('lease_watchdog','Lease watchdog','pass' if lease_guard.watchdog.enabled else 'warn',
+            'systemd process watchdog is '+('enabled' if lease_guard.watchdog.enabled else 'not confirmed'),
+            bool(lease_guard.watchdog.enabled))
+        if engine.stats_error:
+            add('accounting_checkpoint','Accounting checkpoint','fail',engine.stats_error,'error')
+        elif checkpoint_age is None:
+            add('accounting_checkpoint','Accounting checkpoint','warn','No Xray statistics checkpoint has been observed yet','unknown')
+        elif checkpoint_age<=15:
+            add('accounting_checkpoint','Accounting checkpoint','pass','Latest checkpoint is %.1fs old'%checkpoint_age,round(checkpoint_age,1))
+        else:
+            add('accounting_checkpoint','Accounting checkpoint','warn','Latest checkpoint is %.1fs old'%checkpoint_age,round(checkpoint_age,1))
+        add('cpu','CPU','pass' if cpu<90 else ('warn' if cpu<97 else 'fail'),'Current host CPU usage',round(cpu,1))
+        add('memory','Memory','pass' if mem_percent<90 else ('warn' if mem_percent<97 else 'fail'),'Current host memory usage',round(mem_percent,1))
+        add('disk','Disk','pass' if disk_percent<85 else ('warn' if disk_percent<95 else 'fail'),'Runtime filesystem usage',round(disk_percent,1))
+        addresses=system.get('addresses',[])
+        add('network','Network','pass' if addresses else 'warn',
+            ('Usable host addresses are present' if addresses else 'No non-loopback address was reported'),len(addresses))
+        try:
+            update_state=updater.status()
+            add('update_broker','Update broker','pass','Root-owned update broker is reachable',
+                str(update_state.get('state') or update_state.get('status') or 'ready')[:80] if isinstance(update_state,dict) else 'ready')
+        except (UpdateBrokerError,OSError,ValueError) as ex:
+            add('update_broker','Update broker','warn',str(ex)[:300],'unavailable')
+        return {'service':'DARK XRAY NODE','node_id':node_id,'generated_at':time.time(),'checks':checks,
+                'system':{'cpu':round(cpu,1),'memory_percent':round(mem_percent,1),'disk_percent':round(disk_percent,1),
+                          'uptime':int(system['uptime']),'connections':system.get('connections',{}),
+                          'addresses':addresses[:16]},
+                'boundary':'local Agent/Xray/accounting/system diagnostics; tunnel health is not tested'}
 
     @app.get('/node/api/v1/state')
     def state(_scope:str=Depends(auth)):
