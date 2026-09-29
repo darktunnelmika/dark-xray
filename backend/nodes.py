@@ -351,9 +351,10 @@ class NodeRegistry:
         loads=system.get('loads') if isinstance(system.get('loads'),list) else []
         load1=number(loads[0]) if loads else None
         logical=number(cpu_info.get('logical'))
-        load_pct=max(0.0,min(100.0,100.0*load1/logical)) if load1 is not None and logical and logical>0 else None
+        load_raw_pct=max(0.0,100.0*load1/logical) if load1 is not None and logical and logical>0 else None
+        load_capacity_pct=min(100.0,load_raw_pct) if load_raw_pct is not None else None
 
-        weighted=[(cpu,.40),(mem,.35),(load_pct,.25)]
+        weighted=[(cpu,.40),(mem,.35),(load_capacity_pct,.25)]
         present=[(value,weight) for value,weight in weighted if value is not None]
         capacity=round(sum(value*weight for value,weight in present)/sum(weight for _,weight in present),1) if present else None
         capacity_state='unknown' if capacity is None else ('overloaded' if capacity>=90 else 'busy' if capacity>=70 else 'healthy')
@@ -367,9 +368,9 @@ class NodeRegistry:
             if value is None:continue
             if value>=critical:add(alerts,'critical',ccode,value,critical)
             elif value>=warn:add(alerts,'warning',wcode,value,warn)
-        if load_pct is not None:
-            if load_pct>=100:add(alerts,'critical','load_critical',load_pct,100)
-            elif load_pct>=75:add(alerts,'warning','load_high',load_pct,75)
+        if load_raw_pct is not None:
+            if load_raw_pct>=150:add(alerts,'critical','load_critical',load_raw_pct,150)
+            elif load_raw_pct>=100:add(alerts,'warning','load_high',load_raw_pct,100)
 
         core_state=str(core.get('state') or '')
         if core_state and core_state!='running':add(alerts,'critical','xray_not_running')
