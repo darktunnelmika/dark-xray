@@ -63,3 +63,17 @@ test('Nodes V6 live refresh is read-only and preserves extension actions',()=>{
   assert.ok(src.includes("document.querySelector('dialog[open]')"));
   assert.ok(src.includes("!String(x.dataset.act||'').startsWith('nv2')"));
 });
+
+
+test('Nodes V7 surfaces health score capacity and fleet alerts',()=>{
+  for(const token of ['operational_health','HEALTH SCORE','CAPACITY USED','Node health alerts','nv7FleetAlerts','nv7-capacity-track','data-nv6-summary="warning"','data-nv6-summary="critical"'])
+    assert.ok(src.includes(token),token);
+  for(const token of ['cpu_high','memory_critical','disk_high','hub_lease_invalid','accounting_checkpoint_stale'])
+    assert.ok(src.includes(token),token);
+});
+
+test('Nodes V7 keeps tunnel health outside health score and capacity',()=>{
+  assert.ok(src.includes('Tunnel health is intentionally excluded'));
+  assert.ok(!src.includes('tunnel_critical'));
+  assert.ok(!src.includes('tunnel_health'));
+});
