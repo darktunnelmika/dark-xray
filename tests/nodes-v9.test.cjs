@@ -17,7 +17,7 @@ test('Nodes V9 loads after V8 and preserves previous wrappers',()=>{
 test('Nodes V9 maintenance is explicit and does not issue core stop or tunnel probes',()=>{
  for(const token of ['nv9maintenance','/maintenance','Existing connections are not stopped','new subscription/failover routes are paused'])
   assert.ok(src.includes(token),token);
- assert.equal(src.includes("data-core="stop""),false);
+ assert.equal(src.includes('data-core="stop"'),false);
  assert.equal(src.toLowerCase().includes('tunnel health check'),false);
 });
 
