@@ -1,4 +1,4 @@
-/* DARK XRAY Nodes V6 — live fleet operations and stale-safe telemetry. */
+/* DARK XRAY Nodes V7 — live health scoring, alerts and capacity. */
 (function(){
 'use strict';
 if(typeof enginePage!=='function'||typeof runAction!=='function')return;
@@ -28,6 +28,40 @@ function nv6TelemetryLabel(n){
  if(n.telemetry_state==='stale')return L('STALE','قدیمی');
  return L('OFFLINE','آفلاین');
 }
+const nv7AlertLabels={
+ telemetry_offline:['Telemetry offline','تله‌متری آفلاین'],telemetry_stale:['Telemetry stale','تله‌متری قدیمی'],
+ cpu_high:['CPU high','CPU بالا'],cpu_critical:['CPU critical','CPU بحرانی'],
+ memory_high:['RAM high','RAM بالا'],memory_critical:['RAM critical','RAM بحرانی'],
+ disk_high:['Disk usage high','مصرف دیسک بالا'],disk_critical:['Disk almost full','دیسک تقریباً پر'],
+ load_high:['System load high','لود سیستم بالا'],load_critical:['System overloaded','فشار سیستم بحرانی'],
+ xray_not_running:['Xray is not running','Xray در حال اجرا نیست'],xray_error:['Xray error','خطای Xray'],
+ hub_lease_invalid:['Hub accounting lease blocked','مجوز حسابداری Hub مسدود'],
+ accounting_checkpoint_error:['Accounting checkpoint error','خطای ثبت مصرف'],
+ accounting_checkpoint_stale:['Accounting checkpoint delayed','ثبت مصرف با تأخیر'],
+ node_error:['Node communication error','خطای ارتباط نود']
+};
+function nv7Ops(n){return n?.operational_health||{score:null,state:n?.enabled?'critical':'disabled',capacity_percent:null,capacity_state:'unknown',alerts:[]};}
+function nv7HealthLabel(state){return state==='healthy'?L('HEALTHY','سالم'):state==='warning'?L('WARNING','هشدار'):state==='critical'?L('CRITICAL','بحرانی'):L('DISABLED','غیرفعال');}
+function nv7CapacityLabel(state){return state==='healthy'?L('NORMAL','عادی'):state==='busy'?L('BUSY','شلوغ'):state==='overloaded'?L('OVERLOADED','پربار'):L('UNKNOWN','نامشخص');}
+function nv7AlertText(a){
+ const pair=nv7AlertLabels[a?.code]||[String(a?.code||'Alert'),String(a?.code||'هشدار')],base=L(pair[0],pair[1]);
+ if(a?.value===undefined||a?.value===null)return base;
+ const timed=['telemetry_stale','accounting_checkpoint_stale'].includes(a.code);
+ return base+' · '+(timed?nv6Duration(a.value):nv6Pct(a.value));
+}
+function nv7HealthPanel(n){
+ const ops=nv7Ops(n),score=ops.score===null||ops.score===undefined?'—':String(ops.score)+'/100',cap=nv6Num(ops.capacity_percent);
+ const capText=cap===null?'—':nv6Pct(cap),width=cap===null?0:Math.max(0,Math.min(100,cap));
+ const alerts=Array.isArray(ops.alerts)?ops.alerts:[];
+ return `<div class="nv7-health-row"><div class="nv7-health-score ${e(ops.state||'disabled')}"><small>${L('HEALTH SCORE','امتیاز سلامت')}</small><b>${e(score)}</b><span>${e(nv7HealthLabel(ops.state))}</span></div><div class="nv7-capacity ${e(ops.capacity_state||'unknown')}"><div><small>${L('CAPACITY USED','ظرفیت مصرف‌شده')}</small><b>${e(capText)}</b><span>${e(nv7CapacityLabel(ops.capacity_state))}</span></div><div class="nv7-capacity-track"><i style="width:${width}%"></i></div></div></div>${alerts.length?`<div class="nv7-alert-list">${alerts.slice(0,4).map(a=>`<span class="${e(a.severity||'warning')}">${e(nv7AlertText(a))}</span>`).join('')}${alerts.length>4?`<span class="more">+${fa(alerts.length-4)}</span>`:''}</div>`:''}`;
+}
+function nv7FleetAlerts(nodes){
+ const rows=[];
+ for(const n of nodes||[])for(const a of nv7Ops(n).alerts||[])if(['warning','critical'].includes(a.severity))rows.push({node:n.name||n.id,alert:a});
+ rows.sort((a,b)=>(a.alert.severity==='critical'?0:1)-(b.alert.severity==='critical'?0:1));
+ if(!rows.length)return `<div class="nv7-fleet-ok"><b>${L('Fleet healthy','ناوگان سالم')}</b><span>${L('No active Node health alerts.','هشدار سلامت فعالی برای نودها وجود ندارد.')}</span></div>`;
+ return `<div class="nv7-fleet-alerts"><header><b>${L('Node health alerts','هشدارهای سلامت نود')}</b><span>${fa(rows.length)}</span></header><div>${rows.slice(0,6).map(x=>`<span class="${e(x.alert.severity)}"><b>${e(x.node)}</b> · ${e(nv7AlertText(x.alert))}</span>`).join('')}${rows.length>6?`<span class="more">+${fa(rows.length-6)} ${L('more','بیشتر')}</span>`:''}</div></div>`;
+}
 function nv6Patch(nodes){
  if(!Array.isArray(nodes)||state.page!=='nodes')return;
  state.nv2.nodes=nodes;
@@ -44,7 +78,9 @@ function nv6Patch(nodes){
   }
  }
  const fresh=nodes.filter(n=>n.telemetry_state==='fresh').length,stale=nodes.filter(n=>n.telemetry_state==='stale').length,offline=nodes.filter(n=>n.telemetry_state==='offline').length,pending=nodes.filter(n=>n.desired_state?.pending||n.control?.pending).length;
- for(const [key,value] of Object.entries({nodes:nodes.length,fresh,stale,offline,pending})){const el=document.querySelector('[data-nv6-summary="'+key+'"]');if(el)el.textContent=fa(value);}
+ const warning=nodes.filter(n=>nv7Ops(n).state==='warning').length,critical=nodes.filter(n=>nv7Ops(n).state==='critical').length;
+ for(const [key,value] of Object.entries({nodes:nodes.length,fresh,stale,offline,warning,critical,pending})){const el=document.querySelector('[data-nv6-summary="'+key+'"]');if(el)el.textContent=fa(value);}
+ const banner=document.getElementById('nv7-fleet-health');if(banner)banner.innerHTML=nv7FleetAlerts(nodes);
 }
 async function nv6RefreshLive(){
  if(nv6LiveBusy||state.page!=='nodes'||document.hidden||document.querySelector('dialog[open]'))return;
@@ -91,14 +127,15 @@ function controlMessage(r,action){
  return L('No execution acknowledgement for this request; refresh Node status.','برای این درخواست تأیید اجرا دریافت نشد؛ وضعیت نود را تازه‌سازی کن.');
 }
 function nodeCard(n){
- const h=n.health||{},core=h.core||{},sys=h.system||{},fresh=nv6Fresh(n);
+ const h=n.health||{},core=h.core||{},sys=h.system||{},fresh=nv6Fresh(n),ops=nv7Ops(n);
  const status=!n.enabled?'disabled':n.telemetry_state==='fresh'?'online':n.telemetry_state==='stale'?'stale':n.last_error?'error':'offline';
  const desired=n.desired_state||{},assigned=assignedNames(n),pending=!!desired.pending;
  const memPct=sys.memory?.percent??sys.memory_percent,diskPct=sys.disk?.percent??sys.disk_percent,net=sys.network||{},conn=sys.connections||{};
  const lease=h.hub_lease,leaseLabel=!fresh?L('No fresh report','گزارش تازه ندارد'):!lease?L('Agent update required','نیازمند آپدیت نود'):!lease.required?L('Awaiting activation','در انتظار فعال‌سازی'):lease.valid?L('Active · 60s limit','فعال · مهلت ۶۰ ثانیه'):L('Blocked · awaiting Hub','متوقف · در انتظار هاب');
  const desiredLabel=desired.last_error?L('ERROR','خطا'):pending?L('PENDING r','در انتظار r')+String(desired.revision||0):desired.revision?L('SYNCED','همگام'):L('NOT DEPLOYED','مستقر نشده');
  const age=n.telemetry_age_seconds===null||n.telemetry_age_seconds===undefined?'—':nv6Duration(n.telemetry_age_seconds);
- return `<article class="panel nv2-node nv6-node ${fresh?'nv6-fresh':'nv6-not-fresh'}" data-nv6-node="${e(n.id)}"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(nv6TelemetryLabel(n))}</b></div></div>
+ return `<article class="panel nv2-node nv6-node nv7-${e(ops.state||'disabled')} ${fresh?'nv6-fresh':'nv6-not-fresh'}" data-nv6-node="${e(n.id)}"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(nv6TelemetryLabel(n))}</b></div></div>
+ ${nv7HealthPanel(n)}
  <div class="nv6-live-strip"><span>${e(L('Last report','آخرین گزارش'))}: <b>${e(age)}</b></span><span>${e(L('Latency','تأخیر'))}: <b>${fresh&&n.last_latency_ms?e(n.last_latency_ms)+' ms':'—'}</b></span><span>Xray: <b>${fresh?e(core.state||'—'):'—'}</b></span></div>
  <div class="nv2-metrics nv6-resource-grid">
   ${healthMetric('CPU',nv6Live(n,sys.cpu,nv6Pct))}
@@ -145,8 +182,9 @@ async function nodesPage(){
  let d=await loadNodes(),errs='';
  if(d.nodeError)errs+=`<div class="notice error">${L('Node registry could not be loaded: ','فهرست نودها دریافت نشد: ')}${e(d.nodeError)}</div>`;
  const fresh=d.nodes.filter(x=>x.telemetry_state==='fresh').length,stale=d.nodes.filter(x=>x.telemetry_state==='stale').length,offline=d.nodes.filter(x=>x.telemetry_state==='offline').length,pending=d.nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
- return heading(L('Nodes','نودها'),L('Live fleet resources, Node health and remote operations from the Hub.','منابع زنده، سلامت نود و عملیات راه‌دور از داخل Hub.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
- `<div class="nv2">${errs}<section class="nv5-fleet-head nv6-fleet-head"><div><div><small>${L('Nodes','نودها')}</small><b data-nv6-summary="nodes">${fa(d.nodes.length)}</b></div><div><small>${L('Live','زنده')}</small><b data-nv6-summary="fresh">${fa(fresh)}</b></div><div><small>${L('Stale','قدیمی')}</small><b data-nv6-summary="stale">${fa(stale)}</b></div><div><small>${L('Offline','آفلاین')}</small><b data-nv6-summary="offline">${fa(offline)}</b></div><div><small>${L('Pending','در انتظار')}</small><b data-nv6-summary="pending">${fa(pending)}</b></div></div><p>${L('Resource values refresh from the Hub five-second Node monitor while this page is open. Values older than 20 seconds are marked stale and are not presented as live. Tunnel health is intentionally not part of this monitor.','مقادیر منابع از مانیتور پنج‌ثانیه‌ای Hub تا وقتی این صفحه باز است تازه می‌شوند. داده قدیمی‌تر از ۲۰ ثانیه قدیمی علامت می‌خورد و به‌صورت زنده نمایش داده نمی‌شود. سلامت Tunnel عمداً جزو این مانیتور نیست.')}</p></section>
+ const warning=d.nodes.filter(x=>nv7Ops(x).state==='warning').length,critical=d.nodes.filter(x=>nv7Ops(x).state==='critical').length;
+ return heading(L('Nodes','نودها'),L('Live fleet resources, health score, capacity and remote operations from the Hub.','منابع زنده، امتیاز سلامت، ظرفیت و عملیات راه‌دور از داخل Hub.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
+ `<div class="nv2">${errs}<section class="nv5-fleet-head nv6-fleet-head nv7-fleet-head"><div><div><small>${L('Nodes','نودها')}</small><b data-nv6-summary="nodes">${fa(d.nodes.length)}</b></div><div><small>${L('Live','زنده')}</small><b data-nv6-summary="fresh">${fa(fresh)}</b></div><div><small>${L('Stale','قدیمی')}</small><b data-nv6-summary="stale">${fa(stale)}</b></div><div><small>${L('Offline','آفلاین')}</small><b data-nv6-summary="offline">${fa(offline)}</b></div><div><small>${L('Warnings','هشدار')}</small><b data-nv6-summary="warning">${fa(warning)}</b></div><div><small>${L('Critical','بحرانی')}</small><b data-nv6-summary="critical">${fa(critical)}</b></div><div><small>${L('Pending','در انتظار')}</small><b data-nv6-summary="pending">${fa(pending)}</b></div></div><p>${L('Health and capacity use fresh CPU/RAM/load plus Xray, disk, Hub lease and accounting state. Stale data is never treated as live. Tunnel health is intentionally excluded.','سلامت و ظرفیت از CPU/RAM/Load تازه به‌همراه وضعیت Xray، دیسک، مجوز Hub و حسابداری ساخته می‌شوند. داده قدیمی هرگز زنده حساب نمی‌شود. سلامت Tunnel عمداً خارج است.')}</p></section><div id="nv7-fleet-health">${nv7FleetAlerts(d.nodes)}</div>
  <section><div class="nv4-section-title"><div><small>DARK NODE FLEET</small><h2>${L('Servers','سرورها')}</h2></div><span>${fa(d.nodes.length)}</span></div><div class="nv2-grid" id="nv6-node-grid">${d.nodes.length?d.nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'))}</div></section>
  <details class="panel nv5-advanced"><summary>${L('Deployment & failover details','جزئیات استقرار و فیل‌اور')}</summary>${d.orchestrationError?`<div class="notice warning">${e(d.orchestrationError)}</div>`:`${orchestrationBoard(d.orchestration)}`}</details></div>`;
 }
@@ -247,8 +285,11 @@ async function showNodeLogs(id,kind='process'){
  dialog(L('Node logs','لاگ‌های Node'),tabs+`<pre class="terminal nv5-node-log">${e((r.lines||[]).join('\n')||L('No log lines.','لاگی ثبت نشده است.'))}</pre>`,null);
 }
 function nv6DiagnosticDialog(n,latency){
- const h=n.health||{},sys=h.system||{},core=h.core||{},lease=h.hub_lease||{},maint=h.maintenance||{},net=sys.network||{},conn=sys.connections||{},mem=sys.memory||{},disk=sys.disk||{};
+ const h=n.health||{},sys=h.system||{},core=h.core||{},lease=h.hub_lease||{},maint=h.maintenance||{},net=sys.network||{},conn=sys.connections||{},mem=sys.memory||{},disk=sys.disk||{},ops=nv7Ops(n);
  const fresh=nv6Fresh(n),cpuInfo=sys.cpu_info||{},loads=sys.loads||[],source=h.installed_source||{},items=[
+  [L('Health score','امتیاز سلامت'),ops.score==null?'—':String(ops.score)+'/100'],
+  [L('Health state','وضعیت سلامت'),nv7HealthLabel(ops.state)],
+  [L('Capacity used','ظرفیت مصرف‌شده'),ops.capacity_percent==null?'—':nv6Pct(ops.capacity_percent)],
   [L('Telemetry','تله‌متری'),fresh?L('FRESH','تازه'):nv6TelemetryLabel(n)],
   [L('Latency','تأخیر'),latency?latency+' ms':'—'],['Xray',fresh?(core.state||'—'):'—'],
   [L('Agent version','نسخه Agent'),fresh?(h.version||source.version||'—'):'—'],[L('Xray version','نسخه Xray'),fresh?(core.version||'—'):'—'],
@@ -264,12 +305,13 @@ function nv6DiagnosticDialog(n,latency){
   [L('Source commit','کامیت سورس'),fresh&&source.commit?String(source.commit).slice(0,12):'—']
  ];
  const addresses=(sys.addresses||[]).map(x=>`<span class="nv6-address"><b>${e(x.interface||'')}</b> ${e(x.address||'')}</span>`).join('');
- dialog(L('Node Diagnostics','عیب‌یابی نود'),`<div class="notice">${L('Live Agent/Xray/system diagnostics only. Tunnel health is not tested here.','فقط عیب‌یابی زنده Agent/Xray/سیستم؛ سلامت Tunnel در اینجا تست نمی‌شود.')}</div><div class="nv6-diagnostics">${items.map(x=>`<div><small>${e(x[0])}</small><b>${e(x[1])}</b></div>`).join('')}</div>${addresses?`<div class="nv6-addresses">${addresses}</div>`:''}${core.last_error?`<div class="nv2-error">${e(core.last_error)}</div>`:''}${maint.statistics_error?`<div class="nv2-error">${e(maint.statistics_error)}</div>`:''}`,null);
+ const alerts=(ops.alerts||[]).map(a=>`<span class="${e(a.severity||'warning')}">${e(nv7AlertText(a))}</span>`).join('');
+ dialog(L('Node Diagnostics','عیب‌یابی نود'),`<div class="notice">${L('Live Agent/Xray/system diagnostics only. Tunnel health is not tested here.','فقط عیب‌یابی زنده Agent/Xray/سیستم؛ سلامت Tunnel در اینجا تست نمی‌شود.')}</div>${alerts?`<div class="nv7-alert-list nv7-dialog-alerts">${alerts}</div>`:''}<div class="nv6-diagnostics">${items.map(x=>`<div><small>${e(x[0])}</small><b>${e(x[1])}</b></div>`).join('')}</div>${addresses?`<div class="nv6-addresses">${addresses}</div>`:''}${core.last_error?`<div class="nv2-error">${e(core.last_error)}</div>`:''}${maint.statistics_error?`<div class="nv2-error">${e(maint.statistics_error)}</div>`:''}`,null);
 }
 async function refreshAfterRemote(fn){try{return await fn();}finally{if(state.page==='nodes')await renderPage();}}
 runAction=async function(act,el){
  if(act==='nv2new'){await pairNodeDialog();return;}if(act==='nv2edit'){await nodeDialog(el.dataset.id);return;}
- if(act==='nv2probe'){const r=await api('/api/nodes/'+enc(el.dataset.id)+'/probe','POST',{});if(r.node)nv6DiagnosticDialog(r.node,r.latency_ms);if(state.page==='nodes'){const list=await api('/api/nodes');nv6Patch(list);}return;}
+ if(act==='nv2probe'){const id=el.dataset.id,r=await api('/api/nodes/'+enc(id)+'/probe','POST',{}),list=await api('/api/nodes'),node=Array.isArray(list)?list.find(x=>String(x.id)===String(id)):null;if(node)nv6DiagnosticDialog(node,r.latency_ms);if(state.page==='nodes'&&Array.isArray(list))nv6Patch(list);return;}
  if(act==='nv2inbounds'){await refreshAfterRemote(()=>showNodeInbounds(el.dataset.id));return;}
  if(act==='nv2sync'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/sync','POST',{});if(r.queued||r.sync_deferred){toast(controlMessage(r));return;}toast(`${L('Node synchronized','نود همگام شد')} · ${(r.items||[]).length} ${L('inbounds','اینباند')} · ${bytes(r.traffic?.charged_bytes||0)} ${L('new traffic','ترافیک جدید')}`);});return;}
  if(act==='nv2security'){await refreshAfterRemote(async()=>{let r=await api('/api/nodes/'+enc(el.dataset.id)+'/security','POST',{});toast(`${L('Security synchronized','امنیت همگام شد')} · ${r.node.ips} IP · ${r.node.devices} ${L('devices','دستگاه')}`);});return;}
