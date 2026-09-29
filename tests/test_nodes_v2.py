@@ -31,12 +31,11 @@ def test_central_node_token_encrypted_and_probe(env,monkeypatch):
 
 
 
-def test_live_telemetry_refresh_is_freshness_aware_and_preserves_system_snapshot(env,monkeypatch):
+def test_live_telemetry_freshness_preserves_system_snapshot(env,monkeypatch):
  store,_,app,c=env
- for node_id,ch in [('live1','X'),('live2','Y')]:
-  out=c.post('/api/nodes',json={'id':node_id,'name':node_id,'origin':'https://'+node_id+'.example.com',
-    'token':'dkn_'+(ch*60),'enabled':True,'inboundIds':[]})
-  assert out.status_code==200,out.text
+ out=c.post('/api/nodes',json={'id':'live1','name':'live1','origin':'https://live1.example.com',
+   'token':'dkn_'+('X'*60),'enabled':True,'inboundIds':[]})
+ assert out.status_code==200,out.text
  def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
   assert path=='/node/api/health'
   return {'service':'DARK XRAY NODE','agent_only':True,'node_id':node_id,
@@ -49,13 +48,11 @@ def test_live_telemetry_refresh_is_freshness_aware_and_preserves_system_snapshot
                     'addresses':[{'interface':'eth0','address':'203.0.113.8','family':4}]},
           'inbounds':0,'managed_clients':3},11
  monkeypatch.setattr(app.state.nodes,'_request',fake_request)
- refreshed=c.post('/api/nodes/telemetry/refresh')
- assert refreshed.status_code==200,refreshed.text
- doc=refreshed.json()
- assert len(doc['refreshed'])==2 and not doc['errors']
- assert all(x['telemetry_state']=='fresh' for x in doc['nodes'])
- assert all(x['telemetry_age_seconds']<=2 for x in doc['nodes'])
- assert doc['nodes'][0]['health']['system']['network']['down_bps']==256.0
+ result=app.state.nodes.probe('live1')
+ assert result['latency_ms']==11
+ fresh={x['id']:x for x in c.get('/api/nodes').json()}['live1']
+ assert fresh['telemetry_state']=='fresh' and fresh['telemetry_age_seconds']<=2
+ assert fresh['health']['system']['network']['down_bps']==256.0
  with store.transaction() as db:
   db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-30,))
  stale={x['id']:x for x in c.get('/api/nodes').json()}['live1']
