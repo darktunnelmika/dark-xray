@@ -31,14 +31,25 @@ function nv6TelemetryLabel(n){
 function nv6Patch(nodes){
  if(!Array.isArray(nodes)||state.page!=='nodes')return;
  state.nv2.nodes=nodes;
- const grid=document.getElementById('nv6-node-grid');if(grid)grid.innerHTML=nodes.length?nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'));
+ const grid=document.getElementById('nv6-node-grid');
+ if(grid){
+  if(!nodes.length)grid.innerHTML=empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'));
+  else for(const n of nodes){
+   const current=grid.querySelector('[data-nv6-node="'+CSS.escape(String(n.id))+'"]');
+   if(!current)continue;
+   const extras=[...current.querySelectorAll('.nv2-actions [data-act]')].filter(x=>!String(x.dataset.act||'').startsWith('nv2')).map(x=>x.cloneNode(true));
+   const template=document.createElement('template');template.innerHTML=nodeCard(n).trim();const next=template.content.firstElementChild;
+   const actions=next?.querySelector('.nv2-actions');if(actions)for(const extra of extras)if(!actions.querySelector('[data-act="'+CSS.escape(String(extra.dataset.act||''))+'"]'))actions.appendChild(extra);
+   if(next)current.replaceWith(next);
+  }
+ }
  const fresh=nodes.filter(n=>n.telemetry_state==='fresh').length,stale=nodes.filter(n=>n.telemetry_state==='stale').length,offline=nodes.filter(n=>n.telemetry_state==='offline').length,pending=nodes.filter(n=>n.desired_state?.pending||n.control?.pending).length;
  for(const [key,value] of Object.entries({nodes:nodes.length,fresh,stale,offline,pending})){const el=document.querySelector('[data-nv6-summary="'+key+'"]');if(el)el.textContent=fa(value);}
 }
 async function nv6RefreshLive(){
- if(nv6LiveBusy||state.page!=='nodes'||document.hidden)return;
+ if(nv6LiveBusy||state.page!=='nodes'||document.hidden||document.querySelector('dialog[open]'))return;
  nv6LiveBusy=true;
- try{const r=await api('/api/nodes/telemetry/refresh','POST',{});if(r&&Array.isArray(r.nodes))nv6Patch(r.nodes);}
+ try{const nodes=await api('/api/nodes');if(Array.isArray(nodes))nv6Patch(nodes);}
  catch(_ex){}
  finally{nv6LiveBusy=false;}
 }
@@ -87,7 +98,7 @@ function nodeCard(n){
  const lease=h.hub_lease,leaseLabel=!fresh?L('No fresh report','گزارش تازه ندارد'):!lease?L('Agent update required','نیازمند آپدیت نود'):!lease.required?L('Awaiting activation','در انتظار فعال‌سازی'):lease.valid?L('Active · 60s limit','فعال · مهلت ۶۰ ثانیه'):L('Blocked · awaiting Hub','متوقف · در انتظار هاب');
  const desiredLabel=desired.last_error?L('ERROR','خطا'):pending?L('PENDING r','در انتظار r')+String(desired.revision||0):desired.revision?L('SYNCED','همگام'):L('NOT DEPLOYED','مستقر نشده');
  const age=n.telemetry_age_seconds===null||n.telemetry_age_seconds===undefined?'—':nv6Duration(n.telemetry_age_seconds);
- return `<article class="panel nv2-node nv6-node ${fresh?'nv6-fresh':'nv6-not-fresh'}"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(nv6TelemetryLabel(n))}</b></div></div>
+ return `<article class="panel nv2-node nv6-node ${fresh?'nv6-fresh':'nv6-not-fresh'}" data-nv6-node="${e(n.id)}"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(nv6TelemetryLabel(n))}</b></div></div>
  <div class="nv6-live-strip"><span>${e(L('Last report','آخرین گزارش'))}: <b>${e(age)}</b></span><span>${e(L('Latency','تأخیر'))}: <b>${fresh&&n.last_latency_ms?e(n.last_latency_ms)+' ms':'—'}</b></span><span>Xray: <b>${fresh?e(core.state||'—'):'—'}</b></span></div>
  <div class="nv2-metrics nv6-resource-grid">
   ${healthMetric('CPU',nv6Live(n,sys.cpu,nv6Pct))}
@@ -135,7 +146,7 @@ async function nodesPage(){
  if(d.nodeError)errs+=`<div class="notice error">${L('Node registry could not be loaded: ','فهرست نودها دریافت نشد: ')}${e(d.nodeError)}</div>`;
  const fresh=d.nodes.filter(x=>x.telemetry_state==='fresh').length,stale=d.nodes.filter(x=>x.telemetry_state==='stale').length,offline=d.nodes.filter(x=>x.telemetry_state==='offline').length,pending=d.nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
  return heading(L('Nodes','نودها'),L('Live fleet resources, Node health and remote operations from the Hub.','منابع زنده، سلامت نود و عملیات راه‌دور از داخل Hub.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
- `<div class="nv2">${errs}<section class="nv5-fleet-head nv6-fleet-head"><div><div><small>${L('Nodes','نودها')}</small><b data-nv6-summary="nodes">${fa(d.nodes.length)}</b></div><div><small>${L('Live','زنده')}</small><b data-nv6-summary="fresh">${fa(fresh)}</b></div><div><small>${L('Stale','قدیمی')}</small><b data-nv6-summary="stale">${fa(stale)}</b></div><div><small>${L('Offline','آفلاین')}</small><b data-nv6-summary="offline">${fa(offline)}</b></div><div><small>${L('Pending','در انتظار')}</small><b data-nv6-summary="pending">${fa(pending)}</b></div></div><p>${L('Resource values refresh while this page is open. Values older than 20 seconds are marked stale and are not presented as live. Tunnel health is intentionally not part of this monitor.','مقادیر منابع تا وقتی این صفحه باز است تازه می‌شوند. داده قدیمی‌تر از ۲۰ ثانیه قدیمی علامت می‌خورد و به‌صورت زنده نمایش داده نمی‌شود. سلامت Tunnel عمداً جزو این مانیتور نیست.')}</p></section>
+ `<div class="nv2">${errs}<section class="nv5-fleet-head nv6-fleet-head"><div><div><small>${L('Nodes','نودها')}</small><b data-nv6-summary="nodes">${fa(d.nodes.length)}</b></div><div><small>${L('Live','زنده')}</small><b data-nv6-summary="fresh">${fa(fresh)}</b></div><div><small>${L('Stale','قدیمی')}</small><b data-nv6-summary="stale">${fa(stale)}</b></div><div><small>${L('Offline','آفلاین')}</small><b data-nv6-summary="offline">${fa(offline)}</b></div><div><small>${L('Pending','در انتظار')}</small><b data-nv6-summary="pending">${fa(pending)}</b></div></div><p>${L('Resource values refresh from the Hub's five-second Node monitor while this page is open. Values older than 20 seconds are marked stale and are not presented as live. Tunnel health is intentionally not part of this monitor.','مقادیر منابع از مانیتور پنج‌ثانیه‌ای Hub تا وقتی این صفحه باز است تازه می‌شوند. داده قدیمی‌تر از ۲۰ ثانیه قدیمی علامت می‌خورد و به‌صورت زنده نمایش داده نمی‌شود. سلامت Tunnel عمداً جزو این مانیتور نیست.')}</p></section>
  <section><div class="nv4-section-title"><div><small>DARK NODE FLEET</small><h2>${L('Servers','سرورها')}</h2></div><span>${fa(d.nodes.length)}</span></div><div class="nv2-grid" id="nv6-node-grid">${d.nodes.length?d.nodes.map(nodeCard).join(''):empty(L('No nodes yet. Install the lightweight Node Agent and paste its Pair Code.','هنوز نودی اضافه نشده؛ Agent سبک را نصب و Pair Code را اینجا وارد کن.'))}</div></section>
  <details class="panel nv5-advanced"><summary>${L('Deployment & failover details','جزئیات استقرار و فیل‌اور')}</summary>${d.orchestrationError?`<div class="notice warning">${e(d.orchestrationError)}</div>`:`${orchestrationBoard(d.orchestration)}`}</details></div>`;
 }
