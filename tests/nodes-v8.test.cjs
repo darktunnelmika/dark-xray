@@ -26,5 +26,5 @@ test('Nodes V8 detail is read-only and excludes tunnel path health',()=>{
  assert.ok(src.includes('Hub history uses Agent/Xray/system health samples only.'));
  assert.ok(src.includes('Tunnel/WARP/path health is excluded.'));
  assert.equal(src.includes('/probe'),false);
- assert.equal(src.includes("api('/api/nodes/'+enc(id)+'/metrics",'POST'"),false);
+ assert.equal(src.includes(",'POST'"),false);
 });
