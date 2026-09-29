@@ -1493,6 +1493,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def remote_node_probe(node_id:str,p:Principal=Depends(owner)):
         result=nodes.probe(node_id);manager.audit(p.actor,p.actor.id,'node.probe',node_id);return result
 
+    @app.get('/api/nodes/{node_id}/diagnostics')
+    def remote_node_diagnostics(node_id:str,p:Principal=Depends(owner)):
+        result=nodes.diagnostics(node_id)
+        manager.audit(p.actor,p.actor.id,'node.diagnostics',node_id,
+                      'checks='+str(len(result.get('checks',[]))))
+        return result
+
     @app.get('/api/nodes/{node_id}/logs/{kind}')
     def remote_node_logs(node_id:str,kind:Literal['process','error','access'],limit:int=300,p:Principal=Depends(owner)):
         return nodes.remote_logs(node_id,kind,max(1,min(1000,limit)))
