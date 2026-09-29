@@ -48,9 +48,11 @@ function controlMessage(r,action){
 function nodeCard(n){
  const h=n.health||{},core=h.core||{},status=!n.enabled?'disabled':n.online?'online':n.last_error?'error':'offline';
  const desired=n.desired_state||{},assigned=assignedNames(n),pending=!!desired.pending;
+ const lease=h.hub_lease,leaseLabel=!n.online?L('No fresh report','گزارش تازه ندارد'):!lease?L('Agent update required','نیازمند آپدیت نود'):!lease.required?L('Awaiting activation','در انتظار فعال‌سازی'):lease.valid?L('Active · 60s limit','فعال · مهلت ۶۰ ثانیه'):L('Blocked · awaiting Hub','متوقف · در انتظار هاب');
  const desiredLabel=desired.last_error?L('ERROR','خطا'):pending?L('PENDING r','در انتظار r')+String(desired.revision||0):desired.revision?L('SYNCED','همگام'):L('NOT DEPLOYED','مستقر نشده');
  return `<article class="panel nv2-node"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(status)}</b></div></div>
  <div class="nv2-metrics">${healthMetric(L('Latency','تأخیر'),n.last_latency_ms?`${n.last_latency_ms} ms`:'—')}${healthMetric('Xray',core.state||'—')}${healthMetric(L('Inbounds','اینباندها'),assigned.length)}${healthMetric(L('Deployment','استقرار'),desiredLabel)}</div>
+ <div class="notice"><small>${e(L('Hub protection (last report)','محافظ هاب (آخرین گزارش)'))}: <b>${e(leaseLabel)}</b></small></div>
  ${controlBanner(n)}
  ${assigned.length?`<div class="nv2-assigned"><span>${L('DEPLOYED / ASSIGNED','تخصیص اینباند')}</span><div>${assigned.map(x=>`<span class="nv4-assignment ${pending?'warn':'ready'}"><b>${e(x)}</b></span>`).join('')}</div></div>`:''}
  ${n.last_error?`<div class="nv2-error">${e(n.last_error)}</div>`:''}${desired.last_error?`<div class="nv2-error">${e(desired.last_error)}</div>`:''}

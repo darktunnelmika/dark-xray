@@ -3,6 +3,8 @@
 No proxy-panel installation or token is required. The default listener is loopback.
 """
 from __future__ import annotations
+
+from node_lease_sync import renew_accounting_lease
 import argparse
 import base64
 import contextlib
@@ -388,6 +390,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     errors.append({'node_id':node_id,'error':str(ex)[:300]})
             result['desired_state_refresh']={'nodes':refreshed,'errors':errors}
         return result
+    def renew_node_lease(node_id,traffic):
+        return renew_accounting_lease(nodes,manager,engine,node_id,traffic,ensure_node_desired_state,build_node_bundles)
+
     @contextlib.asynccontextmanager
     async def lifespan(app):
         bot_runtime=None
@@ -396,7 +401,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                       sync_provider=lambda node_id:build_node_bundles(node_id),
                                       desired_provider=lambda node_id:ensure_node_desired_state(node_id),
                                       traffic_callback=lambda node_id,result:manager.tick(suppress=True),
-                                      security_callback=apply_global_security)
+                                      security_callback=apply_global_security,
+                                      lease_callback=renew_node_lease)
             bot_runtime=getattr(app.state,'telegram_runtime',None)
             if bot_runtime:bot_runtime.start()
         yield
@@ -404,6 +410,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.replacements=replacements
+    app.state.renew_node_lease=renew_node_lease
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
     from dark_restore import DarkRestore
     dark_restore=DarkRestore(store,engine,nodes)

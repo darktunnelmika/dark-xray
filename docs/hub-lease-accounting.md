@@ -1,0 +1,87 @@
+# Hub accounting lease — 0.10.0-rc17
+
+## Contract
+
+An armed Node serves customer traffic only with a fresh accounting acknowledgement
+from its Hub. The maximum grant is 60 seconds measured from the Node's traffic
+snapshot, using Linux CLOCK_BOOTTIME (monotonic fallback). It is not a ping-based
+heartbeat and it is not a promise of millisecond-precise network failure detection.
+Both direct and tunnel listeners owned by the Node's Xray process are covered.
+SSH, management credentials, client identities and configuration are not deleted.
+
+Each Node checkpoints cumulative per-user upload/download independently at an
+interval capped at 5 seconds. An unchanged Xray configuration no longer bypasses
+this checkpoint. Normal reports use non-resetting Xray counters, and Hub imports
+only their deltas under a SQLite transaction. A complete pre-apply Agent snapshot
+seeds zero baselines for absent new mirrors, preventing loss of their first bytes.
+
+## Grant and recovery ordering
+
+1. The authenticated Agent traffic endpoint takes a strict durable checkpoint and
+   returns a random single-use challenge with the complete cumulative snapshot.
+2. The Hub imports usage, checks its accounting/policy engine, handles quota,
+   expiration, representative credit and pending client state, then sends the
+   resulting configuration to the Node.
+3. Only after the current revision/hash is acknowledged may the Hub return the
+   challenge with the matching configuration and ordered-control revisions.
+4. A grant deadline is snapshot issue time + 60 seconds, never arrival time + 60.
+   Challenges older than 30 seconds, unknown/out-of-order challenges, mismatched
+   revisions and modified duplicates are rejected. Identical retries do not
+   extend authority. Health, configuration pushes and Start/Restart do not grant.
+5. After expiry, existing and new Xray connections are stopped. Recovery imports
+   outstanding usage and applies current policy before eligible users resume.
+   A manually stopped Node remains manually stopped.
+
+## Independent process protection
+
+A dedicated Node safety loop supervises expiry and provides systemd keepalives
+only while accounting is fresh, the engine lock is available and sufficient lease
+time remains (or the customer process is already stopped). The production unit
+uses WatchdogSec=30, WatchdogSignal=SIGKILL, TimeoutAbortSec=1 and
+KillMode=control-group. Child Xray processes do not inherit the notification socket.
+This does not depend on the HTTP route or an unconditional keepalive thread.
+Normal shutdown retains its existing 60-second budget for final traffic snapshots.
+No host firewall rules or unrelated services are modified by this feature.
+
+The required-enforcement latch is persisted, but a grant is never persisted.
+After an armed Agent restart or a server reboot, customer Xray remains stopped
+until a new reconciled Hub grant arrives. New installations start armed. Existing
+upgrades become durably armed on their first valid Hub accounting grant; deploy
+the Hub first and verify every upgraded Node has `hub_lease.required=true`.
+The lease implementation resides in existing Node runtime source files so older
+Node updaters with a fixed source allowlist can safely install this release.
+
+## Status and operating checks
+
+Authenticated Node health exposes `hub_lease` (required, valid, state, remaining
+seconds, last grant, trip count and last error), `lease_watchdog` and maintenance
+checkpoint age/error. The Hub Node card labels this as the **last report**, not a
+live countdown. An offline Node is explicitly shown without a fresh report.
+States are `legacy`, `awaiting_hub`, `active` and `expired`.
+
+A healthy route/HTTP response alone does not prove correct accounting. Verify
+fresh Node checkpoints, active leases, current configuration acknowledgements,
+no policy errors and agreement of Hub user totals with local plus remote usage.
+A permanently failing final statistics query is recorded; it must not prevent
+fail-closed shutdown. Repair the statistics failure before restoring service.
+
+## Boundaries and evidence
+
+Periodic checkpointing does not guarantee zero-byte loss during abrupt power
+failure or an ungraceful Xray crash. The unsaved in-memory tail since the latest
+successful checkpoint can still be lost. A lease is a bounded authorization
+window, not a zero-overshoot globally atomic quota reservation. Very fast traffic
+can exhaust a shared quota within one healthy synchronization interval.
+
+`tests/test_hub_lease.py` covers replay/order/expiry, durable arming, restart,
+manual stop, stats failures, independent checkpoints, notification constraints,
+policy failure and zero-baseline accounting. These use isolated SQLite/FastAPI
+and an explicit fake core; they are not a real packet proof.
+
+`tests/test_hub_lease_real.py` uses the pinned official Xray v26.3.27, two
+isolated Agents over certificate-verified HTTPS, real VLESS/SOCKS transfers and
+already-open TCP echo streams. It verifies offline checkpoints, existing/new
+connection closure, management availability, exact cumulative reconciliation,
+no duplicate charge, quota-before-recovery and pending Start recovery. Expiry
+uses an injected monotonic clock; this is not a full production outage or forced
+whole-Agent-hang experiment. CI runs these with the existing real data-plane job.

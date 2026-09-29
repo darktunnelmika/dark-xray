@@ -79,8 +79,9 @@ class RestoreGroupsMixin:
         if hasattr(nodes, '_restore_native_snapshot'):
             return
         nodes._restore_native_snapshot = nodes.apply_traffic_snapshot
-        def observed(node_id, items, *, captured_at=None):
-            result = nodes._restore_native_snapshot(node_id, items, captured_at=captured_at)
+        def observed(node_id, items, *, captured_at=None, initialize_absent=False):
+            result = nodes._restore_native_snapshot(node_id, items, captured_at=captured_at,
+                                                    initialize_absent=initialize_absent)
             result['restore_usage'] = nodes._restore_traffic_observer.record_node_usage(
                 node_id, items, captured_at=captured_at)
             return result

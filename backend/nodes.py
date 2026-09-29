@@ -633,10 +633,10 @@ class NodeRegistry:
         if total<0 or total>(1<<63)-1:raise PolicyError('Global client traffic counter overflow')
         db.execute('UPDATE clients SET used_bytes=? WHERE id=?',(total,client_id))
 
-    def apply_traffic_snapshot(self,node_id:str,items:list[dict],*,captured_at:float|None=None)->dict:
+    def apply_traffic_snapshot(self,node_id:str,items:list[dict],*,captured_at:float|None=None,initialize_absent:bool=False)->dict:
         if not isinstance(items,list) or len(items)>100000:raise PolicyError('Invalid node traffic snapshot')
         allowed=self._allowed_traffic_clients(node_id);now=time.time() if captured_at is None else float(captured_at)
-        seen=set();charged_up=charged_down=0;baselined=0;resets=0;ignored=0;changed=[]
+        seen=set();charged_up=charged_down=0;baselined=0;resets=0;ignored=0;seeded=0;changed=[]
         with self._node_transaction(node_id) as db:
             for item in items:
                 if not isinstance(item,dict) or set(item)-{'sourceEmail','up','down'}:raise PolicyError('Invalid node traffic item')
@@ -677,7 +677,16 @@ class NodeRegistry:
                               seq=?,initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',
                            (up,down,new_up,new_down,seq,now,node_id,email))
                 changed.append(email);self._recompute_client_usage(db,email)
-        return {'clients':len(seen),'ignored_clients':ignored,'baselined':baselined,'charged_up':charged_up,'charged_down':charged_down,
+            # A complete fresh Agent snapshot proves an absent new mirror has
+            # consumed zero. Seed it BEFORE config apply so its first bytes are
+            # not silently discarded as a later nonzero adoption baseline.
+            if initialize_absent:
+                for email in allowed-seen:
+                    cur=db.execute('''INSERT OR IGNORE INTO remote_node_client_usage
+                        (node_id,client_id,raw_up,raw_down,initialized,last_seen) VALUES(?,?,0,0,1,?)''',
+                        (node_id,email,now))
+                    if cur.rowcount:seeded+=1
+        return {'seeded_zero_baselines':seeded,'clients':len(seen),'ignored_clients':ignored,'baselined':baselined,'charged_up':charged_up,'charged_down':charged_down,
                 'charged_bytes':charged_up+charged_down,'counter_resets':resets,'captured_at':now,'changed_clients':changed}
 
     @installation_operation
@@ -685,8 +694,9 @@ class NodeRegistry:
         doc,ms=self._request(node_id,'/node/api/mirrors/traffic',timeout=12.0)
         if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
             self._request_failed(node_id,'Invalid node traffic response');raise PolicyError('Invalid node traffic response')
-        result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=time.time())
-        return {'latency_ms':ms,**result}
+        result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=time.time(),
+                                          initialize_absent=isinstance(doc.get('accountingLease'),str))
+        return {'latency_ms':ms,**result,'accounting_lease':doc.get('accountingLease')}
 
 
     def _client_inbounds(self,client_id:str)->list[int]:
@@ -999,13 +1009,14 @@ class NodeRegistry:
                 results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
         return {'nodes':len(results),'items':results,'reset':True}
 
-    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None):
+    def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None,lease_callback=None):
         if self.thread and self.thread.is_alive():return
         if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
         if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
         if desired_provider is not None and not callable(desired_provider):raise ValueError('desired_provider must be callable')
         if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
         if security_callback is not None and not callable(security_callback):raise ValueError('security_callback must be callable')
+        if lease_callback is not None and not callable(lease_callback):raise ValueError('lease_callback must be callable')
         self.stop.clear()
         def run():
             if self.stop.wait(initial_delay):return
@@ -1023,7 +1034,7 @@ class NodeRegistry:
                         except (PolicyError,OSError,ValueError):desired_state=None
                     try:
                         self.probe(node_id,timeout=5.0)
-                        traffic=self.sync_traffic(node_id)
+                        traffic=self.sync_traffic(node_id);lease_traffic=traffic
                         if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
                         if security_callback is not None:
                             try:
@@ -1037,7 +1048,7 @@ class NodeRegistry:
                             # so this cycle never sends the pre-quota/pre-block payload.
                             desired_state=desired_provider(node_id)
                             self.sync_desired_state(node_id,desired_state,legacy_bundles=legacy_bundles)
-                            post=self.sync_traffic(node_id)
+                            post=self.sync_traffic(node_id);lease_traffic=post
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
                             if security_callback is not None:
                                 try:
@@ -1046,13 +1057,14 @@ class NodeRegistry:
                                     pass
                         elif sync_provider is not None:
                             self.sync_mirrors(node_id,sync_provider(node_id))
-                            post=self.sync_traffic(node_id)
+                            post=self.sync_traffic(node_id);lease_traffic=post
                             if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
                             if security_callback is not None:
                                 try:
                                     security=self.sync_security(node_id);security_callback(node_id,security)
                                 except (PolicyError,OSError,ValueError):
                                     pass
+                        if lease_callback is not None:lease_callback(node_id,lease_traffic)
                         self.deliver_pending_control(node_id)
                     except (PolicyError,OSError,ValueError):
                         pass
@@ -1202,7 +1214,11 @@ class NodeRegistry:
             raise PolicyError('Invalid Hub desired-state envelope')
         with self._node_operation(node_id):
             control=self.deliver_pending_control(node_id)
-            if control['queued'] and control['delivery_state']!='configuration_pending':
+            # A gated Start must not deadlock configuration -> accounting -> lease.
+            node_health=json.loads(self.get(node_id).get('last_health') or '{}')
+            lease_start=(control['control'].get('action') in ('start','restart') and
+                         (node_health.get('capabilities') or {}).get('accounting_lease')==1)
+            if control['queued'] and control['delivery_state']!='configuration_pending' and not lease_start:
                 return {**control,'desired_state_applied':False,'sync_deferred':True,'items':[]}
             current=self.desired_state(node_id)
             if state.get('revision')!=current['revision'] or state.get('hash')!=current['hash']:
