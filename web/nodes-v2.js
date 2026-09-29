@@ -57,7 +57,7 @@ function nv6ArmLive(){
  if(nv6LiveTimer)clearInterval(nv6LiveTimer);
  if(state.page!=='nodes')return;
  nv6LiveTimer=setInterval(nv6RefreshLive,5000);
- setTimeout(nv6RefreshLive,250);
+
 }
 function assignedNames(n){return (n.inboundIds||[]).map(id=>{let ib=state.inbounds.find(x=>x.id===id);return ib?(ib.remark||ib.tag):'#'+id;});}
 const reasonLabels={
