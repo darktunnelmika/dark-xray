@@ -227,6 +227,14 @@ class NodeRegistry:
               updated_at REAL NOT NULL DEFAULT 0,applied_revision INTEGER NOT NULL DEFAULT 0,
               applied_hash TEXT NOT NULL DEFAULT '',applied_at REAL NOT NULL DEFAULT 0,
               last_error TEXT NOT NULL DEFAULT '');
+            CREATE TABLE IF NOT EXISTS remote_node_metrics(
+              node_id TEXT NOT NULL,captured_at REAL NOT NULL,
+              cpu REAL,memory_percent REAL,disk_percent REAL,load1 REAL,
+              rx_bps REAL,tx_bps REAL,connections INTEGER,latency_ms INTEGER,
+              health_score INTEGER,capacity_percent REAL,xray_running INTEGER,
+              managed_clients INTEGER,
+              PRIMARY KEY(node_id,captured_at));
+            CREATE INDEX IF NOT EXISTS remote_node_metrics_time ON remote_node_metrics(node_id,captured_at);
             ''')
             node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
             for name,ddl in (
@@ -684,6 +692,86 @@ class NodeRegistry:
         with self._node_operation(node_id):
             return self._probe_locked(node_id,timeout=timeout)
 
+    @staticmethod
+    def _metric_number(value):
+        try:
+            out=float(value)
+            return out if out==out and abs(out)!=float('inf') else None
+        except (TypeError,ValueError):return None
+
+    def _record_metric(self,node_id:str,health:dict,latency_ms:int,*,captured_at:float|None=None,min_interval:float=15.0):
+        """Persist a bounded lightweight system sample from an already-completed Health probe.
+
+        This never performs its own network request and intentionally excludes Tunnel/WARP/path health.
+        """
+        now=time.time() if captured_at is None else float(captured_at)
+        system=health.get('system') if isinstance(health.get('system'),dict) else {}
+        memory=system.get('memory') if isinstance(system.get('memory'),dict) else {}
+        disk=system.get('disk') if isinstance(system.get('disk'),dict) else {}
+        network=system.get('network') if isinstance(system.get('network'),dict) else {}
+        connections=system.get('connections') if isinstance(system.get('connections'),dict) else {}
+        loads=system.get('loads') if isinstance(system.get('loads'),list) else []
+        core=health.get('core') if isinstance(health.get('core'),dict) else {}
+        ops=self._operations_health({'enabled':True,'telemetry_state':'fresh','telemetry_age_seconds':0,
+                                     'health':health,'last_error':''})
+        row=(node_id,now,self._metric_number(system.get('cpu')),
+             self._metric_number(memory.get('percent',system.get('memory_percent'))),
+             self._metric_number(disk.get('percent',system.get('disk_percent'))),
+             self._metric_number(loads[0]) if loads else None,
+             self._metric_number(network.get('down_bps')),self._metric_number(network.get('up_bps')),
+             int(connections.get('open')) if type(connections.get('open')) is int else None,
+             int(latency_ms),int(ops['score']) if type(ops.get('score')) is int else None,
+             self._metric_number(ops.get('capacity_percent')),
+             1 if core.get('state')=='running' else 0,
+             int(health.get('managed_clients')) if type(health.get('managed_clients')) is int else None)
+        with self.store.transaction() as db:
+            latest=db.execute('SELECT MAX(captured_at) FROM remote_node_metrics WHERE node_id=?',(node_id,)).fetchone()[0]
+            if latest and now-float(latest)<min_interval:return False
+            db.execute('''INSERT OR REPLACE INTO remote_node_metrics(
+              node_id,captured_at,cpu,memory_percent,disk_percent,load1,rx_bps,tx_bps,connections,latency_ms,
+              health_score,capacity_percent,xray_running,managed_clients) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',row)
+            # Keep enough headroom for the 24h view while bounding database growth.
+            db.execute('DELETE FROM remote_node_metrics WHERE captured_at<?',(now-93600,))
+        return True
+
+    @staticmethod
+    def _metric_average(values):
+        values=[float(x) for x in values if x is not None]
+        return round(sum(values)/len(values),2) if values else None
+
+    def metrics_history(self,node_id:str,window:str='live')->dict:
+        if window not in {'live','1h','24h'}:raise PolicyError('Invalid Node metric window')
+        # Confirm the node exists without exposing its credential.
+        current=next((x for x in self.list() if x['id']==node_id),None)
+        if current is None:raise PolicyError('Node not found')
+        seconds={'live':900,'1h':3600,'24h':86400}[window]
+        bucket={'live':10,'1h':30,'24h':600}[window]
+        now=time.time();start=now-seconds
+        with self.store.lock:
+            rows=[dict(r) for r in self.store.db.execute(
+                '''SELECT captured_at,cpu,memory_percent,disk_percent,load1,rx_bps,tx_bps,connections,
+                          latency_ms,health_score,capacity_percent,xray_running,managed_clients
+                   FROM remote_node_metrics WHERE node_id=? AND captured_at>=? ORDER BY captured_at''',
+                (node_id,start))]
+        groups={}
+        for row in rows:
+            key=int((float(row['captured_at'])-start)//bucket)
+            groups.setdefault(key,[]).append(row)
+        points=[]
+        avg_fields=('cpu','memory_percent','disk_percent','load1','rx_bps','tx_bps','connections',
+                    'latency_ms','health_score','capacity_percent','managed_clients')
+        for key in sorted(groups):
+            chunk=groups[key]
+            item={'at':round(sum(float(x['captured_at']) for x in chunk)/len(chunk),3)}
+            for name in avg_fields:item[name]=self._metric_average([x.get(name) for x in chunk])
+            # One stopped sample makes the bucket reflect the runtime interruption.
+            states=[x.get('xray_running') for x in chunk if x.get('xray_running') is not None]
+            item['xray_running']=min(states) if states else None
+            points.append(item)
+        return {'node':current,'window':window,'from':start,'to':now,'bucket_seconds':bucket,
+                'retention_seconds':93600,'points':points,
+                'boundary':'Hub-stored Agent/Xray/system metrics only; Tunnel/WARP/path health is excluded'}
+
     def _probe_locked(self,node_id:str,*,timeout:float=8.0)->dict:
         now=time.time()
         health,ms=self._request(node_id,'/node/api/health',timeout=timeout)
@@ -692,6 +780,7 @@ class NodeRegistry:
             raise PolicyError('Remote endpoint is not a DARK node agent')
         self.installations.observe(node_id,health)
         with self._node_transaction(node_id) as db:db.execute('UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error=?,last_health=?,updated_at=? WHERE id=?',(now,ms,'',json.dumps(health),now,node_id))
+        self._record_metric(node_id,health,ms,captured_at=now)
         return {'node':self.get(node_id),'latency_ms':ms,'health':health}
 
 
