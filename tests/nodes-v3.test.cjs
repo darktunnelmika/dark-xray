@@ -61,6 +61,19 @@ test('Node Operations Center shows only fresh live telemetry and refreshes every
     assert.ok(src.includes(token),token);
 });
 
+test('Node details expose host data and bounded resource history',()=>{
+  for(const token of [
+    "one('history','History'",
+    '/metrics?window=',
+    "'1h','24h','7d','30d'",
+    '30-second samples',
+    "L('Operating system'",
+    "L('Kernel'",
+    "L('Architecture'",
+    'speed_mbps',
+  ]) assert.ok(src.includes(token),token);
+});
+
 test('Node diagnostics UI does not add a tunnel health action',()=>{
   const start=src.indexOf('function diagnosticsDetail');
   const end=src.indexOf('async function showNodeInbounds',start);
