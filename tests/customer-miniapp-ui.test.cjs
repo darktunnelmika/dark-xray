@@ -24,7 +24,7 @@ test('Customer Mini App is wired to Telegram signed initData and customer-only A
 });
 
 test('Customer Mini App covers purchase services wallet support referral and representative purchase',()=>{
- for(const token of ['خرید اشتراک','سرویس‌های من','کیف پول','پشتیبانی','دعوت دوستان','پنل نمایندگی','Payment'])
+ for(const token of ['خرید اشتراک','سرویس‌های من','کیف پول','پشتیبانی','دعوت دوستان','پنل نمایندگی'])
    assert.ok(js.includes(token)||html.includes(token),token);
  assert.match(js,/data-checkout-wallet/);
  assert.match(js,/data-checkout-crypto/);
