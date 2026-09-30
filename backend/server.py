@@ -460,7 +460,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             request._body=bytes(data)
             if request.url.path.startswith('/api/') and data and 'application/json' not in request.headers.get('content-type',''):
                 return JSONResponse({'detail':'JSON content type required'},415)
-        mini_app_html=request.scope.get('path','')=='/assets/telegram-miniapp.html'
+        mini_app_html=request.scope.get('path','') in ('/assets/telegram-miniapp.html','/assets/telegram-customer.html')
         response=await call_next(request)
         response.headers.setdefault('Cache-Control','no-store')
         response.headers['X-Content-Type-Options']='nosniff'
