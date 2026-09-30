@@ -52,6 +52,26 @@ class PriceBody(Model):
     def resolved_ip_limit(self) -> int:
         return int(self.ip_limit if self.ip_limit is not None else (self.device_limit if self.device_limit is not None else 1))
 
+class SimplePlanBody(Model):
+    name: str = Field(min_length=1, max_length=128)
+    plan_type: Literal['volume','unlimited'] = 'volume'
+    price_minor: StrictInt = Field(ge=0, le=MAX_INT)
+    duration_months: Literal[1,2,3,6,12] = 1
+    volume_gb: StrictInt = Field(default=50, ge=0, le=1_000_000)
+    ip_limit: StrictInt = Field(default=1, ge=1, le=5)
+    inbound_ids: list[StrictInt] = Field(min_length=1, max_length=256)
+    description: str = Field(default='', max_length=2000)
+    category: str = Field(default='General', min_length=1, max_length=64)
+    sale_limit_per_user: StrictInt = Field(default=0, ge=0, le=100000)
+    activation_mode: Literal['immediate','first_connection'] = 'first_connection'
+    delivery_mode: Literal['subscription','config','both','portal'] = 'subscription'
+    hwid_limit: StrictInt = Field(default=0, ge=0, le=1000)
+    show_qr: bool = True
+    show_portal: bool = True
+    renewal_enabled: bool = True
+    add_volume_enabled: bool = True
+    published: bool = False
+
 class GatewayBody(Model):
     id: str = Field(min_length=1, max_length=64)
     label: str = Field(min_length=1, max_length=128)
@@ -223,6 +243,68 @@ class TelegramCommerce:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute(sql,(owner,))]
         for r in rows:r['enabled']=bool(r['enabled']);r['configured']=bool(r.pop('secret_enc'))
         return rows
+
+    def create_simple_plan(self, owner: str, spec: dict[str,Any]) -> dict[str,Any]:
+        name=str(spec.get('name') or '').strip()
+        if not 1<=len(name)<=128:raise PolicyError('Simple plan name is invalid')
+        plan_type=str(spec.get('plan_type') or 'volume')
+        if plan_type not in ('volume','unlimited'):raise PolicyError('Simple plan type is invalid')
+        price_minor=int(spec.get('price_minor') or 0)
+        if not 0<=price_minor<=MAX_INT:raise PolicyError('Simple plan price is outside the allowed range')
+        months=int(spec.get('duration_months') or 1)
+        duration_days={1:30,2:60,3:90,6:180,12:365}.get(months)
+        if not duration_days:raise PolicyError('Simple plan duration must be 1, 2, 3, 6 or 12 months')
+        ip_limit=int(spec.get('ip_limit') or 1)
+        if not 1<=ip_limit<=5:raise PolicyError('Simple plan IP limit must be between 1 and 5')
+        inbound_ids=sorted({int(x) for x in (spec.get('inbound_ids') or []) if type(x) is int and int(x)>0})
+        if not inbound_ids:raise PolicyError('Select at least one Inbound')
+        with self.store.lock:
+            known={int(r[0]) for r in self.store.db.execute('SELECT id FROM core_inbounds')}
+            actor=self.actor_for(owner)
+            if actor.role=='reseller':
+                profile=self.store.db.execute('SELECT allowed FROM owner_profiles WHERE id=?',(owner,)).fetchone()
+                allowed=set(json.loads(profile['allowed'])) if profile else set()
+            else:allowed=known
+        if not set(inbound_ids)<=known:raise PolicyError('Simple plan contains an unknown Inbound')
+        if actor.role=='reseller' and not set(inbound_ids)<=allowed:
+            raise PolicyError('Simple plan contains an Inbound outside representative scope')
+        volume_gb=int(spec.get('volume_gb') or 0)
+        if plan_type=='volume':
+            if not 1<=volume_gb<=1_000_000:raise PolicyError('Volume plan requires a positive GB amount')
+            volume_bytes=volume_gb*1024**3;unlimited_units=0
+        else:
+            volume_gb=0;volume_bytes=0;unlimited_units=1
+        category=str(spec.get('category') or 'General').strip()[:64] or 'General'
+        description=str(spec.get('description') or '')[:2000]
+        sale_limit=int(spec.get('sale_limit_per_user') or 0)
+        if not 0<=sale_limit<=100000:raise PolicyError('Purchase limit is outside the allowed range')
+        activation=str(spec.get('activation_mode') or 'first_connection')
+        delivery=str(spec.get('delivery_mode') or 'subscription')
+        if activation not in ('immediate','first_connection'):raise PolicyError('Invalid activation mode')
+        if delivery not in ('subscription','config','both','portal'):raise PolicyError('Invalid delivery mode')
+        hwid=int(spec.get('hwid_limit') or 0)
+        if not 0<=hwid<=1000:raise PolicyError('HWID limit is outside the allowed range')
+        published=bool(spec.get('published',False));now=time.time()
+        product_id=_id('p');price_id=_id('v')
+        label=('Unlimited' if plan_type=='unlimited' else f'{volume_gb} GB')+f' / {months}M'
+        with self.store.transaction() as db:
+            db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
+              renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (product_id,owner,name,description,category,plan_type,sale_limit,
+               int(bool(spec.get('renewal_enabled',True))),
+               int(bool(spec.get('add_volume_enabled',True)) and plan_type=='volume'),
+               int(published),int(published),now,now))
+            db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
+              volume_bytes,unlimited_units,device_limit,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode,
+              primary_inbound_id,show_qr,show_portal,active,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (price_id,owner,product_id,label,price_minor,'IRT',duration_days,volume_bytes,unlimited_units,
+               ip_limit,ip_limit,hwid,json.dumps(inbound_ids),activation,delivery,inbound_ids[0],
+               int(bool(spec.get('show_qr',True))),int(bool(spec.get('show_portal',True))),int(published),now,now))
+        row=next(x for x in self.product_rows(owner) if x['id']==product_id)
+        row['simple_plan']=True;row['price_id']=price_id;row['published']=published
+        return row
 
     def create_order(self, owner: str, buyer_telegram_id: int, buyer_username: str,
                      product_id: str, price_id: str) -> dict[str,Any]:
@@ -470,6 +552,14 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     @app.get('/api/commerce/products')
     def products(owner_id:str|None=None,p=Depends(current)):
         return commerce.product_rows(commerce.owner_for(p,owner_id))
+
+    @app.post('/api/commerce/simple-plans',status_code=201)
+    def simple_plan_create(body:SimplePlanBody,p=Depends(current)):
+        writable();oid=commerce.owner_for(p)
+        result=commerce.create_simple_plan(oid,body.model_dump())
+        audit(p.actor,oid,'commerce.simple_plan_create',result['id'],
+              f"type={body.plan_type}; months={body.duration_months}; published={body.published}")
+        return result
 
     @app.put('/api/commerce/products')
     def product_put(body:ProductBody,p=Depends(current)):
