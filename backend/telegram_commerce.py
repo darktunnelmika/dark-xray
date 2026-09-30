@@ -677,6 +677,9 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     def payment_confirm(order_id:str,body:PaymentConfirmBody,p=Depends(current)):
         writable();oid=commerce.owner_for(p)
         result=commerce.confirm_payment(oid,order_id,body.reference,manager)
+        order=commerce.order(order_id,oid)
+        if result.get('provisioned') and str(order.get('order_type') or 'purchase')=='purchase':
+            runtime.customer.qualify_referral(oid,int(order['buyer_telegram_id']))
         audit(p.actor,oid,'commerce.payment_confirm',order_id,body.reference[:120])
         return result
 
