@@ -60,7 +60,9 @@ def test_customer_miniapp_accepts_signed_customer_and_is_telegram_frameable(env)
     r=c.get('/api/telegram-customer/bootstrap',params={'owner':'dark'},headers=hdr(700101))
     assert r.status_code==200,r.text
     assert r.json()['user']['telegram_id']==700101
-    bad=dict(hdr(700101));bad['X-Telegram-Init-Data']=bad['X-Telegram-Init-Data'][:-1]+'0'
+    raw=signed(700101);prefix,hash_value=raw.rsplit('hash=',1)
+    bad_hash=('0' if hash_value[0]!='0' else '1')+hash_value[1:]
+    bad={'X-Telegram-Init-Data':prefix+'hash='+bad_hash}
     assert c.get('/api/telegram-customer/bootstrap',params={'owner':'dark'},headers=bad).status_code==403
 
 
