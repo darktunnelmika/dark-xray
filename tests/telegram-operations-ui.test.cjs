@@ -35,3 +35,11 @@ test('web Telegram page exposes Operations V4 centers and hosted crypto setup',(
  assert.match(commerce,/\/api\/telegram\/operations\/crypto/);
  assert.match(commerce,/\/api\/telegram\/operations\/payments/);
 });
+
+
+test('Support Center exposes quick reply management without leaking bot secrets',()=>{
+ assert.match(commerce,/Quick replies/);
+ assert.match(commerce,/tgquickreplies/);
+ assert.match(commerce,/support\/quick-replies/);
+ assert.doesNotMatch(commerce,/token_enc|webhook_secret\s*[:=]\s*[^'"]+/);
+});
