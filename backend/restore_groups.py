@@ -61,8 +61,7 @@ class RestoreGroupsMixin:
                 SELECT r.id,'local',c.up,c.down,c.up,c.down,? FROM restore_subscriptions r
                 JOIN core_clients c ON c.email=r.core_email''', (now,))
             db.execute('DROP TRIGGER IF EXISTS restore_local_usage_v1')
-            db.execute('DROP TRIGGER IF EXISTS restore_local_usage_v2')
-            db.execute('''CREATE TRIGGER restore_local_usage_v2
+            db.execute('''CREATE TRIGGER restore_local_usage_v1
                 AFTER UPDATE OF up,down ON core_clients
                 WHEN (NEW.up<>OLD.up OR NEW.down<>OLD.down) AND
                      EXISTS(SELECT 1 FROM restore_subscriptions WHERE core_email=NEW.email AND promoted_at=0)
