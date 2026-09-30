@@ -112,6 +112,28 @@ curl -4 -fsSL --retry 3 https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@dar
 
 RC14 روی Pair واقعی IRAN ↔ Poland با Reboot هر دو سمت، Ping داخلی و TCP/1190 تست شده است.
 
+## DARK WaterWall Direct مستقل
+
+برای مسیر **Direct TCP از IRAN به KHAREJ**، پروژه اکنون DARK WaterWall Direct RC1 را نیز دارد.
+
+- Reality Direct
+- Reality + HalfDuplex اختیاری
+- Pair Code `DWW1-`
+- Multi-port / Port range / تک‌پورت remap
+- systemd مستقل، Dashboard و Diagnostics
+- WaterWall core update با بررسی SHA-256 رسمی در صورت موجودبودن digest
+- Smoke CI با WaterWall واقعی pin‌شده
+
+نصب بعد از Merge روی `main`:
+
+```bash
+curl -4 -fsSL --retry 3 https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@main/standalone/dark-waterwall/install.sh | bash
+```
+
+راهنما: [standalone/dark-waterwall/README.fa.md](standalone/dark-waterwall/README.fa.md)
+
+> RC1 در این مرحله CI-validated است؛ تا قبل از Pair واقعی IRAN ↔ KHAREJ و load/reboot/reconnect test، Live-Validated اعلام نمی‌شود.
+
 ## گیت‌های سلامت روی سرور
 
 Readiness بدون تغییر سرویس/DB/firewall:
