@@ -225,4 +225,77 @@ pair_fingerprint(){
 save_meta(){
   local dir="$1"; shift
   mkdir -p "$dir/logs"; chmod 700 "$dir"
-  : >"$dir/met
+  : >"$dir/meta.conf"
+  local kv key val
+  for kv in "$@"; do key="${kv%%=*}"; val="${kv#*=}"; printf '%s=%q\n' "$key" "$val" >>"$dir/meta.conf"; done
+  chmod 600 "$dir/meta.conf"
+}
+
+write_runtime(){
+  local name="$1" dir
+  dir="$TUN_DIR/$name"
+  [ -r "$dir/meta.conf" ] || { bad "missing tunnel metadata"; return 1; }
+  # shellcheck disable=SC1090
+  . "$dir/meta.conf"
+  [ -r "$dir/ports.list" ] || { bad "missing ports.list"; return 1; }
+  mkdir -p "$dir/logs"
+  export DWW_NAME="$NAME" DWW_ROLE="$ROLE" DWW_IR_IP="$IR_IP" DWW_KH_IP="$KH_IP"
+  export DWW_TRANSPORT_PORT="$TRANSPORT_PORT" DWW_MODE="$MODE" DWW_SNI="$SNI" DWW_SECRET="$SECRET"
+  export DWW_TARGET_ADDR="$TARGET_ADDR" DWW_WORKERS="$WORKERS" DWW_PORTS_FILE="$dir/ports.list" DWW_WATER_DIR="$WATER_DIR"
+  python3 - "$dir/core.json" "$dir/config.json" <<'PY'
+import json, os, sys
+core_path, config_path=sys.argv[1:]
+name=os.environ['DWW_NAME']; role=os.environ['DWW_ROLE']; ir=os.environ['DWW_IR_IP']; kh=os.environ['DWW_KH_IP']
+tp=int(os.environ['DWW_TRANSPORT_PORT']); mode=os.environ['DWW_MODE']; sni=os.environ['DWW_SNI']; secret=os.environ['DWW_SECRET']
+target=os.environ['DWW_TARGET_ADDR']; workers=int(os.environ['DWW_WORKERS']); ports_file=os.environ['DWW_PORTS_FILE']; water_dir=os.environ['DWW_WATER_DIR']
+core={
+  "log":{"path":"logs/","core":{"loglevel":"INFO","file":"core.log","console":True},"network":{"loglevel":"INFO","file":"network.log","console":True},"dns":{"loglevel":"WARN","file":"dns.log","console":False},"internal":{"loglevel":"WARN","file":"internal.log","console":False}},
+  "misc":{"workers":workers,"ram-profile":"client" if role=="IRAN" else "server","mtu":1500,"try-enabling-bbr":True,"libs-path":water_dir.rstrip('/')+"/libs/"},
+  "dns":{"domain-strategy":"prefer-ipv4"},
+  "configs":["config.json"]
+}
+nodes=[]
+if role=='IRAN':
+    entries=[]
+    for line in open(ports_file,encoding='utf-8'):
+        kind,a,b=line.rstrip('\n').split('\t'); entries.append((kind,int(a),int(b)))
+    for i,(kind,a,b) in enumerate(entries,1):
+        listen=f'in_{i}'; header=f'header_{i}'; half=f'half_{i}'; reality=f'reality_{i}'; transport=f'transport_{i}'
+        settings={"address":"0.0.0.0","nodelay":True,"large-send-buffer":True,"large-recv-buffer":True}
+        if kind=='range': settings['port-range']=[a,b]; header_data='src_context->port'
+        else: settings['port']=a; header_data='src_context->port' if a==b else b
+        nodes.append({"name":listen,"type":"TcpListener","settings":settings,"next":header})
+        next_after_header=half if mode=='reality-hd' else reality
+        nodes.append({"name":header,"type":"HeaderClient","settings":{"data":header_data},"next":next_after_header})
+        if mode=='reality-hd': nodes.append({"name":half,"type":"HalfDuplexClient","settings":{},"next":reality})
+        nodes.append({"name":reality,"type":"RealityClient","settings":{"sni":sni,"verify":True,"password":secret,"algorithm":"chacha20-poly1305"},"next":transport})
+        nodes.append({"name":transport,"type":"TcpConnector","settings":{"address":kh,"port":tp,"nodelay":True,"large-send-buffer":True,"large-recv-buffer":True,"domain-strategy":"only-ipv4"}})
+else:
+    after_reality='half_server' if mode=='reality-hd' else 'header_server'
+    nodes.append({"name":"transport_in","type":"TcpListener","settings":{"address":"0.0.0.0","port":tp,"nodelay":True,"large-send-buffer":True,"large-recv-buffer":True,"whitelist":[ir+"/32"]},"next":"reality_server"})
+    nodes.append({"name":"reality_server","type":"RealityServer","settings":{"destination":"visitor","password":secret,"algorithm":"chacha20-poly1305","sniffing-attempts":8},"next":after_reality})
+    if mode=='reality-hd': nodes.append({"name":"half_server","type":"HalfDuplexServer","settings":{},"next":"header_server"})
+    nodes.append({"name":"header_server","type":"HeaderServer","settings":{"override":"dest_context->port"},"next":"backend"})
+    nodes.append({"name":"backend","type":"TcpConnector","settings":{"address":target,"port":"dest_context->port","nodelay":True,"large-send-buffer":True,"large-recv-buffer":True,"domain-strategy":"prefer-ipv4"}})
+    nodes.append({"name":"visitor","type":"TcpConnector","settings":{"address":sni,"port":443,"nodelay":True,"domain-strategy":"prefer-ipv4"}})
+config={"name":"dark-waterwall-"+name,"author":"DARK VPN","config-version":1,"core-minimum-version":0,"encrypted":False,"nodes":nodes}
+for path,obj in ((core_path,core),(config_path,config)):
+    with open(path,'w',encoding='utf-8') as f: json.dump(obj,f,ensure_ascii=False,indent=2); f.write('\n')
+PY
+  chmod 600 "$dir/core.json" "$dir/config.json"
+  python3 -m json.tool "$dir/core.json" >/dev/null && python3 -m json.tool "$dir/config.json" >/dev/null
+}
+
+write_unit(){
+  mkdir -p "$(dirname "$UNIT_FILE")"
+  cat >"$UNIT_FILE" <<UNIT_EOF
+[Unit]
+Description=DARK WaterWall Direct tunnel %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$TUN_DIR/%i
+ExecStart=$WATER_BIN --config:core.
