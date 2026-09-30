@@ -197,8 +197,9 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
     @app.delete('/api/dark-restore/{restore_id}')
     def delete_restore(restore_id:str,p=Depends(owner)):
         writable()
-        with restore.store.lock:r=restore.store.db.execute('SELECT core_email FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
+        with restore.store.lock:r=restore.store.db.execute('SELECT core_email,promoted_at FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
+        if float(r['promoted_at'] or 0)>0:raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
         restore.engine.delete(r['core_email'])
         with restore.store.transaction() as db:db.execute('DELETE FROM restore_subscriptions WHERE id=?',(restore_id,))
         restore.engine.apply(start=restore.engine.running)
