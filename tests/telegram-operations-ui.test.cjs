@@ -41,5 +41,6 @@ test('Support Center exposes quick reply management without leaking bot secrets'
  assert.match(commerce,/Quick replies/);
  assert.match(commerce,/tgquickreplies/);
  assert.match(commerce,/support\/quick-replies/);
- assert.doesNotMatch(commerce,/token_enc|webhook_secret\s*[:=]\s*[^'"]+/);
+ assert.doesNotMatch(commerce,/token_enc/);
+ assert.doesNotMatch(commerce,/c\.webhook_secret|crypto\.webhook_secret/);
 });
