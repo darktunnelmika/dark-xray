@@ -577,7 +577,7 @@ def test_owner_customer_menu_adds_representative_marketplace(env):
             '🛍 خرید اشتراک','🔄 تمدید سرویس',
             '💰 کیف پول + شارژ','📦 سرویس‌های من',
             '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
-            '🏪 خرید پنل نمایندگی',
+            '🏪 خرید پنل نمایندگی','📱 فروشگاه',
         ]
     finally:
         worker.api.close()
@@ -788,7 +788,7 @@ def test_representative_panel_has_independent_bot_customer_wallet_store_and_supp
             assert customer_labels==[
                 '🛍 خرید اشتراک','🔄 تمدید سرویس',
                 '💰 کیف پول + شارژ','📦 سرویس‌های من',
-                '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
+                '👥 زیرمجموعه‌گیری','🎫 پشتیبانی','📱 فروشگاه',
             ]
         finally:
             worker.api.close()
