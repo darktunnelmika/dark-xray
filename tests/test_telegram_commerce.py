@@ -308,7 +308,7 @@ def test_manual_payment_wizard_is_managed_inside_admin_bot(env):
     worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
     try:
         menu=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '💳 پرداخت‌ها' in menu and '💳 درگاه‌ها' not in menu
+        assert '💳 پرداخت دستی' in menu and '💳 درگاه‌ها' not in menu
         worker.admin_gateways(admin_id)
         assert sent[-1][2]['inline_keyboard'][0][0]['callback_data']=='paycfg'
         worker.start_payment_setup(admin_id,admin_id)
@@ -374,7 +374,7 @@ def test_admin_v2_keyboard_exposes_daily_management_centers(env):
     worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'admin-v2-test')
     try:
         text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
-        for label in ('🏠 داشبورد','👥 کاربران','📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت‌ها',
+        for label in ('🏠 داشبورد','👥 کاربران','📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی',
                       '📊 گزارش‌ها','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
             assert label in text
     finally:
@@ -400,7 +400,7 @@ def test_admin_v2_centers_render_without_external_side_effects(env):
     finally:
         worker.api.close()
     text='\n'.join(x[1] for x in sent)
-    assert 'DARK BOT ADMIN V4' in text
+    assert 'DARK BOT ADMIN V3 → OPERATIONS V4' in text
     assert 'سرویس‌ها' in text
     assert 'مرکز گزارش DARK' in text
     assert 'DARK Full Backup' in text
