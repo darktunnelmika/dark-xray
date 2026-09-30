@@ -178,7 +178,9 @@ class NodeRegistry:
               recovery_count INTEGER NOT NULL DEFAULT 0,last_offline_at REAL NOT NULL DEFAULT 0,
               last_recovered_at REAL NOT NULL DEFAULT 0,
               data_address TEXT NOT NULL DEFAULT '',priority INTEGER NOT NULL DEFAULT 100,
-              failover_enabled INTEGER NOT NULL DEFAULT 1);
+              failover_enabled INTEGER NOT NULL DEFAULT 1,
+              maintenance INTEGER NOT NULL DEFAULT 0,maintenance_since REAL NOT NULL DEFAULT 0,
+              maintenance_note TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS node_agent_tokens(
               id TEXT PRIMARY KEY,name TEXT NOT NULL,digest TEXT NOT NULL UNIQUE,
               enabled INTEGER NOT NULL DEFAULT 1,expires_at REAL NOT NULL,created_at REAL NOT NULL,
@@ -235,6 +237,12 @@ class NodeRegistry:
               managed_clients INTEGER,
               PRIMARY KEY(node_id,captured_at));
             CREATE INDEX IF NOT EXISTS remote_node_metrics_time ON remote_node_metrics(node_id,captured_at);
+            CREATE TABLE IF NOT EXISTS remote_node_alerts(
+              node_id TEXT NOT NULL,code TEXT NOT NULL,severity TEXT NOT NULL,
+              first_seen REAL NOT NULL,last_seen REAL NOT NULL,value REAL,threshold REAL,
+              active INTEGER NOT NULL DEFAULT 1,
+              PRIMARY KEY(node_id,code));
+            CREATE INDEX IF NOT EXISTS remote_node_alerts_active ON remote_node_alerts(node_id,active,last_seen);
             ''')
             node_cols={r[1] for r in store.db.execute('PRAGMA table_info(remote_nodes)')}
             for name,ddl in (
@@ -245,6 +253,9 @@ class NodeRegistry:
                 ('data_address',"ALTER TABLE remote_nodes ADD COLUMN data_address TEXT NOT NULL DEFAULT ''"),
                 ('priority',"ALTER TABLE remote_nodes ADD COLUMN priority INTEGER NOT NULL DEFAULT 100"),
                 ('failover_enabled',"ALTER TABLE remote_nodes ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1"),
+                ('maintenance',"ALTER TABLE remote_nodes ADD COLUMN maintenance INTEGER NOT NULL DEFAULT 0"),
+                ('maintenance_since',"ALTER TABLE remote_nodes ADD COLUMN maintenance_since REAL NOT NULL DEFAULT 0"),
+                ('maintenance_note',"ALTER TABLE remote_nodes ADD COLUMN maintenance_note TEXT NOT NULL DEFAULT ''"),
             ):
                 if name not in node_cols:store.db.execute(ddl)
             # Existing Node V3 records predate data_address. Preserve their
@@ -300,6 +311,7 @@ class NodeRegistry:
         elif remote_id:deployment_state='deployed'
         else:deployment_state='pending'
         if not node.get('enabled'):reason='node_disabled'
+        elif node.get('maintenance'):reason='node_maintenance'
         elif sync_error:reason='sync_error'
         elif not remote_id:reason='not_deployed'
         elif runtime_block:reason=runtime_block
@@ -394,6 +406,48 @@ class NodeRegistry:
         state='critical' if any(x['severity']=='critical' for x in alerts) else ('warning' if alerts else 'healthy')
         return {'score':int(score),'state':state,'capacity_percent':capacity,'capacity_state':capacity_state,'alerts':alerts}
 
+    def _sync_active_alerts(self,db,node_id:str,alerts:list[dict],now:float):
+        active_codes=set()
+        for alert in alerts:
+            code=str(alert.get('code') or '')[:96]
+            severity=str(alert.get('severity') or 'warning')[:16]
+            if not code:continue
+            active_codes.add(code)
+            value=self._metric_number(alert.get('value'));threshold=self._metric_number(alert.get('threshold'))
+            db.execute('''INSERT INTO remote_node_alerts(node_id,code,severity,first_seen,last_seen,value,threshold,active)
+                          VALUES(?,?,?,?,?,?,?,1)
+                          ON CONFLICT(node_id,code) DO UPDATE SET
+                            severity=excluded.severity,
+                            first_seen=CASE WHEN remote_node_alerts.active=1 THEN remote_node_alerts.first_seen ELSE excluded.first_seen END,
+                            last_seen=excluded.last_seen,value=excluded.value,threshold=excluded.threshold,active=1''',
+                       (node_id,code,severity,now,now,value,threshold))
+        if active_codes:
+            marks=','.join('?' for _ in active_codes)
+            db.execute('UPDATE remote_node_alerts SET active=0 WHERE node_id=? AND active=1 AND code NOT IN ('+marks+')',
+                       (node_id,*sorted(active_codes)))
+        else:
+            db.execute('UPDATE remote_node_alerts SET active=0 WHERE node_id=? AND active=1',(node_id,))
+
+    def _annotate_alert_times(self,node:dict,alerts:list[dict],now:float)->list[dict]:
+        with self.store.lock:
+            rows={str(r['code']):dict(r) for r in self.store.db.execute(
+                'SELECT code,severity,first_seen,last_seen,value,threshold,active FROM remote_node_alerts WHERE node_id=? AND active=1',
+                (node['id'],))}
+        out=[]
+        for source in alerts:
+            item=dict(source);code=str(item.get('code') or '')
+            stored=rows.get(code)
+            if stored:
+                item['started_at']=float(stored['first_seen']);item['last_observed_at']=float(stored['last_seen'])
+            elif code=='telemetry_stale':
+                item['started_at']=float(node.get('last_seen') or now)+20.0;item['last_observed_at']=now
+            elif code in {'telemetry_offline','node_error'}:
+                item['started_at']=float(node.get('last_offline_at') or node.get('last_seen') or now);item['last_observed_at']=now
+            else:
+                item['started_at']=float(node.get('last_seen') or now);item['last_observed_at']=float(node.get('last_seen') or now)
+            out.append(item)
+        return out
+
     def list(self)->list[dict]:
         with self.store.lock:rows=[dict(r) for r in self.store.db.execute('SELECT * FROM remote_nodes ORDER BY name,id')]
         now=time.time()
@@ -409,6 +463,7 @@ class NodeRegistry:
             r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
             r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
             r['operational_health']=self._operations_health(r)
+            r['operational_health']['alerts']=self._annotate_alert_times(r,r['operational_health'].get('alerts',[]),now)
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
             desired=dict(ds) if ds else {'revision':0,'desired_hash':'','updated_at':0,'applied_revision':0,'applied_hash':'','applied_at':0,'last_error':''}
@@ -626,6 +681,18 @@ class NodeRegistry:
             db.execute("UPDATE remote_nodes SET enabled=?,updated_at=?,last_seen=0,last_latency_ms=0,last_error='',last_health='{}' WHERE id=?",(int(enabled),time.time(),node_id))
         return self.get(node_id)
 
+    def set_maintenance(self,node_id:str,enabled:bool,note:str='')->dict:
+        if type(enabled)is not bool:raise PolicyError('maintenance enabled must be boolean')
+        if not isinstance(note,str) or len(note)>300:raise PolicyError('Invalid maintenance note')
+        now=time.time()
+        with self._node_transaction(node_id) as db:
+            row=db.execute('SELECT maintenance,maintenance_since FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            if not row:raise PolicyError('Node not found')
+            since=(float(row['maintenance_since']) if row['maintenance'] and enabled else now if enabled else 0.0)
+            db.execute('UPDATE remote_nodes SET maintenance=?,maintenance_since=?,maintenance_note=?,updated_at=? WHERE id=?',
+                       (int(enabled),since,note.strip() if enabled else '',now,node_id))
+        return next(x for x in self.list() if x['id']==node_id)
+
     def delete(self,node_id:str)->dict:
         with self.store.transaction() as db:
             history=db.execute('SELECT 1 FROM remote_node_installations WHERE node_id=? AND retired_at>0',(node_id,)).fetchone()
@@ -640,6 +707,8 @@ class NodeRegistry:
             db.execute('DELETE FROM remote_node_security_state WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_desired_state WHERE node_id=?',(node_id,))
             db.execute('DELETE FROM remote_node_control WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_metrics WHERE node_id=?',(node_id,))
+            db.execute('DELETE FROM remote_node_alerts WHERE node_id=?',(node_id,))
             cur=db.execute('DELETE FROM remote_nodes WHERE id=?',(node_id,))
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
@@ -662,6 +731,8 @@ class NodeRegistry:
             db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
                           last_offline_at=CASE WHEN ? THEN ? ELSE last_offline_at END WHERE id=?''',
                        (str(error)[:300],now,int(first),now,node_id))
+            self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
+                                                {'severity':'critical','code':'node_error'}],now)
 
     @staticmethod
     def _response_error(status:int,raw:bytes)->PolicyError:
@@ -732,6 +803,7 @@ class NodeRegistry:
               health_score,capacity_percent,xray_running,managed_clients) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',row)
             # Keep enough headroom for the 24h view while bounding database growth.
             db.execute('DELETE FROM remote_node_metrics WHERE captured_at<?',(now-93600,))
+            self._sync_active_alerts(db,node_id,ops.get('alerts',[]),now)
         return True
 
     @staticmethod

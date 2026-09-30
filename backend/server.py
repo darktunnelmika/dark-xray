@@ -230,6 +230,9 @@ class NodeCreate(Model):
     priority:StrictInt=Field(default=100,ge=1,le=1000)
     failoverEnabled:bool=True
     inboundIds:list[StrictInt]=Field(default_factory=list,max_length=256)
+class NodeMaintenance(Model):
+    enabled:bool
+    note:str=Field(default='',max_length=300)
 class NodePatch(Model):
     name:str=Field(min_length=1,max_length=128)
     origin:str=Field(min_length=8,max_length=500)
@@ -1334,6 +1337,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     'data_address':node.get('data_address',''),'data_port':int(inbound['port']),
                     'priority':int(node.get('priority') or 100),'latency_ms':int(node.get('last_latency_ms') or 0),
                     'enabled':bool(node.get('enabled')),'online':bool(node.get('online')),
+                    'maintenance':bool(node.get('maintenance')),'maintenance_since':float(node.get('maintenance_since') or 0),
                     'failover_enabled':bool(node.get('failover_enabled')),
                     'remote_inbound_id':int(assignment.get('remote_inbound_id') or 0),
                     'deployment_state':assignment.get('deployment_state','pending'),
@@ -1361,7 +1365,25 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/nodes/{node_id}/metrics')
     def remote_node_metrics(node_id:str,window:Literal['live','1h','24h']='live',p:Principal=Depends(owner)):
-        return nodes.metrics_history(node_id,window)
+        doc=nodes.metrics_history(node_id,window)
+        source={'version':VERSION,'commit':''}
+        source_path=engine.runtime.parent/'installed-source.json'
+        try:
+            if source_path.is_file() and not source_path.is_symlink() and source_path.stat().st_size<65536:
+                raw=json.loads(source_path.read_text(encoding='utf-8'))
+                if isinstance(raw,dict):
+                    source={'version':str(raw.get('version') or VERSION),'commit':str(raw.get('commit') or '')}
+        except (OSError,ValueError):pass
+        doc['hub_source']=source
+        return doc
+
+    @app.post('/api/nodes/{node_id}/maintenance')
+    def remote_node_maintenance(node_id:str,body:NodeMaintenance,p:Principal=Depends(owner)):
+        writable()
+        result=nodes.set_maintenance(node_id,body.enabled,body.note)
+        manager.audit(p.actor,p.actor.id,'node.maintenance',node_id,
+                      ('enabled' if body.enabled else 'disabled')+(('; '+body.note[:200]) if body.note else ''))
+        return result
 
     @app.post('/api/nodes/{node_id}/replacement/prepare')
     def prepare_node_replacement(node_id:str,body:NodePair,p:Principal=Depends(owner)):
