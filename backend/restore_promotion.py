@@ -85,8 +85,20 @@ class RestorePromotionMixin:
                 db.execute("UPDATE restore_subscriptions SET core_email=? WHERE id=?",(native_email,restore_id))
             else:
                 db.execute("UPDATE core_clients SET body=? WHERE email=?",(json.dumps(body),original_email))
+        with self.store.lock:
+            usage_row=self.store.db.execute(
+                "SELECT COALESCE(SUM(up+down),0) FROM restore_usage WHERE restore_id=?",(restore_id,)).fetchone()
+            dark_used=int(usage_row[0] or 0)
         try:
             result=self.manager.adopt(actor,owner_id,native_email)
+            # Manager adoption baselines local Core counters. Restore accounting
+            # may also contain already-consumed remote Node bytes, so raise the
+            # native used baseline to the complete DARK usage before promotion.
+            with self.store.transaction() as db:
+                current=db.execute("SELECT used_bytes FROM clients WHERE id=?",(native_email,)).fetchone()
+                if not current:raise PolicyError('Native policy row missing after adoption')
+                if dark_used>int(current['used_bytes'] or 0):
+                    db.execute("UPDATE clients SET used_bytes=? WHERE id=?",(dark_used,native_email))
         except Exception:
             # Restore the original Core label/body if native adoption did not commit.
             with self.store.transaction() as db:
@@ -105,7 +117,7 @@ class RestorePromotionMixin:
                 if db.execute("SELECT changes()").fetchone()[0]!=1:
                     raise PolicyError('Restore promotion state changed')
                 db.execute("INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)",
-                           (restore_id,'promoted.native',json.dumps({'owner':owner_id,'client_id':row['core_email']}),now))
+                           (restore_id,'promoted.native',json.dumps({'owner':owner_id,'client_id':native_email,'dark_used_baseline':dark_used}),now))
         except Exception:
             # Adoption is durable; fail closed by surfacing the inconsistency instead of deleting a native client.
             raise HTTPException(409,'Native client was adopted but Restore promotion marker could not be saved; inspect before retrying')
