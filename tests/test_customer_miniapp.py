@@ -1,5 +1,6 @@
 import json
 
+from test_standalone import env
 from test_representatives_v2 import create_inbound
 from test_telegram_commerce import manual_gateway
 from test_telegram_ops import BOT_TOKEN,mini_init
