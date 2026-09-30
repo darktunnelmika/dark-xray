@@ -446,4 +446,91 @@ new_kharej(){
   mkdir -p "$dir"; chmod 700 "$dir"
   if ! normalized="$(parse_ports_to_file "$PORTS_SPEC" "$dir/ports.list" 2>&1)"; then bad "$normalized"; rm -rf "$dir"; pause; return; fi
   chmod 600 "$dir/ports.list"
-  PORTS_SPEC="$normalized"; defw="$(auto_workers)"; ask "WaterWall workers on this KHAREJ server" "$defw"; WORKERS="$ANS"; [[ "$WORKERS" =~ ^[0-9]+$ ]] && [ "$WORKERS" -ge 1 ] && [ "$WORKERS" -le 64 
+  PORTS_SPEC="$normalized"; defw="$(auto_workers)"; ask "WaterWall workers on this KHAREJ server" "$defw"; WORKERS="$ANS"; [[ "$WORKERS" =~ ^[0-9]+$ ]] && [ "$WORKERS" -ge 1 ] && [ "$WORKERS" -le 64 ] || { bad "workers must be 1..64"; rm -rf "$dir"; pause; return; }
+  PAIR_HASH="$(pair_fingerprint "$NAME" "$IR_IP" "$KH_IP" "$TRANSPORT_PORT" "$MODE" "$SNI" "$SECRET" "$TARGET_ADDR" "$PORTS_SPEC")"
+  save_meta "$dir" "NAME=$NAME" "ROLE=KHAREJ" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"
+  printf '%s\n' "$code" >"$dir/pair.code"; chmod 600 "$dir/pair.code"
+  write_runtime "$NAME" || { bad "runtime generation failed"; pause; return; }
+  if service_start "$NAME"; then ok "KHAREJ service started"; else warn "service did not start; use Diagnostics"; fi
+  echo; dim "Transport TCP/$TRANSPORT_PORT accepts only source $IR_IP/32 inside WaterWall."
+  pause
+}
+
+list_tunnels(){
+  local d any=0 state role mode ports
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*; do
+    [ -r "$d/meta.conf" ] || continue; any=1
+    unset NAME ROLE MODE TRANSPORT_PORT
+    # shellcheck disable=SC1090
+    . "$d/meta.conf"
+    state="$(systemctl is-active "darkwater@$NAME.service" 2>/dev/null || true)"
+    ports="$(ports_to_spec "$d/ports.list" 2>/dev/null || echo '?')"
+    printf '  %-20s %-7s %-11s %-12s transport:%-5s ports:%s\n' "$NAME" "${ROLE:-?}" "${MODE:-?}" "${state:-inactive}" "${TRANSPORT_PORT:-?}" "$ports"
+  done
+  shopt -u nullglob
+  [ "$any" -eq 1 ] || dim "no tunnels"
+}
+choose_tunnel(){
+  local names=() d i=1 v
+  shopt -s nullglob
+  for d in "$TUN_DIR"/*; do [ -r "$d/meta.conf" ] && names+=("$(basename "$d")"); done
+  shopt -u nullglob
+  [ "${#names[@]}" -gt 0 ] || { warn "no tunnels"; return 1; }
+  for v in "${names[@]}"; do printf '  [%d] %s\n' "$i" "$v"; i=$((i+1)); done
+  ask "Tunnel number" "1"; [[ "$ANS" =~ ^[0-9]+$ ]] && [ "$ANS" -ge 1 ] && [ "$ANS" -le "${#names[@]}" ] || return 1
+  CHOSEN="${names[$((ANS-1))]}"
+}
+
+show_tunnel(){
+  local n="$1" dir ports state ver
+  dir="$TUN_DIR/$n"
+  # shellcheck disable=SC1090
+  . "$dir/meta.conf"; ports="$(ports_to_spec "$dir/ports.list")"; state="$(systemctl is-active "darkwater@$n.service" 2>/dev/null || true)"; ver="$(cat "$WATER_VERSION_FILE" 2>/dev/null || echo unknown)"
+  top; sect "$NAME"; row "Role: ${W}${ROLE}${N}"; row "Mode: ${W}${MODE}${N}"; row "Service: ${W}${state}${N}"; row "IRAN: ${IR_IP}"; row "KHAREJ: ${KH_IP}:${TRANSPORT_PORT}"; row "SNI: ${SNI}"; row "Backend: ${TARGET_ADDR}"; row "Ports: ${ports}"; row "Workers: ${WORKERS}"; row "WaterWall: ${ver}"; row "Pair: ${PAIR_HASH}"; bot
+}
+
+edit_ports(){
+  local n="$1" dir spec normalized
+  dir="$TUN_DIR/$n"
+  # shellcheck disable=SC1090
+  . "$dir/meta.conf"
+  [ "$ROLE" = IRAN ] || { warn "ports are controlled from the IRAN side"; return; }
+  dim "Current: $(ports_to_spec "$dir/ports.list")"; ask "New ports" "$(ports_to_spec "$dir/ports.list")"; spec="$ANS"
+  if ! normalized="$(parse_ports_to_file "$spec" "$dir/ports.list.new" 2>&1)"; then bad "$normalized"; rm -f "$dir/ports.list.new"; return; fi
+  mv "$dir/ports.list.new" "$dir/ports.list"; chmod 600 "$dir/ports.list"; PORTS_SPEC="$normalized"
+  PAIR_HASH="$(pair_fingerprint "$NAME" "$IR_IP" "$KH_IP" "$TRANSPORT_PORT" "$MODE" "$SNI" "$SECRET" "$TARGET_ADDR" "$PORTS_SPEC")"
+  sed -i "s|^PAIR_HASH=.*|PAIR_HASH=$(printf %q "$PAIR_HASH")|" "$dir/meta.conf"
+  PAIR_CODE="$(make_pair_code "$NAME" "$IR_IP" "$KH_IP" "$TRANSPORT_PORT" "$MODE" "$SNI" "$SECRET" "$TARGET_ADDR" "$PORTS_SPEC")"; printf '%s\n' "$PAIR_CODE" >"$dir/pair.code"; chmod 600 "$dir/pair.code"
+  service_restart "$n" && ok "ports applied" || bad "restart failed"
+}
+
+show_pair_code(){ local n="$1"; [ -r "$TUN_DIR/$n/pair.code" ] || { warn "Pair Code unavailable"; return; }; echo; cat "$TUN_DIR/$n/pair.code"; echo; dim "Pair Code contains the shared Reality secret."; }
+
+delete_tunnel(){ local n="$1"; yesno "Delete $n?" n || return; service_disable "$n"; rm -rf "$TUN_DIR/$n"; ok "deleted $n"; }
+
+manage(){
+  header "MANAGE TUNNELS"; list_tunnels; echo; choose_tunnel || { pause; return; }
+  local n="$CHOSEN"
+  while :; do
+    header "MANAGE · $n"; show_tunnel "$n"; echo
+    top; sect "CONTROL"; item 1 "Start" ""; item 2 "Stop" ""; item 3 "Restart" ""; mid; sect "CONFIGURE"; item 4 "Ports" "IRAN side"; item 5 "Pair Code" "secret"; mid; sect "INSPECT"; item 6 "Diagnostics" ""; item 7 "Logs" "last 80 lines"; mid; item 8 "Delete" ""; item 0 "Back" ""; bot; echo; getkey
+    case "$KEY" in
+      1) service_start "$n" && ok "started" || bad "start failed"; pause;;
+      2) service_stop "$n"; ok "stopped"; pause;;
+      3) service_restart "$n" && ok "restarted" || bad "restart failed"; pause;;
+      4) edit_ports "$n"; pause;;
+      5) show_pair_code "$n"; pause;;
+      6) diagnostics_one "$n"; pause;;
+      7) journalctl -u "darkwater@$n.service" -n 80 --no-pager 2>/dev/null || true; pause;;
+      8) delete_tunnel "$n"; pause; return;;
+      0) return;;
+    esac
+  done
+}
+
+diagnostics_one(){
+  local n="$1" dir state conns fds portsok=1
+  dir="$TUN_DIR/$n"
+  [ -r "$dir/meta.conf" ] || return 1
+  # sh
