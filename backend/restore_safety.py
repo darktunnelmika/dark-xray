@@ -173,6 +173,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['promoted_at'] or 0)>0:
+                raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Metadata changed. Reopen the review before saving.')
@@ -198,6 +200,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['promoted_at'] or 0)>0:
+                raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Restore state changed. Reopen before saving.')
