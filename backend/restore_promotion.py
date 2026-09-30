@@ -88,6 +88,7 @@ class RestorePromotionMixin:
 
     def promote(self,ids:list[str],owner_id:str,actor)->dict[str,Any]:
         if actor.role!='owner':raise PolicyError('Only the primary owner can promote Restore users')
+        if self.manager is None:raise PolicyError('Restore promotion requires Manager runtime')
         if len(set(ids))!=len(ids):raise PolicyError('Duplicate Restore user IDs')
         items=[];promoted=0
         # Best effort is intentional: representative resource credit may fit only part of a selected batch.
