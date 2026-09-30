@@ -161,6 +161,23 @@ class TelegramOperations:
                 'support_urgent':support_urgent,'representatives':reps,'top_products':top,'currency':'IRT',
                 'mini_app_url':self.mini_app_url(owner)}
 
+    def inbound_catalog(self,owner:str)->list[dict[str,Any]]:
+        actor=self.commerce.actor_for(owner)
+        allowed=None
+        if actor.role=='reseller':
+            profile=self.manager.profile(owner);allowed={int(x) for x in (profile.get('allowed') or [])}
+        out=[]
+        with self.store.lock:
+            rows=list(self.store.db.execute("SELECT id,body FROM core_inbounds ORDER BY id"))
+        for row in rows:
+            inbound_id=int(row['id'])
+            if allowed is not None and inbound_id not in allowed:continue
+            try:body=json.loads(row['body'])
+            except Exception:body={}
+            out.append({'id':inbound_id,'name':str(body.get('remark') or body.get('tag') or ('Inbound '+str(inbound_id))),
+                        'port':int(body.get('port') or 0),'protocol':str(body.get('protocol') or '')})
+        return out
+
     def payment_rows(self,owner:str,limit:int=100)->list[dict[str,Any]]:
         limit=max(1,min(int(limit),200));rows=[]
         with self.store.lock:
@@ -398,8 +415,9 @@ class TelegramOperations:
     def mini_bootstrap(self,owner:str,init_data:str)->dict[str,Any]:
         auth=self.verify_mini_app(owner,init_data)
         return {'auth':auth,'dashboard':self.dashboard(owner),'plans':self.commerce.product_rows(owner),
-                'payments':self.payment_rows(owner,80),'support':self.support_rows(owner,80),
-                'quick_replies':self.quick_replies(owner),'crypto':self.crypto_gateway(owner)}
+                'inbounds':self.inbound_catalog(owner),'payments':self.payment_rows(owner,80),
+                'support':self.support_rows(owner,80),'quick_replies':self.quick_replies(owner),
+                'crypto':self.crypto_gateway(owner)}
 
 
 def install_telegram_ops(app,runtime,current,writable,audit):
