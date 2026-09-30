@@ -181,3 +181,56 @@ def test_backup_refuses_inaccessible_output_path_as_policy_error(tmp_path,monkey
     monkeypatch.setattr(Path,'exists',denied_exists)
     with pytest.raises(PolicyError,match='Backup target path is not accessible'):
         create_backup(data,config,archive,PASS)
+
+
+def test_full_backup_preserves_telegram_operations_v4_state(tmp_path):
+    data,config=minimal_source(tmp_path)
+    with sqlite3.connect(data/'dark.sqlite3') as db:
+        db.executescript("""
+        CREATE TABLE telegram_bots(
+          owner TEXT PRIMARY KEY,enabled INTEGER NOT NULL,token_enc TEXT NOT NULL,
+          admin_telegram_id INTEGER NOT NULL,updated_at REAL NOT NULL,update_offset INTEGER NOT NULL,
+          bot_username TEXT NOT NULL,last_error TEXT NOT NULL,last_seen REAL NOT NULL,forum_prompted_at REAL NOT NULL);
+        CREATE TABLE commerce_gateways(
+          id TEXT NOT NULL,owner TEXT NOT NULL,label TEXT NOT NULL,kind TEXT NOT NULL,
+          enabled INTEGER NOT NULL,instructions TEXT NOT NULL,plugin TEXT NOT NULL,secret_enc TEXT NOT NULL,
+          updated_at REAL NOT NULL,PRIMARY KEY(owner,id));
+        CREATE TABLE customer_support_tickets(
+          id TEXT PRIMARY KEY,owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,username TEXT NOT NULL,
+          subject TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,updated_at REAL NOT NULL,
+          priority TEXT NOT NULL DEFAULT 'normal',assigned_to TEXT NOT NULL DEFAULT '');
+        CREATE TABLE customer_support_quick_replies(
+          owner TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,
+          active INTEGER NOT NULL,created_at REAL NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner,id));
+        CREATE TABLE commerce_gateway_events(
+          owner TEXT NOT NULL,gateway_id TEXT NOT NULL,event_id TEXT NOT NULL,status TEXT NOT NULL,
+          order_id TEXT NOT NULL,detail TEXT NOT NULL,created_at REAL NOT NULL,updated_at REAL NOT NULL,
+          PRIMARY KEY(owner,gateway_id,event_id));
+        """)
+        db.execute("INSERT INTO telegram_bots VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   ('dark',1,'OLD-TOKEN',123456789,1.0,55,'oldbot','',2.0,0.0))
+        db.execute("INSERT INTO commerce_gateways VALUES(?,?,?,?,?,?,?,?,?)",
+                   ('crypto','dark','Crypto Hosted','plugin',1,'pay with crypto','crypto-hosted','ENCRYPTED-CONFIG',3.0))
+        db.execute("INSERT INTO customer_support_tickets VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   ('t1','dark',55,'u55','Need help','open',1.0,2.0,'urgent','support-a'))
+        db.execute("INSERT INTO customer_support_quick_replies VALUES(?,?,?,?,?,?,?)",
+                   ('dark','qr_check','Checking','We are checking this now.',1,1.0,2.0))
+        db.execute("INSERT INTO commerce_gateway_events VALUES(?,?,?,?,?,?,?,?)",
+                   ('dark','crypto','evt1','processed','ord1','paid',2.0,3.0))
+        db.commit()
+    archive=tmp_path/'telegram-ops-v4.darkbackup'
+    create_backup(data,config,archive,PASS)
+    restored=tmp_path/'telegram-ops-v4-restored'
+    result=restore_backup(archive,restored,PASS)
+    assert result['new_bot_token_required'] is True
+    with sqlite3.connect(restored/'data/dark.sqlite3') as db:
+        db.row_factory=sqlite3.Row
+        bot=db.execute("SELECT enabled,token_enc FROM telegram_bots WHERE owner='dark'").fetchone()
+        assert tuple(bot)==(0,'')
+        gateway=db.execute("SELECT plugin,secret_enc,enabled FROM commerce_gateways WHERE owner='dark' AND id='crypto'").fetchone()
+        assert tuple(gateway)==('crypto-hosted','ENCRYPTED-CONFIG',1)
+        ticket=db.execute("SELECT priority,assigned_to FROM customer_support_tickets WHERE id='t1'").fetchone()
+        assert tuple(ticket)==('urgent','support-a')
+        quick=db.execute("SELECT title,body,active FROM customer_support_quick_replies WHERE owner='dark' AND id='qr_check'").fetchone()
+        assert tuple(quick)==('Checking','We are checking this now.',1)
+        assert db.execute("SELECT status FROM commerce_gateway_events WHERE owner='dark' AND event_id='evt1'").fetchone()[0]=='processed'

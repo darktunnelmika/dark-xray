@@ -154,7 +154,8 @@ class BotWorker(CustomerBotFeatures):
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
                 ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
                 ['📊 گزارش‌ها','🎫 پشتیبانی'],
-                ['💾 بکاپ','⚙️ تنظیمات ربات'],
+                ['📱 Mini App','⚙️ تنظیمات ربات'],
+                ['💾 بکاپ'],
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
@@ -264,7 +265,8 @@ class BotWorker(CustomerBotFeatures):
         if text=='📦 سرویس‌ها' and self.is_admin(user_id):self.admin_services(chat_id);return
         if text=='🧾 سفارش‌ها' and self.is_admin(user_id):self.admin_orders(chat_id);return
         if text=='🛠 مدیریت فروشگاه' and self.is_admin(user_id):self.admin_store(chat_id);return
-        if text=='💳 پرداخت دستی' and self.is_admin(user_id):self.admin_gateways(chat_id);return
+        if text in ('💳 پرداخت‌ها','💳 پرداخت دستی') and self.is_admin(user_id):self.admin_payments(chat_id);return
+        if text=='📱 Mini App' and self.is_admin(user_id):self.admin_mini_app(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
         if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
         if text=='⚙️ تنظیمات ربات' and self.is_admin(user_id):self.admin_settings(chat_id);return
@@ -354,7 +356,12 @@ class BotWorker(CustomerBotFeatures):
                     'پس از پرداخت، تصویر یا فایل رسید را همین‌جا بفرست.'
                 ] if x)
                 self.api.send(chat_id,card)
-            else:self.api.send(chat_id,'این درگاه برای آپدیت آینده رزرو شده است؛ فعلاً پرداخت دستی را انتخاب کن.')
+            elif result.get('checkout_url'):
+                text='🪙 پرداخت آنلاین / کریپتو\nمبلغ: '+amount(self.runtime.commerce.order(order_id,self.owner)['amount_minor'],
+                    self.runtime.commerce.order(order_id,self.owner)['currency'])
+                if result.get('instructions'):text+='\n'+str(result['instructions'])
+                self.api.send(chat_id,text,{'inline_keyboard':[[{'text':'🪙 رفتن به درگاه پرداخت','url':result['checkout_url']}]]})
+            else:self.api.send(chat_id,'این درگاه هنوز Checkout قابل استفاده ندارد؛ روش دیگری را انتخاب کن.')
             return
         if data=='stnew' and self.is_admin(user_id):
             self.start_simple_plan_create(chat_id,user_id);return
@@ -425,6 +432,16 @@ class BotWorker(CustomerBotFeatures):
             self.price_inbounds_done(chat_id,user_id);return
         if data.startswith('stprimary:') and self.is_admin(user_id):
             self.price_choose_primary(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='ops_payments' and self.is_admin(user_id):
+            self.admin_payments(chat_id);return
+        if data=='ops_support' and self.is_admin(user_id):
+            self.admin_support(chat_id);return
+        if data.startswith('opspayok:') and self.is_admin(user_id):
+            _,kind,row=data.split(':',2);getattr(self.runtime,'ops').payment_action(self.owner,kind,int(row),'approve')
+            self.api.send(chat_id,'✅ پرداخت پردازش شد.');self.admin_payments(chat_id);return
+        if data.startswith('opspayno:') and self.is_admin(user_id):
+            _,kind,row=data.split(':',2);getattr(self.runtime,'ops').payment_action(self.owner,kind,int(row),'reject')
+            self.api.send(chat_id,'❌ پرداخت رد شد.');self.admin_payments(chat_id);return
         if data.startswith('clrenew:') and self.is_admin(user_id):
             self.client_renew_menu(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('clr:') and self.is_admin(user_id):
@@ -552,30 +569,28 @@ class BotWorker(CustomerBotFeatures):
         self.api.send(chat_id,f"📊 وضعیت DARK BOT\nForum: {forum_state}\nپرداخت دستی: {pay_state}\nکاربران: {clients}\nمحصولات: {products}\nسفارش‌ها: {orders}\nنیازمند پیگیری: {pending}")
 
     def admin_dashboard(self,chat_id:int):
-        rows=self.runtime.manager.list(self.actor())
-        active=sum(1 for r in rows if not r.get('block_reasons'))
-        disabled=max(0,len(rows)-active)
-        products=len(self.runtime.commerce.product_rows(self.owner))
-        forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
-        with self.runtime.store.lock:
-            orders=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=?",(self.owner,)).fetchone()[0])
-            pending=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM commerce_orders WHERE owner=?
-              AND status IN ('pending','awaiting_payment','payment_review','paid')""",(self.owner,)).fetchone()[0])
-            nodes=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM remote_nodes WHERE enabled=1").fetchone()[0])
-            online=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM remote_nodes WHERE enabled=1 AND last_error='' AND last_seen>?",
-                                                     (time.time()-180,)).fetchone()[0])
-            reps=0
-            if self.owner_role()=='owner':
-                reps=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM api_admins WHERE role='reseller' AND disabled=0").fetchone()[0])
-        forum_state='متصل ✅' if forum.get('configured') else ('نیازمند Rebind ♻️' if forum.get('rebind_required') else 'متصل نیست ⛔')
-        pay_state='فعال ✅' if gateway and gateway.get('enabled') else ('غیرفعال ⛔' if gateway else 'تنظیم نشده')
-        text=(f"🏠 DARK BOT ADMIN V3\n"
-              f"👥 کاربران: {len(rows)} · فعال {active} · محدود/خاموش {disabled}\n"
-              f"🛍 محصولات: {products}\n🧾 سفارش‌ها: {orders} · پیگیری {pending}\n"
-              f"🖥 نودها: {online}/{nodes} آنلاین\n"
-              f"💳 پرداخت: {pay_state}\n📊 Forum: {forum_state}")
-        if self.owner_role()=='owner':text+=f"\n🤝 نمایندگان فعال: {reps}"
-        self.api.send(chat_id,text)
+        ops=getattr(self.runtime,'ops',None)
+        if not ops:
+            self.api.send(chat_id,'داشبورد عملیات هنوز آماده نیست.');return
+        d=ops.dashboard(self.owner)
+        text=(f"🏠 DARK BOT ADMIN V3 → OPERATIONS V4\n"
+              f"💰 فروش امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']}/{d['orders_today']} سفارش\n"
+              f"📈 ۷ روز: {amount(d['revenue_7d'],d['currency'])} · Conversion {d['conversion_7d']}%\n"
+              f"🛍 پلن منتشرشده: {d['published_plans']} · مشتری خریدار: {d['customers']}\n"
+              f"💳 پرداخت نیازمند بررسی: {d['pending_payments']}\n"
+              f"💰 مانده کیف پول مشتری‌ها: {amount(d['wallet_liability'],d['currency'])}\n"
+              f"🎫 پشتیبانی باز: {d['support_open']} · فوری {d['support_urgent']}")
+        if self.owner_role()=='owner':text+=f"\n🤝 نمایندگان فعال: {d['representatives']}"
+        top=d.get('top_products') or []
+        if top:
+            text+='\n\n🏆 Top Plans'
+            for row in top[:3]:text+=f"\n• {row['name']} · {row['sales']} فروش · {amount(row['revenue_minor'],d['currency'])}"
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'📱 بازکردن Mini App مدیریت','web_app':{'url':ops.mini_app_url(self.owner)}}],
+            [{'text':'💳 Payment Center','callback_data':'ops_payments'},
+             {'text':'🎫 Support Center','callback_data':'ops_support'}]
+        ]})
+
 
     def admin_services(self,chat_id:int):
         rows=self.runtime.manager.list(self.actor())
@@ -1324,6 +1339,29 @@ class BotWorker(CustomerBotFeatures):
     def manual_gateway(self)->dict[str,Any]|None:
         return next((r for r in self.runtime.commerce.gateway_rows(self.owner)
                      if r.get('id')=='card' and r.get('kind')=='manual'),None)
+
+    def admin_mini_app(self,chat_id:int):
+        ops=getattr(self.runtime,'ops',None)
+        if not ops:self.api.send(chat_id,'Mini App هنوز آماده نیست.');return
+        self.api.send(chat_id,'📱 DARK Telegram Operations\nمدیریت فروش، پرداخت، پشتیبانی و پلن‌ها در Mini App.',
+                      {'inline_keyboard':[[{'text':'🚀 بازکردن Mini App','web_app':{'url':ops.mini_app_url(self.owner)}}]]})
+
+    def admin_payments(self,chat_id:int):
+        ops=getattr(self.runtime,'ops',None)
+        if not ops:self.admin_gateways(chat_id);return
+        rows=ops.payment_rows(self.owner,20);crypto=ops.crypto_gateway(self.owner);manual=self.manual_gateway()
+        pending=[x for x in rows if x.get('reviewable')]
+        text=(f"💳 PAYMENT CENTER\nنیازمند بررسی: {len(pending)}\n"
+              f"کارت دستی: {'فعال ✅' if manual and manual.get('enabled') else 'غیرفعال/تنظیم نشده'}\n"
+              f"Crypto: {'فعال ✅' if crypto.get('enabled') and crypto.get('configured') else 'غیرفعال/تنظیم نشده'}")
+        kb=[]
+        for row in pending[:8]:
+            label=('سفارش' if row['kind']=='order' else 'شارژ کیف پول')+' · '+amount(row['amount_minor'],row['currency'])
+            kb.append([{'text':'✅ '+label[:46],'callback_data':f"opspayok:{row['kind']}:{row['row_id']}"},
+                       {'text':'❌ رد','callback_data':f"opspayno:{row['kind']}:{row['row_id']}"}])
+        kb.append([{'text':'💳 تنظیم کارت دستی','callback_data':'paycfg'},
+                   {'text':'📱 Payment Center','web_app':{'url':ops.mini_app_url(self.owner)}}])
+        self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def admin_gateways(self,chat_id:int):
         row=self.manual_gateway()

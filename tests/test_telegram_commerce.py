@@ -375,7 +375,7 @@ def test_admin_v2_keyboard_exposes_daily_management_centers(env):
     try:
         text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
         for label in ('🏠 داشبورد','👥 کاربران','📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی',
-                      '📊 گزارش‌ها','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
+                      '📊 گزارش‌ها','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
             assert label in text
     finally:
         worker.api.close()
@@ -400,7 +400,7 @@ def test_admin_v2_centers_render_without_external_side_effects(env):
     finally:
         worker.api.close()
     text='\n'.join(x[1] for x in sent)
-    assert 'DARK BOT ADMIN V3' in text
+    assert 'DARK BOT ADMIN V3 → OPERATIONS V4' in text
     assert 'سرویس‌ها' in text
     assert 'مرکز گزارش DARK' in text
     assert 'DARK Full Backup' in text

@@ -139,7 +139,10 @@ def prepare_telegram_disaster_recovery(db: sqlite3.Connection) -> dict:
                       forum_rows_preserved=count,forum_rebind_required=bool(count))
     if 'telegram_forum_topics' in tables:
         result['topic_rows_preserved']=int(db.execute('SELECT COUNT(*) FROM telegram_forum_topics').fetchone()[0])
-    for table in ('commerce_products','commerce_prices','commerce_gateways','commerce_orders','commerce_payments'):
+    for table in ('commerce_products','commerce_prices','commerce_gateways','commerce_orders','commerce_payments',
+                  'commerce_gateway_events','customer_wallets','customer_wallet_ledger','customer_topups',
+                  'customer_support_tickets','customer_support_messages','customer_support_quick_replies',
+                  'telegram_customer_settings'):
         if table in tables:result['commerce_tables_preserved'].append(table)
     return result
 

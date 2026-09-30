@@ -3,6 +3,7 @@ import json
 import secrets
 import time
 from typing import Any, Literal
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
@@ -337,6 +338,19 @@ class TelegramCommerce:
                price['activation_mode'],price['delivery_mode'],primary,int(price['show_qr']),int(price['show_portal'])))
         return {'id':order_id,'status':'pending','amount_minor':int(price['price_minor']),'currency':price['currency']}
 
+    def _plugin_checkout(self,gw,order,payment_id:str)->str:
+        if str(gw['kind'])!='plugin' or str(gw['plugin'])!='crypto-hosted':return ''
+        try:cfg=json.loads(self._open(str(gw['secret_enc'] or '')))
+        except Exception as ex:raise PolicyError('Crypto gateway configuration is invalid') from ex
+        template=str(cfg.get('checkout_url_template') or '')
+        if not template:raise PolicyError('Crypto checkout URL is not configured')
+        try:url=template.format(amount=str(int(order['amount_minor'])),currency=quote(str(order['currency']),safe=''),
+                                order_id=quote(str(order['id']),safe=''),payment_id=quote(str(payment_id),safe=''))
+        except (KeyError,ValueError) as ex:raise PolicyError('Crypto checkout URL template is invalid') from ex
+        parsed=urlsplit(url)
+        if parsed.scheme!='https' or not parsed.netloc:raise PolicyError('Crypto checkout URL is invalid')
+        return url
+
     def start_payment(self, owner: str, order_id: str, gateway_id: str) -> dict[str,Any]:
         now=time.time()
         with self.store.transaction() as db:
@@ -351,9 +365,10 @@ class TelegramCommerce:
                        (gateway_id,now,order_id))
             db.execute("""INSERT INTO commerce_payments(id,order_id,owner,gateway_id,amount_minor,currency,status,created_at,updated_at)
               VALUES(?,?,?,?,?,?,?,?,?)""",(payment_id,order_id,owner,gateway_id,order['amount_minor'],order['currency'],'pending',now,now))
+        checkout=self._plugin_checkout(gw,order,payment_id)
         return {'payment_id':payment_id,'status':'awaiting_payment','mode':gw['kind'],
                 'card_number':gw['card_number'],'card_holder':gw['card_holder'],'bank_name':gw['bank_name'],
-                'instructions':gw['instructions'],'plugin':gw['plugin']}
+                'instructions':gw['instructions'],'plugin':gw['plugin'],'checkout_url':checkout}
 
     def latest_waiting_order(self, owner: str, buyer_telegram_id: int) -> dict[str,Any] | None:
         with self.store.lock:
@@ -499,6 +514,8 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     runtime=TelegramBotRuntime(commerce,manager,auth,audit)
     from representative_marketplace import install_representative_marketplace
     install_representative_marketplace(app,runtime.marketplace,current,writable,audit)
+    from telegram_ops import install_telegram_ops
+    install_telegram_ops(app,runtime,current,writable,audit)
     app.state.telegram_commerce=commerce
     app.state.telegram_runtime=runtime
 

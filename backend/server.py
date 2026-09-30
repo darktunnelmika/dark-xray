@@ -460,12 +460,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             request._body=bytes(data)
             if request.url.path.startswith('/api/') and data and 'application/json' not in request.headers.get('content-type',''):
                 return JSONResponse({'detail':'JSON content type required'},415)
+        mini_app_html=request.scope.get('path','')=='/assets/telegram-miniapp.html'
         response=await call_next(request)
         response.headers.setdefault('Cache-Control','no-store')
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Referrer-Policy']='no-referrer'
-        response.headers.setdefault('X-Frame-Options','DENY')
-        response.headers.setdefault('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
+        if not mini_app_html:response.headers.setdefault('X-Frame-Options','DENY')
+        csp=("default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-src 'self'; frame-ancestors https://telegram.org https://*.telegram.org; object-src 'none'; base-uri 'none'; form-action 'self'"
+             if mini_app_html else
+             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
+        response.headers.setdefault('Content-Security-Policy',csp)
         if config.secure_cookie:response.headers['Strict-Transport-Security']='max-age=31536000'
         return response
 
