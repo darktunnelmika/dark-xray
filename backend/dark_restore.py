@@ -12,6 +12,7 @@ from restore_groups import RestoreGroupsMixin
 from restore_frontend import inspect_domain
 from restore_targets import RestoreTargetsMixin
 from restore_safety import RestoreSafetyMixin
+from restore_promotion import RestorePromotionMixin
 from restore_scan import scan_subscription
 
 _HOST_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
@@ -36,9 +37,9 @@ class RestoreDomainBody(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
     acme_email:str=Field(default='',max_length=254)
 
-class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
-    def __init__(self,store,engine,nodes):
-        self.store,self.engine,self.nodes=store,engine,nodes
+class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
+    def __init__(self,store,engine,nodes,manager):
+        self.store,self.engine,self.nodes,self.manager=store,engine,nodes,manager
         with store.lock:
             store.db.executescript("""
             CREATE TABLE IF NOT EXISTS restore_subscriptions(
@@ -151,6 +152,7 @@ class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
     def subscription(self,token:str,fmt:str,*,record_access:bool=True)->tuple[bytes,dict]:
         with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=?',(token,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
+        if float(r['promoted_at'] or 0)>0:raise HTTPException(410,'Restore subscription was promoted to a native client')
         self.require_eligible(r)
         now=time.time()
         view,ready=self.render_view(self.target_selection(r),fmt)
@@ -167,6 +169,7 @@ class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
 
 def install_dark_restore(app,restore,current,owner,writable,audit):
     restore.install_group_routes(app,owner,writable,audit)
+    restore.install_promotion_routes(app,owner,writable,audit)
     restore.install_target_routes(app,owner,writable,audit)
     restore.install_safety_routes(app,owner,writable,audit)
 
