@@ -141,13 +141,16 @@ class BotWorker(CustomerBotFeatures):
         return self.actor().role
 
     def main_keyboard(self,admin:bool)->dict:
+        ops=getattr(self.runtime,'ops',None)
+        customer_app={'text':'📱 فروشگاه','web_app':{'url':ops.customer_mini_app_url(self.owner)}} if ops else '📱 فروشگاه'
         rows=[
             ['🛍 خرید اشتراک','🔄 تمدید سرویس'],
             ['💰 کیف پول + شارژ','📦 سرویس‌های من'],
             ['👥 زیرمجموعه‌گیری','🎫 پشتیبانی'],
+            [customer_app],
         ]
         if self.owner_role()=='owner':
-            rows += [['🏪 خرید پنل نمایندگی']]
+            rows.insert(3,['🏪 خرید پنل نمایندگی'])
         if admin:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
@@ -159,7 +162,8 @@ class BotWorker(CustomerBotFeatures):
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
-        return {'keyboard':[[{'text':x} for x in row] for row in rows],
+        def button(x):return x if isinstance(x,dict) else {'text':x}
+        return {'keyboard':[[button(x) for x in row] for row in rows],
                 'resize_keyboard':True,'is_persistent':True}
 
     def send_home(self,chat_id:int,user_id:int):
@@ -255,6 +259,11 @@ class BotWorker(CustomerBotFeatures):
         if text=='👥 زیرمجموعه‌گیری':self.customer_referral_menu(chat_id,user_id);return
         if text=='🏪 خرید پنل نمایندگی' and self.owner_role()=='owner':
             self.customer_representative_marketplace(chat_id,user_id);return
+        if text=='📱 فروشگاه' and not self.is_admin(user_id):
+            ops=getattr(self.runtime,'ops',None)
+            if ops:self.api.send(chat_id,'📱 فروشگاه DARK',{'inline_keyboard':[[{'text':'🚀 بازکردن فروشگاه','web_app':{'url':ops.customer_mini_app_url(self.owner)}}]]})
+            else:self.api.send(chat_id,'Mini App فروشگاه در دسترس نیست.')
+            return
         if text=='🎫 پشتیبانی':
             if self.is_admin(user_id):self.admin_support(chat_id)
             else:self.customer_support_menu(chat_id,user_id)
