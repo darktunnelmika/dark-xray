@@ -75,42 +75,44 @@ function inboundPicker(selected){
  if(!(state.inbounds||[]).length)return `<div class="notice">${L('Create Inbounds first.','ابتدا Inbound بساز.')}</div>`;
  return `<div class="tg-list">${state.inbounds.map(x=>`<label class="tg-switch"><input type="checkbox" name="repInbound" value="${x.id}" ${set.has(x.id)?'checked':''}><span>${esc(x.id+' · '+(x.remark||x.tag||'Inbound')+' · :'+x.port)}</span></label>`).join('')}</div>`;
 }
+function repPlanMonth(days){return ({30:1,60:2,90:3,180:6,365:12})[Number(days)]||1;}
+function newRepPlanId(){return 'rp_'+crypto.randomUUID().replaceAll('-','').slice(0,12);}
 async function planDialog(planId=''){
- const plans=RM.plans||await loadPlans(),p=plans.find(x=>x.id===planId)||{};
- const readonly=planId?'readonly':'required maxlength="64" dir="ltr"';
- dialog(planId?L('Edit representative plan','ویرایش پلن نمایندگی'):L('New representative plan','پلن نمایندگی جدید'),
+ const plans=RM.plans||await loadPlans(),p=plans.find(x=>x.id===planId)||{},newId=planId||newRepPlanId();
+ dialog(planId?L('Edit representative plan','ویرایش پلن نمایندگی'):L('New representative plan','ساخت پلن نمایندگی'),
  `<div class="form-grid">
-  ${field('ID','id',p.id||'','text',readonly)}
   ${field(L('Name','نام'),'name',p.name||'','text','required maxlength="128"')}
   ${field(L('Price · Toman','قیمت · تومان'),'price',p.price_minor||0,'number','min="0" step="1" required')}
-  ${field(L('Duration days','مدت روز'),'duration',p.duration_days||30,'number','min="1" max="3650" required')}
+  ${select(L('Duration','مدت'),'duration_months',[['1',L('1 month','۱ ماه')],['2',L('2 months','۲ ماه')],['3',L('3 months','۳ ماه')],['6',L('6 months','۶ ماه')],['12',L('12 months','۱۲ ماه')]],String(repPlanMonth(p.duration_days||30)))}
   ${field(L('Volume credit GB','اعتبار حجمی GB'),'volume',Number(p.volume_credit_bytes||0)/gb,'number','min="0" step="0.01" required')}
   ${field(L('Unlimited credit','اعتبار نامحدود'),'unlimited',p.unlimited_credit||0,'number','min="0" max="1000000" required')}
   ${field(L('Max clients · 0 unlimited','حداکثر کلاینت · صفر نامحدود'),'max_clients',p.max_clients||0,'number','min="0" max="1000000" required')}
-  ${field(L('Prefix base','پیشوند پایه'),'prefix',p.prefix||'rep_','text','maxlength="32" dir="ltr"')}
-  ${field(L('Max client IP · 0 unlimited','حداکثر IP هر کلاینت'),'max_ip',p.max_client_ips||0,'number','min="0" max="1000"')}
-  ${field(L('Max client HWID · 0 unlimited','حداکثر HWID هر کلاینت'),'max_hwid',p.max_client_hwid||0,'number','min="0" max="1000"')}
-  ${select(L('Independent bot','ربات مستقل'),'bot_allowed',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],String(p.bot_allowed!==false))}
-  ${select(L('Renewal','تمدید'),'renewal',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],String(p.renewal_enabled!==false))}
-  ${select(L('Active','فعال'),'active',[['true',L('Yes','بله')],['false',L('No','خیر')]],String(p.active!==false))}
-  ${select(L('Visible to customers','نمایش به مشتری'),'visible',[['true',L('Yes','بله')],['false',L('No','خیر')]],String(p.visible!==false))}
-  <label class="span-2">${L('Description','توضیحات')}<textarea class="field-input" name="description" rows="3" maxlength="2000">${esc(p.description||'')}</textarea></label>
   <div class="span-2"><label>${L('Allowed Inbounds','اینباندهای مجاز')}</label>${inboundPicker(p.allowed_inbounds||[])}</div>
+  <details class="span-2 tg-plan-advanced"><summary>${L('Advanced settings','تنظیمات پیشرفته')}</summary><div class="form-grid">
+   ${field(L('Prefix base','پیشوند پایه'),'prefix',p.prefix||'rep_','text','maxlength="32" dir="ltr"')}
+   ${field(L('Max client IP · 0 unlimited','حداکثر IP هر کلاینت'),'max_ip',p.max_client_ips||0,'number','min="0" max="1000"')}
+   ${field(L('Max client HWID · 0 unlimited','حداکثر HWID هر کلاینت'),'max_hwid',p.max_client_hwid||0,'number','min="0" max="1000"')}
+   ${select(L('Independent bot','ربات مستقل'),'bot_allowed',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],String(p.bot_allowed!==false))}
+   ${select(L('Renewal','تمدید'),'renewal',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],String(p.renewal_enabled!==false))}
+   ${select(L('Published','انتشار'),'published',[['true',L('Published','منتشر')],['false',L('Draft / hidden','پیش‌نویس / مخفی')]],String(p.active!==false&&p.visible!==false))}
+   <label class="span-2">${L('Description','توضیحات')}<textarea class="field-input" name="description" rows="3" maxlength="2000">${esc(p.description||'')}</textarea></label>
+  </div></details>
  </div>`,async fd=>{
-   const ids=checkedInboundIds();
-   if(!ids.length)throw Error(L('Select at least one Inbound.','حداقل یک Inbound انتخاب کن.'));
-   const id=val(fd,'id');
-   await api('/api/representative-marketplace/plans/'+enc(id),'PUT',{
+   const ids=checkedInboundIds();if(!ids.length)throw Error(L('Select at least one Inbound.','حداقل یک Inbound انتخاب کن.'));
+   const months=Number(val(fd,'duration_months')),duration_days=({1:30,2:60,3:90,6:180,12:365})[months]||30;
+   const published=val(fd,'published')==='true';
+   await api('/api/representative-marketplace/plans/'+enc(newId),'PUT',{
     name:val(fd,'name'),description:val(fd,'description'),price_minor:Number(val(fd,'price')),currency:'IRT',
-    duration_days:Number(val(fd,'duration')),volume_credit_bytes:Math.round(Number(val(fd,'volume'))*gb),
-    unlimited_credit:Number(val(fd,'unlimited')),max_clients:Number(val(fd,'max_clients')),prefix:val(fd,'prefix'),
+    duration_days,volume_credit_bytes:Math.round(Number(val(fd,'volume'))*gb),
+    unlimited_credit:Number(val(fd,'unlimited')),max_clients:Number(val(fd,'max_clients')),prefix:val(fd,'prefix')||'rep_',
     max_client_ips:Number(val(fd,'max_ip')),max_client_hwid:Number(val(fd,'max_hwid')),allowed_inbounds:ids,
     bot_allowed:val(fd,'bot_allowed')==='true',renewal_enabled:val(fd,'renewal')==='true',
-    active:val(fd,'active')==='true',visible:val(fd,'visible')==='true'
+    active:published,visible:published
    });
    closeDialog();RM.plans=null;toast(L('Representative plan saved.','پلن نمایندگی ذخیره شد.'));await renderPage();
  });
 }
+
 runAction=async function(act,el){
  if(act==='repplannew'){await planDialog();return;}
  if(act==='repplanedit'){await planDialog(el.dataset.plan);return;}
