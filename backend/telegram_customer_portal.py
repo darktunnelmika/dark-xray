@@ -54,6 +54,7 @@ class CustomerPortal:
         'provisioned_waiting_activation':('active','سرویس آماده است؛ زمان از اولین اتصال شروع می‌شود'),
         'provisioned':('active','سرویس فعال است'),
         'renewed':('active','تمدید انجام شد'),
+        'volume_added':('active','حجم اضافه شد'),
         'cancelled':('cancelled','سفارش لغو/منقضی شد'),
     }
 
@@ -162,19 +163,21 @@ class CustomerPortal:
     def _service_summary(self,owner:str,uid:int,email:str,detail:dict[str,Any],row_id:int)->dict[str,Any]:
         c=detail.get('client') or {};quota=int(c.get('totalGB') or 0);used=int(detail.get('used_bytes') or 0)
         expiry=int(c.get('expiryTime') or 0);now_ms=int(time.time()*1000)
-        origin=self.customer.latest_service_order(owner,uid,email);product_name='DARK Service';renewal=False
+        origin=self.customer.latest_service_order(owner,uid,email);product_name='DARK Service';renewal=False;add_volume=False
         activation_pending=False
         if origin:
             activation_pending=str(origin.get('status'))=='provisioned_waiting_activation'
             with self.store.lock:
-                p=self.store.db.execute("SELECT name,renewal_enabled FROM commerce_products WHERE owner=? AND id=?",
+                p=self.store.db.execute("SELECT name,renewal_enabled,add_volume_enabled FROM commerce_products WHERE owner=? AND id=?",
                                         (owner,origin['product_id'])).fetchone()
-            if p:product_name=str(p['name']);renewal=bool(p['renewal_enabled'])
+            if p:
+                product_name=str(p['name']);renewal=bool(p['renewal_enabled']);add_volume=bool(p['add_volume_enabled'])
         blocked=bool(detail.get('block_reasons'));expired=bool(expiry and expiry<=now_ms)
         status='blocked' if blocked else 'expired' if expired else 'waiting_activation' if activation_pending else 'active'
         return {'row_id':int(row_id),'id':email,'product_name':product_name,'quota_bytes':quota,'used_bytes':used,
                 'remaining_bytes':None if quota==0 else max(0,quota-used),'unlimited':quota==0,'expiry_time':expiry,
-                'status':status,'renewal_enabled':renewal,'presence_state':detail.get('presence_state') or 'offline',
+                'status':status,'renewal_enabled':renewal,'add_volume_enabled':bool(add_volume and quota>0),
+                'presence_state':detail.get('presence_state') or 'offline',
                 'last_seen_at':float(detail.get('last_seen_at') or 0),'block_reasons':detail.get('block_reasons') or []}
 
     def services(self,owner:str,uid:int)->list[dict[str,Any]]:
@@ -206,6 +209,15 @@ class CustomerPortal:
                                            for p in rp['prices'] if p.get('active')]
             except PolicyError:summary['renewal_prices']=[]
         else:summary['renewal_prices']=[]
+        if summary['add_volume_enabled']:
+            try:
+                vp=self.customer.volume_addon_prices(owner,uid,email)
+                summary['volume_prices']=[{'id':p['id'],'row_id':p['row_id'],'label':p['label'],
+                                           'price_minor':int(p['price_minor']),'currency':p['currency'],
+                                           'volume_bytes':int(p['volume_bytes'])}
+                                          for p in vp['prices'] if p.get('active') and int(p.get('volume_bytes') or 0)>0]
+            except PolicyError:summary['volume_prices']=[]
+        else:summary['volume_prices']=[]
         return summary
 
     def create_renewal(self,owner:str,uid:int,username:str,row_id:int,price_id:str)->dict[str,Any]:
@@ -220,6 +232,19 @@ class CustomerPortal:
         result=self.customer.pay_renewal(owner,order_id)
         self._audit(owner,uid,'customer.renewal_wallet',order_id,'client='+str(result.get('client_id') or ''))
         return result|self._phase(str(result.get('status') or 'renewed'))
+
+    def create_volume_addon(self,owner:str,uid:int,username:str,row_id:int,price_id:str)->dict[str,Any]:
+        email,_=self._service_row(owner,uid,row_id)
+        order=self.customer.create_volume_addon_order(owner,uid,username,email,price_id)
+        self._audit(owner,uid,'customer.volume_addon_create',order['id'],'client='+email)
+        return order|self._phase(order['status'])
+
+    def pay_volume_addon_wallet(self,owner:str,uid:int,order_id:str)->dict[str,Any]:
+        order=self._owned_order(owner,uid,order_id)
+        if order.get('order_type')!='volume_addon':raise PolicyError('Order is not a volume add-on')
+        result=self.customer.pay_volume_addon(owner,order_id)
+        self._audit(owner,uid,'customer.volume_addon_wallet',order_id,'client='+str(result.get('client_id') or ''))
+        return result|self._phase(str(result.get('status') or 'volume_added'))
 
     def wallet_bundle(self,owner:str,uid:int)->dict[str,Any]:
         wallet=self.customer.wallet(owner,uid)
@@ -376,6 +401,18 @@ def install_customer_portal(app,runtime,writable):
     def customer_renew_pay(order_id:str,owner:str,x_telegram_init_data:str=Header(default='',alias='X-Telegram-Init-Data')):
         writable();a=header_auth(owner,x_telegram_init_data)
         return portal.pay_renewal_wallet(owner,a['telegram_id'],order_id)
+
+    @app.post('/api/telegram-customer/services/{row_id}/volume',status_code=201)
+    def customer_volume_addon(row_id:int,body:RenewBody,owner:str,
+                              x_telegram_init_data:str=Header(default='',alias='X-Telegram-Init-Data')):
+        writable();a=header_auth(owner,x_telegram_init_data)
+        return portal.create_volume_addon(owner,a['telegram_id'],a['username'],row_id,body.price_id)
+
+    @app.post('/api/telegram-customer/volume-addons/{order_id}/wallet')
+    def customer_volume_addon_pay(order_id:str,owner:str,
+                                  x_telegram_init_data:str=Header(default='',alias='X-Telegram-Init-Data')):
+        writable();a=header_auth(owner,x_telegram_init_data)
+        return portal.pay_volume_addon_wallet(owner,a['telegram_id'],order_id)
 
     @app.post('/api/telegram-customer/wallet/topups',status_code=201)
     def customer_topup(body:TopupBody,owner:str,x_telegram_init_data:str=Header(default='',alias='X-Telegram-Init-Data')):
