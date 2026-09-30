@@ -99,13 +99,13 @@ class TelegramOperations:
     def verify_mini_app(self,owner:str,init_data:str)->dict[str,Any]:
         raw=str(init_data or '')
         if not raw or len(raw)>16384:raise PolicyError('Telegram Mini App authorization is missing')
-        pairs=parse_qsl(raw,keep_blank_values=True,strict_parsing=True)
+        try:pairs=parse_qsl(raw,keep_blank_values=True,strict_parsing=True)
+        except ValueError as ex:raise PolicyError('Telegram Mini App authorization is malformed') from ex
         values={}
         for key,value in pairs:
             if key in values:raise PolicyError('Duplicate Telegram Mini App field')
             values[key]=value
         supplied=values.pop('hash',None)
-        values.pop('signature',None)
         if not supplied or len(supplied)!=64:raise PolicyError('Telegram Mini App hash is invalid')
         row,token=self._bot_secret(owner)
         check='\n'.join(f'{key}={values[key]}' for key in sorted(values))
