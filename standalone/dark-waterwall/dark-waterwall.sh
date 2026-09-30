@@ -390,4 +390,60 @@ install_waterwall_core(){
 }
 
 waterwall_ready(){ [ -x "$WATER_BIN" ]; }
-service_start(){ local n="$1"; write_runtime "$n" || return 1; systemctl enable --now "darkwater@
+service_start(){ local n="$1"; write_runtime "$n" || return 1; systemctl enable --now "darkwater@$n.service" >/dev/null 2>&1; }
+service_restart(){ local n="$1"; write_runtime "$n" || return 1; systemctl restart "darkwater@$n.service" >/dev/null 2>&1; }
+service_stop(){ systemctl stop "darkwater@$1.service" >/dev/null 2>&1 || true; }
+service_disable(){ systemctl disable --now "darkwater@$1.service" >/dev/null 2>&1 || true; }
+
+new_iran(){
+  header "NEW DIRECT · IRAN"
+  waterwall_ready || { warn "WaterWall core is not installed"; install_waterwall_core || { pause; return; }; }
+  local ip defw dir spec normalized
+  ask "Tunnel name" "direct1"; NAME="$ANS"; valid_name "$NAME" || { bad "invalid name"; pause; return; }
+  dir="$TUN_DIR/$NAME"; [ ! -e "$dir" ] || { bad "tunnel already exists"; pause; return; }
+  ip="$(public_ipv4)"; ask "IRAN public IPv4" "$ip"; IR_IP="$ANS"; valid_ip4 "$IR_IP" || { bad "invalid IRAN IPv4"; pause; return; }
+  ask "KHAREJ public IPv4"; KH_IP="$ANS"; valid_ip4 "$KH_IP" || { bad "invalid KHAREJ IPv4"; pause; return; }
+  ask "Transport TCP port on KHAREJ" "443"; TRANSPORT_PORT="$ANS"; valid_port "$TRANSPORT_PORT" || { bad "invalid transport port"; pause; return; }
+  echo; top; sect "MODE"; item 1 "Reality Direct" "1 TCP transport per user connection"; item 2 "Reality + HalfDuplex" "2 TCP transports per user connection"; bot; echo; getkey
+  case "$KEY" in 2) MODE="reality-hd";; *) MODE="reality";; esac
+  ask "Reality visitor/SNI domain" "www.cloudflare.com"; SNI="$ANS"; valid_host "$SNI" || { bad "invalid SNI hostname"; pause; return; }
+  ask "KHAREJ backend address" "127.0.0.1"; TARGET_ADDR="$ANS"; { valid_ip4 "$TARGET_ADDR" || valid_host "$TARGET_ADDR"; } || { bad "invalid backend address"; pause; return; }
+  echo; dim "Port format: 443,8443:9443,20000-20100"
+  ask "IRAN listen ports -> KHAREJ target ports" "443"; spec="$ANS"
+  mkdir -p "$dir"; chmod 700 "$dir"
+  if ! normalized="$(parse_ports_to_file "$spec" "$dir/ports.list" 2>&1)"; then bad "$normalized"; rm -rf "$dir"; pause; return; fi
+  chmod 600 "$dir/ports.list"
+  if [[ "$TARGET_ADDR" =~ ^(127\.0\.0\.1|localhost|0\.0\.0\.0)$ ]] && target_conflicts_transport "$dir/ports.list" "$TRANSPORT_PORT"; then
+    bad "a backend target resolves to the same port as the KHAREJ transport listener ($TRANSPORT_PORT)"
+    rm -rf "$dir"; pause; return
+  fi
+  defw="$(auto_workers)"; ask "WaterWall workers on this IRAN server" "$defw"; WORKERS="$ANS"; [[ "$WORKERS" =~ ^[0-9]+$ ]] && [ "$WORKERS" -ge 1 ] && [ "$WORKERS" -le 64 ] || { bad "workers must be 1..64"; rm -rf "$dir"; pause; return; }
+  SECRET="$(gen_secret)"
+  PORTS_SPEC="$normalized"
+  PAIR_HASH="$(pair_fingerprint "$NAME" "$IR_IP" "$KH_IP" "$TRANSPORT_PORT" "$MODE" "$SNI" "$SECRET" "$TARGET_ADDR" "$PORTS_SPEC")"
+  save_meta "$dir" "NAME=$NAME" "ROLE=IRAN" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"
+  PAIR_CODE="$(make_pair_code "$NAME" "$IR_IP" "$KH_IP" "$TRANSPORT_PORT" "$MODE" "$SNI" "$SECRET" "$TARGET_ADDR" "$PORTS_SPEC")"
+  printf '%s\n' "$PAIR_CODE" >"$dir/pair.code"; chmod 600 "$dir/pair.code"
+  write_runtime "$NAME" || { bad "runtime generation failed"; pause; return; }
+  if service_start "$NAME"; then ok "IRAN service started"; else warn "service did not start; use Diagnostics"; fi
+  echo; top; sect "PAIR CODE · paste on KHAREJ"; bot
+  printf "\n  %s%s%s\n" "$Y" "$PAIR_CODE" "$N"
+  echo; dim "Treat this Pair Code as a secret: it contains the Reality shared secret."
+  pause
+}
+
+new_kharej(){
+  header "NEW DIRECT · KHAREJ"
+  waterwall_ready || { warn "WaterWall core is not installed"; install_waterwall_core || { pause; return; }; }
+  local code local_ip dir normalized defw
+  ask "Paste DWW1 Pair Code"; code="$ANS"
+  if ! decode_pair_code "$code"; then bad "invalid or damaged Pair Code"; pause; return; fi
+  NAME="${PAIR_FIELDS[1]}"; IR_IP="${PAIR_FIELDS[2]}"; KH_IP="${PAIR_FIELDS[3]}"; TRANSPORT_PORT="${PAIR_FIELDS[4]}"; MODE="${PAIR_FIELDS[5]}"; SNI="${PAIR_FIELDS[6]}"; SECRET="${PAIR_FIELDS[7]}"; TARGET_ADDR="${PAIR_FIELDS[8]}"; PORTS_SPEC="${PAIR_FIELDS[9]}"
+  dir="$TUN_DIR/$NAME"; [ ! -e "$dir" ] || { bad "tunnel already exists: $NAME"; pause; return; }
+  local_ip="$(public_ipv4)"
+  if valid_ip4 "$local_ip" && [ "$local_ip" != "$KH_IP" ]; then warn "this server appears to be $local_ip but Pair Code expects $KH_IP"; yesno "Continue anyway?" n || return; fi
+  if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$TRANSPORT_PORT$"; then warn "TCP/$TRANSPORT_PORT already appears to be in use"; yesno "Continue and create config anyway?" n || return; fi
+  mkdir -p "$dir"; chmod 700 "$dir"
+  if ! normalized="$(parse_ports_to_file "$PORTS_SPEC" "$dir/ports.list" 2>&1)"; then bad "$normalized"; rm -rf "$dir"; pause; return; fi
+  chmod 600 "$dir/ports.list"
+  PORTS_SPEC="$normalized"; defw="$(auto_workers)"; ask "WaterWall workers on this KHAREJ server" "$defw"; WORKERS="$ANS"; [[ "$WORKERS" =~ ^[0-9]+$ ]] && [ "$WORKERS" -ge 1 ] && [ "$WORKERS" -le 64 
