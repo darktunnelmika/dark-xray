@@ -65,3 +65,12 @@ Xray-core is a separately supplied upstream proxy engine. No Xray binary is bund
 ## Dependencies
 
 Python dependencies are listed in requirements.txt and requirements-dev.txt and are not bundled. No font files are bundled. The existing project LICENSE is retained.
+
+## WaterWall
+
+The standalone `DARK WaterWall Direct` installer downloads the WaterWall executable from the official upstream WaterWall GitHub Releases at install/update time. The WaterWall executable is not bundled in this repository.
+
+Upstream project: `radkesvat/WaterWall`
+
+WaterWall is licensed under the Mozilla Public License 2.0 (MPL-2.0). The upstream license and source remain available from the WaterWall project. DARK XRAY does not modify or relicense the downloaded upstream executable.
+
