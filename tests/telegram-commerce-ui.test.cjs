@@ -65,3 +65,23 @@ test('recovery UI exposes rebind-required state',()=>{
   assert.match(js,/rebind_required/);
   assert.match(js,/Disaster Recovery state preserved/);
 });
+test('Simple Store V4 creates one reviewed sales plan without manual IDs',()=>{
+  assert.match(js,/SIMPLE STORE V4/);
+  assert.match(js,/\/api\/commerce\/simple-plans/);
+  assert.match(js,/Review & publish/);
+  assert.match(js,/duration_months/);
+  assert.match(js,/planInbound/);
+  assert.match(js,/Advanced settings/);
+  const start=js.indexOf('async function productDialog(){');
+  const end=js.indexOf('async function priceDialog(product){',start);
+  const simple=js.slice(start,end);
+  assert.doesNotMatch(simple,/field\(['"]ID['"]/);
+  assert.match(simple,/\['1'.*'2'.*'3'.*'6'.*'12'/s);
+  assert.match(simple,/\['1','1'\].*\['5','5'\]/s);
+  assert.match(simple,/\['volume'.*\['unlimited'/s);
+});
+
+test('advanced commerce capabilities remain available after simplification',()=>{
+  for(const token of ['Advanced variant','activation_mode','delivery_mode','hwid_limit','show_qr','show_portal'])
+    assert.ok(js.includes(token),token);
+});
