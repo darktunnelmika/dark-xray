@@ -84,12 +84,17 @@ async function serviceSheet(row){
   let qrPayload=String(d.subscription_url||d.main_config||d.portal_url||'');
   openSheet('<h2>'+esc(s.product_name)+'</h2><div class="cu-grid">'+stat('باقی‌مانده',s.unlimited?'نامحدود':bytes(s.remaining_bytes))+stat('مصرف',bytes(s.used_bytes))+stat('انقضا',date(s.expiry_time))+'</div>'+
   '<div class="cu-card"><h2>🔗 اتصال</h2>'+links.map(x=>'<div class="cu-row"><div><b>'+x[0]+'</b><div class="cu-link">'+esc(x[1])+'</div></div><button class="cu-btn" data-copy="'+esc(x[1])+'">کپی</button></div>').join('')+(qrPayload?'<button class="cu-btn" data-show-qr="'+esc(qrPayload)+'">نمایش QR</button><div id="serviceQr" class="cu-qr"></div>':'')+'</div>'+
-  (s.renewal_prices?.length?'<div class="cu-card"><h2>🔄 تمدید با کیف پول</h2>'+s.renewal_prices.map(p=>'<div class="cu-price"><div><b>'+esc(p.label)+'</b><small>'+p.duration_days+' روز · '+bytes(p.volume_bytes)+'</small></div><button class="cu-btn primary" data-renew-row="'+row+'" data-renew-price="'+esc(p.id)+'">'+money(p.price_minor,p.currency)+'</button></div>').join('')+'</div>':''));
+  (s.renewal_prices?.length?'<div class="cu-card"><h2>🔄 تمدید با کیف پول</h2>'+s.renewal_prices.map(p=>'<div class="cu-price"><div><b>'+esc(p.label)+'</b><small>'+p.duration_days+' روز · '+bytes(p.volume_bytes)+'</small></div><button class="cu-btn primary" data-renew-row="'+row+'" data-renew-price="'+esc(p.id)+'">'+money(p.price_minor,p.currency)+'</button></div>').join('')+'</div>':'')+
+  (s.volume_prices?.length?'<div class="cu-card"><h2>➕ خرید حجم اضافه</h2><span class="cu-muted">فقط حجم افزایش می‌یابد؛ تاریخ انقضا و مصرف فعلی دست‌نخورده می‌ماند.</span>'+s.volume_prices.map(p=>'<div class="cu-price"><div><b>'+bytes(p.volume_bytes)+'</b><small>'+esc(p.label)+'</small></div><button class="cu-btn primary" data-volume-row="'+row+'" data-volume-price="'+esc(p.id)+'">'+money(p.price_minor,p.currency)+'</button></div>').join('')+'</div>':''));
  }catch(e){toast(e.message)}
 }
 async function renew(btn){
  if(!confirm('تمدید از موجودی کیف پول انجام شود؟'))return;
  btn.disabled=true;try{const o=await api('/api/telegram-customer/services/'+btn.dataset.renewRow+'/renew','POST',{price_id:btn.dataset.renewPrice});await api('/api/telegram-customer/renewals/'+o.id+'/wallet','POST',{});closeSheet();toast('تمدید انجام شد.');await reload();tab='services';render()}catch(e){toast(e.message)}finally{btn.disabled=false}
+}
+async function addVolume(btn){
+ if(!confirm('حجم اضافه از موجودی کیف پول خریداری شود؟'))return;
+ btn.disabled=true;try{const o=await api('/api/telegram-customer/services/'+btn.dataset.volumeRow+'/volume','POST',{price_id:btn.dataset.volumePrice});const r=await api('/api/telegram-customer/volume-addons/'+o.id+'/wallet','POST',{});closeSheet();toast('حجم اضافه شد: '+bytes(r.added_bytes));await reload();tab='services';render()}catch(e){toast(e.message)}finally{btn.disabled=false}
 }
 async function topup(amount){
  try{const r=await api('/api/telegram-customer/wallet/topups','POST',{amount_minor:Number(amount)}),p=r.payment;openSheet('<h2>💰 شارژ کیف پول</h2><div class="cu-card"><div class="cu-row"><div><small>مبلغ</small><b>'+money(r.topup.amount_minor,r.topup.currency)+'</b></div></div><div class="cu-row"><div><small>شماره کارت</small><b dir="ltr">'+esc(p.card_number||'—')+'</b></div><button class="cu-btn" data-copy="'+esc(p.card_number||'')+'">کپی</button></div><div class="cu-row"><div><small>به نام</small><b>'+esc(p.card_holder||'—')+'</b></div></div><p class="cu-muted">'+esc(p.instructions||'')+'</p></div><button class="cu-btn primary" data-open-bot>ارسال رسید در ربات</button>');await reload()}catch(e){toast(e.message)}
@@ -127,6 +132,7 @@ function bindSheet(){
  sheet.querySelectorAll('[data-copy]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copy||'');toast('کپی شد')}catch{toast('کپی نشد')}});
  sheet.querySelectorAll('[data-show-qr]').forEach(b=>b.onclick=()=>{const box=document.getElementById('serviceQr');if(!box||typeof qrcode!=='function')return;try{const q=qrcode(0,'L');q.addData(b.dataset.showQr);q.make();box.innerHTML=q.createSvgTag()}catch{toast('QR در دسترس نیست')}});
  sheet.querySelectorAll('[data-renew-row]').forEach(b=>b.onclick=()=>renew(b));
+ sheet.querySelectorAll('[data-volume-row]').forEach(b=>b.onclick=()=>addVolume(b));
  sheet.querySelectorAll('[data-close-ticket]').forEach(b=>b.onclick=async()=>{await api('/api/telegram-customer/support/'+b.dataset.closeTicket+'/close','POST',{});closeSheet();await reload();toast('تیکت بسته شد')});
  sheet.querySelectorAll('[data-rep-buy]').forEach(b=>b.onclick=()=>repBuy(b));
  sheet.querySelectorAll('[data-rep-saved]').forEach(b=>b.onclick=async()=>{await api('/api/telegram-customer/representative/orders/'+b.dataset.repSaved+'/credentials-saved','POST',{});closeSheet();await reload();toast('ثبت شد')});
