@@ -94,7 +94,8 @@ class RestorePromotionMixin:
         # Best effort is intentional: representative resource credit may fit only part of a selected batch.
         for rid in ids:
             try:
-                result=self._promote_one(str(rid),owner_id,actor)
+                with self._import_lock:
+                    result=self._promote_one(str(rid),owner_id,actor)
                 items.append({'id':rid,'ok':True,'result':result});promoted+=1
             except Exception as ex:
                 items.append({'id':rid,'ok':False,'error':str(ex)[:300]})
