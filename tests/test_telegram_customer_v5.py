@@ -118,7 +118,8 @@ def test_customer_renewal_and_volume_addon_keep_same_client_and_preserve_expiry(
     actor=c.app.state.telegram_commerce.actor_for('dark')
     before=manager.detail(actor,client,credentials=True)
     expiry_before=int(before['client']['expiryTime']);quota_before=int(before['client']['totalGB'])
-    with store.transaction() as db:db.execute("UPDATE clients SET used_bytes=? WHERE id=?",(5*1024**3,client))
+    with store.transaction() as db:
+        db.execute("UPDATE core_clients SET up=?,down=0 WHERE email=?",(5*1024**3,client))
 
     addon=c.post(f'/api/telegram-customer/services/{row}/volume',params={'owner':'dark'},headers=hdr(720001),
                  json={'price_id':price})
