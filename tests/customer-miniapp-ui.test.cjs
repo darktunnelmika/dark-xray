@@ -30,7 +30,8 @@ test('Customer Mini App covers purchase services wallet support referral and rep
  assert.match(js,/data-checkout-crypto/);
  assert.match(js,/renewService/);
  assert.match(js,/repCheckout/);
- assert.match(js,/receipt_channel/);
+ assert.match(js,/openTelegramLink/);
+ assert.match(js,/ارسال رسید در ربات/);
 });
 
 test('Customer Mini App is mobile first and uses persistent five-tab navigation',()=>{
