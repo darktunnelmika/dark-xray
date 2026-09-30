@@ -256,6 +256,9 @@ class RestoreGroupsMixin:
                 legacy = u.geturl()
                 with self.store.lock:
                     old = self.store.db.execute('SELECT * FROM restore_subscriptions WHERE legacy_host=? AND legacy_path=? AND legacy_query=?', (host,path,query)).fetchone()
+                if old and float(old['promoted_at'] or 0)>0:
+                    conflicts.append({'id':old['id'],'group_id':old['group_id'],'reason':'promoted_to_native'})
+                    continue
                 if old and group and old['group_id'] != group['id']:
                     conflicts.append({'id':old['id'],'group_id':old['group_id'],'reason':'already_in_another_group'})
                     continue
