@@ -236,6 +236,30 @@ class RestoreGroupsMixin:
             g[r['plan_type']] += 1;g['promoted'] += int(r['promoted']);g[r['presence_state']] += 1
             for key in ('dark_up','dark_down','dark_used','local_used','node_used'):
                 g[key] += int(r[key])
+        # Surface actual runtime target health on each group card. Mixed groups
+        # report the union of their active mapping variants rather than hiding
+        # destinations just because users differ.
+        for g in groups:
+            g.update(target_total=0,target_ready=0,target_pending=0,target_mixed=False)
+            try:
+                state=self.group_targets(g['id'])
+                variants=state.get('variants') or []
+                selections=[]
+                if state.get('mapping'):selections=[state['mapping']]
+                elif variants:selections=[{k:v for k,v in x.items() if k!='clients'} for x in variants]
+                elif state.get('defaultMapping'):selections=[state['defaultMapping']]
+                seen={}
+                for value in selections:
+                    for target in self.resolved_targets(value):
+                        key=(target['runtime'],int(target['inboundId']))
+                        current=seen.get(key)
+                        seen[key]=bool(target.get('ready')) if current is None else bool(current or target.get('ready'))
+                g['target_total']=len(seen);g['target_ready']=sum(1 for ok in seen.values() if ok)
+                g['target_pending']=g['target_total']-g['target_ready'];g['target_mixed']=bool(state.get('mixed'))
+            except Exception:
+                # Group listing must remain available even if one target mapping
+                # needs repair; the detailed mapping page will expose that error.
+                g['target_pending']=g['target_total']
         return groups
 
     def import_urls(self, urls, inbounds, nodes, scan, *, group_id='', group_name='', node_mode=None, include_local=None):
