@@ -14,8 +14,37 @@ enginePages.telegram=[L('Telegram Bot','ربات تلگرام')];
 navItems=function(){const n=baseNavItems();if(n.some(x=>x[0]==='telegram'))return n;const at=Math.max(0,n.findIndex(x=>x[0]==='account'));n.splice(at,0,['telegram',L('Telegram Bot','ربات تلگرام'),'link']);return n;};
 
 async function load(){
- const pairs=[['bot','/api/telegram/status'],['products','/api/commerce/products'],['orders','/api/commerce/orders']];
+ const pairs=[['bot','/api/telegram/status'],['products','/api/commerce/products'],['orders','/api/commerce/orders'],
+  ['ops','/api/telegram/operations/dashboard'],['payments','/api/telegram/operations/payments'],
+  ['support','/api/telegram/operations/support'],['crypto','/api/telegram/operations/crypto']];
  const out={};await Promise.all(pairs.map(async([k,u])=>{try{out[k]=await api(u);}catch(ex){out[k]={error:ex.message};}}));TC.data=out;return out;
+}
+function opsCard(o={}){
+ const top=Array.isArray(o.top_products)?o.top_products:[];
+ return `<article class="panel tg-card tg-ops"><div class="tg-head"><div><span class="code-caption">OPERATIONS V4</span><h2>${L('Sales dashboard','داشبورد فروش')}</h2></div><span class="tg-state ok">LIVE</span></div>
+ <div class="tg-ops-grid">
+  <div><small>${L('Revenue today','فروش امروز')}</small><b>${fmt(o.revenue_today||0,o.currency||'IRT')}</b><em>${o.paid_today||0} / ${o.orders_today||0} ${L('orders','سفارش')}</em></div>
+  <div><small>${L('7 day revenue','فروش ۷ روز')}</small><b>${fmt(o.revenue_7d||0,o.currency||'IRT')}</b><em>${o.conversion_7d||0}% conversion</em></div>
+  <div><small>${L('Pending payments','پرداخت‌های نیازمند بررسی')}</small><b>${o.pending_payments||0}</b><em>${L('manual review','بررسی دستی')}</em></div>
+  <div><small>${L('Wallet liability','مانده کیف پول مشتری‌ها')}</small><b>${fmt(o.wallet_liability||0,o.currency||'IRT')}</b><em>${o.customers||0} ${L('buyers','خریدار')}</em></div>
+  <div><small>${L('Published plans','پلن منتشرشده')}</small><b>${o.published_plans||0}</b><em>${o.representatives?o.representatives+' '+L('representatives','نماینده'):L('Own store','فروشگاه خود')}</em></div>
+  <div><small>${L('Support','پشتیبانی')}</small><b>${o.support_open||0}</b><em>${o.support_urgent||0} ${L('urgent','فوری')}</em></div>
+ </div>
+ ${top.length?`<div class="tg-top-products"><small>${L('Top plans · 30 days','پلن‌های برتر · ۳۰ روز')}</small>${top.map(x=>`<span><b>${esc(x.name)}</b><em>${x.sales} · ${fmt(x.revenue_minor,o.currency||'IRT')}</em></span>`).join('')}</div>`:''}
+ </article>`;
+}
+function paymentCenter(rows=[],crypto={}){
+ const list=Array.isArray(rows)?rows:[],review=list.filter(x=>x.reviewable),recent=list.slice(0,20);
+ return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">PAYMENT CENTER</span><h2>${L('Payments','پرداخت‌ها')}</h2></div><div class="row-actions"><button class="btn mini" data-act="tgcrypto">${icon('settings')}${L('Crypto','کریپتو')}</button><button class="btn mini" data-act="tgrefresh">${icon('refresh')}${L('Refresh','بروزرسانی')}</button></div></div>
+ <div class="tg-payment-summary"><span>${L('Needs review','نیازمند بررسی')} <b>${review.length}</b></span><span>Crypto <b>${crypto.enabled&&crypto.configured?'ON':'OFF'}</b></span></div>
+ ${recent.length?`<div class="table-wrap"><table class="data-table tg-pay-table"><thead><tr><th>${L('Type','نوع')}</th><th>${L('Buyer','خریدار')}</th><th>${L('Amount','مبلغ')}</th><th>${L('Status','وضعیت')}</th><th>${L('Reference','مرجع')}</th><th>${L('Action','عملیات')}</th></tr></thead><tbody>${recent.map(x=>`<tr><td>${x.kind==='topup'?L('Wallet top-up','شارژ کیف پول'):L('Order','سفارش')}</td><td class="mono">${esc(x.buyer_telegram_id||'—')}</td><td>${fmt(x.amount_minor,x.currency)}</td><td>${st(x.status,x.status==='paid'||x.status==='approved')}</td><td class="mono">${esc(x.external_ref||x.order_id||'—')}</td><td>${x.reviewable?`<div class="row-actions"><button class="btn mini" data-act="tgpayapprove" data-kind="${x.kind}" data-row="${x.row_id}">✓</button><button class="btn mini" data-act="tgpayreject" data-kind="${x.kind}" data-row="${x.row_id}">✕</button></div>`:'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="tg-empty">${L('No payments yet.','هنوز پرداختی ثبت نشده است.')}</div>`}
+ </article>`;
+}
+function supportCenter(data={}){
+ const rows=Array.isArray(data.tickets)?data.tickets:[];
+ const pri={urgent:'🔴',high:'🟠',normal:'🔵',low:'⚪'};
+ return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">SUPPORT CENTER</span><h2>${L('Customer support','پشتیبانی مشتریان')}</h2></div><button class="btn mini" data-act="tgrefresh">${icon('refresh')}${L('Refresh','بروزرسانی')}</button></div>
+ <div class="tg-list">${rows.length?rows.slice(0,30).map(t=>`<section class="tg-support-row"><div><b>${pri[t.priority]||'🔵'} ${esc(t.subject)}</b><small>Telegram ${esc(t.telegram_id)} · ${esc(t.status)} · ${t.message_count||0} ${L('messages','پیام')}</small><em>${t.assigned_to?L('Assigned: ','مسئول: ')+esc(t.assigned_to):L('Unassigned','بدون مسئول')}</em></div><div class="row-actions"><button class="btn mini" data-act="tgsupportreply" data-row="${t.row_id}">${L('Reply','پاسخ')}</button><button class="btn mini" data-act="tgsupportmeta" data-row="${t.row_id}" data-priority="${esc(t.priority||'normal')}" data-assigned="${esc(t.assigned_to||'')}">${L('Triage','اولویت')}</button>${t.status!=='closed'?'<button class="btn mini" data-act="tgsupportclose" data-row="'+t.row_id+'">'+L('Close','بستن')+'</button>':''}</div></section>`).join(''):`<div class="tg-empty">${L('No support tickets yet.','هنوز تیکتی ثبت نشده است.')}</div>`}</div></article>`;
 }
 function botCard(b){
  const online=b.runtime_state==='online',configured=!!b.configured,forum=b.forum||{},forumOk=!!forum.configured,forumRebind=!!forum.rebind_required;
@@ -57,7 +86,7 @@ function ordersCard(rows){
 async function page(){
  const d=await load();if(d.bot?.error)return heading(L('Telegram Bot','ربات تلگرام'),'')+`<div class="notice error">${esc(d.bot.error)}</div>`;
  return heading(L('Telegram Bot & Store','ربات تلگرام و فروشگاه'),L('The panel shows bot/forum health and product policy. Manual payment settings live only inside the Telegram admin menu.','پنل وضعیت ربات/انجمن و سیاست محصول را نشان می‌دهد؛ تنظیم پرداخت دستی فقط داخل منوی ادمین خود ربات انجام می‌شود.'))+
- `<div class="tg-grid">${botCard(d.bot)}${forumCard(d.bot.forum)}</div><article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">BOT-ONLY PAYMENT</span><h2>${L('Payment settings','تنظیمات پرداخت')}</h2></div></div><div class="tg-list"><div class="notice">${L('Card number, card holder, bank and payment instructions are intentionally managed only inside Telegram: Admin → Manual Payment.','شماره کارت، صاحب کارت، بانک و متن پرداخت عمداً فقط داخل خود تلگرام مدیریت می‌شوند: ادمین ← پرداخت دستی.')}</div></div></article>${productsCard(d.products)}${ordersCard(d.orders)}`;
+ `${opsCard(d.ops)}<div class="tg-grid">${botCard(d.bot)}${forumCard(d.bot.forum)}</div><article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">PAYMENT POLICY</span><h2>${L('Gateway settings','تنظیمات درگاه')}</h2></div></div><div class="tg-list"><div class="notice">${L('Manual card settings stay inside the Telegram admin menu. Hosted crypto checkout can be configured below without exposing its webhook secret.','تنظیم کارت دستی داخل منوی ادمین ربات می‌ماند؛ درگاه کریپتوی Hosted از Payment Center تنظیم می‌شود و secret وبهوک نمایش داده نمی‌شود.')}</div></div></article>${paymentCenter(d.payments,d.crypto)}${supportCenter(d.support)}${productsCard(d.products)}${ordersCard(d.orders)}`;
 }
 enginePage=async function(){if(state.page==='telegram')return page();return baseEnginePage();};
 function v(f,n){return String(f.get(n)||'').trim();}
@@ -125,6 +154,11 @@ async function priceDialog(product){
  });
 }
 runAction=async function(act,el){
+ if(act==='tgpayapprove'||act==='tgpayreject'){if(!confirm(act==='tgpayapprove'?L('Approve this payment?','این پرداخت تأیید شود؟'):L('Reject this payment?','این پرداخت رد شود؟')))return;await api('/api/telegram/operations/payments/'+enc(el.dataset.kind)+'/'+enc(el.dataset.row)+'/'+(act==='tgpayapprove'?'approve':'reject'),'POST',{});toast(L('Payment updated.','وضعیت پرداخت بروزرسانی شد.'));TC.data=null;await renderPage();return;}
+ if(act==='tgsupportreply'){dialog(L('Support reply','پاسخ پشتیبانی'),field(L('Message','پیام'),'text','','text','required maxlength="4000"'),async fd=>{await api('/api/telegram/operations/support/'+enc(el.dataset.row)+'/reply','POST',{text:v(fd,'text')});closeDialog();toast(L('Reply sent.','پاسخ ارسال شد.'));TC.data=null;await renderPage();});return;}
+ if(act==='tgsupportclose'){if(!confirm(L('Close this ticket?','این تیکت بسته شود؟')))return;await api('/api/telegram/operations/support/'+enc(el.dataset.row)+'/close','POST',{});TC.data=null;await renderPage();return;}
+ if(act==='tgsupportmeta'){dialog(L('Support triage','اولویت پشتیبانی'),`<div class="form-grid">${select(L('Priority','اولویت'),'priority',[['low',L('Low','کم')],['normal',L('Normal','عادی')],['high',L('High','زیاد')],['urgent',L('Urgent','فوری')]],el.dataset.priority||'normal')}${field(L('Assigned to','مسئول'),'assigned_to',el.dataset.assigned||'','text','maxlength="128"')}</div>`,async fd=>{await api('/api/telegram/operations/support/'+enc(el.dataset.row)+'/meta','PUT',{priority:v(fd,'priority'),assigned_to:v(fd,'assigned_to')});closeDialog();TC.data=null;await renderPage();});return;}
+ if(act==='tgcrypto'){const c=TC.data?.crypto||{};dialog(L('Hosted crypto gateway','درگاه کریپتوی Hosted'),`<div class="form-grid">${field(L('Label','عنوان'),'label',c.label||'Crypto Gateway','text','required maxlength="128"')}${select(L('Enabled','فعال'),'enabled',[['false',L('Off','خاموش')],['true',L('On','روشن')]],String(!!c.enabled))}<label class="span-2">${L('Checkout URL template','قالب URL پرداخت')}<textarea class="field-input" name="template" rows="3" required placeholder="https://pay.example/checkout?amount={amount}&order={order_id}">${esc(c.checkout_url_template||'')}</textarea></label>${field(L('Webhook secret · leave blank to keep','Webhook secret · برای حفظ خالی بگذار'),'secret','','password','minlength="16" autocomplete="new-password"')}<label class="span-2">${L('Instructions','راهنما')}<textarea class="field-input" name="instructions" rows="2">${esc(c.instructions||'')}</textarea></label><div class="span-2 notice"><b>Webhook:</b><br><span class="mono">${esc(c.webhook_url||'')}</span><br>${L('Supported placeholders: {amount}, {currency}, {order_id}, {payment_id}. Provider webhook must send signed standardized events.','Placeholderها: {amount}، {currency}، {order_id}، {payment_id}. وبهوک Provider باید event استاندارد امضاشده ارسال کند.')}</div></div>`,async fd=>{const secret=v(fd,'secret');await api('/api/telegram/operations/crypto','PUT',{id:c.id||'crypto',label:v(fd,'label'),enabled:v(fd,'enabled')==='true',checkout_url_template:v(fd,'template'),webhook_secret:secret||null,instructions:v(fd,'instructions')});closeDialog();toast(L('Crypto gateway saved.','درگاه کریپتو ذخیره شد.'));TC.data=null;await renderPage();});return;}
  if(act==='tgbottest'){const r=await api('/api/telegram/test','POST',{});toast(`@${r.username||r.name} ${L('is valid.','معتبر است.')}`);TC.data=null;await renderPage();return;}
  if(act==='tgforumrepair'){await api('/api/telegram/forum/repair','POST',{});toast(L('Forum topics checked and repaired.','Topicهای انجمن بررسی و ترمیم شدند.'));await renderPage();return;}
  if(act==='tgproductnew'){await productDialog();return;}if(act==='tgpricenew'){await priceDialog(el.dataset.product);return;}
