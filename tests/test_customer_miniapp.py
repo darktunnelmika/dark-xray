@@ -132,3 +132,31 @@ def test_customer_representative_purchase_returns_one_time_credentials(env):
     ack=c.post(f'/api/telegram-customer/representative/orders/{oid}/ack',params={'owner':'dark'},headers=h(880060),json={})
     assert ack.status_code==200
     assert 'password' not in c.app.state.telegram_runtime.marketplace.result(oid,'dark')
+
+
+def test_representative_customer_miniapp_is_owner_scoped(env):
+    from fastapi.testclient import TestClient
+    from server import make_app
+    _,engine,manager,auth,c=env
+    inbound=create_inbound(c)
+    assert c.put('/api/owners/mini-rep',json={
+        'name':'Mini Rep','allowed':[inbound],'volume_credit_bytes':100*1024**3,
+        'unlimited_credit':2,'max_clients':20}).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'mini-rep','password':'MiniRepPass88','role':'reseller'}).status_code==200
+    token,p=auth.login('mini-rep','MiniRepPass88','','127.0.0.44',3600,'customer-mini-rep')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        assert seller.put('/api/telegram/settings',json={
+            'enabled':False,'bot_token':BOT_TOKEN,'admin_telegram_id':770001}).status_code==200
+        created=seller.post('/api/commerce/simple-plans',json={
+            'name':'REP CUSTOMER PLAN','plan_type':'volume','price_minor':90000,'duration_months':1,
+            'volume_gb':20,'ip_limit':1,'inbound_ids':[inbound],'published':True})
+        assert created.status_code==201,created.text
+        boot=seller.get('/api/telegram-customer/bootstrap',params={'owner':'mini-rep'},headers=h(881000))
+        assert boot.status_code==200,boot.text
+        doc=boot.json()
+        assert doc['identity']['telegram_id']==881000
+        assert [x['id'] for x in doc['products']]==[created.json()['id']]
+        assert doc['representative']['available'] is False
+        assert doc['wallet']['balance_minor']==0
