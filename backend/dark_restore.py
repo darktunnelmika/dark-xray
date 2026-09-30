@@ -38,7 +38,7 @@ class RestoreDomainBody(BaseModel):
     acme_email:str=Field(default='',max_length=254)
 
 class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
-    def __init__(self,store,engine,nodes,manager):
+    def __init__(self,store,engine,nodes,manager=None):
         self.store,self.engine,self.nodes,self.manager=store,engine,nodes,manager
         with store.lock:
             store.db.executescript("""
