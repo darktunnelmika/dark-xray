@@ -516,6 +516,8 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     install_representative_marketplace(app,runtime.marketplace,current,writable,audit)
     from telegram_ops import install_telegram_ops
     install_telegram_ops(app,runtime,current,writable,audit)
+    from telegram_customer_portal import install_customer_portal
+    install_customer_portal(app,runtime,writable)
     app.state.telegram_commerce=commerce
     app.state.telegram_runtime=runtime
 
