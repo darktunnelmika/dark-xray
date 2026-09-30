@@ -794,3 +794,83 @@ def test_representative_panel_has_independent_bot_customer_wallet_store_and_supp
             worker.api.close()
     assert c.get('/api/telegram/status').json()['owner']=='dark'
     assert all(x['id']!='seller-plan' for x in c.get('/api/commerce/products').json())
+
+def test_simple_store_v4_api_generates_ids_and_safe_defaults(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    r=c.post('/api/commerce/simple-plans',json={
+        'name':'Turbo 100','plan_type':'volume','price_minor':450000,
+        'duration_months':6,'volume_gb':100,'ip_limit':3,'inbound_ids':[inbound_id],
+        'published':True,
+    })
+    assert r.status_code==201,r.text
+    doc=r.json()
+    assert doc['id'].startswith('p_') and doc['price_id'].startswith('v_')
+    assert doc['kind']=='volume' and doc['active'] is True and doc['visible'] is True
+    assert len(doc['prices'])==1
+    price=doc['prices'][0]
+    assert price['id']==doc['price_id'] and price['duration_days']==180
+    assert price['volume_bytes']==100*1024**3 and price['unlimited_units']==0
+    assert price['ip_limit']==3 and price['hwid_limit']==0
+    assert price['activation_mode']=='first_connection'
+    assert price['delivery_mode']=='subscription'
+    assert price['primary_inbound_id']==inbound_id
+    assert price['show_qr'] is True and price['show_portal'] is True
+    with store.lock:
+        assert store.db.execute("SELECT COUNT(*) FROM commerce_products WHERE owner='dark' AND id=?",(doc['id'],)).fetchone()[0]==1
+
+
+def test_simple_store_v4_defaults_to_draft_without_publish(env):
+    _,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    r=c.post('/api/commerce/simple-plans',json={
+        'name':'Draft Unlimited','plan_type':'unlimited','price_minor':700000,
+        'duration_months':1,'volume_gb':0,'ip_limit':1,'inbound_ids':[inbound_id],
+    })
+    assert r.status_code==201,r.text
+    doc=r.json()
+    assert doc['active'] is False and doc['visible'] is False and doc['published'] is False
+    assert doc['prices'][0]['active'] is False
+    assert doc['prices'][0]['volume_bytes']==0 and doc['prices'][0]['unlimited_units']==1
+
+
+def test_representative_bot_simple_plan_wizard_uses_only_allowed_inbounds(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/simpleseller',json={
+        'name':'Simple Seller','allowed':[inbound_id],'volume_credit_bytes':500*1024**3,
+        'unlimited_credit':5,'max_clients':50}).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'simpleseller','password':'SimpleSeller88','role':'reseller'}).status_code==200
+    token,p=auth.login('simpleseller','SimpleSeller88','','127.0.0.22',3600,'simple-store-v4')
+    bot_token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        assert seller.put('/api/telegram/settings',json={
+            'enabled':False,'bot_token':bot_token,'admin_telegram_id':991001}).status_code==200
+        worker=BotWorker(seller.app.state.telegram_runtime,'simpleseller',bot_token,'simple-v4')
+        sent=[];worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((text,reply_markup))
+        try:
+            worker.start_product_create(991001,991001)
+            worker.handle_store_text(991001,991001,'Rep Turbo')
+            worker.simple_plan_choose_type(991001,991001,'volume')
+            worker.handle_store_text(991001,991001,'350000')
+            worker.simple_plan_choose_months(991001,991001,3)
+            worker.simple_plan_choose_volume(991001,991001,50)
+            worker.simple_plan_choose_ip(991001,991001,2)
+            worker.simple_plan_toggle_inbound(991001,991001,inbound_id)
+            worker.simple_plan_review(991001,991001)
+            assert worker.sessions[991001]=='store_simple_review'
+            worker.publish_simple_plan(991001,991001)
+        finally:
+            worker.api.close()
+    with store.lock:
+        product=store.db.execute("SELECT id,kind,active,visible FROM commerce_products WHERE owner='simpleseller'").fetchone()
+        price=store.db.execute("SELECT duration_days,volume_bytes,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode FROM commerce_prices WHERE owner='simpleseller'").fetchone()
+    assert product and product['id'].startswith('p_') and tuple(product)[1:]==('volume',1,1)
+    assert price['duration_days']==90 and price['volume_bytes']==50*1024**3
+    assert price['ip_limit']==2 and price['hwid_limit']==0
+    assert json.loads(price['inbound_ids'])==[inbound_id]
+    assert price['activation_mode']=='first_connection' and price['delivery_mode']=='subscription'
+    assert any('پیش‌نمایش پلن' in text for text,_ in sent)
+    assert any('پلن فروش منتشر شد' in text for text,_ in sent)
