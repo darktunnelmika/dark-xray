@@ -313,6 +313,84 @@ class CustomerCenter:
                            (str(ex)[:1000],time.time(),order_id))
             raise
 
+    def volume_addon_prices(self,owner:str,telegram_id:int,client_id:str)->dict[str,Any]:
+        origin=self.latest_service_order(owner,telegram_id,client_id)
+        if not origin:raise PolicyError('Service has no DARK purchase history')
+        with self.store.lock:
+            product=self.store.db.execute('SELECT * FROM commerce_products WHERE owner=? AND id=?',(owner,origin['product_id'])).fetchone()
+            prices=[dict(r) for r in self.store.db.execute("""SELECT rowid AS row_id,* FROM commerce_prices
+              WHERE owner=? AND product_id=? AND active=1 AND volume_bytes>0 ORDER BY price_minor,id""",(owner,origin['product_id']))]
+        if not product or not product['add_volume_enabled']:raise PolicyError('Volume add-on is disabled for this product')
+        if not prices:raise PolicyError('No volume add-on price is available')
+        return {'origin':origin,'product':dict(product),'prices':prices}
+
+    def create_volume_addon_order(self,owner:str,telegram_id:int,username:str,client_id:str,price_id:str)->dict[str,Any]:
+        data=self.volume_addon_prices(owner,telegram_id,client_id)
+        price=next((x for x in data['prices'] if x['id']==price_id),None)
+        if not price:raise PolicyError('Volume add-on price is not available')
+        actor=self.commerce.actor_for(owner)
+        detail=self.manager.detail(actor,client_id,credentials=True);client=detail.get('client') or {}
+        if int(client.get('tgId') or 0)!=int(telegram_id):raise PolicyError('Service does not belong to this Telegram user')
+        if int(client.get('totalGB') or 0)<=0:raise PolicyError('Unlimited service does not need a volume add-on')
+        with self.store.lock:
+            waiting=self.store.db.execute("""SELECT 1 FROM commerce_orders WHERE owner=? AND client_id=?
+              AND status='provisioned_waiting_activation' LIMIT 1""",(owner,client_id)).fetchone()
+        if waiting:raise PolicyError('Service is waiting for first connection activation')
+        now=time.time();order_id=_id('ord')
+        with self.store.transaction() as db:
+            db.execute("""INSERT INTO commerce_orders(id,owner,buyer_telegram_id,buyer_username,product_id,price_id,
+              amount_minor,currency,status,created_at,updated_at,volume_bytes,duration_days,ip_limit,hwid_limit,
+              inbound_ids,activation_mode,delivery_mode,primary_inbound_id,show_qr,show_portal,order_type,target_client_id,
+              renewal_target_expiry)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (order_id,owner,int(telegram_id),str(username or '')[:128],data['product']['id'],price_id,
+               int(price['price_minor']),price['currency'],'pending',now,now,int(price['volume_bytes']),0,
+               int(client.get('limitIp') or 0),int(client.get('limitHwid') or 0),json.dumps(detail.get('inboundIds') or []),
+               'immediate','subscription',0,0,0,'volume_addon',client_id,0))
+        return self.commerce.order(order_id,owner)
+
+    def pay_volume_addon(self,owner:str,order_id:str)->dict[str,Any]:
+        order=self.commerce.order(order_id,owner)
+        if order.get('order_type')!='volume_addon':raise PolicyError('Order is not a volume add-on')
+        if str(order['currency']).upper()!=CURRENCY:raise PolicyError('Wallet currently supports IRT products only')
+        target=str(order.get('target_client_id') or '')
+        if not target:raise PolicyError('Volume add-on target is missing')
+        reference='volume_addon:'+order_id
+        with self.store.transaction() as db:
+            current=db.execute('SELECT * FROM commerce_orders WHERE id=? AND owner=?',(order_id,owner)).fetchone()
+            if not current:raise PolicyError('Volume add-on order not found')
+            if current['status']=='volume_added':return {'id':order_id,'status':'volume_added','client_id':target,'wallet_paid':True}
+            if current['status'] not in ('pending','paid'):raise PolicyError('Volume add-on cannot be paid from current state')
+            self._debit_tx(db,owner,int(current['buyer_telegram_id']),int(current['amount_minor']),'volume_addon',reference,order_id)
+            now=time.time()
+            if not db.execute("SELECT 1 FROM commerce_payments WHERE order_id=? AND owner=? AND gateway_id='wallet'",(order_id,owner)).fetchone():
+                db.execute("""INSERT INTO commerce_payments(id,order_id,owner,gateway_id,amount_minor,currency,status,external_ref,created_at,updated_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?)""",(_id('pay'),order_id,owner,'wallet',int(current['amount_minor']),CURRENCY,
+                                                 'paid',reference,now,now))
+            db.execute("UPDATE commerce_orders SET status='paid',gateway_id='wallet',payment_ref=?,updated_at=? WHERE id=?",
+                       (reference,now,order_id))
+        try:
+            actor=self.commerce.actor_for(owner);detail=self.manager.detail(actor,target,credentials=True)
+            client=detail.get('client') or {}
+            if int(client.get('tgId') or 0)!=int(order['buyer_telegram_id']):raise PolicyError('Service does not belong to this Telegram user')
+            current_quota=int(client.get('totalGB') or 0)
+            if current_quota<=0:raise PolicyError('Unlimited service does not need a volume add-on')
+            add_bytes=int(order.get('volume_bytes') or 0)
+            if add_bytes<=0:raise PolicyError('Volume add-on is empty')
+            new_quota=current_quota+add_bytes
+            self.manager.update(actor,target,{'totalGB':new_quota})
+            with self.store.transaction() as db:
+                db.execute("UPDATE commerce_orders SET status='volume_added',client_id=?,fulfillment_error='',updated_at=? WHERE id=?",
+                           (target,time.time(),order_id))
+            return {'id':order_id,'status':'volume_added','client_id':target,'wallet_paid':True,
+                    'added_bytes':add_bytes,'new_total_bytes':new_quota,
+                    'client':self.manager.detail(actor,target,credentials=True)}
+        except Exception as ex:
+            with self.store.transaction() as db:
+                db.execute("UPDATE commerce_orders SET fulfillment_error=?,updated_at=? WHERE id=?",
+                           (str(ex)[:1000],time.time(),order_id))
+            raise
+
     def ensure_referral_profile(self,owner:str,telegram_id:int)->dict[str,Any]:
         tid=int(telegram_id)
         with self.store.transaction() as db:

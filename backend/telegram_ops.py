@@ -49,7 +49,7 @@ class CryptoGatewayBody(Model):
 
 
 class TelegramOperations:
-    SUCCESS_ORDER_STATES=('paid','provisioned','provisioned_waiting_activation','renewed')
+    SUCCESS_ORDER_STATES=('paid','provisioned','provisioned_waiting_activation','renewed','volume_added')
     REVIEW_PAYMENT_STATES=('review',)
     MINIAPP_MAX_AGE=900
 
@@ -88,6 +88,9 @@ class TelegramOperations:
     def mini_app_url(self,owner:str)->str:
         return self.public_url('/assets/telegram-miniapp.html')+'?owner='+quote(str(owner),safe='')
 
+    def customer_mini_app_url(self,owner:str)->str:
+        return self.public_url('/assets/telegram-customer.html')+'?owner='+quote(str(owner),safe='')
+
     def webhook_url(self,owner:str,gateway_id:str)->str:
         return self.public_url('/api/telegram/crypto/webhook/'+quote(str(owner),safe='')+'/'+quote(str(gateway_id),safe=''))
 
@@ -96,7 +99,7 @@ class TelegramOperations:
         if not row or not row.get('bot_token'):raise PolicyError('Telegram bot token is not configured')
         return row,str(row['bot_token'])
 
-    def verify_mini_app(self,owner:str,init_data:str)->dict[str,Any]:
+    def verify_init_data(self,owner:str,init_data:str,*,admin_only:bool=False)->dict[str,Any]:
         raw=str(init_data or '')
         if not raw or len(raw)>16384:raise PolicyError('Telegram Mini App authorization is missing')
         try:pairs=parse_qsl(raw,keep_blank_values=True,strict_parsing=True)
@@ -119,8 +122,12 @@ class TelegramOperations:
         try:user=json.loads(values.get('user','{}'))
         except (TypeError,ValueError):raise PolicyError('Telegram Mini App user is invalid')
         if not isinstance(user,dict) or type(user.get('id')) is not int:raise PolicyError('Telegram Mini App user is invalid')
-        if int(user['id'])!=int(row['admin_telegram_id']):raise PolicyError('Telegram Mini App admin does not match this bot')
-        return {'owner':owner,'user':user,'auth_date':auth_date}
+        if admin_only and int(user['id'])!=int(row['admin_telegram_id']):
+            raise PolicyError('Telegram Mini App admin does not match this bot')
+        return {'owner':owner,'user':user,'auth_date':auth_date,'admin':int(user['id'])==int(row['admin_telegram_id'])}
+
+    def verify_mini_app(self,owner:str,init_data:str)->dict[str,Any]:
+        return self.verify_init_data(owner,init_data,admin_only=True)
 
     @staticmethod
     def _midnight(now:float)->float:
@@ -210,6 +217,8 @@ class TelegramOperations:
             if action=='approve':
                 result=self.commerce.approve_payment(owner,row_id,self.manager)
                 order=self.commerce.order(result['id'],owner)
+                if result.get('provisioned') and str(order.get('order_type') or 'purchase')=='purchase':
+                    self.customer.qualify_referral(owner,int(order['buyer_telegram_id']))
                 worker=self._worker(owner)
                 if worker and result.get('provisioned'):
                     try:worker.send_delivery(int(order['buyer_telegram_id']),result)
@@ -387,6 +396,8 @@ class TelegramOperations:
         try:
             if status=='paid':
                 result=self.commerce.confirm_payment(owner,order_id,reference,self.manager)
+                if result.get('provisioned') and str(order.get('order_type') or 'purchase')=='purchase':
+                    self.customer.qualify_referral(owner,int(order['buyer_telegram_id']))
                 worker=self._worker(owner)
                 if worker and result.get('provisioned'):
                     try:worker.send_delivery(int(order['buyer_telegram_id']),result)

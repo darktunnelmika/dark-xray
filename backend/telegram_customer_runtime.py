@@ -101,16 +101,18 @@ class CustomerBotFeatures:
         expiry=int(c.get('expiryTime') or 0)
         expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
         origin=self.runtime.customer.latest_service_order(self.owner,user_id,email)
-        product_name='سرویس DARK';renewal=False
+        product_name='سرویس DARK';renewal=False;add_volume=False
         if origin:
             with self.runtime.store.lock:
-                p=self.runtime.store.db.execute("SELECT name,renewal_enabled FROM commerce_products WHERE owner=? AND id=?",
+                p=self.runtime.store.db.execute("SELECT name,renewal_enabled,add_volume_enabled FROM commerce_products WHERE owner=? AND id=?",
                                                 (self.owner,origin['product_id'])).fetchone()
-            if p:product_name=str(p['name']);renewal=bool(p['renewal_enabled'])
+            if p:
+                product_name=str(p['name']);renewal=bool(p['renewal_enabled']);add_volume=bool(p['add_volume_enabled'])
         text=(f"📦 {product_name}\nشناسه: {email}\nباقی‌مانده: {left}\n"
               f"انقضا: {expiry_text}\nوضعیت: {'فعال ✅' if not detail.get('block_reasons') else 'محدود ⛔'}")
         buttons=[[{'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(row_id)}]]
         if renewal:buttons[0].append({'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(row_id)})
+        if add_volume and quota>0:buttons.append([{'text':'➕ خرید حجم','callback_data':'usvcvol:'+str(row_id)}])
         self.api.send(chat_id,text,{'inline_keyboard':buttons})
 
     def customer_connection(self,chat_id:int,user_id:int,row_id:int):
@@ -152,6 +154,18 @@ class CustomerBotFeatures:
                              'callback_data':f"urnp:{row_id}:{p['row_id']}"}])
         if not buttons:self.api.send(chat_id,'پلن تمدید فعالی وجود ندارد.');return
         self.api.send(chat_id,f"🔄 تمدید {email}\nپلن را انتخاب کن:",{'inline_keyboard':buttons})
+
+    def customer_volume_options(self,chat_id:int,user_id:int,row_id:int):
+        email,_=self._customer_client_row(user_id,row_id)
+        try:data=self.runtime.customer.volume_addon_prices(self.owner,user_id,email)
+        except PolicyError as ex:self.api.send(chat_id,str(ex));return
+        buttons=[]
+        for p in data['prices']:
+            if int(p.get('volume_bytes') or 0)<=0:continue
+            buttons.append([{'text':f"➕ {self.bytes(int(p['volume_bytes']))} · {money(p['price_minor'],p['currency'])}"[:62],
+                             'callback_data':f"uvp:{row_id}:{p['row_id']}"}])
+        if not buttons:self.api.send(chat_id,'حجم اضافه برای این سرویس فعال نیست.');return
+        self.api.send(chat_id,f"➕ خرید حجم {email}\nحجم و قیمت را انتخاب کن:",{'inline_keyboard':buttons})
 
     def customer_referral_menu(self,chat_id:int,user_id:int):
         stats=self.runtime.customer.referral_stats(self.owner,user_id)
@@ -344,6 +358,30 @@ class CustomerBotFeatures:
             self.customer_connection(chat_id,user_id,int(data.split(':',1)[1]));return True
         if data.startswith('usvcrenew:'):
             self.customer_renew_options(chat_id,user_id,int(data.split(':',1)[1]));return True
+        if data.startswith('usvcvol:'):
+            self.customer_volume_options(chat_id,user_id,int(data.split(':',1)[1]));return True
+        if data.startswith('uvp:'):
+            _,client_row,price_row=data.split(':',2)
+            email,_=self._customer_client_row(user_id,int(client_row))
+            price=self.price_by_rowid(int(price_row))
+            order=self.runtime.customer.create_volume_addon_order(self.owner,user_id,str(sender.get('username') or ''),
+                                                                  email,price['id'])
+            wallet=self.runtime.customer.wallet(self.owner,user_id)
+            enough=int(wallet['balance_minor'])>=int(order['amount_minor'])
+            kb=[]
+            if enough:kb.append([{'text':'✅ پرداخت و افزودن حجم','callback_data':'uvpay:'+order['id']}])
+            kb.append([{'text':'💰 شارژ کیف پول','callback_data':'wmenu'}])
+            self.api.send(chat_id,f"➕ حجم اضافه برای {email}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
+                          f"موجودی: {money(wallet['balance_minor'])}",{'inline_keyboard':kb});return True
+        if data.startswith('uvpay:'):
+            order_id=data.split(':',1)[1]
+            try:
+                result=self.runtime.customer.pay_volume_addon(self.owner,order_id)
+                self.runtime.manager.audit(self.actor(),self.owner,'commerce.wallet_volume_addon',order_id,
+                                           f"telegram={user_id}; client={result['client_id']}")
+                self.api.send(chat_id,'✅ حجم با موفقیت اضافه شد؛ تاریخ انقضا و مصرف فعلی تغییر نکرد.')
+            except Exception as ex:self.api.send(chat_id,'افزودن حجم انجام نشد: '+str(ex)[:700])
+            return True
         if data.startswith('urnp:'):
             _,client_row,price_row=data.split(':',2)
             email,_=self._customer_client_row(user_id,int(client_row))

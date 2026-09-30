@@ -148,6 +148,8 @@ class BotWorker(CustomerBotFeatures):
         ]
         if self.owner_role()=='owner':
             rows += [['🏪 خرید پنل نمایندگی']]
+        if not admin and getattr(self.runtime,'ops',None):
+            rows += [[{'text':'📱 پنل من','web_app':{'url':self.runtime.ops.customer_mini_app_url(self.owner)}}]]
         if admin:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
@@ -159,7 +161,7 @@ class BotWorker(CustomerBotFeatures):
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
-        return {'keyboard':[[{'text':x} for x in row] for row in rows],
+        return {'keyboard':[[x if isinstance(x,dict) else {'text':x} for x in row] for row in rows],
                 'resize_keyboard':True,'is_persistent':True}
 
     def send_home(self,chat_id:int,user_id:int):
@@ -248,6 +250,8 @@ class BotWorker(CustomerBotFeatures):
             if len(parts)==2 and parts[1].startswith('ref_'):
                 self.runtime.customer.register_referral(self.owner,user_id,parts[1][4:])
             self.send_home(chat_id,user_id);return
+        if text=='📱 پنل من' and not self.is_admin(user_id) and getattr(self.runtime,'ops',None):
+            self.api.send(chat_id,'📱 پنل مشتری DARK',{'inline_keyboard':[[{'text':'🚀 بازکردن پنل من','web_app':{'url':self.runtime.ops.customer_mini_app_url(self.owner)}}]]});return
         if low=='/shop' or text=='🛍 خرید اشتراک':self.shop(chat_id);return
         if text=='🔄 تمدید سرویس':self.customer_renew_services(chat_id,user_id);return
         if text=='💰 کیف پول + شارژ':self.customer_wallet_menu(chat_id,user_id);return
@@ -502,6 +506,8 @@ class BotWorker(CustomerBotFeatures):
             order=self.runtime.commerce.order(result['id'],self.owner)
             self.runtime.manager.audit(self.actor(),self.owner,'commerce.payment_approve',result['id'],f"telegram_admin={user_id}")
             if result.get('provisioned'):
+                if str(order.get('order_type') or 'purchase')=='purchase':
+                    self.runtime.customer.qualify_referral(self.owner,int(order['buyer_telegram_id']))
                 self.send_delivery(int(order['buyer_telegram_id']),result)
                 note=f"✅ پرداخت {result['id']} تأیید شد؛ سرویس {result['client_id']} ساخته شد."
                 if result.get('activation_pending'):note+=' منتظر اولین اتصال است.'

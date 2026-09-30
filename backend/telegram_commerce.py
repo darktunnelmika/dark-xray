@@ -516,6 +516,8 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     install_representative_marketplace(app,runtime.marketplace,current,writable,audit)
     from telegram_ops import install_telegram_ops
     install_telegram_ops(app,runtime,current,writable,audit)
+    from telegram_customer_portal import install_customer_portal
+    install_customer_portal(app,runtime,writable)
     app.state.telegram_commerce=commerce
     app.state.telegram_runtime=runtime
 
@@ -675,6 +677,9 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
     def payment_confirm(order_id:str,body:PaymentConfirmBody,p=Depends(current)):
         writable();oid=commerce.owner_for(p)
         result=commerce.confirm_payment(oid,order_id,body.reference,manager)
+        order=commerce.order(order_id,oid)
+        if result.get('provisioned') and str(order.get('order_type') or 'purchase')=='purchase':
+            runtime.customer.qualify_referral(oid,int(order['buyer_telegram_id']))
         audit(p.actor,oid,'commerce.payment_confirm',order_id,body.reference[:120])
         return result
 
