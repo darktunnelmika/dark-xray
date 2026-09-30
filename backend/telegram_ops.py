@@ -88,6 +88,9 @@ class TelegramOperations:
     def mini_app_url(self,owner:str)->str:
         return self.public_url('/assets/telegram-miniapp.html')+'?owner='+quote(str(owner),safe='')
 
+    def customer_mini_app_url(self,owner:str)->str:
+        return self.public_url('/assets/telegram-customer.html')+'?owner='+quote(str(owner),safe='')
+
     def webhook_url(self,owner:str,gateway_id:str)->str:
         return self.public_url('/api/telegram/crypto/webhook/'+quote(str(owner),safe='')+'/'+quote(str(gateway_id),safe=''))
 
@@ -96,7 +99,7 @@ class TelegramOperations:
         if not row or not row.get('bot_token'):raise PolicyError('Telegram bot token is not configured')
         return row,str(row['bot_token'])
 
-    def verify_mini_app(self,owner:str,init_data:str)->dict[str,Any]:
+    def verify_webapp_user(self,owner:str,init_data:str,admin_only:bool=False)->dict[str,Any]:
         raw=str(init_data or '')
         if not raw or len(raw)>16384:raise PolicyError('Telegram Mini App authorization is missing')
         try:pairs=parse_qsl(raw,keep_blank_values=True,strict_parsing=True)
@@ -119,8 +122,13 @@ class TelegramOperations:
         try:user=json.loads(values.get('user','{}'))
         except (TypeError,ValueError):raise PolicyError('Telegram Mini App user is invalid')
         if not isinstance(user,dict) or type(user.get('id')) is not int:raise PolicyError('Telegram Mini App user is invalid')
-        if int(user['id'])!=int(row['admin_telegram_id']):raise PolicyError('Telegram Mini App admin does not match this bot')
+        if int(user['id'])<=0:raise PolicyError('Telegram Mini App user is invalid')
+        if admin_only and int(user['id'])!=int(row['admin_telegram_id']):
+            raise PolicyError('Telegram Mini App admin does not match this bot')
         return {'owner':owner,'user':user,'auth_date':auth_date}
+
+    def verify_mini_app(self,owner:str,init_data:str)->dict[str,Any]:
+        return self.verify_webapp_user(owner,init_data,admin_only=True)
 
     @staticmethod
     def _midnight(now:float)->float:
