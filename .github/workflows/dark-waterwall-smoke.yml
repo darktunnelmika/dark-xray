@@ -1,0 +1,92 @@
+name: DARK WaterWall Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'standalone/dark-waterwall/**'
+      - '.github/workflows/dark-waterwall-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'standalone/dark-waterwall/**'
+      - '.github/workflows/dark-waterwall-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      WW_TAG: v1.46.94
+      WW_ASSET: Waterwall-linux-gcc-x64.zip
+      WW_SHA256: 50c8cf5dca21996f33ccfde974fe400b69a7da1605297b5612979c9c28748e15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax
+        run: |
+          bash -n standalone/dark-waterwall/install.sh
+          bash -n standalone/dark-waterwall/dark-waterwall.sh
+
+      - name: Generate and validate DARK configs
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/darkww"
+          mkdir -p "$root"
+          DARK_WW_BASE_DIR="$root/etc" \
+          DARK_WW_WATER_DIR="$root/opt" \
+          DARK_WW_SELFTEST=1 \
+            bash standalone/dark-waterwall/dark-waterwall.sh
+          python3 -m json.tool "$root/etc/selftest/iran/core.json" >/dev/null
+          python3 -m json.tool "$root/etc/selftest/iran/config.json" >/dev/null
+          python3 -m json.tool "$root/etc/selftest/kharej/core.json" >/dev/null
+          python3 -m json.tool "$root/etc/selftest/kharej/config.json" >/dev/null
+          grep -q 'RealityClient' "$root/etc/selftest/iran/config.json"
+          grep -q 'HalfDuplexClient' "$root/etc/selftest/iran/config.json"
+          grep -q 'RealityServer' "$root/etc/selftest/kharej/config.json"
+          grep -q 'HalfDuplexServer' "$root/etc/selftest/kharej/config.json"
+
+      - name: Download pinned WaterWall
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/darkww"
+          url="https://github.com/radkesvat/WaterWall/releases/download/${WW_TAG}/${WW_ASSET}"
+          curl -fL --retry 3 "$url" -o "$RUNNER_TEMP/waterwall.zip"
+          echo "${WW_SHA256}  $RUNNER_TEMP/waterwall.zip" | sha256sum -c -
+          mkdir -p "$root/opt"
+          unzip -q "$RUNNER_TEMP/waterwall.zip" -d "$root/opt"
+          bin="$(find "$root/opt" -maxdepth 3 -type f -iname 'Waterwall' | head -n1)"
+          test -n "$bin"
+          chmod +x "$bin"
+          if [ "$bin" != "$root/opt/Waterwall" ]; then cp "$bin" "$root/opt/Waterwall"; chmod +x "$root/opt/Waterwall"; fi
+          "$root/opt/Waterwall" --help >/dev/null 2>&1 || true
+
+      - name: Start IRAN generated config with real WaterWall
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/darkww"
+          cd "$root/etc/selftest/iran"
+          set +e
+          timeout 5 "$root/opt/Waterwall" --config:core.json >ww.log 2>&1
+          rc=$?
+          set -e
+          cat ww.log
+          test "$rc" -eq 124
+          ! grep -Eiq 'FATAL|startup failure|unknown node|invalid.*config|failed to.*node' ww.log
+
+      - name: Start KHAREJ generated config with real WaterWall
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/darkww"
+          cd "$root/etc/selftest/kharej"
+          set +e
+          timeout 5 "$root/opt/Waterwall" --config:core.json >ww.log 2>&1
+          rc=$?
+          set -e
+          cat ww.log
+          test "$rc" -eq 124
+          ! grep -Eiq 'FATAL|startup failure|unknown node|invalid.*config|failed to.*node' ww.log
