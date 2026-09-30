@@ -4,7 +4,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request as FastAPIRequest
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 from pydantic import BaseModel, Field
 
 from dark_policy import PolicyError
@@ -219,6 +219,17 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
 
     @app.api_route('/restore/sub/{token}',methods=['GET','HEAD'])
     def restore_sub(token:str,request:FastAPIRequest):
+        with restore.store.lock:
+            promoted=restore.store.db.execute("""SELECT r.promoted_at,m.public_token
+              FROM restore_subscriptions r LEFT JOIN managed_clients m ON m.email=r.core_email AND m.state!='deleted'
+              WHERE r.public_token=?""",(token,)).fetchone()
+        if promoted and float(promoted['promoted_at'] or 0)>0:
+            native_token=str(promoted['public_token'] or '')
+            if not native_token:raise HTTPException(409,'Promoted native subscription is unavailable')
+            path=str(restore.engine.section('subscription').get('path','/sub')).rstrip('/')+'/'+native_token
+            query=request.url.query
+            target=restore.engine.config.public_origin.rstrip('/')+path+('?' + query if query else '')
+            return RedirectResponse(target,status_code=307)
         ua=request.headers.get('user-agent','').lower();fmt=request.query_params.get('format','')
         if fmt not in ('raw','base64','json','clash'):fmt='clash' if ('clash' in ua or 'mihomo' in ua) else 'base64'
         body,headers=restore.subscription(token,fmt,record_access=request.method=='GET')
