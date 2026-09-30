@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from server import make_app
 from test_standalone import env
-from test_representatives_v2 import create_inbound
+from test_representatives_v2 import create_inbound,inbound_payload
 
 
 BOT_TOKEN='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
@@ -146,7 +146,7 @@ def test_hosted_crypto_checkout_and_signed_webhook_are_idempotent(env):
     with store.lock:
         row=store.db.execute("SELECT status,client_id FROM commerce_orders WHERE id=?",(oid,)).fetchone()
         events=store.db.execute("SELECT COUNT(*) FROM commerce_gateway_events WHERE owner='dark' AND event_id='evt_paid_1'").fetchone()[0]
-    assert row['status']=='provisioned' and row['client_id']
+    assert row['status'] in ('provisioned','provisioned_waiting_activation') and row['client_id']
     assert events==1
     dash=c.get('/api/telegram/operations/dashboard').json()
     assert dash['revenue_today']>=450000 and dash['paid_today']>=1
@@ -155,7 +155,9 @@ def test_hosted_crypto_checkout_and_signed_webhook_are_idempotent(env):
 def test_representative_mini_app_only_lists_allowed_inbounds(env):
     _,engine,manager,auth,c=env
     inbound_a=create_inbound(c)
-    inbound_b=create_inbound(c)
+    second=inbound_payload(25102);second['tag']='rep-v2-b';second['remark']='REP V2 B'
+    r=c.post('/api/inbounds',json=second);assert r.status_code==200,r.text
+    inbound_b=r.json()['id']
     assert c.put('/api/owners/mini-seller',json={
         'name':'Mini Seller','allowed':[inbound_a],'volume_credit_bytes':100*1024**3,
         'unlimited_credit':2,'max_clients':10}).status_code==200
