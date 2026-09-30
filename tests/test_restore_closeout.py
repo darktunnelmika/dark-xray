@@ -89,7 +89,9 @@ def test_promotion_preserves_identity_remaining_quota_and_freezes_restore_usage(
         db.execute('UPDATE core_clients SET up=2500,down=3500 WHERE email=?',(item['core_email'],))
     assert c.get('/api/dark-restore').json()['items'][0]['dark_used']==5000
 
-    assert c.get('/restore/sub/'+item['public_token']).status_code==410
+    alias=c.get('/restore/sub/'+item['public_token']+'?format=raw',follow_redirects=False)
+    assert alias.status_code==307
+    assert '/sub/' in alias.headers['location'] and alias.headers['location'].endswith('?format=raw')
     assert c.put('/api/dark-restore/'+item['id']+'/mapping',json={'inboundIds':[inbound],'nodeIds':[]}).status_code==409
     assert c.delete('/api/dark-restore/'+item['id']).status_code==409
 
