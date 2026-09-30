@@ -73,11 +73,13 @@ def test_promotion_preserves_identity_remaining_quota_and_freezes_restore_usage(
     result=c.post('/api/dark-restore/promote',json={'ids':[item['id']],'representativeId':'restore_rep'})
     assert result.status_code==200,result.text
     assert result.json()['promoted']==1 and result.json()['failed']==0
+    native_id=result.json()['items'][0]['result']['client_id']
+    assert native_id.startswith('rr_')
 
     with store.lock:
-        native=store.db.execute("SELECT owner,quota_bytes,used_bytes FROM clients WHERE id=?",(item['core_email'],)).fetchone()
+        native=store.db.execute("SELECT owner,quota_bytes,used_bytes FROM clients WHERE id=?",(native_id,)).fetchone()
     assert tuple(native)==('restore_rep',40000,5000)
-    after_core=engine.client_detail(item['core_email'])['client']
+    after_core=engine.client_detail(native_id)['client']
     assert after_core['id']==before['id']
     assert after_core['totalGB']==40000
     assert after_core['limitIp']==2 and after_core['limitHwid']==1
@@ -86,12 +88,16 @@ def test_promotion_preserves_identity_remaining_quota_and_freezes_restore_usage(
     assert history['promoted'] is True and history['promoted_owner']=='restore_rep'
     assert history['dark_used']==5000
     with store.transaction() as db:
-        db.execute('UPDATE core_clients SET up=2500,down=3500 WHERE email=?',(item['core_email'],))
+        db.execute('UPDATE core_clients SET up=2500,down=3500 WHERE email=?',(native_id,))
     assert c.get('/api/dark-restore').json()['items'][0]['dark_used']==5000
 
     alias=c.get('/restore/sub/'+item['public_token']+'?format=raw',follow_redirects=False)
     assert alias.status_code==307
     assert '/sub/' in alias.headers['location'] and alias.headers['location'].endswith('?format=raw')
+    # The representative profile remains editable after migration even with a client prefix.
+    manager.owner_put(OWNER,'restore_rep',name='Restore Rep Updated',allowed=[inbound],
+                      volume_credit_bytes=100000,unlimited_credit=5,max_clients=50,
+                      prefix='rr_',max_client_ips=2,max_client_hwid=1)
     assert c.put('/api/dark-restore/'+item['id']+'/mapping',json={'inboundIds':[inbound],'nodeIds':[]}).status_code==409
     assert c.delete('/api/dark-restore/'+item['id']).status_code==409
 
@@ -122,8 +128,10 @@ def test_unlimited_promotion_consumes_unlimited_credit_not_volume(env,monkeypatc
     make_rep(manager,auth,inbound,volume=0,unlimited=2)
     result=c.post('/api/dark-restore/promote',json={'ids':[item['id']],'representativeId':'restore_rep'})
     assert result.status_code==200 and result.json()['promoted']==1
+    native_id=result.json()['items'][0]['result']['client_id']
+    assert native_id.startswith('rr_')
     with store.lock:
-        native=store.db.execute("SELECT quota_bytes,owner FROM clients WHERE id=?",(item['core_email'],)).fetchone()
+        native=store.db.execute("SELECT quota_bytes,owner FROM clients WHERE id=?",(native_id,)).fetchone()
     assert tuple(native)==(0,'restore_rep')
     catalog=c.get('/api/dark-restore/representatives').json()
     rep=next(x for x in catalog if x['id']=='restore_rep')
