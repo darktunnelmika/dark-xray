@@ -134,8 +134,8 @@ class RestoreSafetyMixin:
                          target_total=0,target_ready=0,target_pending=0,mixed_mapping=False)
         for row in rows:
             group = by_id[row['group_id']]
-            key = 'eligible' if row['service_status'] == 'eligible' else 'needs_review' if row['service_status'] == 'needs_review' else 'blocked'
-            group[key] += 1
+            key = None if row['service_status'] == 'promoted' else 'eligible' if row['service_status'] == 'eligible' else 'needs_review' if row['service_status'] == 'needs_review' else 'blocked'
+            if key:group[key] += 1
             group['legacy_unconfirmed'] += int(row['metadata_state'] == 'legacy_saved')
             group['subscription_received'] += int(row['subscription_received'])
             group['traffic_observed'] += int(row['traffic_observed'])
