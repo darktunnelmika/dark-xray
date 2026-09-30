@@ -46,7 +46,9 @@ def test_mini_app_validates_signed_init_data_and_csp(env):
     page=c.get('/assets/telegram-miniapp.html')
     assert page.status_code==200
     assert 'https://telegram.org/js/telegram-web-app.js' in page.text
-    assert 'https://telegram.org' in page.headers.get('content-security-policy','')
+    csp=page.headers.get('content-security-policy','')
+    assert 'https://telegram.org' in csp and 'frame-ancestors https://telegram.org https://*.telegram.org' in csp
+    assert 'x-frame-options' not in page.headers
 
     init=mini_init(BOT_TOKEN,700001)
     r=c.get('/api/telegram-miniapp/bootstrap',params={'owner':'dark'},
