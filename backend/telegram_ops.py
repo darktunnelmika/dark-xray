@@ -49,7 +49,7 @@ class CryptoGatewayBody(Model):
 
 
 class TelegramOperations:
-    SUCCESS_ORDER_STATES=('paid','provisioned','provisioned_waiting_activation','renewed')
+    SUCCESS_ORDER_STATES=('paid','provisioned','provisioned_waiting_activation','renewed','volume_added')
     REVIEW_PAYMENT_STATES=('review',)
     MINIAPP_MAX_AGE=900
 
