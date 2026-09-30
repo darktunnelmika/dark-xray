@@ -112,4 +112,117 @@ ensure_deps(){
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl unzip python3 openssl ca-certificates iproute2 coreutils procps >/dev/null 2>&1
-  elif command -v dnf >/dev/null 2>&1; then dnf install -y -q curl unzip python3 ope
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y -q curl unzip python3 openssl ca-certificates iproute coreutils procps-ng >/dev/null 2>&1
+  elif command -v yum >/dev/null 2>&1; then yum install -y -q curl unzip python3 openssl ca-certificates iproute coreutils procps-ng >/dev/null 2>&1
+  elif command -v apk >/dev/null 2>&1; then apk add --no-cache bash curl unzip python3 openssl ca-certificates iproute2 coreutils procps >/dev/null 2>&1
+  else bad "supported package manager not found"; return 1; fi
+}
+
+parse_ports_to_file(){
+  local spec="$1" out="$2"
+  python3 - "$spec" "$out" <<'PY'
+import re, sys
+spec, out = sys.argv[1], sys.argv[2]
+items=[]; intervals=[]; normalized=[]
+for raw in spec.split(','):
+    tok=raw.strip()
+    if not tok:
+        continue
+    m=re.fullmatch(r'(\d+)', tok)
+    if m:
+        lp=int(m.group(1)); tp=lp; kind='single'; a=b=lp
+        normalized.append(str(lp))
+    else:
+        m=re.fullmatch(r'(\d+):(\d+)', tok)
+        if m:
+            lp=int(m.group(1)); tp=int(m.group(2)); kind='single'; a=b=lp
+            normalized.append(f'{lp}:{tp}' if lp != tp else str(lp))
+        else:
+            m=re.fullmatch(r'(\d+)-(\d+)', tok)
+            if not m:
+                raise SystemExit(f'invalid port token: {tok}')
+            a,b=map(int,m.groups())
+            if a>b: raise SystemExit(f'invalid range: {tok}')
+            lp=tp=None; kind='range'; normalized.append(f'{a}-{b}')
+    if not (1 <= a <= 65535 and 1 <= b <= 65535): raise SystemExit(f'listen port out of range: {tok}')
+    if kind=='single' and not (10 <= tp <= 65535): raise SystemExit(f'target port must be 10..65535: {tok}')
+    if kind=='range' and a < 10: raise SystemExit(f'target range must start at 10 or higher: {tok}')
+    for x,y in intervals:
+        if max(a,x) <= min(b,y): raise SystemExit(f'overlapping listen ports: {tok}')
+    intervals.append((a,b))
+    items.append((kind, lp if kind=='single' else a, tp if kind=='single' else b))
+if not items: raise SystemExit('at least one port mapping is required')
+if len(items) > 128: raise SystemExit('too many mappings; max 128 entries')
+with open(out,'w',encoding='utf-8') as f:
+    for kind,a,b in items: f.write(f'{kind}\t{a}\t{b}\n')
+print(','.join(normalized))
+PY
+}
+ports_to_spec(){
+  local f="$1"
+  python3 - "$f" <<'PY'
+import sys
+parts=[]
+for line in open(sys.argv[1], encoding='utf-8'):
+    kind,a,b=line.rstrip('\n').split('\t')
+    if kind=='range': parts.append(f'{a}-{b}')
+    else: parts.append(a if a==b else f'{a}:{b}')
+print(','.join(parts))
+PY
+}
+target_conflicts_transport(){
+  local f="$1" p="$2"
+  python3 - "$f" "$p" <<'PY'
+import sys
+p=int(sys.argv[2])
+for line in open(sys.argv[1], encoding='utf-8'):
+    kind,a,b=line.rstrip('\n').split('\t'); a=int(a); b=int(b)
+    if (kind=='range' and a<=p<=b) or (kind=='single' and b==p): raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+make_pair_code(){
+  local name="$1" ir="$2" kh="$3" transport="$4" mode="$5" sni="$6" secret="$7" target="$8" ports="$9"
+  python3 - "$name" "$ir" "$kh" "$transport" "$mode" "$sni" "$secret" "$target" "$ports" <<'PY'
+import base64, hashlib, json, sys
+name,ir,kh,tp,mode,sni,secret,target,ports=sys.argv[1:]
+o={"v":1,"name":name,"ir_ip":ir,"kh_ip":kh,"transport_port":int(tp),"mode":mode,"sni":sni,"secret":secret,"target":target,"ports":ports}
+raw=json.dumps(o,separators=(',',':'),sort_keys=True).encode()
+enc=base64.urlsafe_b64encode(raw).decode().rstrip('=')
+chk=hashlib.sha256(raw).hexdigest()[:12]
+print('DWW1-'+enc+'.'+chk)
+PY
+}
+decode_pair_code(){
+  local code="$1"
+  mapfile -t PAIR_FIELDS < <(python3 - "$code" <<'PY'
+import base64, hashlib, json, re, sys
+code=sys.argv[1].strip()
+if not code.startswith('DWW1-') or '.' not in code: raise SystemExit('invalid DWW1 pair code')
+enc,chk=code[5:].rsplit('.',1)
+try: raw=base64.urlsafe_b64decode(enc+'='*((4-len(enc)%4)%4))
+except Exception: raise SystemExit('invalid pair encoding')
+if hashlib.sha256(raw).hexdigest()[:12] != chk: raise SystemExit('pair checksum mismatch')
+try:o=json.loads(raw)
+except Exception: raise SystemExit('invalid pair payload')
+required=['v','name','ir_ip','kh_ip','transport_port','mode','sni','secret','target','ports']
+if any(k not in o for k in required) or o['v']!=1: raise SystemExit('unsupported pair payload')
+if o['mode'] not in ('reality','reality-hd'): raise SystemExit('unsupported pair mode')
+if not re.fullmatch(r'[A-Za-z0-9_-]{1,24}',str(o['name'])): raise SystemExit('invalid tunnel name')
+if not (1 <= int(o['transport_port']) <= 65535): raise SystemExit('invalid transport port')
+if not (1 <= len(str(o['secret']).encode()) <= 32): raise SystemExit('invalid Reality secret')
+for k in required: print(o[k])
+PY
+) || return 1
+  [ "${#PAIR_FIELDS[@]}" -eq 10 ] || return 1
+}
+pair_fingerprint(){
+  local name="$1" ir="$2" kh="$3" transport="$4" mode="$5" sni="$6" secret="$7" target="$8" ports="$9"
+  printf '%s' "$name|$ir|$kh|$transport|$mode|$sni|$secret|$target|$ports" | sha256sum | awk '{print substr($1,1,16)}'
+}
+
+save_meta(){
+  local dir="$1"; shift
+  mkdir -p "$dir/logs"; chmod 700 "$dir"
+  : >"$dir/met
