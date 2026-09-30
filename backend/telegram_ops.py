@@ -217,6 +217,8 @@ class TelegramOperations:
             if action=='approve':
                 result=self.commerce.approve_payment(owner,row_id,self.manager)
                 order=self.commerce.order(result['id'],owner)
+                if result.get('provisioned') and str(order.get('order_type') or 'purchase')=='purchase':
+                    self.customer.qualify_referral(owner,int(order['buyer_telegram_id']))
                 worker=self._worker(owner)
                 if worker and result.get('provisioned'):
                     try:worker.send_delivery(int(order['buyer_telegram_id']),result)
@@ -394,6 +396,8 @@ class TelegramOperations:
         try:
             if status=='paid':
                 result=self.commerce.confirm_payment(owner,order_id,reference,self.manager)
+                if result.get('provisioned') and str(order.get('order_type') or 'purchase')=='purchase':
+                    self.customer.qualify_referral(owner,int(order['buyer_telegram_id']))
                 worker=self._worker(owner)
                 if worker and result.get('provisioned'):
                     try:worker.send_delivery(int(order['buyer_telegram_id']),result)
