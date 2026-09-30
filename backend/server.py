@@ -465,8 +465,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         response.headers.setdefault('Cache-Control','no-store')
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Referrer-Policy']='no-referrer'
-        response.headers.setdefault('X-Frame-Options','DENY')
-        csp=("default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+        if not mini_app_html:response.headers.setdefault('X-Frame-Options','DENY')
+        csp=("default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-src 'self'; frame-ancestors https://telegram.org https://*.telegram.org; object-src 'none'; base-uri 'none'; form-action 'self'"
              if mini_app_html else
              "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'")
         response.headers.setdefault('Content-Security-Policy',csp)
