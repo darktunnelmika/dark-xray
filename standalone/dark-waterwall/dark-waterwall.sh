@@ -298,4 +298,96 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=$TUN_DIR/%i
-ExecStart=$WATER_BIN --config:core.
+ExecStart=$WATER_BIN --config:core.json
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillSignal=SIGINT
+LimitNOFILE=1048576
+TasksMax=infinity
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+ensure_system(){ mkdir -p "$TUN_DIR" "$BASE_DIR" "$WATER_DIR"; chmod 700 "$BASE_DIR" "$TUN_DIR"; write_unit; }
+
+resolve_waterwall_release(){
+  local arch="$1" oldcpu="${DARK_WW_OLD_CPU:-0}" release_json
+  release_json="$(curl -4 -fsSL --retry 2 --connect-timeout 8 --max-time 30 https://api.github.com/repos/radkesvat/WaterWall/releases/latest 2>/dev/null)" || return 1
+  WW_RELEASE_JSON="$release_json" python3 - "$arch" "$oldcpu" <<'PYREL'
+import json, os, sys
+arch, oldcpu=sys.argv[1], sys.argv[2]=='1'
+o=json.loads(os.environ['WW_RELEASE_JSON']); assets={a.get('name',''):a.get('browser_download_url','') for a in o.get('assets',[])}
+if arch in ('x86_64','amd64'):
+    pref=['Waterwall-linux-gcc-x64-old-cpu.zip','Waterwall-linux-gcc-x64.zip'] if oldcpu else ['Waterwall-linux-gcc-x64.zip','Waterwall-linux-gcc-x64-old-cpu.zip','Waterwall-linux-clang-x64.zip']
+elif arch in ('aarch64','arm64'):
+    pref=['Waterwall-linux-gcc-arm64-old-cpu.zip','Waterwall-linux-gcc-arm64.zip'] if oldcpu else ['Waterwall-linux-gcc-arm64.zip','Waterwall-linux-gcc-arm64-old-cpu.zip']
+else:
+    raise SystemExit(2)
+for name in pref:
+    if assets.get(name):
+        digest=''
+        for a in o.get('assets',[]):
+            if a.get('name')==name:
+                digest=(a.get('digest') or '').removeprefix('sha256:'); break
+        print(o.get('tag_name','latest')); print(assets[name]); print(name); print(digest); break
+else: raise SystemExit(3)
+PYREL
+}
+install_waterwall_core(){
+  ensure_deps || return 1
+  local arch asset release url td zip root bin info_lines expected_sha actual_sha
+  arch="$(uname -m)"
+  case "$arch" in x86_64|amd64|aarch64|arm64) :;; *) bad "unsupported architecture: $arch"; return 1;; esac
+  if [ -n "${DARK_WW_DOWNLOAD_URL:-}" ]; then
+    url="$DARK_WW_DOWNLOAD_URL"; release="${DARK_WW_RELEASE:-custom}"; asset="custom"; expected_sha="${DARK_WW_SHA256:-}"
+  elif [ -n "${DARK_WW_RELEASE:-}" ]; then
+    release="$DARK_WW_RELEASE"
+    case "$arch" in
+      x86_64|amd64) [ "${DARK_WW_OLD_CPU:-0}" = 1 ] && asset="Waterwall-linux-gcc-x64-old-cpu.zip" || asset="Waterwall-linux-gcc-x64.zip";;
+      aarch64|arm64) [ "${DARK_WW_OLD_CPU:-0}" = 1 ] && asset="Waterwall-linux-gcc-arm64-old-cpu.zip" || asset="Waterwall-linux-gcc-arm64.zip";;
+    esac
+    url="https://github.com/radkesvat/WaterWall/releases/download/$release/$asset"; expected_sha="${DARK_WW_SHA256:-}"
+  else
+    mapfile -t info_lines < <(resolve_waterwall_release "$arch" || true)
+    if [ "${#info_lines[@]}" -ge 3 ]; then release="${info_lines[0]}"; url="${info_lines[1]}"; asset="${info_lines[2]}"; expected_sha="${info_lines[3]:-}"
+    else
+      release="latest"
+      case "$arch" in x86_64|amd64) asset="Waterwall-linux-gcc-x64.zip";; aarch64|arm64) asset="Waterwall-linux-gcc-arm64.zip";; esac
+      url="https://github.com/radkesvat/WaterWall/releases/latest/download/$asset"; expected_sha="${DARK_WW_SHA256:-}"
+    fi
+  fi
+  td="$(mktemp -d)" || return 1; zip="$td/waterwall.zip"
+  info "downloading WaterWall $release ($asset)"
+  if ! curl -4 -fL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 180 -o "$zip" "$url"; then rm -rf "$td"; bad "WaterWall download failed"; dim "override with DARK_WW_DOWNLOAD_URL if your provider needs a mirror"; return 1; fi
+  if [ -n "${expected_sha:-}" ]; then
+    actual_sha="$(sha256sum "$zip" | awk '{print $1}')"
+    [ "$actual_sha" = "$expected_sha" ] || { rm -rf "$td"; bad "WaterWall SHA-256 mismatch"; return 1; }
+    ok "WaterWall SHA-256 verified"
+  else
+    warn "upstream digest unavailable; archive signature is not independently verified"
+  fi
+  mkdir -p "$td/extract" || { rm -rf "$td"; return 1; }
+  unzip -q "$zip" -d "$td/extract" || { rm -rf "$td"; bad "invalid WaterWall archive"; return 1; }
+  bin="$(find "$td/extract" -maxdepth 4 -type f \( -iname 'Waterwall' -o -iname 'WaterWall' \) | head -n1)"
+  [ -n "$bin" ] || { rm -rf "$td"; bad "WaterWall executable not found in archive"; return 1; }
+  root="$(dirname "$bin")"
+  mkdir -p "$WATER_DIR"
+  [ -f "$WATER_BIN" ] && cp -f "$WATER_BIN" "$WATER_BIN.bak" 2>/dev/null || true
+  cp -a "$root"/. "$WATER_DIR"/ || { rm -rf "$td"; bad "could not install WaterWall"; return 1; }
+  if [ ! -f "$WATER_BIN" ]; then
+    local found; found="$(find "$WATER_DIR" -maxdepth 2 -type f -iname 'Waterwall' | head -n1)"
+    [ -n "$found" ] && cp -f "$found" "$WATER_BIN"
+  fi
+  chmod 0755 "$WATER_BIN" 2>/dev/null || { rm -rf "$td"; bad "WaterWall binary missing after install"; return 1; }
+  printf '%s\n' "$release" >"$WATER_VERSION_FILE"; chmod 644 "$WATER_VERSION_FILE"
+  rm -rf "$td"
+  ok "WaterWall $release installed"
+  return 0
+}
+
+waterwall_ready(){ [ -x "$WATER_BIN" ]; }
+service_start(){ local n="$1"; write_runtime "$n" || return 1; systemctl enable --now "darkwater@
