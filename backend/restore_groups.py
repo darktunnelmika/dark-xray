@@ -39,33 +39,44 @@ class RestoreGroupsMixin:
             cols = {r[1] for r in db.execute('PRAGMA table_info(restore_subscriptions)')}
             if 'group_id' not in cols:
                 db.execute("ALTER TABLE restore_subscriptions ADD COLUMN group_id TEXT NOT NULL DEFAULT 'grp_ungrouped'")
+            if 'promoted_owner' not in cols:
+                db.execute("ALTER TABLE restore_subscriptions ADD COLUMN promoted_owner TEXT NOT NULL DEFAULT ''")
+            if 'promoted_at' not in cols:
+                db.execute("ALTER TABLE restore_subscriptions ADD COLUMN promoted_at REAL NOT NULL DEFAULT 0")
             db.execute('CREATE INDEX IF NOT EXISTS restore_by_group ON restore_subscriptions(group_id,created_at)')
             db.execute('''CREATE TABLE IF NOT EXISTS restore_usage(
                 restore_id TEXT NOT NULL,scope TEXT NOT NULL,
                 up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0,
                 raw_up INTEGER NOT NULL DEFAULT 0,raw_down INTEGER NOT NULL DEFAULT 0,
-                updated_at REAL NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL DEFAULT 0,activity_at REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY(restore_id,scope),
                 FOREIGN KEY(restore_id) REFERENCES restore_subscriptions(id) ON DELETE CASCADE)''')
+            usage_cols={r[1] for r in db.execute('PRAGMA table_info(restore_usage)')}
+            if 'activity_at' not in usage_cols:
+                db.execute("ALTER TABLE restore_usage ADD COLUMN activity_at REAL NOT NULL DEFAULT 0")
+                db.execute("UPDATE restore_usage SET activity_at=updated_at WHERE scope='local' AND up+down>0")
             # Existing Core counters were born in DARK, not copied from the old panel.
             # Seed once, retaining every existing ID/token/quota and every future total.
             db.execute('''INSERT OR IGNORE INTO restore_usage(restore_id,scope,up,down,raw_up,raw_down,updated_at)
                 SELECT r.id,'local',c.up,c.down,c.up,c.down,? FROM restore_subscriptions r
                 JOIN core_clients c ON c.email=r.core_email''', (now,))
-            db.execute('''CREATE TRIGGER IF NOT EXISTS restore_local_usage_v1
+            db.execute('DROP TRIGGER IF EXISTS restore_local_usage_v1')
+            db.execute('DROP TRIGGER IF EXISTS restore_local_usage_v2')
+            db.execute('''CREATE TRIGGER restore_local_usage_v2
                 AFTER UPDATE OF up,down ON core_clients
                 WHEN (NEW.up<>OLD.up OR NEW.down<>OLD.down) AND
-                     EXISTS(SELECT 1 FROM restore_subscriptions WHERE core_email=NEW.email)
+                     EXISTS(SELECT 1 FROM restore_subscriptions WHERE core_email=NEW.email AND promoted_at=0)
                 BEGIN
-                    INSERT INTO restore_usage(restore_id,scope,up,down,raw_up,raw_down,updated_at)
+                    INSERT INTO restore_usage(restore_id,scope,up,down,raw_up,raw_down,updated_at,activity_at)
                     SELECT id,'local',
                         CASE WHEN NEW.up>=OLD.up THEN NEW.up-OLD.up ELSE NEW.up END,
                         CASE WHEN NEW.down>=OLD.down THEN NEW.down-OLD.down ELSE NEW.down END,
-                        NEW.up,NEW.down,CAST(strftime('%s','now') AS REAL)
-                    FROM restore_subscriptions WHERE core_email=NEW.email
+                        NEW.up,NEW.down,CAST(strftime('%s','now') AS REAL),CAST(strftime('%s','now') AS REAL)
+                    FROM restore_subscriptions WHERE core_email=NEW.email AND promoted_at=0
                     ON CONFLICT(restore_id,scope) DO UPDATE SET
                         up=restore_usage.up+excluded.up,down=restore_usage.down+excluded.down,
-                        raw_up=excluded.raw_up,raw_down=excluded.raw_down,updated_at=excluded.updated_at;
+                        raw_up=excluded.raw_up,raw_down=excluded.raw_down,updated_at=excluded.updated_at,
+                        activity_at=excluded.activity_at;
                 END''')
         self._observe_node_traffic()
 
@@ -94,7 +105,7 @@ class RestoreGroupsMixin:
             assigned = {int(r[0]) for r in db.execute(
                 'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?', (node_id,))}
             restored = {r['core_email']: r for r in db.execute(
-                'SELECT id,core_email,inbound_ids FROM restore_subscriptions')
+                'SELECT id,core_email,inbound_ids FROM restore_subscriptions WHERE promoted_at=0')
                 if assigned.intersection(json.loads(r['inbound_ids']))}
             seen = set()
             for item in items:
@@ -119,10 +130,12 @@ class RestoreGroupsMixin:
                     raise PolicyError('Restore traffic counter overflow')
                 # Record the watermark even without new bytes, so a delayed older
                 # sample cannot later be mistaken for a counter reset.
-                db.execute('''INSERT INTO restore_usage VALUES(?,?,?,?,?,?,?)
-                    ON CONFLICT(restore_id,scope) DO UPDATE SET up=excluded.up,down=excluded.down,
-                    raw_up=excluded.raw_up,raw_down=excluded.raw_down,updated_at=excluded.updated_at''',
-                    (rid, scope, total_up, total_down, up, down, now))
+                activity=now if du+dd>0 else float(old['activity_at'] or 0) if old else 0
+                db.execute('''INSERT INTO restore_usage(restore_id,scope,up,down,raw_up,raw_down,updated_at,activity_at)
+                    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(restore_id,scope) DO UPDATE SET up=excluded.up,down=excluded.down,
+                    raw_up=excluded.raw_up,raw_down=excluded.raw_down,updated_at=excluded.updated_at,
+                    activity_at=excluded.activity_at''',
+                    (rid, scope, total_up, total_down, up, down, now, activity))
                 counted += 1
         return {'clients': counted}
 
@@ -186,11 +199,13 @@ class RestoreGroupsMixin:
         with self.store.lock:
             rows = [dict(r) for r in self.store.db.execute('''SELECT r.*,g.name group_name,
                 COALESCE(u.dark_up,0) dark_up,COALESCE(u.dark_down,0) dark_down,
-                COALESCE(u.local_used,0) local_used,COALESCE(u.node_used,0) node_used
+                COALESCE(u.local_used,0) local_used,COALESCE(u.node_used,0) node_used,
+                COALESCE(u.activity_at,0) activity_at
                 FROM restore_subscriptions r JOIN restore_groups g ON g.id=r.group_id
                 LEFT JOIN (SELECT restore_id,SUM(up) dark_up,SUM(down) dark_down,
                     SUM(CASE WHEN scope='local' THEN up+down ELSE 0 END) local_used,
-                    SUM(CASE WHEN scope<>'local' THEN up+down ELSE 0 END) node_used
+                    SUM(CASE WHEN scope<>'local' THEN up+down ELSE 0 END) node_used,
+                    MAX(activity_at) activity_at
                     FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id''' + where +
                 ' ORDER BY r.created_at DESC,r.id', (group_id,) if group_id else ())]
         for r in rows:
@@ -201,6 +216,11 @@ class RestoreGroupsMixin:
             r['effective_used'] = r['legacy_used'] + r['dark_used']  # quota compatibility, not display usage
             r['remaining'] = max(0, int(r['legacy_total']) - r['effective_used']) if int(r['legacy_total']) else 0
             r['usage_since'] = float(r['first_seen'] or r['created_at'])
+            activity=float(r.get('activity_at') or 0);age=max(0,int(time.time()-activity)) if activity else None
+            r['presence_state']='online' if age is not None and age<=60 else 'idle' if age is not None and age<=300 else 'offline'
+            r['presence_age_seconds']=age
+            r['plan_type']='unlimited' if int(r['legacy_total'])==0 else 'limited'
+            r['promoted']=float(r.get('promoted_at') or 0)>0
         return rows
 
     def groups(self):
@@ -209,10 +229,12 @@ class RestoreGroupsMixin:
             groups = [dict(r) for r in self.store.db.execute('SELECT id,name,created_at,updated_at FROM restore_groups ORDER BY created_at,id')]
         by_id = {g['id']: g for g in groups}
         for g in groups:
-            g.update(clients=0, migrated=0, dark_up=0, dark_down=0, dark_used=0, local_used=0, node_used=0)
+            g.update(clients=0, migrated=0, dark_up=0, dark_down=0, dark_used=0, local_used=0, node_used=0,
+                     limited=0,unlimited=0,promoted=0,online=0,idle=0,offline=0)
             g['unassigned'] = g['id'] == UNGROUPED
         for r in rows:
             g = by_id[r['group_id']]; g['clients'] += 1; g['migrated'] += int(r['first_seen'] > 0)
+            g[r['plan_type']] += 1;g['promoted'] += int(r['promoted']);g[r['presence_state']] += 1
             for key in ('dark_up','dark_down','dark_used','local_used','node_used'):
                 g[key] += int(r[key])
         return groups
