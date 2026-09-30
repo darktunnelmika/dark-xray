@@ -46,8 +46,8 @@ function priceLine(p){
  return `<div class="tg-price"><div><b>${esc(p.label)}</b><small>${volume} · ${p.duration_days} ${L('days','روز')} · IP ${p.ip_limit} · HWID ${p.hwid_limit} · ${esc(act)} · ${esc(deliver)} · ${fmt(p.price_minor,p.currency)}</small></div>${p.active?st(L('ACTIVE','فعال'),true):st(L('OFF','خاموش'),false)}</div>`;
 }
 function productsCard(products){
- return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">STORE CATALOG V2</span><h2>${L('Products & pricing','محصولات و قیمت‌گذاری')}</h2></div><button class="btn btn-primary" data-act="tgproductnew">${icon('plus')}${L('Product','محصول')}</button></div>
- <div class="tg-list">${Array.isArray(products)&&products.length?products.map(p=>`<section class="tg-product"><div class="tg-product-head"><div><b>${esc(p.name)}</b><small>${esc(p.category)} · ${esc(p.kind)} · ${esc(p.id)} · ${L('Per-user limit','سقف خرید')}: ${p.sale_limit_per_user||'∞'}</small></div><button class="btn mini" data-act="tgpricenew" data-product="${esc(p.id)}">${icon('plus')}${L('Price','قیمت')}</button></div><p>${esc(p.description||'')}</p><div>${p.prices?.length?p.prices.map(priceLine).join(''):`<div class="tg-empty">${L('No price variants yet.','هنوز قیمت تعریف نشده است.')}</div>`}</div></section>`).join(''):`<div class="tg-empty">${L('No products yet.','هنوز محصولی ساخته نشده است.')}</div>`}</div></article>`;
+ return `<article class="panel tg-card"><div class="tg-head"><div><span class="code-caption">SIMPLE STORE V4</span><h2>${L('Sales plans','پلن‌های فروش')}</h2></div><button class="btn btn-primary" data-act="tgproductnew">${icon('plus')}${L('New sales plan','ساخت پلن فروش')}</button></div>
+ <div class="tg-list">${Array.isArray(products)&&products.length?products.map(p=>`<section class="tg-product"><div class="tg-product-head"><div><b>${esc(p.name)}</b><small>${esc(p.category)} · ${esc(p.kind)} · ${esc(p.id)} · ${L('Per-user limit','سقف خرید')}: ${p.sale_limit_per_user||'∞'}</small></div><button class="btn mini" data-act="tgpricenew" data-product="${esc(p.id)}">${icon('plus')}${L('Advanced variant','واریانت پیشرفته')}</button></div><p>${esc(p.description||'')}</p><div>${p.prices?.length?p.prices.map(priceLine).join(''):`<div class="tg-empty">${L('No price variants yet.','هنوز قیمت تعریف نشده است.')}</div>`}</div></section>`).join(''):`<div class="tg-empty">${L('No sales plans yet.','هنوز پلن فروشی ساخته نشده است.')}</div>`}</div></article>`;
 }
 function ordersCard(rows){
  const items=Array.isArray(rows)?rows.slice(0,60):[];
@@ -61,11 +61,60 @@ async function page(){
 }
 enginePage=async function(){if(state.page==='telegram')return page();return baseEnginePage();};
 function v(f,n){return String(f.get(n)||'').trim();}
-async function productDialog(){
- dialog(L('New product','محصول جدید'),`<div class="form-grid">${field('ID','id','','text','required maxlength="64" dir="ltr"')}${field(L('Name','نام'),'name','','text','required maxlength="128"')}${field(L('Category','دسته‌بندی'),'category','General','text','required maxlength="64"')}${select(L('Type','نوع'),'kind',[['volume','Volume'],['unlimited','Unlimited'],['multi_location','Multi-location'],['gaming','Gaming']],'volume')}${field(L('Per-user purchase limit · 0 unlimited','سقف خرید هر کاربر · صفر نامحدود'),'sale_limit','0','number','min="0" max="100000"')}${select(L('Renewal','تمدید'),'renewal',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],'true')}${select(L('Add volume','افزایش حجم'),'add_volume',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],'true')}<label class="span-2">${L('Description','توضیحات')}<textarea class="field-input" name="description" rows="3" maxlength="2000"></textarea></label></div>`,async f=>{
-  await api('/api/commerce/products','PUT',{id:v(f,'id'),name:v(f,'name'),description:v(f,'description'),category:v(f,'category'),kind:v(f,'kind'),sale_limit_per_user:Number(v(f,'sale_limit')||0),renewal_enabled:v(f,'renewal')==='true',add_volume_enabled:v(f,'add_volume')==='true',active:true,visible:true});closeDialog();toast(L('Product saved.','محصول ذخیره شد.'));await renderPage();
- });
+function simplePlanInboundPicker(){
+ const rows=state.inbounds||[];
+ if(!rows.length)return '<div class="notice warning">'+L('Create an inbound first.','ابتدا یک اینباند بساز.')+'</div>';
+ return '<div class="tg-plan-inbounds">'+rows.map(x=>'<label class="tg-switch"><input type="checkbox" name="planInbound" value="'+x.id+'"><span>'+esc((x.remark||x.tag||('Inbound '+x.id))+' · :'+x.port)+'</span></label>').join('')+'</div>';
 }
+function simplePlanReview(payload){
+ const inboundNames=(state.inbounds||[]).filter(x=>payload.inbound_ids.includes(Number(x.id))).map(x=>x.remark||x.tag||('#'+x.id));
+ const quota=payload.plan_type==='unlimited'?L('Unlimited','نامحدود'):payload.volume_gb+' GB';
+ const activation=payload.activation_mode==='first_connection'?L('Starts on first connection','شروع از اولین اتصال'):L('Immediate','فوری');
+ dialog(L('Review & publish','بررسی و انتشار'),
+  '<div class="tg-plan-review"><div><small>'+L('Plan','پلن')+'</small><b>'+esc(payload.name)+'</b></div>'+
+  '<div><small>'+L('Type','نوع')+'</small><b>'+esc(quota)+'</b></div>'+
+  '<div><small>'+L('Price','قیمت')+'</small><b>'+fmt(payload.price_minor,'IRT')+'</b></div>'+
+  '<div><small>'+L('Duration','مدت')+'</small><b>'+payload.duration_months+' '+L('month(s)','ماه')+'</b></div>'+
+  '<div><small>'+L('IP limit','محدودیت IP')+'</small><b>'+payload.ip_limit+'</b></div>'+
+  '<div><small>'+L('Locations','لوکیشن‌ها')+'</small><b>'+esc(inboundNames.join(' · '))+'</b></div>'+
+  '<div class="span-2 notice">'+esc(activation)+' · Subscription + Portal · QR ON · HWID '+payload.hwid_limit+'</div></div>',
+  async()=>{await api('/api/commerce/simple-plans','POST',{...payload,published:true});closeDialog();toast(L('Sales plan published.','پلن فروش منتشر شد.'));await renderPage();},
+  L('Publish plan','انتشار پلن'));
+}
+async function productDialog(){
+ dialog(L('New sales plan','ساخت پلن فروش'),`<div class="form-grid tg-simple-plan">
+  ${field(L('Plan name','نام پلن'),'name','','text','required maxlength="128" placeholder="Turbo 50GB"')}
+  ${select(L('Type','نوع'),'plan_type',[['volume',L('Volume','حجمی')],['unlimited',L('Unlimited','نامحدود')]],'volume')}
+  ${field(L('Price · Toman','قیمت · تومان'),'price','0','number','min="0" step="1" required')}
+  ${select(L('Duration','مدت'),'duration_months',[['1',L('1 month','۱ ماه')],['2',L('2 months','۲ ماه')],['3',L('3 months','۳ ماه')],['6',L('6 months','۶ ماه')],['12',L('12 months','۱۲ ماه')]],'1')}
+  ${field(L('Volume GB','حجم GB'),'volume_gb','50','number','min="1" max="1000000" step="1" required')}
+  ${select(L('IP limit','محدودیت IP'),'ip_limit',[['1','1'],['2','2'],['3','3'],['4','4'],['5','5']],'1')}
+  <div class="span-2"><label>${L('Locations / Inbounds','لوکیشن‌ها / اینباندها')}</label>${simplePlanInboundPicker()}</div>
+  <details class="span-2 tg-plan-advanced"><summary>${L('Advanced settings','تنظیمات پیشرفته')}</summary><div class="form-grid">
+   ${field(L('Category / badge','دسته / برچسب'),'category','General','text','maxlength="64" placeholder="Gaming / VIP / Economy"')}
+   ${field(L('Per-user purchase limit · 0 unlimited','سقف خرید هر کاربر · صفر نامحدود'),'sale_limit','0','number','min="0" max="100000"')}
+   ${select(L('Activation','فعال‌سازی'),'activation_mode',[['first_connection',L('Start on first connection','شروع از اولین اتصال')],['immediate',L('Immediately after payment','فوری بعد از پرداخت')]],'first_connection')}
+   ${select(L('Delivery','تحویل'),'delivery_mode',[['subscription','Subscription + Portal'],['both','Subscription + Main Config'],['config',L('Main Config','کانفیگ اصلی')],['portal','Portal']],'subscription')}
+   ${field('HWID','hwid_limit','0','number','min="0" max="1000"')}
+   ${select('QR','show_qr',[['true','ON'],['false','OFF']],'true')}
+   ${select(L('Portal','پورتال'),'show_portal',[['true','ON'],['false','OFF']],'true')}
+   ${select(L('Renewal','تمدید'),'renewal',[['true',L('Allowed','مجاز')],['false',L('Disabled','غیرفعال')]],'true')}
+   <label class="span-2">${L('Description','توضیحات')}<textarea class="field-input" name="description" rows="3" maxlength="2000"></textarea></label>
+  </div></details>
+ </div>`,async f=>{
+  const ids=[...document.querySelectorAll('#dialog-form input[name="planInbound"]:checked')].map(x=>Number(x.value));
+  if(!ids.length)throw Error(L('Select at least one location.','حداقل یک لوکیشن انتخاب کن.'));
+  const planType=v(f,'plan_type'),volume=Number(v(f,'volume_gb')||0);
+  if(planType==='volume'&&(!Number.isInteger(volume)||volume<1))throw Error(L('Enter a valid volume.','حجم معتبر وارد کن.'));
+  const payload={name:v(f,'name'),plan_type:planType,price_minor:Number(v(f,'price')),duration_months:Number(v(f,'duration_months')),
+   volume_gb:planType==='unlimited'?0:volume,ip_limit:Number(v(f,'ip_limit')),inbound_ids:ids,description:v(f,'description'),
+   category:v(f,'category')||'General',sale_limit_per_user:Number(v(f,'sale_limit')||0),activation_mode:v(f,'activation_mode'),
+   delivery_mode:v(f,'delivery_mode'),hwid_limit:Number(v(f,'hwid_limit')||0),show_qr:v(f,'show_qr')==='true',
+   show_portal:v(f,'show_portal')==='true',renewal_enabled:v(f,'renewal')==='true',add_volume_enabled:planType==='volume'};
+  closeDialog();simplePlanReview(payload);
+ },L('Review','بررسی'));
+}
+
 async function priceDialog(product){
  const inboundHint=(state.inbounds||[]).map(x=>`${x.id}:${x.remark||x.tag}`).join(' · ');
  dialog(L('New price variant','قیمت جدید'),`<div class="form-grid">${field('ID','id','','text','required maxlength="64" dir="ltr"')}${field(L('Label','عنوان'),'label','','text','required')}${field(L('Price','قیمت'),'price','0','number','min="0" step="1" required')}${select(L('Currency','واحد'),'currency',[['IRT','Toman / تومان'],['IRR','Rial / ریال'],['USD','USD']],'IRT')}${field(L('Duration days','مدت روز'),'duration','30','number','min="1" max="3650" required')}${field(L('Volume GB · 0 for Unlimited','حجم GB · صفر برای نامحدود'),'volume','30','number','min="0" step="0.01" required')}${field(L('Unlimited units','اعتبار نامحدود'),'unlimited','0','number','min="0" step="1" required')}${field(L('IP limit · 0 unlimited','محدودیت IP'),'ip_limit','1','number','min="0" max="1000" required')}${field(L('HWID limit · 0 unlimited','محدودیت HWID'),'hwid_limit','0','number','min="0" max="1000" required')}${select(L('Activation','فعال‌سازی'),'activation_mode',[['immediate',L('Immediately after payment','فوری بعد از پرداخت')],['first_connection',L('Start on first connection','شروع از اولین اتصال')]],'immediate')}${select(L('Customer delivery','تحویل به مشتری'),'delivery_mode',[['subscription','Subscription'],['config',L('Main config','کانفیگ اصلی')],['both','Subscription + Config'],['portal','Cyber Portal']],'subscription')}${field(L('Inbound IDs, comma separated','شناسه اینباندها با کاما'),'inbounds','','text','required dir="ltr" placeholder="1,2"')}${field(L('Primary inbound ID · optional','اینباند اصلی · اختیاری'),'primary_inbound','','number','min="1" step="1"')}${select('QR','show_qr',[['true',L('Show','نمایش')],['false',L('Hide','مخفی')]],'true')}${select(L('Portal link','لینک پورتال'),'show_portal',[['true',L('Show','نمایش')],['false',L('Hide','مخفی')]],'true')}<div class="span-2 notice">${esc(inboundHint||L('Create an inbound first.','ابتدا اینباند بساز.'))}</div></div>`,async f=>{
