@@ -152,7 +152,7 @@ class BotWorker(CustomerBotFeatures):
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
-                ['🛠 مدیریت فروشگاه','💳 پرداخت‌ها'],
+                ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
                 ['📊 گزارش‌ها','🎫 پشتیبانی'],
                 ['📱 Mini App','⚙️ تنظیمات ربات'],
                 ['💾 بکاپ'],
@@ -573,7 +573,7 @@ class BotWorker(CustomerBotFeatures):
         if not ops:
             self.api.send(chat_id,'داشبورد عملیات هنوز آماده نیست.');return
         d=ops.dashboard(self.owner)
-        text=(f"🏠 DARK BOT ADMIN V4\n"
+        text=(f"🏠 DARK BOT ADMIN V3 → OPERATIONS V4\n"
               f"💰 فروش امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']}/{d['orders_today']} سفارش\n"
               f"📈 ۷ روز: {amount(d['revenue_7d'],d['currency'])} · Conversion {d['conversion_7d']}%\n"
               f"🛍 پلن منتشرشده: {d['published_plans']} · مشتری خریدار: {d['customers']}\n"
