@@ -33,6 +33,7 @@ python -m pytest tests/test_finance_hardening.py -q --junitxml=qa/junit/finance-
 python -m pytest tests/test_telegram_commerce.py -q --junitxml=qa/junit/telegram-commerce.xml
 python -m pytest tests/test_telegram_ops.py -q --junitxml=qa/junit/telegram-operations.xml
 python -m pytest tests/test_customer_miniapp.py -q --junitxml=qa/junit/customer-miniapp-v5.xml
+python -m pytest tests/test_restore_closeout.py -q --junitxml=qa/junit/restore-closeout.xml
 python -m pytest tests/test_destructive_recovery.py -q --junitxml=qa/junit/destructive-recovery.xml
 python -m pytest tests/test_policy_consistency.py -q --junitxml=qa/junit/policy-consistency.xml
 python -m pytest tests/test_reset_scheduler_v2.py -q --junitxml=qa/junit/reset-scheduler-v2.xml
@@ -89,6 +90,7 @@ node --test tests/finance-v2.test.cjs
 node --test tests/telegram-commerce-ui.test.cjs
 node --test tests/telegram-operations-ui.test.cjs
 node --test tests/customer-miniapp-ui.test.cjs
+node --test tests/restore-closeout.test.cjs
 node --test tests/ui-stability.test.cjs
 node --test tests/update-center.test.cjs
 node --test tests/nodes-v3.test.cjs
