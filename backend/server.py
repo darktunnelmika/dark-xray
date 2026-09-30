@@ -858,7 +858,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
             if meta.get('deployLocal',True) is not False:ready['local'].add(inbound_id)
         for node in nodes.list():
-            if not node.get('enabled') or not node.get('online') or node.get('last_error'):continue
+            if (not node.get('enabled') or not node.get('online') or node.get('last_error')
+                    or node.get('maintenance')):continue
             key='node:'+str(node['id'])
             for assignment in node.get('assignments',[]):
                 inbound_id=int(assignment.get('local_inbound_id') or 0)
