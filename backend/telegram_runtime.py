@@ -502,6 +502,8 @@ class BotWorker(CustomerBotFeatures):
             order=self.runtime.commerce.order(result['id'],self.owner)
             self.runtime.manager.audit(self.actor(),self.owner,'commerce.payment_approve',result['id'],f"telegram_admin={user_id}")
             if result.get('provisioned'):
+                if str(order.get('order_type') or 'purchase')=='purchase':
+                    self.runtime.customer.qualify_referral(self.owner,int(order['buyer_telegram_id']))
                 self.send_delivery(int(order['buyer_telegram_id']),result)
                 note=f"✅ پرداخت {result['id']} تأیید شد؛ سرویس {result['client_id']} ساخته شد."
                 if result.get('activation_pending'):note+=' منتظر اولین اتصال است.'
