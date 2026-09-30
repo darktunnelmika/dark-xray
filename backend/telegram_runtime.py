@@ -357,7 +357,7 @@ class BotWorker(CustomerBotFeatures):
             else:self.api.send(chat_id,'این درگاه برای آپدیت آینده رزرو شده است؛ فعلاً پرداخت دستی را انتخاب کن.')
             return
         if data=='stnew' and self.is_admin(user_id):
-            self.start_product_create(chat_id,user_id);return
+            self.start_simple_plan_create(chat_id,user_id);return
         if data=='stlist' and self.is_admin(user_id):
             self.admin_store_products(chat_id);return
         if data.startswith('stprod:') and self.is_admin(user_id):
@@ -713,6 +713,10 @@ class BotWorker(CustomerBotFeatures):
         self.admin_store_products(chat_id)
 
     def start_product_create(self,chat_id:int,user_id:int):
+        self.sessions[user_id]='store_product_name';self.session_data[user_id]={}
+        self.api.send(chat_id,'➕ نام محصول را بفرست.\nبرای لغو: /cancel')
+
+    def start_simple_plan_create(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_name';self.session_data[user_id]={}
         self.api.send(chat_id,'➕ نام پلن فروش را بفرست.\nمثال: Turbo 50GB\nبرای لغو: /cancel')
 
