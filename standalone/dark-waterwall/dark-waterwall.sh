@@ -599,4 +599,42 @@ selftest(){
   mkdir -p "$TUN_DIR/test"; cp "$td/ports.list" "$TUN_DIR/test/ports.list"; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"; write_runtime test || exit 6
   grep -q 'HalfDuplexClient' "$TUN_DIR/test/config.json" || exit 7
   cp "$TUN_DIR/test/core.json" "$td/iran/core.json"; cp "$TUN_DIR/test/config.json" "$td/iran/config.json"; mkdir -p "$td/iran/logs"
-  ROLE=KHAREJ; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_AD
+  ROLE=KHAREJ; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"; write_runtime test || exit 8
+  grep -q 'HalfDuplexServer' "$TUN_DIR/test/config.json" || exit 9
+  grep -q 'RealityServer' "$TUN_DIR/test/config.json" || exit 10
+  cp "$TUN_DIR/test/core.json" "$td/kharej/core.json"; cp "$TUN_DIR/test/config.json" "$td/kharej/config.json"; mkdir -p "$td/kharej/logs"
+  MODE=reality; ROLE=IRAN; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"; write_runtime test || exit 11
+  grep -q 'RealityClient' "$TUN_DIR/test/config.json" || exit 12
+  ! grep -q 'HalfDuplexClient' "$TUN_DIR/test/config.json" || exit 13
+  MODE=reality; ROLE=KHAREJ; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"; write_runtime test || exit 14
+  grep -q 'RealityServer' "$TUN_DIR/test/config.json" || exit 15
+  ! grep -q 'HalfDuplexServer' "$TUN_DIR/test/config.json" || exit 16
+  echo "DARK WaterWall selftest PASS"
+}
+
+main_menu(){
+  while :; do
+    header
+    top; sect "SETUP"; item 1 "Install / Repair Core" "WaterWall + systemd"; item 2 "New Direct · IRAN" "creates Pair Code"; item 3 "New Direct · KHAREJ" "takes Pair Code"; mid; sect "OPERATE"; item 4 "Manage tunnels" ""; item 5 "Dashboard" ""; item 6 "Diagnostics" ""; mid; sect "MAINTENANCE"; item 7 "Update DARK script" ""; item 8 "Update WaterWall core" ""; item 9 "Uninstall" ""; item 0 "Exit" ""; bot; echo; getkey
+    case "$KEY" in
+      1) install_waterwall_core; ensure_system; pause;;
+      2) new_iran;;
+      3) new_kharej;;
+      4) manage;;
+      5) dashboard;;
+      6) diagnostics_menu;;
+      7) update_self; pause;;
+      8) update_waterwall;;
+      9) uninstall_all; return;;
+      0) return;;
+    esac
+  done
+}
+
+if [ "${DARK_WW_SELFTEST:-0}" = 1 ]; then selftest; exit $?; fi
+if [ "${DARK_WW_LIB_ONLY:-0}" = 1 ]; then exit 0; fi
+need_root
+ensure_deps || exit 1
+ensure_system
+if [ "${DARK_WW_REPAIR_ONLY:-0}" = 1 ]; then exit 0; fi
+main_menu
