@@ -851,7 +851,7 @@ def test_representative_bot_simple_plan_wizard_uses_only_allowed_inbounds(env):
         worker=BotWorker(seller.app.state.telegram_runtime,'simpleseller',bot_token,'simple-v4')
         sent=[];worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((text,reply_markup))
         try:
-            worker.start_product_create(991001,991001)
+            worker.start_simple_plan_create(991001,991001)
             worker.handle_store_text(991001,991001,'Rep Turbo')
             worker.simple_plan_choose_type(991001,991001,'volume')
             worker.handle_store_text(991001,991001,'350000')
