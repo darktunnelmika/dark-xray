@@ -52,7 +52,9 @@ class RestorePromotionMixin:
         body=json.loads(core['body'])
         legacy_used=int(row['legacy_upload'])+int(row['legacy_download'])
         if int(row['legacy_total'])>0:
-            body['totalGB']=max(0,int(row['legacy_total'])-legacy_used)
+            # Native quota=0 means unlimited, so an exhausted limited Restore user
+            # must retain a positive limited quota and remain blocked by its baseline usage.
+            body['totalGB']=max(1,int(row['legacy_total'])-legacy_used)
         else:
             body['totalGB']=0
         ip_cap=int(profile['max_client_ips'] or 0);hwid_cap=int(profile['max_client_hwid'] or 0)
