@@ -533,4 +533,70 @@ diagnostics_one(){
   local n="$1" dir state conns fds portsok=1
   dir="$TUN_DIR/$n"
   [ -r "$dir/meta.conf" ] || return 1
-  # sh
+  # shellcheck disable=SC1090
+  . "$dir/meta.conf"
+  state="$(systemctl is-active "darkwater@$n.service" 2>/dev/null || true)"
+  echo; info "service: ${state:-inactive}"
+  if python3 -m json.tool "$dir/core.json" >/dev/null 2>&1 && python3 -m json.tool "$dir/config.json" >/dev/null 2>&1; then ok "JSON syntax"; else bad "JSON syntax"; fi
+  if [ "$ROLE" = KHAREJ ]; then
+    if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$TRANSPORT_PORT$"; then ok "transport listening TCP/$TRANSPORT_PORT"; else bad "transport not listening TCP/$TRANSPORT_PORT"; fi
+  else
+    while IFS=$'\t' read -r kind a b; do
+      if [ "$kind" = single ]; then ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$a$" || portsok=0
+      else ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$a$" || portsok=0; fi
+    done <"$dir/ports.list"
+    [ "$portsok" -eq 1 ] && ok "IRAN listener ports visible" || warn "one or more IRAN listener ports are not visible"
+  fi
+  conns="$(ss -ntpH 2>/dev/null | grep -ci '[Ww]aterwall' || true)"; info "WaterWall TCP sockets: $conns"
+  local pid; pid="$(systemctl show -p MainPID --value "darkwater@$n.service" 2>/dev/null || echo 0)"; if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 0 ] && [ -d "/proc/$pid/fd" ]; then fds="$(find "/proc/$pid/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"; info "open file descriptors: $fds / 1048576"; fi
+  info "recent log:"; journalctl -u "darkwater@$n.service" -n 20 --no-pager 2>/dev/null || true
+}
+
+diagnostics_menu(){ header "DIAGNOSTICS"; list_tunnels; echo; choose_tunnel || { pause; return; }; diagnostics_one "$CHOSEN"; pause; }
+dashboard(){ header "DASHBOARD"; list_tunnels; echo; local running total; total="$(find "$TUN_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"; running="$(systemctl list-units 'darkwater@*.service' --state=running --no-legend 2>/dev/null | wc -l)"; info "tunnels: $total  running: $running"; info "WaterWall: $(cat "$WATER_VERSION_FILE" 2>/dev/null || echo not-installed)"; pause; }
+
+update_waterwall(){
+  local names=() d
+  shopt -s nullglob; for d in "$TUN_DIR"/*; do [ -d "$d" ] && names+=("$(basename "$d")"); done; shopt -u nullglob
+  install_waterwall_core || { pause; return; }
+  for d in "${names[@]}"; do systemctl try-restart "darkwater@$d.service" >/dev/null 2>&1 || true; done
+  ok "WaterWall core updated; active tunnels restarted"; pause
+}
+
+update_self(){
+  local tmp url urls=()
+  tmp="$(mktemp)" || return
+  [ -r "$UPDATE_URL_FILE" ] && urls+=("$(cat "$UPDATE_URL_FILE")")
+  urls+=("https://cdn.jsdelivr.net/gh/darktunnelmika/dark-xray@main/standalone/dark-waterwall/dark-waterwall.sh" "https://raw.githubusercontent.com/darktunnelmika/dark-xray/main/standalone/dark-waterwall/dark-waterwall.sh")
+  for url in "${urls[@]}"; do
+    [ -n "$url" ] || continue
+    if curl -4 -fsSL --retry 2 --connect-timeout 8 --max-time 60 "$url" -o "$tmp" && grep -q 'DARKVPN-WATERWALL-SCRIPT' "$tmp" && bash -n "$tmp"; then
+      install -m 0755 "$tmp" "$SELF_PATH"; printf '%s\n' "$url" >"$UPDATE_URL_FILE"; rm -f "$tmp"; ok "DARK WaterWall script updated"; return 0
+    fi
+  done
+  rm -f "$tmp"; bad "script update failed"
+}
+
+uninstall_all(){
+  header "UNINSTALL"; warn "This removes DARK WaterWall tunnels and the WaterWall core."; yesno "Continue?" n || return
+  local d n
+  shopt -s nullglob; for d in "$TUN_DIR"/*; do n="$(basename "$d")"; service_disable "$n"; done; shopt -u nullglob
+  rm -f "$UNIT_FILE"; systemctl daemon-reload >/dev/null 2>&1 || true
+  rm -rf "$BASE_DIR" "$WATER_DIR"
+  [ "$SELF_PATH" = "/usr/local/bin/darkwater" ] && rm -f "$SELF_PATH"
+  ok "uninstalled"
+}
+
+selftest(){
+  local td="$BASE_DIR/selftest" spec code
+  mkdir -p "$td/iran" "$td/kharej"
+  spec="$(parse_ports_to_file '18443,18444:19444,20000-20010' "$td/ports.list")" || exit 1
+  [ "$spec" = '18443,18444:19444,20000-20010' ] || exit 2
+  code="$(make_pair_code test 192.0.2.10 198.51.100.20 21443 reality-hd www.example.com 0123456789abcdef0123456789abcdef 127.0.0.1 "$spec")" || exit 3
+  decode_pair_code "$code" || exit 4
+  [ "${PAIR_FIELDS[5]}" = reality-hd ] || exit 5
+  NAME=test; ROLE=IRAN; IR_IP=192.0.2.10; KH_IP=198.51.100.20; TRANSPORT_PORT=21443; MODE=reality-hd; SNI=www.example.com; SECRET=0123456789abcdef0123456789abcdef; TARGET_ADDR=127.0.0.1; WORKERS=2; PAIR_HASH=x
+  mkdir -p "$TUN_DIR/test"; cp "$td/ports.list" "$TUN_DIR/test/ports.list"; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_ADDR=$TARGET_ADDR" "WORKERS=$WORKERS" "PAIR_HASH=$PAIR_HASH"; write_runtime test || exit 6
+  grep -q 'HalfDuplexClient' "$TUN_DIR/test/config.json" || exit 7
+  cp "$TUN_DIR/test/core.json" "$td/iran/core.json"; cp "$TUN_DIR/test/config.json" "$td/iran/config.json"; mkdir -p "$td/iran/logs"
+  ROLE=KHAREJ; save_meta "$TUN_DIR/test" "NAME=$NAME" "ROLE=$ROLE" "IR_IP=$IR_IP" "KH_IP=$KH_IP" "TRANSPORT_PORT=$TRANSPORT_PORT" "MODE=$MODE" "SNI=$SNI" "SECRET=$SECRET" "TARGET_AD
