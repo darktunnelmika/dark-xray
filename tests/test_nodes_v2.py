@@ -185,6 +185,16 @@ def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env
   db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=77,last_sync=? WHERE node_id='maint1' AND local_inbound_id=?",(time.time(),inbound))
   db.execute("UPDATE remote_nodes SET last_seen=?,last_error='',last_health=?,last_latency_ms=11 WHERE id='maint1'",
              (time.time(),__import__('json').dumps(health)))
+ explicit_host={
+   'inboundId':inbound,'runtime':'node:maint1','endpointType':'direct',
+   'address':'maint-direct.example.com','port':24410,'remark':'MAINT DIRECT',
+   'security':'same','sni':'','host':'','path':'','alpn':'','fingerprint':'','allowInsecure':False,
+   'overrideSniFromAddress':False,'keepSniBlank':False,'finalMask':'','mihomoIpVersion':'',
+   'excludeFromSubTypes':[],'enable':True}
+ hosts=c.put('/api/settings/hosts',json={'value':[explicit_host]})
+ assert hosts.status_code==200,hosts.text
+ before_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+ assert any(x.get('runtime')=='node:maint1' for x in before_links)
  before={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
  assert before['enabled']==1 and before['online'] is True
  assert before['assignments'][0]['failover_ready'] is True
@@ -197,12 +207,16 @@ def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env
  assert node['assignments'][0]['failover_ready'] is False
  assert node['assignments'][0]['failover_reason']=='node_maintenance'
  assert app.state.nodes.failover_targets('maintenance-user')==[]
+ during_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+ assert all(x.get('runtime')!='node:maint1' for x in during_links)
  disabled=c.post('/api/nodes/maint1/maintenance',json={'enabled':False,'note':''})
  assert disabled.status_code==200,disabled.text
  node=disabled.json()
  assert node['maintenance']==0 and node['maintenance_since']==0 and node['enabled']==1
  assert node['assignments'][0]['failover_ready'] is True
  assert len(app.state.nodes.failover_targets('maintenance-user'))==1
+ after_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+ assert any(x.get('runtime')=='node:maint1' for x in after_links)
 
 
 def test_node_alert_lifecycle_tracks_first_and_last_observation(env):
