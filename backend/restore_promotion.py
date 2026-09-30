@@ -39,7 +39,7 @@ class RestorePromotionMixin:
         with self.store.lock:
             row=self.store.db.execute("SELECT * FROM restore_subscriptions WHERE id=?",(restore_id,)).fetchone()
             account=self.store.db.execute("SELECT role,disabled FROM api_admins WHERE id=?",(owner_id,)).fetchone()
-            profile=self.store.db.execute("SELECT allowed,max_client_ips,max_client_hwid FROM owner_profiles WHERE id=?",(owner_id,)).fetchone()
+            profile=self.store.db.execute("SELECT allowed,prefix,max_client_ips,max_client_hwid FROM owner_profiles WHERE id=?",(owner_id,)).fetchone()
             core=self.store.db.execute("SELECT body FROM core_clients WHERE email=?",(row['core_email'],)).fetchone() if row else None
         if not row:raise PolicyError('Restore user not found')
         if float(row['promoted_at'] or 0)>0:raise PolicyError('Restore user was already promoted')
@@ -50,6 +50,19 @@ class RestorePromotionMixin:
         inbound_ids=[int(x) for x in json.loads(row['inbound_ids'])]
         if not set(inbound_ids)<=allowed:raise PolicyError('Representative does not allow all Restore Inbounds')
         body=json.loads(core['body'])
+        original_email=str(row['core_email']);native_email=original_email
+        prefix=str(profile['prefix'] or '').strip().lower()
+        if prefix and not original_email.lower().startswith(prefix):
+            stem=(prefix+'restore_'+restore_id.removeprefix('rst_')[:16])[:120]
+            with self.store.lock:
+                occupied={str(r[0]) for r in self.store.db.execute(
+                    "SELECT email FROM core_clients WHERE email<>? UNION SELECT id FROM clients WHERE id<>?",
+                    (original_email,original_email))}
+            native_email=stem
+            suffix=1
+            while native_email in occupied:
+                tail='_'+str(suffix);native_email=(stem[:128-len(tail)]+tail);suffix+=1
+            body['email']=native_email
         legacy_used=int(row['legacy_upload'])+int(row['legacy_download'])
         if int(row['legacy_total'])>0:
             # Native quota=0 means unlimited, so an exhausted limited Restore user
@@ -62,14 +75,27 @@ class RestorePromotionMixin:
         if ip_cap and (current_ip==0 or current_ip>ip_cap):body['limitIp']=ip_cap
         if hwid_cap and (current_hwid==0 or current_hwid>hwid_cap):body['limitHwid']=hwid_cap
         # The native policy baseline will account for DARK bytes already consumed.
+        # A representative prefix is a durable naming policy. Preserve UUID/password
+        # while renaming only the internal client label when the imported label does
+        # not satisfy that prefix.
         with self.store.transaction() as db:
-            db.execute("UPDATE core_clients SET body=? WHERE email=?",(json.dumps(body),row['core_email']))
+            if native_email!=original_email:
+                db.execute("UPDATE core_clients SET email=?,body=? WHERE email=?",
+                           (native_email,json.dumps(body),original_email))
+                db.execute("UPDATE restore_subscriptions SET core_email=? WHERE id=?",(native_email,restore_id))
+            else:
+                db.execute("UPDATE core_clients SET body=? WHERE email=?",(json.dumps(body),original_email))
         try:
-            result=self.manager.adopt(actor,owner_id,str(row['core_email']))
+            result=self.manager.adopt(actor,owner_id,native_email)
         except Exception:
-            # Restore the original Core body if native adoption did not commit.
+            # Restore the original Core label/body if native adoption did not commit.
             with self.store.transaction() as db:
-                db.execute("UPDATE core_clients SET body=? WHERE email=?",(core['body'],row['core_email']))
+                if native_email!=original_email:
+                    db.execute("UPDATE core_clients SET email=?,body=? WHERE email=?",
+                               (original_email,core['body'],native_email))
+                    db.execute("UPDATE restore_subscriptions SET core_email=? WHERE id=?",(original_email,restore_id))
+                else:
+                    db.execute("UPDATE core_clients SET body=? WHERE email=?",(core['body'],original_email))
             raise
         now=time.time()
         try:
@@ -83,7 +109,7 @@ class RestorePromotionMixin:
         except Exception:
             # Adoption is durable; fail closed by surfacing the inconsistency instead of deleting a native client.
             raise HTTPException(409,'Native client was adopted but Restore promotion marker could not be saved; inspect before retrying')
-        return {'id':restore_id,'client_id':row['core_email'],'representative_id':owner_id,
+        return {'id':restore_id,'client_id':native_email,'representative_id':owner_id,
                 'quota_bytes':int((result.get('client') or {}).get('totalGB') or 0),'promoted_at':now}
 
     def promote(self,ids:list[str],owner_id:str,actor)->dict[str,Any]:
