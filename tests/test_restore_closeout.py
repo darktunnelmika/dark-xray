@@ -136,3 +136,24 @@ def test_unlimited_promotion_consumes_unlimited_credit_not_volume(env,monkeypatc
     catalog=c.get('/api/dark-restore/representatives').json()
     rep=next(x for x in catalog if x['id']=='restore_rep')
     assert rep['remaining_unlimited']==1 and rep['remaining_volume_bytes']==0
+
+
+def test_promotion_baselines_complete_hub_and_node_dark_usage(env,monkeypatch):
+    store,engine,manager,auth,c,restore,inbound,item=prepare(env,monkeypatch)
+    make_rep(manager,auth,inbound,volume=100000)
+    # 5 KB local DARK usage plus 4 KB already observed on a remote Node.
+    with store.transaction() as db:
+        db.execute('UPDATE core_clients SET up=2000,down=3000 WHERE email=?',(item['core_email'],))
+        db.execute("""INSERT INTO restore_usage(restore_id,scope,up,down,raw_up,raw_down,updated_at,activity_at)
+          VALUES(?,?,?,?,?,?,?,?)""",(item['id'],'node:synthetic',1500,2500,1500,2500,time.time(),time.time()))
+    before=c.get('/api/dark-restore').json()['items'][0]
+    assert before['local_used']==5000 and before['node_used']==4000 and before['dark_used']==9000
+    result=c.post('/api/dark-restore/promote',json={'ids':[item['id']],'representativeId':'restore_rep'})
+    assert result.status_code==200,result.text
+    assert result.json()['promoted']==1
+    native_id=result.json()['items'][0]['result']['client_id']
+    with store.lock:
+        native=store.db.execute("SELECT quota_bytes,used_bytes FROM clients WHERE id=?",(native_id,)).fetchone()
+    # Native quota remains the post-legacy total, while used baseline includes
+    # every DARK byte already consumed on Hub and Nodes.
+    assert tuple(native)==(40000,9000)
