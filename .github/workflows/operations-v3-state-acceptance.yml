@@ -1,0 +1,55 @@
+name: Operations V3 unconfigured-state acceptance
+on:
+  push:
+    branches: [automation/operations-v3-publisher-20261002]
+    paths: [.github/workflows/operations-v3-state-acceptance.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Apply exact reviewed state fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach 9e6c22620dc6db7204b99b6da4b05d83e0bed395
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,subprocess
+          p=Path('web/operations-v3.js');s=p.read_text()
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='718a2470a6c410e5d4f3be3904f50340b9bf396a0f1f6f500751e7afd2baef57'
+          old="['error','offline','stopped','stale','unknown','pending'].find"
+          assert s.count(old)==1
+          p.write_text(s.replace(old,"['error','offline','stopped','stale','unknown','unconfigured','pending'].find"))
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='0e48aa195f080ba51a83a1d34f2138b462fe668d183002ca6381292519d8fb8a'
+          p=Path('tests/operations-v3-ui.test.cjs')
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='bc51f37dc61704be8129642cc7f5b6b43d145e6585c8a0be34109810978a1158'
+          extra=r'''
+          test('an enabled bot without credentials never becomes an applied summary card',()=>{
+           const {ctx,o}=setup();o.telegram=[{owner:'fixture',enabled:true,configured:false,state:'unconfigured'}];
+           const html=ctx.DarkOperationsV3.render();
+           const telegram=html.slice(html.indexOf('Telegram bots'),html.indexOf('WARP configuration'));
+           assert.match(telegram,/Not configured/);assert.doesNotMatch(telegram,/Applied/);
+          });
+          '''
+          p.write_text(p.read_text()+extra)
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='1ba88e7844109fd2673a5112466f0dd0067586e7c76affc5f74ae3a2d567d75f'
+          names=sorted(p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\0') if p and p!='SHA256SUMS')
+          Path('SHA256SUMS').write_text(''.join(hashlib.sha256(Path(p).read_bytes()).hexdigest()+'  '+p+'\n' for p in names))
+          subprocess.run(['git','add','web/operations-v3.js','tests/operations-v3-ui.test.cjs','SHA256SUMS'],check=True)
+          assert set(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())=={'web/operations-v3.js','tests/operations-v3-ui.test.cjs','SHA256SUMS'}
+          PY
+          sha256sum -c SHA256SUMS >/tmp/ops-state-sums.log
+          git diff --cached --check
+          node --test tests/operations-v3-ui.test.cjs tests/overview-v4.test.cjs
+      - name: Publish tested candidate only
+        run: |
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(operations): never mark an unconfigured bot as applied'
+          git push origin HEAD:refs/heads/feature/operations-v3
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
