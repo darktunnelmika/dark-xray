@@ -34,12 +34,18 @@ function routeRow(r){
   '<button type="button" class="btn btn-primary mini" data-act="tmapply" data-id="'+r.inboundId+'" data-server="'+esc(r.serverId)+'" data-path="'+esc(r.accessPath)+'">'+icon('check')+L('Apply','اعمال')+'</button></div></div>';
 }
 function serverCard(rows){
- const first=rows[0],server=first.server||{},same=rows.every(function(x){return x.policy===first.policy;}),both=same?first.policy:'normal',warp=rows.some(function(x){return x.warpReady;}),paths=rows.map(function(x){return x.accessPath;}).join(',');
- return '<article class="tm-server"><header><div><b>'+esc(server.name||first.serverId)+'</b><small class="mono">'+esc(server.address||'—')+' · '+(server.online===false?L('Offline','آفلاین'):L('Online','آنلاین'))+'</small></div>'+
+ const first=rows[0],server=first.server||{},same=rows.every(function(x){return x.policy===first.policy;}),both=same?first.policy:'normal',
+  warp=rows.some(function(x){return x.warpReady;}),pending=rows.some(function(x){return x.warpPending;}),paths=rows.map(function(x){return x.accessPath;}).join(',');
+ const warpButton=pending
+  ?'<button type="button" class="btn btn-primary mini" data-act="tmwarpscan" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('activity')+L('Scan & Select WARP','اسکن و انتخاب WARP')+'</button>'
+  :warp
+   ?'<button type="button" class="btn mini" data-act="tmwarpscan" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('activity')+L('WARP Paths','مسیرهای WARP')+'</button>'
+   :'<button type="button" class="btn mini" data-act="tmwarpcreate" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('plus')+L('Register WARP','ثبت WARP')+'</button>';
+ const warpState=pending?'<span class="tag amber">'+L('WARP · SELECT ROUTE','WARP · انتخاب مسیر')+'</span>':warp?'<span class="tag green">'+L('WARP · ACTIVE','WARP · فعال')+'</span>':'';
+ return '<article class="tm-server"><header><div><b>'+esc(server.name||first.serverId)+'</b><small class="mono">'+esc(server.address||'—')+' · '+(server.online===false?L('Offline','آفلاین'):L('Online','آنلاین'))+'</small>'+warpState+'</div>'+
   '<div class="tm-server-tools"><select data-matrix-both-policy>'+policyOptions(both)+'</select>'+
   '<button type="button" class="btn mini" data-act="tmapplyboth" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'" data-paths="'+esc(paths)+'">'+L('Apply both','اعمال روی هر دو')+'</button>'+
-  '<button type="button" class="btn mini" data-act="tmprobeall" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'" data-paths="'+esc(paths)+'">'+icon('activity')+L('Test all','تست همه')+'</button>'+
-  (warp?'<button type="button" class="btn mini" data-act="tmwarpscan" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('activity')+'WARP Paths</button>':'<button type="button" class="btn mini" data-act="tmwarpcreate" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('plus')+L('Create WARP','ساخت WARP')+'</button>')+
+  '<button type="button" class="btn mini" data-act="tmprobeall" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'" data-paths="'+esc(paths)+'">'+icon('activity')+L('Test all','تست همه')+'</button>'+warpButton+
   '</div></header><div class="tm-routes">'+rows.map(routeRow).join('')+'</div></article>';
 }
 async function openMatrix(id){
@@ -77,22 +83,48 @@ async function probeAll(el){
  toast(failed?L('Some Traffic Matrix tests failed.','بعضی تست‌های ماتریس ناموفق بودند.'):L('All Traffic Matrix paths passed.','همه مسیرهای ماتریس سالم هستند.'),!!failed);
 }
 async function createWarp(el){
- const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');toast(L('Creating WARP profile…','در حال ساخت WARP…'));
- await api('/api/traffic-matrix/warp/create','POST',{server:server});toast(L('WARP created and installed.','WARP ساخته و نصب شد.'));await openMatrix(id);
+ const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');
+ toast(L('Registering WARP… no route will be activated yet.','در حال ثبت WARP… هنوز هیچ مسیری فعال نمی‌شود.'));
+ const r=await api('/api/traffic-matrix/warp/create','POST',{server:server});
+ if(!r.pendingRegistration)throw Error(L('WARP registration did not enter manual-selection mode.','ثبت WARP وارد حالت انتخاب دستی نشد.'));
+ toast(L('WARP registered. Scan and choose the route yourself.','WARP ثبت شد؛ مسیر را اسکن و خودت انتخاب کن.'));
+ await scanWarp({dataset:{id:String(id),server}});
 }
 async function scanWarp(el){
- const id=Number(el.dataset.id),server=String(el.dataset.server||'hub'),r=await api('/api/traffic-matrix/warp/scan','POST',{server:server});
- const rows=(r.items||[]).map(function(x){
-  return '<div class="tm-warp-path"><div><b class="mono">'+esc(x.endpoint)+'</b><small>'+esc([x.country,x.colo].filter(Boolean).join(' · ')||'Cloudflare WARP')+'</small></div>'+
-   '<span>'+(x.delayMs==null?'—':Math.round(Number(x.delayMs))+' ms')+'</span><span>'+(x.lossPercent==null?'—':x.lossPercent+'%')+'</span>'+
-   '<span class="tag '+(x.ready?'green':'red')+'">'+(x.ready?L('Ready','آماده'):L('Failed','ناموفق'))+'</span><div>'+
-   (x.selected?'<span class="tag">'+L('Current','فعلی')+'</span>':x.ready?'<button type="button" class="btn mini" data-act="tmwarpuse" data-id="'+id+'" data-server="'+esc(server)+'" data-endpoint="'+esc(x.endpoint)+'">'+L('Use','انتخاب')+'</button>':'')+'</div></div>';
+ const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');
+ toast(L('Scanning WARP paths from the selected server…','در حال اسکن مسیرهای WARP از سرور انتخاب‌شده…'));
+ const r=await api('/api/traffic-matrix/warp/scan','POST',{server:server});
+ const ready=(r.items||[]).filter(x=>x.ready),best=ready[0]||null;
+ const rows=(r.items||[]).map(function(x,index){
+  const location=[x.country,x.colo].filter(Boolean).join(' · ')||L('Cloudflare edge','لبه Cloudflare');
+  const delay=x.delayMs==null?'—':Math.round(Number(x.delayMs))+' ms';
+  const loss=x.lossPercent==null?'—':x.lossPercent+'%';
+  const jitter=x.jitterMs==null?'—':Math.round(Number(x.jitterMs))+' ms';
+  const status=x.selected?'<span class="tag green">'+L('ACTIVE','فعال')+'</span>':x.candidateDefault?'<span class="tag amber">'+L('REGISTERED DEFAULT','پیش‌فرض ثبت')+'</span>':'';
+  const pick=x.ready&&!x.selected?'<button type="button" class="btn mini" data-act="tmwarpuse" data-id="'+id+'" data-server="'+esc(server)+'" data-endpoint="'+esc(x.endpoint)+'" data-location="'+esc(location)+'" data-delay="'+esc(delay)+'" data-loss="'+esc(loss)+'" data-jitter="'+esc(jitter)+'">'+L('Select','انتخاب')+'</button>':'';
+  return '<div class="tm-warp-path '+(x.ready?'ready':'failed')+'"><div><b class="mono">'+esc(x.endpoint)+'</b><small>'+esc(location)+(x.egressIp?' · '+esc(x.egressIp):'')+'</small></div>'+
+   '<span><b>'+delay+'</b><small>Ping</small></span><span><b>'+loss+'</b><small>Loss</small></span><span><b>'+jitter+'</b><small>Jitter</small></span>'+
+   '<span class="tag '+(x.ready?'green':'red')+'">'+(x.ready?L('Ready','آماده'):L('Failed','ناموفق'))+'</span><div>'+status+pick+'</div></div>';
  }).join('');
- dialog(L('WARP Paths','مسیرهای WARP'),'<div class="tm-warp-list">'+(rows||'—')+'</div>');
+ const note=r.pendingRegistration
+  ?'<div class="notice warning">'+L('This WARP registration is pending. Scanning does not change production traffic. Select one route below to activate it.','این ثبت WARP در انتظار انتخاب است. اسکن هیچ ترافیک Production را تغییر نمی‌دهد؛ یکی از مسیرهای زیر را برای فعال‌سازی انتخاب کن.')+'</div>'
+  :'<div class="notice">'+L('Scanning is read-only. Your current WARP route stays active until you explicitly select another route.','اسکن فقط خواندنی است؛ مسیر فعلی WARP تا وقتی مسیر دیگری را صریحاً انتخاب نکنی فعال می‌ماند.')+'</div>';
+ const bestButton=best?'<button type="button" class="btn" data-act="tmwarpuse" data-auto="1" data-id="'+id+'" data-server="'+esc(server)+'" data-endpoint="'+esc(best.endpoint)+'" data-location="'+esc([best.country,best.colo].filter(Boolean).join(' · ')||'Cloudflare edge')+'" data-delay="'+esc(best.delayMs==null?'—':Math.round(Number(best.delayMs))+' ms')+'" data-loss="'+esc(best.lossPercent==null?'—':best.lossPercent+'%')+'" data-jitter="'+esc(best.jitterMs==null?'—':Math.round(Number(best.jitterMs))+' ms')+'">'+L('Auto Best · explicit','بهترین خودکار · با تأیید')+'</button>':'';
+ dialog(L('WARP Route Scanner','اسکن مسیر WARP'),note+'<div class="tm-warp-head"><b>'+esc((r.server?.name||server))+'</b><small>'+L('Manual selection is the default.','حالت پیش‌فرض انتخاب دستی است.')+'</small><div>'+bestButton+'<button type="button" class="btn" data-act="tmwarpscan" data-id="'+id+'" data-server="'+esc(server)+'">'+L('Rescan','اسکن دوباره')+'</button></div></div><div class="tm-warp-list">'+(rows||'<div class="notice warning">'+L('No WARP path result.','نتیجه‌ای برای مسیر WARP وجود ندارد.')+'</div>')+'</div>');
+ const node=document.querySelector('#overlay .dialog');if(node)node.classList.add('warp-scan-dialog');
 }
 async function useWarp(el){
  const id=Number(el.dataset.id),server=String(el.dataset.server||'hub'),endpoint=String(el.dataset.endpoint||'');
- await api('/api/traffic-matrix/warp/endpoint','POST',{server:server,endpoint:endpoint});toast(L('WARP path selected and verified.','مسیر WARP انتخاب و تأیید شد.'));await openMatrix(id);
+ const location=String(el.dataset.location||'Cloudflare WARP'),delay=String(el.dataset.delay||'—'),loss=String(el.dataset.loss||'—'),jitter=String(el.dataset.jitter||'—');
+ const automatic=String(el.dataset.auto||'')==='1';
+ const body='<div class="tm-warp-confirm"><div class="notice '+(automatic?'warning':'')+'">'+
+  (automatic?L('You explicitly chose Auto Best. DARK picked this route only from the scan results currently shown.','تو صریحاً Auto Best را انتخاب کردی؛ DARK فقط از نتایج همین اسکن این مسیر را برگزیده است.'):L('Review the selected WARP route before applying it.','قبل از اعمال، مسیر WARP انتخاب‌شده را بررسی کن.'))+
+  '</div><div class="tm-warp-confirm-grid"><div><span>'+L('Server','سرور')+'</span><b>'+esc(server)+'</b></div><div><span>'+L('Location','موقعیت')+'</span><b>'+esc(location)+'</b></div><div><span>Endpoint</span><code>'+esc(endpoint)+'</code></div><div><span>Ping</span><b>'+esc(delay)+'</b></div><div><span>Loss</span><b>'+esc(loss)+'</b></div><div><span>Jitter</span><b>'+esc(jitter)+'</b></div></div><label class="tg-switch"><input type="checkbox" name="confirmed" required><span>'+L('Apply exactly this WARP route to the selected runtime','دقیقاً همین مسیر WARP روی سرور انتخاب‌شده اعمال شود')+'</span></label></div>';
+ dialog(automatic?L('Confirm Auto Best WARP','تأیید Auto Best WARP'):L('Confirm WARP route','تأیید مسیر WARP'),body,async fd=>{
+  if(!fd.has('confirmed'))throw Error(L('Confirm the selected WARP route.','مسیر WARP انتخاب‌شده را تأیید کن.'));
+  await api('/api/traffic-matrix/warp/endpoint','POST',{server,endpoint});
+  closeDialog();toast(L('Selected WARP route applied and verified.','مسیر WARP انتخاب‌شده اعمال و تأیید شد.'));await openMatrix(id);
+ },L('Apply selected route','اعمال مسیر انتخاب‌شده'));
 }
 runAction=async function(act,el){
  if(act==='tmopen')return openMatrix(Number(el.dataset.id));
