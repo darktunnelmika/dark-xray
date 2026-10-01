@@ -1542,6 +1542,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.transaction() as db:
             db.execute('DELETE FROM traffic_matrix WHERE scope=?',(scope,))
             db.execute('DELETE FROM warp_profiles WHERE scope=?',(scope,))
+            db.execute('DELETE FROM warp_pending_profiles WHERE scope=?',(scope,))
         apply_global_security()
         manager.audit(p.actor,p.actor.id,'node.delete',node_id);return result
     @app.post('/api/nodes/{node_id}/probe')
