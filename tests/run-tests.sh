@@ -121,3 +121,6 @@ python -m pytest tests/test_credential_loss_regression.py -q --junitxml=qa/junit
 python -m pytest tests/test_node_credential_concurrency.py -q --junitxml=qa/junit/node-credential-concurrency.xml
 
 python -m pytest tests/test_node_update_permissions.py -q --junitxml=qa/junit/node-update-permissions.xml
+
+python -m pytest tests/test_xray_settings_v5.py -q --junitxml=qa/junit/xray-settings-v5.xml
+node --test tests/xray-settings-v5.test.cjs

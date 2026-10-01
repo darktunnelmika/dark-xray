@@ -41,7 +41,7 @@ from core import CoreEngine,CoreError,Config,SUB_RE
 from reality_scan import RealityScanError,scan_target,search_targets
 from outbound_probe import OutboundProbeError,probe_outbounds
 from warp_cloudflare import WarpRegistrationError,register_cloudflare_warp,validate_warp_endpoint
-from warp_paths import warp_endpoint_candidates
+from warp_paths import warp_endpoint_candidates, warp_scan_results
 from traffic_matrix import POLICIES as MATRIX_POLICIES,ACCESS_PATHS as MATRIX_ACCESS_PATHS,policy_parts as matrix_policy_parts
 from nodes import NodeRegistry,token_digest
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
@@ -287,6 +287,23 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if require_online and not row.get('online'):raise HTTPException(409,'Selected Node is offline')
         return row
 
+    def _settings_apply_state(scope:str)->dict:
+        # Read desired/applied runtime state only. No health probes or mutation.
+        if scope=='hub':
+            runtime=engine.runtime_state()
+            error=str(runtime.get('last_error') or '')[:300]
+            status='error' if error else 'pending' if runtime.get('dirty') or runtime.get('state')!='running' else 'applied'
+            return {'status':status,'error':error,'source':'hub-runtime'}
+        node=next((n for n in nodes.list() if 'node:'+str(n['id'])==scope),{})
+        desired=node.get('desired_state') or {};control=node.get('control') or {}
+        runtime=(node.get('health') or {}).get('core') or {}
+        error=str(desired.get('last_error') or runtime.get('last_error') or '')[:300]
+        pending=(not node.get('online') or desired.get('pending') or control.get('pending') or
+                 runtime.get('dirty') or runtime.get('state')!='running' or not desired.get('applied_revision'))
+        return {'status':'error' if error else 'pending' if pending else 'applied',
+                'error':error,'source':'node-acknowledgement','revision':desired.get('revision',0),
+                'appliedRevision':desired.get('applied_revision',0)}
+
     def _warp_profile(scope:str)->dict|None:
         return engine.warp_profile(str(scope or 'hub'))
 
@@ -345,12 +362,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         rows=[]
         for scope in scopes:
             target=_runtime_target(scope,require_online=False);warp=bool(_warp_profile(scope));warp_pending=bool(_warp_pending(scope))
+            apply_state=_settings_apply_state(scope)
             for path in ('direct','tunnel'):
                 port=_matrix_port(scope,inbound,ports,path)
                 if path=='tunnel' and not port:continue
                 rows.append({'server':target,'serverId':scope,'inboundId':inbound_id,'accessPath':path,'port':port,
                              'policy':saved.get((scope,path),'normal'),'warpReady':warp,'warpPending':warp_pending,
-                             'adblockReady':bool(block and str(block.get('protocol','')).lower()=='blackhole')})
+                             'adblockReady':bool(block and str(block.get('protocol','')).lower()=='blackhole'),
+                             'applyState':apply_state})
         return {'inboundId':inbound_id,'remark':str(inbound.get('remark') or inbound.get('tag') or inbound_id),
                 'tag':str(inbound.get('tag') or ''),'rows':rows,'policies':sorted(MATRIX_POLICIES)}
 
@@ -1755,6 +1774,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'jitterMs':result.get('jitterMs'),'warpVerified':warp_verified,'egress':result.get('egress',{}),
                 'adblockReady':bool(row.get('adblockReady')),'productionTrafficMutation':False}
 
+    @app.get('/api/xray-settings/servers')
+    def xray_settings_servers(p:Principal=Depends(owner)):
+        return {'items':[target|{'applyState':_settings_apply_state(target['id'])}
+                         for target in _runtime_targets()], 'productionTrafficMutation':False}
+
     @app.get('/api/traffic-matrix/warp')
     def traffic_matrix_warp_status(server:str='hub',p:Principal=Depends(owner)):
         target=_runtime_target(server,require_online=False);profile=_warp_profile(server);pending=_warp_pending(server)
@@ -1764,7 +1788,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             return str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
         return {'server':target,'registered':bool(profile),'endpoint':endpoint_of(profile),
                 'pendingRegistration':bool(pending),'pendingEndpoint':endpoint_of(pending),
-                'manualSelectionRequired':bool(pending),'autoBestDefault':False}
+                'manualSelectionRequired':bool(pending),'autoBestDefault':False,
+                'applyState':_settings_apply_state(server)}
 
     @app.post('/api/traffic-matrix/warp/create')
     def traffic_matrix_warp_create(body:WarpCreate,p:Principal=Depends(owner)):
@@ -1799,35 +1824,34 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if isinstance(active_peers,list) and active_peers and isinstance(active_peers[0],dict):
                 active_current=str(active_peers[0].get('endpoint') or '')
         endpoints=list(dict.fromkeys(([active_current] if active_current else [])+warp_endpoint_candidates(candidate_current)))
-        try:
-            if target['kind']=='hub':
-                clones=[];mapping={}
-                for idx,endpoint in enumerate(endpoints):
-                    item=copy.deepcopy(outbound);tag='dark-warp-path-'+str(idx);item['tag']=tag
-                    item['settings']['peers'][0]['endpoint']=endpoint;clones.append(item);mapping[tag]=endpoint
-                raw=probe_outbounds(engine._binary(),config.xray_assets,clones,tags=[x['tag'] for x in clones],
-                                    attempts=2,timeout=4.0,trace=True)
-                for x in raw:x['endpoint']=mapping.get(str(x.get('tag') or ''),'')
-            else:
-                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',endpoints,attempts=2,timeout_seconds=4,
-                                                 outbound=outbound if pending else None)
-                raw=remote['items']
-        except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'WARP path scan failed: '+str(ex))
-        items=[]
-        for x in raw:
-            e=x.get('egress') if isinstance(x.get('egress'),dict) else {}
-            ready=bool(x.get('success')) and bool(x.get('warpVerified'))
-            endpoint=str(x.get('endpoint') or '')
-            items.append({'endpoint':endpoint,'ready':ready,'selected':bool(active_current and endpoint==active_current),
-                          'candidateDefault':bool(pending and endpoint==candidate_current),
-                          'delayMs':x.get('delayMs'),'lossPercent':x.get('lossPercent'),'jitterMs':x.get('jitterMs'),
-                          'country':e.get('country',''),'colo':e.get('colo',''),'egressIp':e.get('ip',''),'warp':e.get('warp',''),
-                          'error':x.get('error','')})
-        items.sort(key=lambda x:(not x['ready'],float(x['lossPercent']) if x['lossPercent'] is not None else 100,
-                                 float(x['delayMs']) if x['delayMs'] is not None else 10**9))
+        raw=[]
+        # Bounded batches release the existing per-node operation lock between
+        # requests, letting rc29 accounting/lease renewal continue during scans.
+        # A failed batch is visible per endpoint and cannot erase other results.
+        for offset in range(0,len(endpoints),4):
+            batch=endpoints[offset:offset+4]
+            try:
+                if target['kind']=='hub':
+                    clones=[];mapping={}
+                    for idx,endpoint in enumerate(batch):
+                        item=copy.deepcopy(outbound);tag='dark-warp-path-'+str(offset+idx);item['tag']=tag
+                        item['settings']['peers'][0]['endpoint']=endpoint;clones.append(item);mapping[tag]=endpoint
+                    results=probe_outbounds(engine._binary(),config.xray_assets,clones,tags=[x['tag'] for x in clones],
+                                            attempts=2,timeout=4.0,trace=True)
+                    for result in results:result['endpoint']=mapping.get(str(result.get('tag') or ''),'')
+                else:
+                    remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',batch,attempts=2,timeout_seconds=4,
+                                                     outbound=outbound if pending else None)
+                    results=remote['items']
+                raw.extend(results)
+            except (OutboundProbeError,PolicyError) as ex:
+                raw.extend({'endpoint':endpoint,'success':False,'warpVerified':False,
+                            'error':str(ex)[:300]} for endpoint in batch)
+        items=warp_scan_results(endpoints,raw,active_current,candidate_current if pending else '')
         return {'server':target,'selected':active_current,'pendingRegistration':bool(pending),
                 'candidateEndpoint':candidate_current,'manualSelectionRequired':bool(pending),
-                'items':items,'productionTrafficMutation':False}
+                'items':items,'resultCount':len(items),'scannedAt':time.time(),
+                'productionTrafficMutation':False}
 
     @app.post('/api/traffic-matrix/warp/endpoint')
     def traffic_matrix_warp_endpoint(body:WarpEndpointSelect,p:Principal=Depends(owner)):
@@ -1857,7 +1881,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if pending:_warp_pending_delete(body.server)
         manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',body.server,'manual endpoint='+endpoint)
         return {'server':target,'selected':endpoint,'test':checked,'applied':applied,
-                'pendingRegistration':False,'manualSelectionRequired':False}
+                'pendingRegistration':False,'manualSelectionRequired':False,
+                'applyState':_settings_apply_state(body.server)}
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
