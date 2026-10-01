@@ -1432,9 +1432,11 @@ class NodeRegistry:
                 'probe':doc['probe'],'productionTrafficMutation':False}
 
     @installation_operation
-    def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4)->dict:
+    def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4,
+                            outbound:dict|None=None)->dict:
         payload={'tag':str(tag or 'warp'),'attempts':attempts,'timeoutSeconds':timeout_seconds}
         if endpoints is not None:payload['endpoints']=endpoints
+        if outbound is not None:payload['outbound']=outbound
         count=len(endpoints) if isinstance(endpoints,list) else 15
         doc,ms=self._request(node_id,'/node/api/v1/warp/endpoints/probe','POST',payload,
                              min(30.0,max(8.0,float(max(1,count)*timeout_seconds+8))))
