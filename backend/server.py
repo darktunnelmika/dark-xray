@@ -215,6 +215,8 @@ class WarpEndpointScan(Model):
 class WarpEndpointSelect(Model):
     server:str=Field(default='hub',min_length=1,max_length=160)
     endpoint:str=Field(min_length=3,max_length=160)
+class WarpAutoSelect(Model):
+    server:str=Field(default='hub',min_length=1,max_length=160)
 
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
@@ -283,16 +285,21 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if require_online and not row.get('online'):raise HTTPException(409,'Selected Node is offline')
         return row
 
-    def _warp_profile(scope:str)->dict|None:
-        return engine.warp_profile(str(scope or 'hub'))
+    def _warp_profile_state(scope:str)->dict|None:
+        return engine.warp_profile_state(str(scope or 'hub'))
 
-    def _warp_profile_save(scope:str,outbound:dict,device_id:str='')->dict:
+    def _warp_profile(scope:str)->dict|None:
+        state=_warp_profile_state(scope)
+        return copy.deepcopy(state['outbound']) if state else None
+
+    def _warp_profile_save(scope:str,outbound:dict,device_id:str='',*,confirmed:bool=True)->dict:
         value=str(scope or 'hub').strip() or 'hub';body=copy.deepcopy(outbound);body['tag']='warp'
         with store.transaction() as db:
-            db.execute("""INSERT INTO warp_profiles(scope,outbound_json,device_id,updated_at) VALUES(?,?,?,?)
-                          ON CONFLICT(scope) DO UPDATE SET outbound_json=excluded.outbound_json,
-                          device_id=excluded.device_id,updated_at=excluded.updated_at""",
-                       (value,json.dumps(body,separators=(',',':')),str(device_id or '')[:256],time.time()))
+            db.execute("""INSERT INTO warp_profiles(scope,outbound_json,device_id,selection_confirmed,updated_at)
+                          VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET outbound_json=excluded.outbound_json,
+                          device_id=excluded.device_id,selection_confirmed=excluded.selection_confirmed,
+                          updated_at=excluded.updated_at""",
+                       (value,json.dumps(body,separators=(',',':')),str(device_id or '')[:256],int(bool(confirmed)),time.time()))
         return body
 
     def _warp_profile_delete(scope:str):
@@ -320,7 +327,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
         rows=[]
         for scope in scopes:
-            target=_runtime_target(scope,require_online=False);warp=bool(_warp_profile(scope))
+            target=_runtime_target(scope,require_online=False);warp_state=_warp_profile_state(scope)
+            warp=bool(warp_state and warp_state.get('selection_confirmed'))
             for path in ('direct','tunnel'):
                 port=_matrix_port(scope,inbound,ports,path)
                 if path=='tunnel' and not port:continue
@@ -1665,8 +1673,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             if policy not in MATRIX_POLICIES:raise HTTPException(400,'Unsupported Traffic Matrix policy')
             _ensure_matrix_base_outbounds(policy)
             if policy.startswith('warp_'):
-                profile=_warp_profile(scope)
-                if profile is None:raise HTTPException(409,'Create WARP on this runtime before selecting a WARP policy')
+                profile_state=_warp_profile_state(scope)
+                if profile_state is None:raise HTTPException(409,'Create WARP on this runtime before selecting a WARP policy')
+                if not profile_state.get('selection_confirmed'):
+                    raise HTTPException(409,'Select and apply a verified WARP path on this runtime before using a WARP policy')
                 warp_scopes.add(scope)
         for scope in sorted(warp_scopes):_warp_current_probe(scope,_warp_profile(scope),attempts=2)
         with store.lock:
@@ -1711,7 +1721,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not row:raise HTTPException(404,'Traffic Matrix path not found')
         target=_runtime_target(str(body.server),require_online=True);policy=str(row['policy']);warp=policy.startswith('warp_')
         outbound_tag='warp' if warp else 'direct'
-        if warp and _warp_profile(str(body.server)) is None:raise HTTPException(409,'WARP profile is missing on this runtime')
+        if warp:
+            warp_state=_warp_profile_state(str(body.server))
+            if warp_state is None:raise HTTPException(409,'WARP profile is missing on this runtime')
+            if not warp_state.get('selection_confirmed'):
+                raise HTTPException(409,'WARP path selection is pending on this runtime')
         try:
             if target['kind']=='hub':
                 listener=_listener_ready(int(row['port']))
@@ -1730,81 +1744,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'jitterMs':result.get('jitterMs'),'warpVerified':warp_verified,'egress':result.get('egress',{}),
                 'adblockReady':bool(row.get('adblockReady')),'productionTrafficMutation':False}
 
-    @app.get('/api/traffic-matrix/warp')
-    def traffic_matrix_warp_status(server:str='hub',p:Principal=Depends(owner)):
-        target=_runtime_target(server,require_online=False);profile=_warp_profile(server)
-        endpoint=''
-        if profile:
-            peers=((profile.get('settings') or {}).get('peers') or [{}])
-            if isinstance(peers,list) and peers and isinstance(peers[0],dict):endpoint=str(peers[0].get('endpoint') or '')
-        return {'server':target,'registered':bool(profile),'endpoint':endpoint}
-
-    @app.post('/api/traffic-matrix/warp/create')
-    def traffic_matrix_warp_create(body:WarpCreate,p:Principal=Depends(owner)):
-        writable();target=_runtime_target(body.server,require_online=True);old=_warp_profile(body.server)
-        try:registered=register_cloudflare_warp(tag='warp')
-        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
-        candidate=registered['outbound'];peers=((candidate.get('settings') or {}).get('peers') or [{}])
+    def _warp_scan(scope:str,*,attempts:int=2)->dict:
+        target=_runtime_target(scope,require_online=True);state=_warp_profile_state(scope)
+        if not state:raise HTTPException(409,'Create WARP on this runtime first')
+        outbound=state['outbound'];peers=((outbound.get('settings') or {}).get('peers') or [{}])
         current=str(peers[0].get('endpoint') or '') if peers else ''
-        selected=None;tested=[]
-        if target['kind']=='hub':
-            endpoints=warp_endpoint_candidates(current);clones=[];mapping={}
-            for idx,endpoint in enumerate(endpoints):
-                item=copy.deepcopy(candidate);tag='dark-warp-create-'+str(idx);item['tag']=tag
-                item['settings']['peers'][0]['endpoint']=endpoint;clones.append(item);mapping[tag]=endpoint
-            try:raw=probe_outbounds(engine._binary(),config.xray_assets,clones,tags=[x['tag'] for x in clones],
-                                    attempts=1,timeout=4.0,trace=True)
-            except OutboundProbeError as ex:raise HTTPException(409,'WARP path scan failed: '+str(ex))
-            for row in raw:
-                row['endpoint']=mapping.get(str(row.get('tag') or ''),'');tested.append(row)
-        else:
-            # Install only an unused outbound first so the Node can test its own
-            # physical WARP path. No Traffic Matrix rule points to it yet.
-            _warp_profile_save(body.server,candidate,registered.get('deviceId',''))
-            try:
-                _apply_matrix_scope(body.server)
-                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',None,attempts=1,timeout_seconds=4)
-                tested=remote.get('items') or []
-            except Exception as ex:
-                if old is None:_warp_profile_delete(body.server)
-                else:_warp_profile_save(body.server,old,'rollback')
-                try:_apply_matrix_scope(body.server)
-                except Exception:pass
-                raise HTTPException(409,'Node WARP scan failed and profile was rolled back: '+str(ex)[:300])
-        ready=[x for x in tested if x.get('success') and x.get('warpVerified')]
-        ready.sort(key=lambda x:(float(x.get('lossPercent') if x.get('lossPercent') is not None else 100),
-                                 float(x.get('delayMs') if x.get('delayMs') is not None else 10**9),
-                                 float(x.get('jitterMs') if x.get('jitterMs') is not None else 10**9)))
-        if not ready:
-            if target['kind']=='node':
-                if old is None:_warp_profile_delete(body.server)
-                else:_warp_profile_save(body.server,old,'rollback')
-                try:_apply_matrix_scope(body.server)
-                except Exception:pass
-            raise HTTPException(409,'No working Cloudflare WARP path was found on the selected runtime')
-        selected=ready[0];endpoint=str(selected.get('endpoint') or current)
-        candidate=copy.deepcopy(candidate);candidate['tag']='warp';candidate['settings']['peers'][0]['endpoint']=endpoint
-        _warp_profile_save(body.server,candidate,registered.get('deviceId',''))
-        try:applied=_apply_matrix_scope(body.server)
-        except Exception as ex:
-            if old is None:_warp_profile_delete(body.server)
-            else:_warp_profile_save(body.server,old,'rollback')
-            try:_apply_matrix_scope(body.server)
-            except Exception:pass
-            raise HTTPException(409,'WARP install failed and was rolled back: '+str(ex)[:300])
-        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.create',body.server,
-                      'verified endpoint='+endpoint+'; independent runtime WARP profile')
-        return {'registered':True,'server':target,'selected':endpoint,
-                'test':{'delayMs':selected.get('delayMs'),'lossPercent':selected.get('lossPercent'),
-                        'jitterMs':selected.get('jitterMs'),'warpVerified':bool(selected.get('warpVerified')),
-                        'egress':selected.get('egress',{})},
-                'applied':applied}
-
-    @app.post('/api/traffic-matrix/warp/scan')
-    def traffic_matrix_warp_scan(body:WarpEndpointScan,p:Principal=Depends(owner)):
-        target=_runtime_target(body.server,require_online=True);outbound=_warp_profile(body.server)
-        if not outbound:raise HTTPException(409,'Create WARP on this runtime first')
-        peers=((outbound.get('settings') or {}).get('peers') or [{}]);current=str(peers[0].get('endpoint') or '') if peers else ''
         endpoints=warp_endpoint_candidates(current)
         try:
             if target['kind']=='hub':
@@ -1813,29 +1757,33 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     item=copy.deepcopy(outbound);tag='dark-warp-path-'+str(idx);item['tag']=tag
                     item['settings']['peers'][0]['endpoint']=endpoint;clones.append(item);mapping[tag]=endpoint
                 raw=probe_outbounds(engine._binary(),config.xray_assets,clones,tags=[x['tag'] for x in clones],
-                                    attempts=2,timeout=4.0,trace=True)
+                                    attempts=attempts,timeout=4.0,trace=True)
                 for x in raw:x['endpoint']=mapping.get(str(x.get('tag') or ''),'')
             else:
-                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',None,attempts=2,timeout_seconds=4)
+                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',None,attempts=attempts,timeout_seconds=4)
                 raw=remote['items']
         except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'WARP path scan failed: '+str(ex))
         items=[]
+        confirmed=bool(state.get('selection_confirmed'))
         for x in raw:
             e=x.get('egress') if isinstance(x.get('egress'),dict) else {}
             ready=bool(x.get('success')) and bool(x.get('warpVerified'))
-            items.append({'endpoint':str(x.get('endpoint') or ''),'ready':ready,'selected':str(x.get('endpoint') or '')==current,
+            items.append({'endpoint':str(x.get('endpoint') or ''),'ready':ready,
+                          'selected':confirmed and str(x.get('endpoint') or '')==current,
                           'delayMs':x.get('delayMs'),'lossPercent':x.get('lossPercent'),'jitterMs':x.get('jitterMs'),
                           'country':e.get('country',''),'colo':e.get('colo',''),'egressIp':e.get('ip',''),'warp':e.get('warp',''),
                           'error':x.get('error','')})
         items.sort(key=lambda x:(not x['ready'],float(x['lossPercent']) if x['lossPercent'] is not None else 100,
-                                 float(x['delayMs']) if x['delayMs'] is not None else 10**9))
-        return {'server':target,'selected':current,'items':items,'productionTrafficMutation':False}
+                                 float(x['delayMs']) if x['delayMs'] is not None else 10**9,
+                                 float(x['jitterMs']) if x['jitterMs'] is not None else 10**9))
+        return {'server':target,'selected':current if confirmed else '','selectionConfirmed':confirmed,
+                'items':items,'productionTrafficMutation':False}
 
-    @app.post('/api/traffic-matrix/warp/endpoint')
-    def traffic_matrix_warp_endpoint(body:WarpEndpointSelect,p:Principal=Depends(owner)):
-        writable();target=_runtime_target(body.server,require_online=True);old=_warp_profile(body.server)
-        if not old:raise HTTPException(409,'Create WARP on this runtime first')
-        try:endpoint=validate_warp_endpoint(body.endpoint)
+    def _warp_select(scope:str,endpoint:str,p)->dict:
+        target=_runtime_target(scope,require_online=True);state=_warp_profile_state(scope)
+        if not state:raise HTTPException(409,'Create WARP on this runtime first')
+        old=state['outbound']
+        try:endpoint=validate_warp_endpoint(endpoint)
         except WarpRegistrationError as ex:raise HTTPException(400,str(ex))
         candidate=copy.deepcopy(old);candidate['settings']['peers'][0]['endpoint']=endpoint
         try:
@@ -1846,15 +1794,70 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'Selected WARP path test failed: '+str(ex))
         if not checked.get('success') or not checked.get('warpVerified'):
             raise HTTPException(409,'Selected WARP path did not verify Cloudflare warp=on')
-        _warp_profile_save(body.server,candidate,'endpoint-change')
-        try:applied=_apply_matrix_scope(body.server)
+        _warp_profile_save(scope,candidate,state.get('device_id',''),confirmed=True)
+        try:applied=_apply_matrix_scope(scope)
         except Exception as ex:
-            _warp_profile_save(body.server,old,'rollback')
-            try:_apply_matrix_scope(body.server)
+            _warp_profile_save(scope,old,state.get('device_id',''),confirmed=bool(state.get('selection_confirmed')))
+            try:_apply_matrix_scope(scope)
             except Exception:pass
             raise HTTPException(409,'WARP endpoint apply failed and was rolled back: '+str(ex)[:300])
-        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',body.server,endpoint)
-        return {'server':target,'selected':endpoint,'test':checked,'applied':applied}
+        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',scope,endpoint)
+        return {'server':target,'selected':endpoint,'selectionConfirmed':True,'test':checked,'applied':applied}
+
+    @app.get('/api/traffic-matrix/runtimes')
+    def traffic_matrix_runtimes(p:Principal=Depends(owner)):
+        return {'items':_runtime_targets()}
+
+    @app.get('/api/traffic-matrix/warp')
+    def traffic_matrix_warp_status(server:str='hub',p:Principal=Depends(owner)):
+        target=_runtime_target(server,require_online=False);state=_warp_profile_state(server)
+        endpoint=''
+        if state:
+            peers=((state['outbound'].get('settings') or {}).get('peers') or [{}])
+            if isinstance(peers,list) and peers and isinstance(peers[0],dict):endpoint=str(peers[0].get('endpoint') or '')
+        confirmed=bool(state and state.get('selection_confirmed'))
+        return {'server':target,'registered':bool(state),'endpoint':endpoint if confirmed else '',
+                'candidateEndpoint':endpoint if state else '','selectionConfirmed':confirmed,
+                'state':'ready' if confirmed else 'awaiting_selection' if state else 'not_created'}
+
+    @app.post('/api/traffic-matrix/warp/create')
+    def traffic_matrix_warp_create(body:WarpCreate,p:Principal=Depends(owner)):
+        writable();target=_runtime_target(body.server,require_online=True)
+        if _warp_profile_state(body.server):raise HTTPException(409,'WARP already exists on this runtime; scan paths instead')
+        try:registered=register_cloudflare_warp(tag='warp')
+        except WarpRegistrationError as ex:raise HTTPException(502,str(ex))
+        candidate=registered['outbound']
+        _warp_profile_save(body.server,candidate,registered.get('deviceId',''),confirmed=False)
+        if target['kind']=='node':
+            try:_apply_matrix_scope(body.server)
+            except Exception as ex:
+                _warp_profile_delete(body.server)
+                try:_apply_matrix_scope(body.server)
+                except Exception:pass
+                raise HTTPException(409,'WARP test profile could not be deployed to Node: '+str(ex)[:300])
+        try:scan=_warp_scan(body.server,attempts=1)
+        except HTTPException:
+            scan={'server':target,'selected':'','selectionConfirmed':False,'items':[],'productionTrafficMutation':False}
+        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.create',body.server,
+                      'registered; endpoint selection required before production WARP policy')
+        return {'registered':True,'server':target,'selectionRequired':True,'selectionConfirmed':False,
+                'items':scan.get('items',[]),'productionTrafficMutation':False}
+
+    @app.post('/api/traffic-matrix/warp/scan')
+    def traffic_matrix_warp_scan(body:WarpEndpointScan,p:Principal=Depends(owner)):
+        return _warp_scan(body.server,attempts=2)
+
+    @app.post('/api/traffic-matrix/warp/endpoint')
+    def traffic_matrix_warp_endpoint(body:WarpEndpointSelect,p:Principal=Depends(owner)):
+        writable();return _warp_select(body.server,body.endpoint,p)
+
+    @app.post('/api/traffic-matrix/warp/auto')
+    def traffic_matrix_warp_auto(body:WarpAutoSelect,p:Principal=Depends(owner)):
+        writable();scan=_warp_scan(body.server,attempts=2)
+        ready=[x for x in scan['items'] if x.get('ready')]
+        if not ready:raise HTTPException(409,'No working Cloudflare WARP path was found on the selected runtime')
+        result=_warp_select(body.server,str(ready[0]['endpoint']),p)
+        result['autoSelected']=True;return result
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
