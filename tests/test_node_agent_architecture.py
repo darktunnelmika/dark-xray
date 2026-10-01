@@ -207,7 +207,7 @@ def _agent_env(tmp_path):
     token_value='dkn_'+('Z'*60)
     token_path=tmp_path/'token';token_path.write_text(token_value+'\n');os.chmod(token_path,0o600)
     app=make_agent_app(eng,store,AgentToken(token_path),'node-probe-test',background=False)
-    client=TestClient(app);client.headers['Authorization']='Bearer '+token_value
+    client=TestClient(app,base_url='http://node.test');client.headers['Authorization']='Bearer '+token_value
     return store,eng,client
 
 
