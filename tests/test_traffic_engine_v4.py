@@ -161,6 +161,7 @@ def test_live_outbound_probe_uses_selected_runtime_and_returns_real_metrics(env,
         {'tag':'direct','protocol':'freedom','settings':{}},
         {'tag':'edge','protocol':'freedom','settings':{}},
     ])
+    monkeypatch.setattr(c.app.state.engine,'_binary',lambda:'/bin/true')
     monkeypatch.setattr(server,'probe_outbounds',lambda *a,**k:[{
         'tag':'edge','testable':True,'success':True,'delayMs':27.5,'lossPercent':0.0,
         'jitterMs':1.4,'egress':{'ip':'198.51.100.20','country':'NL','colo':'AMS','warp':'off'}
