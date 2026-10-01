@@ -2003,8 +2003,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'observatory':{'enabled':bool(observatory),'selectors':obs_selectors,
                                'probe_url':observatory.get('probeURL',observatory.get('probeUrl','')) if isinstance(observatory,dict) else '',
                                'probe_interval':observatory.get('probeInterval','') if isinstance(observatory,dict) else ''},
-                'warnings':warnings,'preview_mode':'saved_config_static',
-                'live_route_api':False}
+                'servers':_runtime_targets(),'warnings':warnings,'preview_mode':'saved_config_static',
+                'live_route_api':False,'live_outbound_probe':True}
 
     def _port_match(expr,value:int):
         if expr in (None,''):return True
@@ -2165,6 +2165,25 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/traffic-engine')
     def traffic_engine(p:Principal=Depends(owner)):return traffic_engine_doc()
+
+    @app.post('/api/traffic-engine/outbound/probe')
+    def traffic_engine_outbound_probe(body:TrafficOutboundProbe,p:Principal=Depends(owner)):
+        target=_runtime_target(body.server,require_online=True)
+        try:
+            if target['kind']=='hub':
+                outbounds=engine.runtime_outbounds(body.server)
+                if not any(isinstance(x,dict) and str(x.get('tag') or '')==body.tag for x in outbounds):
+                    raise HTTPException(404,'Outbound not found on selected runtime')
+                row=probe_outbounds(engine._binary(),config.xray_assets,outbounds,tags=[body.tag],
+                                    attempts=int(body.attempts),timeout=5.0,trace=True)[0]
+            else:
+                row=nodes.outbound_probe(target['nodeId'],body.tag,attempts=int(body.attempts),timeout_seconds=5)['probe']
+        except (OutboundProbeError,PolicyError) as ex:
+            raise HTTPException(409,'Outbound probe failed: '+str(ex))
+        egress=row.get('egress') if isinstance(row.get('egress'),dict) else {}
+        return {'server':target,'tag':body.tag,'success':bool(row.get('success')),'testable':bool(row.get('testable',True)),
+                'delayMs':row.get('delayMs'),'lossPercent':row.get('lossPercent'),'jitterMs':row.get('jitterMs'),
+                'egress':egress,'error':row.get('error',''),'productionTrafficMutation':False}
 
     @app.post('/api/traffic-engine/preview')
     def traffic_engine_preview(body:TrafficRoutePreview,p:Principal=Depends(owner)):return traffic_preview(body)
