@@ -117,7 +117,7 @@ function darkSummary(){
 
 function nodeCard(){
  if(!isOwner())return '';
- const nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online),offline=enabled.filter(n=>!n.online),errors=nodes.filter(n=>n.last_error||(n.assignments||[]).some(a=>a.last_error));
+ const nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online),offline=enabled.filter(n=>!n.online),errors=enabled.filter(n=>n.last_error||(n.assignments||[]).some(a=>a.last_error));
  return `<article class="ov4-card ov4-node-card"><header class="ov4-card-head"><div><span>${L('NODE FLEET','ناوگان نودها')}</span><small>${L('Remote DARK agents','عامل‌های راه‌دور DARK')}</small></div><button class="ov4-link" data-act="ov4nodes">${L('Manage','مدیریت')} →</button></header>
  <div class="ov4-node-kpis"><div><b class="good">${online.length}</b><span>${L('Online','آنلاین')}</span></div><div><b class="${offline.length?'bad':''}">${offline.length}</b><span>${L('Offline','آفلاین')}</span></div><div><b class="${errors.length?'warn':''}">${errors.length}</b><span>${L('Sync errors','خطای همگام‌سازی')}</span></div></div>
  <div class="ov4-node-list">${nodes.length?nodes.slice(0,5).map(n=>`<div><i class="${!n.enabled?'off':n.online?'good':'bad'}"></i><span><b>${e(n.name||n.id)}</b><small>${e((n.inboundIds||[]).length)} ${L('inbounds','اینباند')}${n.last_latency_ms?' · '+e(n.last_latency_ms)+' ms':''}</small></span><em>${n.enabled?(n.online?L('Online','آنلاین'):L('Offline','آفلاین')):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No remote nodes registered yet.','هنوز نودی ثبت نشده است.')}</div>`}</div></article>`;
@@ -139,7 +139,7 @@ function repsCard(){
 }
 
 function healthCard(){
- const core=state.ov2?.core||state.sync?.runtime||{},nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),offline=enabled.filter(n=>!n.online),errors=nodes.filter(n=>n.last_error),bans=state.ov2?.ip?.bans?.length||0,up=state.updateCenter||{},rows=[];
+ const core=state.ov2?.core||state.sync?.runtime||{},nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),offline=enabled.filter(n=>!n.online),errors=enabled.filter(n=>n.last_error),bans=state.ov2?.ip?.bans?.length||0,up=state.updateCenter||{},rows=[];
  const add=(kind,title,detail)=>rows.push({kind,title,detail});
  if(core.last_error)add('bad',L('Runtime error','خطای محیط اجرا'),core.last_error);
  if(core.dirty)add('warn',L('Config pending apply','کانفیگ در انتظار اعمال'),L('Saved state differs from running Xray.','وضعیت ذخیره‌شده با Xray در حال اجرا متفاوت است.'));

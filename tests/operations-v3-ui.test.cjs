@@ -29,3 +29,12 @@ test('owner cache is not rendered after a role or account change',()=>{
 test('refresh failure discards former good observation',async()=>{
  const {ctx}=setup();ctx.api=async()=>{throw Error('offline');};await ctx.runAction('ov3refresh',{});assert.equal(ctx.state.ov2.overview,null);assert.match(ctx.DarkOperationsV3.render(),/unavailable/);
 });
+
+test('disabled retired nodes cannot raise active dashboard sync alerts',()=>{
+ const source=fs.readFileSync('web/overview-v4.js','utf8');
+ const code=source.slice(source.indexOf('function healthCard(){'),source.indexOf('const activityScopes='));
+ const ctx={state:{ov2:{core:{state:'running'},nodes:[{name:'Retired',enabled:false,last_error:'old failure'}]}},L:(en)=>en,e:x=>x,fa:x=>x};
+ vm.runInNewContext(code,ctx);const html=ctx.healthCard();
+ assert.doesNotMatch(html,/Node sync errors|Retired/);assert.match(html,/All monitored systems nominal/);
+ assert.doesNotMatch(source,/errors=nodes\.filter/);
+});
