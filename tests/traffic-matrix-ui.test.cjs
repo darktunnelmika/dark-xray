@@ -37,3 +37,22 @@ test('Traffic Matrix assets load after Inbounds V3',()=>{
  assert.match(index,/assets\/traffic-matrix\.js/);
  assert.ok(index.indexOf('assets/inbounds-v3.js')<index.indexOf('assets/traffic-matrix.js'));
 });
+
+
+test('WARP V5 is manual by default and Auto Best is explicit',()=>{
+ assert.match(matrix,/Register WARP/);
+ assert.match(matrix,/Scan & Select WARP/);
+ assert.match(matrix,/manual-selection mode/);
+ assert.match(matrix,/Auto Best · explicit/);
+ assert.match(matrix,/manualSelectionRequired/);
+ assert.match(matrix,/productionTrafficMutation/);
+ assert.match(matrix,/Confirm WARP route/);
+ assert.doesNotMatch(matrix,/WARP created and installed/);
+});
+
+test('Traffic Matrix previews route changes and shows WARP AdBlock state',()=>{
+ assert.match(matrix,/Preview Traffic Matrix change/);
+ assert.match(matrix,/Preview batch route change/);
+ assert.match(matrix,/WARP ON/);
+ assert.match(matrix,/AdBlock ON/);
+});
