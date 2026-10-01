@@ -11,7 +11,7 @@ def reconcile(restore, decide, records=None):
     with restore.engine.lock, restore.store.lock:
         db = restore.store.db
         missing = db.execute('''SELECT 1 FROM restore_subscriptions r LEFT JOIN restore_safety s
-            ON s.restore_id=r.id WHERE s.restore_id IS NULL LIMIT 1''').fetchone()
+            ON s.restore_id=r.id WHERE s.restore_id IS NULL AND r.promoted_at=0 LIMIT 1''').fetchone()
         if missing:
             with restore.store.transaction() as tx:
                 restore._seed_safety(tx)
@@ -20,7 +20,8 @@ def reconcile(restore, decide, records=None):
             COALESCE(u.used,0) dark_used
             FROM restore_subscriptions r JOIN restore_safety s ON s.restore_id=r.id
             LEFT JOIN core_clients c ON c.email=r.core_email
-            LEFT JOIN (SELECT restore_id,SUM(up+down) used FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id'''))
+            LEFT JOIN (SELECT restore_id,SUM(up+down) used FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id
+            WHERE r.promoted_at=0'''))
         pending = []
         for raw in rows:
             r = dict(raw); client = json.loads(r['core_body']) if r['core_body'] else None

@@ -23,7 +23,7 @@ jobs:
       - name: Restore target, isolation and Direct duplicate regressions
         run: python -m pytest -q tests/test_restore_targets.py tests/test_dark_restore.py tests/test_restore_groups.py tests/test_restore_node_observer.py tests/test_restore_frontend.py tests/test_hosts_v3.py tests/test_nodes_v2.py
       - name: Frontend selection and confirmation boundaries
-        run: node --test tests/restore-targets.test.cjs tests/dark-restore-groups.test.cjs
+        run: node --test tests/restore-targets.test.cjs tests/dark-restore-groups.test.cjs tests/restore-closeout.test.cjs
       - name: Whole-group edit through real owner HTTP login
         run: python tests/restore-targets-browser.py
       - uses: actions/upload-artifact@v4

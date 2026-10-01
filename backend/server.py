@@ -416,7 +416,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     app.state.renew_node_lease=renew_node_lease
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
     from dark_restore import DarkRestore
-    dark_restore=DarkRestore(store,engine,nodes)
+    dark_restore=DarkRestore(store,engine,nodes,manager)
     app.state.dark_restore=dark_restore
     public=urlsplit(config.public_origin);panel_path=config.panel_path
 

@@ -39,7 +39,7 @@ jobs:
       - name: Strict source metadata and policy isolation
         run: python -m pytest tests/test_restore_safety.py tests/test_restore_safety_stability.py tests/test_restore_groups.py tests/test_restore_targets.py tests/test_restore_frontend.py tests/test_meter_write_amplification.py -q --junitxml=qa/junit/restore-safety.xml
       - name: Frontend permissions and exact numeric inputs
-        run: node --test tests/restore-safety.test.cjs tests/restore-targets.test.cjs tests/restore-view-sync.test.cjs
+        run: node --test tests/restore-safety.test.cjs tests/restore-targets.test.cjs tests/restore-view-sync.test.cjs tests/restore-closeout.test.cjs
       - name: Confirmed review and suspension through real owner login
         run: python tests/restore-safety-browser.py
       - name: Fetch verified official Xray

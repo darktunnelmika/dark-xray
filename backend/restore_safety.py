@@ -41,6 +41,8 @@ def _valid_numbers(row):
 
 def decision(row, metadata, client, used, *, now=None):
     now = time.time() if now is None else now
+    if float(row.get('promoted_at') or 0)>0:
+        return 'promoted'
     if client is None:
         return 'identity_missing'
     if not _valid_numbers(row) or metadata.get('metadata_state') not in ('verified', 'manual', 'legacy_saved'):
@@ -128,14 +130,23 @@ class RestoreSafetyMixin:
     def groups(self):
         groups = super().groups(); rows = self.rows(); by_id = {g['id']: g for g in groups}
         for group in groups:
-            group.update(eligible=0, needs_review=0, blocked=0, legacy_unconfirmed=0, subscription_received=0, traffic_observed=0)
+            group.update(eligible=0, needs_review=0, blocked=0, legacy_unconfirmed=0, subscription_received=0, traffic_observed=0,
+                         target_total=0,target_ready=0,target_pending=0,mixed_mapping=False)
         for row in rows:
             group = by_id[row['group_id']]
-            key = 'eligible' if row['service_status'] == 'eligible' else 'needs_review' if row['service_status'] == 'needs_review' else 'blocked'
-            group[key] += 1
+            key = None if row['service_status'] == 'promoted' else 'eligible' if row['service_status'] == 'eligible' else 'needs_review' if row['service_status'] == 'needs_review' else 'blocked'
+            if key:group[key] += 1
             group['legacy_unconfirmed'] += int(row['metadata_state'] == 'legacy_saved')
             group['subscription_received'] += int(row['subscription_received'])
             group['traffic_observed'] += int(row['traffic_observed'])
+        for group in groups:
+            if group.get('unassigned') or not group.get('clients'):continue
+            try:
+                state=self.group_targets(group['id']);targets=state.get('targets') or []
+                group['target_total']=len(targets);group['target_ready']=sum(1 for t in targets if t.get('ready'))
+                group['target_pending']=group['target_total']-group['target_ready'];group['mixed_mapping']=bool(state.get('mixed'))
+            except Exception:
+                group['target_pending']=group.get('target_total',0)
         return groups
 
     def require_eligible(self, row):
@@ -145,6 +156,8 @@ class RestoreSafetyMixin:
             c = self.store.db.execute('SELECT body FROM core_clients WHERE email=?', (row['core_email'],)).fetchone()
         meta = dict(s) if s else {'metadata_state': 'verified' if row['scan_status'] == 'verified' else 'review'}
         reason = decision(row, meta, json.loads(c['body']) if c else None, sum(self.usage(row['id']).values()))
+        if reason == 'promoted':
+            raise HTTPException(410, {'code':'restore_promoted','message':'Restore subscription was promoted to a native client'})
         if reason != 'eligible':
             raise HTTPException(403, {'code': 'restore_' + reason, 'message': 'Restore subscription is not eligible: ' + reason})
 
@@ -160,6 +173,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['promoted_at'] or 0)>0:
+                raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Metadata changed. Reopen the review before saving.')
@@ -185,6 +200,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['promoted_at'] or 0)>0:
+                raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Restore state changed. Reopen before saving.')

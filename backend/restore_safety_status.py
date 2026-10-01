@@ -9,6 +9,7 @@ def safety_snapshot(restore, group_id=None):
     rows = restore.rows(group_id); counts = {}; now = time.time()
     for row in rows:
         state = row['service_status']; counts[state] = counts.get(state, 0) + 1
+    enforced=[r for r in rows if r.get('service_status')!='promoted']
     inbounds = restore.engine.inbounds()
     local_ids = {int(i['id']) for i in inbounds if i.get('enable', True) and
                  i.get('panelMeta', {}).get('deployLocal', True) is not False}
@@ -21,7 +22,7 @@ def safety_snapshot(restore, group_id=None):
                 active.update(c.get('email') for c in settings.get('clients', []))
                 active.update(c.get('user') for c in settings.get('accounts', []))
             matches = all((r['core_email'] in active) ==
-                          (r['service_status'] == 'eligible' and bool(local_ids.intersection(r['inbound_ids']))) for r in rows)
+                          (r['service_status'] == 'eligible' and bool(local_ids.intersection(r['inbound_ids']))) for r in enforced)
             hub_state = 'synced' if matches else 'pending'
         except (OSError, ValueError, TypeError, AttributeError):
             hub_state = 'unverified'
@@ -30,7 +31,7 @@ def safety_snapshot(restore, group_id=None):
     runtimes = []
     for node in restore.nodes.list():
         ids = {int(a['local_inbound_id']) for a in node.get('assignments', [])}
-        relevant = [r for r in rows if ids.intersection(r['inbound_ids'])]
+        relevant = [r for r in enforced if ids.intersection(r['inbound_ids'])]
         if not relevant:
             continue
         ds = desired.get(node['id']); state = 'unverified'
@@ -56,7 +57,7 @@ def safety_snapshot(restore, group_id=None):
         # in a group's subscription. Hiding a route is not credential revocation.
         runtimes.append({'id': node['id'], 'name': node['name'], 'state': state,
                          'last_seen': node.get('last_seen', 0), 'error': bool(node.get('last_error'))})
-    return {'counts': counts, 'clients': len(rows),
+    return {'counts': counts, 'clients': len(rows), 'enforced_clients': len(enforced),
             'subscription_received': sum(r['subscription_received'] for r in rows),
             'traffic_observed': sum(r['traffic_observed'] for r in rows),
             'legacy_unconfirmed': sum(r['metadata_state'] == 'legacy_saved' for r in rows),

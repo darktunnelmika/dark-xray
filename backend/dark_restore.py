@@ -4,7 +4,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request as FastAPIRequest
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 from pydantic import BaseModel, Field
 
 from dark_policy import PolicyError
@@ -12,6 +12,7 @@ from restore_groups import RestoreGroupsMixin
 from restore_frontend import inspect_domain
 from restore_targets import RestoreTargetsMixin
 from restore_safety import RestoreSafetyMixin
+from restore_promotion import RestorePromotionMixin
 from restore_scan import scan_subscription
 
 _HOST_RE=re.compile(r'(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
@@ -36,9 +37,9 @@ class RestoreDomainBody(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
     acme_email:str=Field(default='',max_length=254)
 
-class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
-    def __init__(self,store,engine,nodes):
-        self.store,self.engine,self.nodes=store,engine,nodes
+class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
+    def __init__(self,store,engine,nodes,manager=None):
+        self.store,self.engine,self.nodes,self.manager=store,engine,nodes,manager
         with store.lock:
             store.db.executescript("""
             CREATE TABLE IF NOT EXISTS restore_subscriptions(
@@ -151,6 +152,7 @@ class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
     def subscription(self,token:str,fmt:str,*,record_access:bool=True)->tuple[bytes,dict]:
         with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=?',(token,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
+        if float(r['promoted_at'] or 0)>0:raise HTTPException(410,'Restore subscription was promoted to a native client')
         self.require_eligible(r)
         now=time.time()
         view,ready=self.render_view(self.target_selection(r),fmt)
@@ -167,6 +169,7 @@ class DarkRestore(RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
 
 def install_dark_restore(app,restore,current,owner,writable,audit):
     restore.install_group_routes(app,owner,writable,audit)
+    restore.install_promotion_routes(app,owner,writable,audit)
     restore.install_target_routes(app,owner,writable,audit)
     restore.install_safety_routes(app,owner,writable,audit)
 
@@ -194,8 +197,9 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
     @app.delete('/api/dark-restore/{restore_id}')
     def delete_restore(restore_id:str,p=Depends(owner)):
         writable()
-        with restore.store.lock:r=restore.store.db.execute('SELECT core_email FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
+        with restore.store.lock:r=restore.store.db.execute('SELECT core_email,promoted_at FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
+        if float(r['promoted_at'] or 0)>0:raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
         restore.engine.delete(r['core_email'])
         with restore.store.transaction() as db:db.execute('DELETE FROM restore_subscriptions WHERE id=?',(restore_id,))
         restore.engine.apply(start=restore.engine.running)
@@ -215,6 +219,17 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
 
     @app.api_route('/restore/sub/{token}',methods=['GET','HEAD'])
     def restore_sub(token:str,request:FastAPIRequest):
+        with restore.store.lock:
+            promoted=restore.store.db.execute("""SELECT r.promoted_at,m.public_token
+              FROM restore_subscriptions r LEFT JOIN managed_clients m ON m.email=r.core_email AND m.state!='deleted'
+              WHERE r.public_token=?""",(token,)).fetchone()
+        if promoted and float(promoted['promoted_at'] or 0)>0:
+            native_token=str(promoted['public_token'] or '')
+            if not native_token:raise HTTPException(409,'Promoted native subscription is unavailable')
+            path=str(restore.engine.section('subscription').get('path','/sub')).rstrip('/')+'/'+native_token
+            query=request.url.query
+            target=restore.engine.config.public_origin.rstrip('/')+path+('?' + query if query else '')
+            return RedirectResponse(target,status_code=307)
         ua=request.headers.get('user-agent','').lower();fmt=request.query_params.get('format','')
         if fmt not in ('raw','base64','json','clash'):fmt='clash' if ('clash' in ua or 'mihomo' in ua) else 'base64'
         body,headers=restore.subscription(token,fmt,record_access=request.method=='GET')
