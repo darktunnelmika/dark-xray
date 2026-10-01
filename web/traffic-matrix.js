@@ -26,9 +26,10 @@ function pingView(r){
 }
 function pathLabel(v){return v==='tunnel'?L('Tunnel','تانل'):L('Direct','مستقیم');}
 function routeRow(r){
+ const warpOn=String(r.policy||'').startsWith('warp_'),adblockOn=String(r.policy||'').includes('adblock');
  return '<div class="tm-route" data-matrix-key="'+esc(keyFor(r))+'">'+
   '<div class="tm-path"><span class="tm-path-icon '+esc(r.accessPath)+'">'+(r.accessPath==='tunnel'?'T':'D')+'</span><div><b>'+esc(pathLabel(r.accessPath))+'</b><small class="mono">:'+esc(r.port)+' · '+esc(r.serverId)+'</small></div></div>'+
-  '<label class="tm-policy"><span>'+L('Policy','سیاست مسیر')+'</span><select data-matrix-policy>'+policyOptions(r.policy)+'</select></label>'+
+  '<label class="tm-policy"><span>'+L('Policy','سیاست مسیر')+'</span><select data-matrix-policy>'+policyOptions(r.policy)+'</select><small class="tm-policy-state"><i class="'+(warpOn?'on':'')+'">WARP '+(warpOn?'ON':'OFF')+'</i><i class="'+(adblockOn?'on':'')+'">AdBlock '+(adblockOn?'ON':'OFF')+'</i></small></label>'+
   '<div class="tm-health">'+pingView(r)+'</div>'+
   '<div class="tm-actions"><button type="button" class="btn mini" data-act="tmprobe" data-id="'+r.inboundId+'" data-server="'+esc(r.serverId)+'" data-path="'+esc(r.accessPath)+'">'+icon('activity')+L('Ping','پینگ')+'</button>'+
   '<button type="button" class="btn btn-primary mini" data-act="tmapply" data-id="'+r.inboundId+'" data-server="'+esc(r.serverId)+'" data-path="'+esc(r.accessPath)+'">'+icon('check')+L('Apply','اعمال')+'</button></div></div>';
@@ -62,14 +63,23 @@ async function openMatrix(id){
 }
 async function applyOne(el){
  const row=el.closest('.tm-route'),policy=String(row&&row.querySelector('[data-matrix-policy]')?row.querySelector('[data-matrix-policy]').value:'normal');
- await api('/api/traffic-matrix','POST',{inboundId:Number(el.dataset.id),server:String(el.dataset.server||'hub'),accessPath:String(el.dataset.path||'direct'),policy:policy});
- toast(L('Traffic Matrix applied and verified.','ماتریس مسیر اعمال و تأیید شد.'));await openMatrix(Number(el.dataset.id));
+ const id=Number(el.dataset.id),server=String(el.dataset.server||'hub'),path=String(el.dataset.path||'direct');
+ const body='<div class="tm-apply-preview"><div><span>'+L('Server','سرور')+'</span><b>'+esc(server)+'</b></div><div><span>'+L('Access path','مسیر دسترسی')+'</span><b>'+esc(pathLabel(path))+'</b></div><div><span>'+L('Policy','سیاست')+'</span><b>'+esc(policyLabel(policy))+'</b></div><label class="tg-switch"><input type="checkbox" name="confirmed" required><span>'+L('Apply this route policy','این سیاست مسیر اعمال شود')+'</span></label></div>';
+ dialog(L('Preview Traffic Matrix change','پیش‌نمایش تغییر ماتریس'),body,async fd=>{
+  if(!fd.has('confirmed'))throw Error(L('Confirm the route change.','تغییر مسیر را تأیید کن.'));
+  await api('/api/traffic-matrix','POST',{inboundId:id,server,accessPath:path,policy});
+  closeDialog();toast(L('Traffic Matrix applied and verified.','ماتریس مسیر اعمال و تأیید شد.'));await openMatrix(id);
+ },L('Apply route','اعمال مسیر'));
 }
 async function applyBoth(el){
  const card=el.closest('.tm-server'),policy=String(card&&card.querySelector('[data-matrix-both-policy]')?card.querySelector('[data-matrix-both-policy]').value:'normal');
- const paths=String(el.dataset.paths||'direct').split(',').filter(Boolean);
- await api('/api/traffic-matrix/batch','POST',{inboundId:Number(el.dataset.id),server:String(el.dataset.server||'hub'),accessPaths:paths,policy:policy});
- toast(L('Both access paths were applied and verified.','هر دو مسیر اعمال و تأیید شدند.'));await openMatrix(Number(el.dataset.id));
+ const paths=String(el.dataset.paths||'direct').split(',').filter(Boolean),id=Number(el.dataset.id),server=String(el.dataset.server||'hub');
+ const body='<div class="tm-apply-preview"><div><span>'+L('Server','سرور')+'</span><b>'+esc(server)+'</b></div><div><span>'+L('Access paths','مسیرها')+'</span><b>'+esc(paths.map(pathLabel).join(' + '))+'</b></div><div><span>'+L('Policy','سیاست')+'</span><b>'+esc(policyLabel(policy))+'</b></div><label class="tg-switch"><input type="checkbox" name="confirmed" required><span>'+L('Apply this policy to all shown access paths','این سیاست روی همه مسیرهای نمایش‌داده‌شده اعمال شود')+'</span></label></div>';
+ dialog(L('Preview batch route change','پیش‌نمایش تغییر گروهی مسیر'),body,async fd=>{
+  if(!fd.has('confirmed'))throw Error(L('Confirm the route change.','تغییر مسیر را تأیید کن.'));
+  await api('/api/traffic-matrix/batch','POST',{inboundId:id,server,accessPaths:paths,policy});
+  closeDialog();toast(L('Both access paths were applied and verified.','هر دو مسیر اعمال و تأیید شدند.'));await openMatrix(id);
+ },L('Apply all paths','اعمال همه مسیرها'));
 }
 async function probePath(id,server,path){
  const key=[server,id,path].join('|');state.trafficMatrix.pings[key]={testing:true};
