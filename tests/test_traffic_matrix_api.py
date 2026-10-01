@@ -154,3 +154,35 @@ def test_warp_auto_best_is_explicit_opt_in(env,monkeypatch):
  auto=c.post("/api/traffic-matrix/warp/auto",json={"server":"hub"})
  assert auto.status_code==200,auto.text
  assert auto.json()["autoSelected"] is True and auto.json()["selectionConfirmed"] is True
+
+
+def test_outbound_probe_reports_runtime_latency_and_egress_without_route_mutation(env,monkeypatch):
+ import server
+ store,eng,c,iid=env
+ eng.save_section("outbounds",[
+  {"tag":"direct","protocol":"freedom","settings":{}},
+  {"tag":"backup","protocol":"freedom","settings":{}},
+ ])
+ monkeypatch.setattr(eng,"_binary",lambda:"/bin/true")
+ monkeypatch.setattr(server,"probe_outbounds",lambda *a,**k:[
+  {"tag":"direct","success":True,"delayMs":12.0,"lossPercent":0.0,"jitterMs":1.0,
+   "egress":{"country":"DE","colo":"FRA","ip":"198.51.100.8","warp":"off"}},
+  {"tag":"backup","success":True,"delayMs":19.0,"lossPercent":0.0,"jitterMs":2.0,
+   "egress":{"country":"NL","colo":"AMS","ip":"203.0.113.8","warp":"off"}},
+ ])
+ before=eng.section("routing")
+ r=c.post("/api/traffic-matrix/outbounds/probe",json={"server":"hub","tags":["direct","backup"],"attempts":2})
+ assert r.status_code==200,r.text
+ doc=r.json()
+ assert doc["server"]["id"]=="hub" and doc["productionTrafficMutation"] is False
+ assert [(x["tag"],x["delayMs"],x["country"],x["colo"]) for x in doc["items"]]==[
+  ("direct",12.0,"DE","FRA"),("backup",19.0,"NL","AMS")]
+ assert eng.section("routing")==before
+
+
+def test_runtime_catalog_exposes_hub_for_xray_tools(env):
+ store,eng,c,iid=env
+ r=c.get("/api/traffic-matrix/runtimes")
+ assert r.status_code==200,r.text
+ assert r.json()["items"][0]["id"]=="hub"
+ assert r.json()["items"][0]["kind"]=="hub"
