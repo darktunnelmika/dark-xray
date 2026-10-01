@@ -332,12 +332,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         rows=[]
         for scope in scopes:
             target=_runtime_target(scope,require_online=False);warp_state=_warp_profile_state(scope)
-            warp=bool(warp_state and warp_state.get('selection_confirmed'))
+            warp_registered=bool(warp_state);warp=bool(warp_state and warp_state.get('selection_confirmed'))
             for path in ('direct','tunnel'):
                 port=_matrix_port(scope,inbound,ports,path)
                 if path=='tunnel' and not port:continue
                 rows.append({'server':target,'serverId':scope,'inboundId':inbound_id,'accessPath':path,'port':port,
-                             'policy':saved.get((scope,path),'normal'),'warpReady':warp,
+                             'policy':saved.get((scope,path),'normal'),'warpRegistered':warp_registered,'warpReady':warp,
                              'adblockReady':bool(block and str(block.get('protocol','')).lower()=='blackhole')})
         return {'inboundId':inbound_id,'remark':str(inbound.get('remark') or inbound.get('tag') or inbound_id),
                 'tag':str(inbound.get('tag') or ''),'rows':rows,'policies':sorted(MATRIX_POLICIES)}
