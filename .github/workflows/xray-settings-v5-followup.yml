@@ -1,0 +1,62 @@
+name: Verify and publish V5 navigation follow-up
+on:
+  push:
+    branches: [automation/xray-settings-v5-publisher-20261001]
+    paths: [.github/workflows/xray-settings-v5-followup.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Apply exact checksummed follow-up
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp qa/xray-settings-v5-followup.b64 /tmp/xray-settings-v5-followup.b64
+          git checkout --detach 7e074e1414d475336de20876c962b963f5d86567
+          python - <<'PY'
+          import base64,gzip,hashlib,json,subprocess
+          from pathlib import Path
+          raw=gzip.decompress(base64.b64decode(Path('/tmp/xray-settings-v5-followup.b64').read_text(),validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='c4a03177776bdf9bf6c59de573778c5c931903b2d4d673410f20912341d8a9bd'
+          doc=json.loads(raw)
+          assert doc['base']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          allowed={'tests/traffic-matrix-access-browser.py','web/traffic-matrix.js'}
+          assert len(doc['files'])==2 and {x['path'] for x in doc['files']}==allowed
+          for item in doc['files']:
+              path=Path(item['path']);assert path.is_file() and not path.is_symlink()
+              text=path.read_text();assert hashlib.sha256(text.encode()).hexdigest()==item['before']
+              end=len(text)
+              for start,stop,replacement in reversed(item['edits']):
+                  assert 0<=start<=stop<=end
+                  text=text[:start]+replacement+text[stop:];end=start
+              assert hashlib.sha256(text.encode()).hexdigest()==item['after']
+              path.write_text(text)
+          subprocess.run(['git','add','--',*sorted(allowed)],check=True)
+          names=sorted(p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\0') if p and p!='SHA256SUMS')
+          Path('SHA256SUMS').write_text(''.join(hashlib.sha256(Path(p).read_bytes()).hexdigest()+'  '+p+'\n' for p in names))
+          subprocess.run(['git','add','SHA256SUMS'],check=True)
+          assert set(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())==allowed|{'SHA256SUMS'}
+          PY
+          git diff --cached --check
+          sha256sum -c SHA256SUMS >/tmp/v5-followup-sums.log
+          python tools/repo-check.py
+      - name: Verify navigation in both languages and four viewport sizes
+        run: |
+          python -m pip install -q -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+          node --test tests/traffic-matrix-access.test.cjs tests/traffic-matrix-ui.test.cjs tests/xray-settings-v5.test.cjs
+          python tests/traffic-matrix-access-browser.py
+      - name: Publish only the tested follow-up; do not merge or deploy
+        run: |
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test(xray): verify server-first navigation across desktop and mobile'
+          git push origin HEAD:refs/heads/fix/xray-settings-v5-manual-warp
+          git rev-parse HEAD
