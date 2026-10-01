@@ -116,6 +116,7 @@ def test_warp_scan_is_read_only_and_manual_selection_activates_pending(env,monke
     import server
     store,eng,c,iid=env
     monkeypatch.setattr(server,'register_cloudflare_warp',lambda **k:_registered_warp())
+    monkeypatch.setattr(eng,'_binary',lambda:'/bin/true')
     assert c.post('/api/traffic-matrix/warp/create',json={'server':'hub'}).status_code==200
 
     def scan_probe(binary,assets,outbounds,*,tags=None,attempts=1,timeout=5.0,trace=False):
