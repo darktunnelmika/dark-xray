@@ -1784,10 +1784,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/traffic-matrix/warp/scan')
     def traffic_matrix_warp_scan(body:WarpEndpointScan,p:Principal=Depends(owner)):
-        target=_runtime_target(body.server,require_online=True);outbound=_warp_profile(body.server)
-        if not outbound:raise HTTPException(409,'Create WARP on this runtime first')
-        peers=((outbound.get('settings') or {}).get('peers') or [{}]);current=str(peers[0].get('endpoint') or '') if peers else ''
-        endpoints=warp_endpoint_candidates(current)
+        target=_runtime_target(body.server,require_online=True);active=_warp_profile(body.server);pending=_warp_pending(body.server)
+        outbound=pending or active
+        if not outbound:raise HTTPException(409,'Register WARP on this runtime before scanning paths')
+        peers=((outbound.get('settings') or {}).get('peers') or [{}]);candidate_current=str(peers[0].get('endpoint') or '') if peers else ''
+        active_current=''
+        if active:
+            active_peers=((active.get('settings') or {}).get('peers') or [{}])
+            if isinstance(active_peers,list) and active_peers and isinstance(active_peers[0],dict):
+                active_current=str(active_peers[0].get('endpoint') or '')
+        endpoints=list(dict.fromkeys(([active_current] if active_current else [])+warp_endpoint_candidates(candidate_current)))
         try:
             if target['kind']=='hub':
                 clones=[];mapping={}
@@ -1798,20 +1804,25 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                     attempts=2,timeout=4.0,trace=True)
                 for x in raw:x['endpoint']=mapping.get(str(x.get('tag') or ''),'')
             else:
-                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',None,attempts=2,timeout_seconds=4)
+                remote=nodes.warp_endpoint_probe(target['nodeId'],'warp',endpoints,attempts=2,timeout_seconds=4,
+                                                 outbound=outbound if pending else None)
                 raw=remote['items']
         except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'WARP path scan failed: '+str(ex))
         items=[]
         for x in raw:
             e=x.get('egress') if isinstance(x.get('egress'),dict) else {}
             ready=bool(x.get('success')) and bool(x.get('warpVerified'))
-            items.append({'endpoint':str(x.get('endpoint') or ''),'ready':ready,'selected':str(x.get('endpoint') or '')==current,
+            endpoint=str(x.get('endpoint') or '')
+            items.append({'endpoint':endpoint,'ready':ready,'selected':bool(active_current and endpoint==active_current),
+                          'candidateDefault':bool(pending and endpoint==candidate_current),
                           'delayMs':x.get('delayMs'),'lossPercent':x.get('lossPercent'),'jitterMs':x.get('jitterMs'),
                           'country':e.get('country',''),'colo':e.get('colo',''),'egressIp':e.get('ip',''),'warp':e.get('warp',''),
                           'error':x.get('error','')})
         items.sort(key=lambda x:(not x['ready'],float(x['lossPercent']) if x['lossPercent'] is not None else 100,
                                  float(x['delayMs']) if x['delayMs'] is not None else 10**9))
-        return {'server':target,'selected':current,'items':items,'productionTrafficMutation':False}
+        return {'server':target,'selected':active_current,'pendingRegistration':bool(pending),
+                'candidateEndpoint':candidate_current,'manualSelectionRequired':bool(pending),
+                'items':items,'productionTrafficMutation':False}
 
     @app.post('/api/traffic-matrix/warp/endpoint')
     def traffic_matrix_warp_endpoint(body:WarpEndpointSelect,p:Principal=Depends(owner)):
