@@ -59,7 +59,7 @@ class SimplePlanBody(Model):
     price_minor: StrictInt = Field(ge=0, le=MAX_INT)
     duration_days: StrictInt = Field(default=30, ge=1, le=3650)
     volume_gb: StrictInt = Field(default=50, ge=0, le=1_000_000)
-    ip_limit: StrictInt = Field(default=1, ge=1, le=5)
+    ip_limit: StrictInt = Field(default=1, ge=1, le=1000)
     inbound_ids: list[StrictInt] = Field(min_length=1, max_length=256)
     description: str = Field(default='', max_length=2000)
     category: str = Field(default='General', min_length=1, max_length=64)
