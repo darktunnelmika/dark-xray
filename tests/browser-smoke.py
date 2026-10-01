@@ -14,7 +14,9 @@ from dark_policy import Store,Actor
 from auth import Auth
 from core import Config,CoreEngine
 from manager import Manager
+import server as api_server
 from server import make_app
+from update_bridge import UpdateBrokerClient
 import uvicorn
 from playwright.sync_api import sync_playwright
 
@@ -71,6 +73,8 @@ def open_guided(page,locator,stage):
 
 with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
     tmp=Path(d);sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1];sock.close()
+    # A root-run browser lab must never contact the installed update broker.
+    api_server.UpdateBrokerClient=lambda **kw:UpdateBrokerClient(path=str(tmp/'absent-update.sock'),**kw)
     origin=f'http://127.0.0.1:{port}'
     store=Store(tmp/'dark.sqlite3')
     engine=CoreEngine(Config(public_origin=origin,bind_port=port,public_address='example.test',
@@ -326,6 +330,8 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             mark('DNS Guided V3 exposes safe structured controls instead of raw JSON')
 
             visit(page,'routing')
+            page.locator('[data-act="x5advanced"]').click()
+            page.locator('[data-act="te4rulenew"]').wait_for(state='visible')
             page.locator('.te5-routing-bar').wait_for(state='visible',timeout=10000)
             assert page.locator('.te5-advanced-tools').count()==1
             assert page.locator('.te4-preview').is_hidden()
@@ -679,6 +685,14 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
         try:engine.close()
         except Exception:pass
         store.close()
+
+if report['status']=='passed':
+    import subprocess
+    followup=subprocess.run([sys.executable,str(ROOT/'tests/xray-settings-v5-browser.py')],check=False)
+    if followup.returncode:
+        report.update(status='failed',error='Xray Settings V5 browser flow failed')
+    else:
+        report['xray_settings_v5']=json.loads((OUT/'browser-xray-v5-results.json').read_text())
 
 (OUT/'browser-results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=False,indent=2))

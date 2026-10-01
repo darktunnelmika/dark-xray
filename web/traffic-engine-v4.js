@@ -57,7 +57,8 @@ function probeView(tag){
  if(p.testing)return '<div class="te5-out-probe testing"><b>…</b><small>'+L('Testing','در حال تست')+'</small></div>';
  const delay=p.delayMs==null?'—':Math.round(Number(p.delayMs))+' ms',loss=p.lossPercent==null?'—':p.lossPercent+'%',jitter=p.jitterMs==null?'—':Math.round(Number(p.jitterMs))+' ms';
  const loc=p.egress&&[p.egress.country,p.egress.colo].filter(Boolean).join(' · ');
- return '<div class="te5-out-probe '+(p.success?'ok':'bad')+'"><b>'+(p.success?delay:'FAIL')+'</b><small>'+loss+' · J '+jitter+(loc?' · '+esc(loc):'')+'</small></div>';
+ const source=p.server?.name||p.server?.id||state.te4.probe_server;
+ return '<div class="te5-out-probe '+(p.success?'ok':'bad')+'"><b>'+(p.success?delay:'FAIL')+'</b><small>'+loss+' · J '+jitter+(loc?' · '+esc(loc):'')+' · '+L('From: ','از: ')+esc(source)+'</small></div>';
 }
 function serverOptions(d){
  const rows=d.status?.servers||[],current=state.te4.probe_server||'hub';
@@ -276,7 +277,7 @@ async function probeOutbound(tag){
 }
 async function probeAllOutbounds(){
  const tags=(state.te4.data?.outbounds||[]).map(x=>String(x.tag||'')).filter(Boolean);let failed=0;
- for(const tag of tags){try{await probeOutbound(tag);}catch{failed++;}}
+ for(const tag of tags){try{const result=await probeOutbound(tag);if(result.testable!==false&&!result.success)failed++;}catch{failed++;}}
  toast(failed?L('Some outbound tests failed.','بعضی تست‌های اوتباند ناموفق بودند.'):L('All testable outbounds passed.','همه اوتباندهای قابل تست سالم بودند.'),!!failed);
 }
 document.addEventListener('change',ev=>{

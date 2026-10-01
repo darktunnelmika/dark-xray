@@ -12,6 +12,7 @@ from auth import Auth
 from core import Config,CoreEngine
 from dark_policy import Actor,Store
 from manager import Manager
+from update_bridge import UpdateBrokerClient
 from playwright.sync_api import sync_playwright
 
 
@@ -44,6 +45,7 @@ def run():
     checks=[]
     with tempfile.TemporaryDirectory(prefix='dark-xray-settings-test-') as tmpdir:
         tmp=Path(tmpdir);port=fixture_port()
+        server_module.UpdateBrokerClient=lambda **kw:UpdateBrokerClient(path=str(tmp/'absent-update.sock'),**kw)
         origin=f'http://127.0.0.1:{port}'
         store=Store(tmp/'dark.sqlite3')
         engine=CoreEngine(Config(public_origin=origin,bind_port=port,public_address='example.test',
@@ -103,12 +105,27 @@ def run():
                                 for button in page.locator('.xray-settings-nav button').all():
                                     box=button.bounding_box();assert box and box['height']>=44,box
                                     assert box['x']>=0 and box['x']+box['width']<=width+1,box
-                            card=page.locator('.tm-access-card');card.wait_for(state='visible')
-                            button=card.locator('.tm-access-open')
-                            box=button.bounding_box();assert box and box['height']>=44 and box['width']>=100,box
-                            assert box['x']>=0 and box['x']+box['width']<=width+1,box
-                            assert card.locator('b').inner_text()=='Dark Vpn'
-                            button.click()
+                            # V5 replaces inbound-first cards with explicit server-first controls.
+                            server_select=page.locator('[data-x5-select="server"]')
+                            assert server_select.input_value()==''
+                            assert page.locator('[data-act="x5warpregister"]').count()==0
+                            server_select.select_option('hub')
+                            page.locator('[data-act="x5warpregister"]').wait_for(state='visible')
+                            assert page.locator('[data-act="x5warpregister"]').count()==1
+                            assert page.locator('[data-act="x5warpscan"]').count()==0
+                            assert page.locator('[data-x5-select="inbound"]').input_value()==''
+                            page.locator('[data-x5-select="inbound"]').select_option(str(inbound['id']))
+                            page.locator('[data-x5-select="path"]').wait_for(state='visible')
+                            assert page.locator('[data-x5-select="path"]').input_value()==''
+                            page.locator('[data-x5-select="path"]').select_option('direct')
+                            page.locator('[data-x5-route]').wait_for(state='visible')
+                            assert page.locator('[data-x5-route]').input_value()=='normal'
+                            assert not page.locator('[data-x5-adblock]').is_checked()
+                            assert page.locator('[data-act="x5preview"]').is_visible()
+                            assert page.locator('[data-act="x5routeping"]').is_visible()
+                            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+                            # Preserve the existing matrix contract without firing any probe or Apply.
+                            page.evaluate('(id)=>DarkTrafficMatrix.open(id)',inbound['id'])
                             matrix=page.locator('.traffic-matrix-dialog')
                             matrix.locator('.tm-server').wait_for(state='visible')
                             assert matrix.locator('[data-act="tmwarpcreate"]').count()==1
@@ -135,6 +152,7 @@ def run():
                             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
                             check={'width':width,'language':lang,'role':me['role'],'single_xray_menu':True,
                                 'sections_opened':['core_dns','outbounds','routing','warp_adblock'],
+                                'server_first':True,'manual_default':True,'explicit_scope_controls':True,
                                 'matrix_open':True,'direct_tunnel_ping_controls':True,'writes':0,'errors':errors}
                             checks.append(check);print(json.dumps(check),flush=True)
                             context.close()
