@@ -360,6 +360,28 @@ def install_representative_marketplace(app,market,current,writable,audit):
         audit(p.actor,p.actor.id,'representative.plan_delete',plan_id,result['mode'])
         return result
 
+    @app.get('/api/representative-marketplace/orders')
+    def orders(p=Depends(current)):
+        if p.actor.role!='owner':raise HTTPException(403,'Only the primary Owner may view marketplace orders')
+        with market.store.lock:
+            rows=[dict(r) for r in market.store.db.execute(
+                "SELECT id,buyer_telegram_id,buyer_username,plan_id,kind,amount_minor,currency,status,representative_id,fulfillment_error,created_at,updated_at FROM representative_market_orders WHERE owner=? ORDER BY created_at DESC LIMIT 200",(p.actor.id,))]
+        return rows
+
+    @app.get('/api/representative-marketplace/summary')
+    def summary(p=Depends(current)):
+        if p.actor.role!='owner':raise HTTPException(403,'Only the primary Owner may view marketplace summary')
+        market.sweep_expired()
+        now=time.time()
+        with market.store.lock:
+            db=market.store.db
+            active=int(db.execute("SELECT COUNT(*) FROM representative_subscriptions WHERE owner=? AND status='active'",(p.actor.id,)).fetchone()[0])
+            suspended=int(db.execute("SELECT COUNT(*) FROM representative_subscriptions WHERE owner=? AND status='suspended'",(p.actor.id,)).fetchone()[0])
+            expiring=int(db.execute("SELECT COUNT(*) FROM representative_subscriptions WHERE owner=? AND status='active' AND expires_at>? AND expires_at<=?",(p.actor.id,now,now+7*86400)).fetchone()[0])
+            pending=int(db.execute("SELECT COUNT(*) FROM representative_market_orders WHERE owner=? AND status IN ('pending','paid')",(p.actor.id,)).fetchone()[0])
+            failed=int(db.execute("SELECT COUNT(*) FROM representative_market_orders WHERE owner=? AND status='failed_refunded'",(p.actor.id,)).fetchone()[0])
+        return {'active':active,'suspended':suspended,'expiring_7d':expiring,'pending_orders':pending,'failed_refunded':failed}
+
     @app.get('/api/representative-marketplace/subscriptions')
     def subscriptions(p=Depends(current)):
         if p.actor.role!='owner':raise HTTPException(403,'Only the primary Owner may view marketplace subscriptions')

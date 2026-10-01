@@ -266,3 +266,23 @@ def test_bot_purchase_delivery_includes_panel_url(env):
         assert 'Username:' in text and 'Password:' in text
     finally:
         worker.api.close()
+
+def test_owner_marketplace_v2_summary_and_order_feed(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/representative-marketplace/plans/v2-summary',json=plan_payload(inbound_id)).status_code==200
+    before=c.get('/api/representative-marketplace/summary');assert before.status_code==200
+    assert before.json()['active']==0 and before.json()['pending_orders']==0
+    # Owner feed is read-only and empty before a customer order.
+    orders=c.get('/api/representative-marketplace/orders');assert orders.status_code==200 and orders.json()==[]
+
+def test_representative_cannot_read_owner_v2_operations(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/v2seller',json={'name':'V2 Seller','allowed':[inbound_id]}).status_code==200
+    assert c.post('/api/admins',json={'username':'v2seller','password':'V2SellerPassword88','role':'reseller'}).status_code==200
+    token,p=auth.login('v2seller','V2SellerPassword88','','127.0.0.55',3600,'rep-v2')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        assert seller.get('/api/representative-marketplace/orders').status_code==403
+        assert seller.get('/api/representative-marketplace/summary').status_code==403
