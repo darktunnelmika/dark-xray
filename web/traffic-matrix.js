@@ -96,7 +96,7 @@ async function createWarp(el){
  const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');
  toast(L('Registering WARP… no route will be activated yet.','در حال ثبت WARP… هنوز هیچ مسیری فعال نمی‌شود.'));
  const r=await api('/api/traffic-matrix/warp/create','POST',{server:server});
- if(!r.pendingRegistration)throw Error(L('WARP registration did not enter manual-selection mode.','ثبت WARP وارد حالت انتخاب دستی نشد.'));
+ if(!r.pendingRegistration||r.manualSelectionRequired!==true)throw Error(L('WARP registration did not enter manual-selection mode.','ثبت WARP وارد حالت انتخاب دستی نشد.'));
  toast(L('WARP registered. Scan and choose the route yourself.','WARP ثبت شد؛ مسیر را اسکن و خودت انتخاب کن.'));
  await scanWarp({dataset:{id:String(id),server}});
 }
@@ -104,6 +104,7 @@ async function scanWarp(el){
  const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');
  toast(L('Scanning WARP paths from the selected server…','در حال اسکن مسیرهای WARP از سرور انتخاب‌شده…'));
  const r=await api('/api/traffic-matrix/warp/scan','POST',{server:server});
+ if(r.productionTrafficMutation!==false)throw Error(L('Unsafe WARP scan response: production mutation was not explicitly false.','پاسخ اسکن WARP امن نیست؛ عدم تغییر Production صریحاً تأیید نشده است.'));
  const ready=(r.items||[]).filter(x=>x.ready),best=ready[0]||null;
  const rows=(r.items||[]).map(function(x,index){
   const location=[x.country,x.colo].filter(Boolean).join(' · ')||L('Cloudflare edge','لبه Cloudflare');
