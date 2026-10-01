@@ -58,3 +58,24 @@ test('Closeout mobile UI keeps compact badges and sticky bulk actions',()=>{
  assert.match(css,/\.dr-native/);
  assert.match(css,/position:sticky/);
 });
+
+
+test('Restore client list matches compact native Clients layout with visible presence signal',()=>{
+ assert.match(source,/dr-client-list/);
+ assert.match(source,/dr-list-head/);
+ assert.match(source,/dr-live/);
+ assert.match(source,/data-act="drdetail"/);
+ assert.match(source,/data-dr-dark-usage/);
+ assert.match(css,/min-height:58px/);
+ assert.match(css,/grid-template-columns:28px minmax\(190px,1\.3fr\)/);
+ assert.match(css,/\.dr-live\.online/);
+ assert.match(css,/@media\(max-width:760px\)/);
+ assert.match(css,/min-height:54px/);
+});
+
+test('Restore detail opens legacy metadata instead of expanding every list row',()=>{
+ assert.match(source,/async function detailDialog/);
+ assert.match(source,/LEGACY SOURCE/);
+ assert.match(source,/DARK USAGE/);
+ assert.match(source,/TARGETS/);
+});
