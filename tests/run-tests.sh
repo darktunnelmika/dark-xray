@@ -79,6 +79,7 @@ python -m pytest tests/test_update_broker.py -q --junitxml=qa/junit/update-broke
 python -m pytest tests/test_update_api.py -q --junitxml=qa/junit/update-api.xml
 python -m pytest tests/test_web_contract.py -q --junitxml=qa/junit/web-contract.xml
 python -m pytest tests/test_reality_scan.py -q --junitxml=qa/junit/reality.xml
+python -m pytest tests/test_warp_probe_limits.py -q --junitxml=qa/junit/warp-probe-limits.xml
 node --test tests/form-models.test.cjs
 node --test tests/inbounds-models.test.cjs
 node --test tests/inbounds-v3-regression.test.cjs
@@ -96,6 +97,7 @@ node --test tests/update-center.test.cjs
 node --test tests/nodes-v3.test.cjs
 node --test tests/hosts-v3.test.cjs
 node --test tests/traffic-engine-v4.test.cjs
+node --test tests/traffic-matrix-access.test.cjs
 node --test tests/representatives-v2.test.cjs
 node --test tests/cyber-classic.test.cjs
 node --test tests/overview-v4.test.cjs
