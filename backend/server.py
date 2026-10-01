@@ -298,6 +298,26 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def _warp_profile_delete(scope:str):
         with store.transaction() as db:db.execute('DELETE FROM warp_profiles WHERE scope=?',(str(scope or 'hub'),))
 
+    def _warp_pending(scope:str)->dict|None:
+        value=str(scope or 'hub').strip() or 'hub'
+        with store.lock:row=store.db.execute('SELECT outbound_json FROM warp_pending_profiles WHERE scope=?',(value,)).fetchone()
+        if not row:return None
+        try:out=json.loads(row['outbound_json'])
+        except (TypeError,ValueError):return None
+        return copy.deepcopy(out) if isinstance(out,dict) else None
+
+    def _warp_pending_save(scope:str,outbound:dict,device_id:str='')->dict:
+        value=str(scope or 'hub').strip() or 'hub';body=copy.deepcopy(outbound);body['tag']='warp';now=time.time()
+        with store.transaction() as db:
+            db.execute("""INSERT INTO warp_pending_profiles(scope,outbound_json,device_id,created_at,updated_at)
+                          VALUES(?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET outbound_json=excluded.outbound_json,
+                          device_id=excluded.device_id,updated_at=excluded.updated_at""",
+                       (value,json.dumps(body,separators=(',',':')),str(device_id or '')[:256],now,now))
+        return body
+
+    def _warp_pending_delete(scope:str):
+        with store.transaction() as db:db.execute('DELETE FROM warp_pending_profiles WHERE scope=?',(str(scope or 'hub'),))
+
     def _matrix_deployments(inbound_id:int)->tuple[dict,list[str],dict]:
         inbound=engine.inbound(inbound_id);meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta'),dict) else {}
         scopes=[]
