@@ -208,6 +208,10 @@ class TrafficMatrixProbe(Model):
     server:str=Field(default='hub',min_length=1,max_length=160)
     accessPath:Literal['direct','tunnel']='direct'
     attempts:StrictInt=Field(default=2,ge=1,le=3)
+class TrafficOutboundProbe(Model):
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    tag:str=Field(min_length=1,max_length=128)
+    attempts:StrictInt=Field(default=2,ge=1,le=3)
 class WarpCreate(Model):
     server:str=Field(default='hub',min_length=1,max_length=160)
 class WarpEndpointScan(Model):
