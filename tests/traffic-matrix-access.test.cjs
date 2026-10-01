@@ -23,7 +23,16 @@ function setup(role='owner',lang='en'){
   document:{querySelectorAll:()=>buttons,querySelector:()=>breadcrumb},
   runAction:async act=>'delegated:'+act,
   go:async page=>{navigation.push(page);scope.state.page=page;scope.shell();return scope.enginePage();},
-  api:async(url,method='GET')=>{requests.push([url,method]);return [{id:1,remark:'Dark Vpn',protocol:'vless',port:8569}];},
+  api:async(url,method='GET',body)=>{requests.push([url,method]);
+   if(url==='/api/inbounds')return [{id:1,remark:'Dark Vpn',protocol:'vless',port:8569}];
+   if(url==='/api/traffic-matrix/runtimes')return {items:[{id:'hub',kind:'hub',name:'HUB',address:'1.2.3.4',online:true}]};
+   if(url.startsWith('/api/traffic-matrix/warp?'))return {registered:false,state:'not_created',selectionConfirmed:false,endpoint:'',candidateEndpoint:'',server:{id:'hub',kind:'hub',name:'HUB',online:true}};
+   if(url==='/api/traffic-matrix/warp/create')return {registered:true,selectionRequired:true,items:[]};
+   if(url==='/api/traffic-matrix/warp/scan')return {items:[],selectionConfirmed:false};
+   if(url==='/api/traffic-matrix/warp/endpoint')return {selectionConfirmed:true,selected:body?.endpoint||''};
+   if(url==='/api/traffic-matrix/warp/auto')return {selectionConfirmed:true,autoSelected:true};
+   return {};
+  },
   DarkTrafficMatrix:{open:async id=>{opened.push(id);return 'opened';}}
  };
  vm.runInNewContext(source,scope);
@@ -52,7 +61,7 @@ test('All four sections remain reachable using original engines without changing
   assert.equal(scope.state.page,page);
  }
  assert.deepEqual(delegated,['xray','outbounds','routing']);
- assert.deepEqual(requests,[['/api/inbounds','GET']]);
+ assert.deepEqual(requests,[['/api/inbounds','GET'],['/api/traffic-matrix/runtimes','GET'],['/api/traffic-matrix/warp?server=hub','GET']]);
 });
 test('Xray parent stays active and the breadcrumb identifies the selected child',()=>{
  const {scope,buttons,breadcrumb}=setup();
@@ -67,7 +76,7 @@ test('Xray parent stays active and the breadcrumb identifies the selected child'
 test('WARP opens the existing per-inbound matrix and does not apply a policy',async()=>{
  const {scope,requests,opened}=setup();
  const html=await scope.enginePage();assert.match(html,/Dark Vpn/);assert.match(html,/data-act="tmaccessopen"/);
- assert.deepEqual(requests,[['/api/inbounds','GET']]);assert.deepEqual(opened,[]);
+ assert.deepEqual(requests,[['/api/inbounds','GET'],['/api/traffic-matrix/runtimes','GET'],['/api/traffic-matrix/warp?server=hub','GET']]);assert.deepEqual(opened,[]);
  await scope.runAction('tmaccessopen',{dataset:{id:'1'}});assert.deepEqual(opened,[1]);
  assert.equal(await scope.runAction('other',{}),'delegated:other');
  scope.state.page='settings';assert.equal(await scope.enginePage(),'<p>Original</p>');
@@ -99,4 +108,33 @@ test('Persian grouping, mobile targets and asset order remain explicit',async()=
  assert.ok(index.includes('assets/traffic-matrix-access.css'));
  assert.ok(index.indexOf('assets/traffic-matrix.js')<index.indexOf('assets/traffic-matrix-access.js'));
  assert.ok(index.indexOf('assets/traffic-matrix-access.js')<index.indexOf('assets/ui-stability.js'));
+});
+
+test('WARP center is runtime-first and manual selection is the default',async()=>{
+ const {scope}=setup();
+ const html=await scope.enginePage();
+ assert.match(html,/WARP RUNTIME CENTER/);
+ assert.match(html,/data-xw-runtime/);
+ assert.match(html,/Create \+ Scan/);
+ assert.match(source,/Select & Apply/);
+ assert.match(source,/selectionConfirmed/);
+ assert.match(source,/production WARP policies stay blocked/);
+ assert.match(source,/data-act="xwauto"/);
+});
+
+test('WARP center calls explicit create scan select endpoints without hidden auto apply',async()=>{
+ const {scope,requests}=setup();
+ await scope.enginePage();
+ requests.length=0;
+ await scope.runAction('xwcreate',{});
+ assert.deepEqual(requests.map(x=>x[0]),['/api/traffic-matrix/warp/create','/api/inbounds','/api/traffic-matrix/runtimes','/api/traffic-matrix/warp?server=hub']);
+ assert.doesNotMatch(source,/WARP created and installed/);
+ assert.match(source,/Select a verified path to activate it/);
+});
+
+test('Xray Settings compact WARP UI has responsive scan result layout',()=>{
+ assert.match(css,/\.xw-center/);
+ assert.match(css,/\.xw-path/);
+ assert.match(css,/\.xw-state\.warn/);
+ assert.match(css,/@media\(max-width:760px\)/);
 });
