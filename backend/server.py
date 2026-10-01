@@ -340,12 +340,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         block=next((x for x in engine.section('outbounds') if isinstance(x,dict) and x.get('tag')=='block'),None)
         rows=[]
         for scope in scopes:
-            target=_runtime_target(scope,require_online=False);warp=bool(_warp_profile(scope))
+            target=_runtime_target(scope,require_online=False);warp=bool(_warp_profile(scope));warp_pending=bool(_warp_pending(scope))
             for path in ('direct','tunnel'):
                 port=_matrix_port(scope,inbound,ports,path)
                 if path=='tunnel' and not port:continue
                 rows.append({'server':target,'serverId':scope,'inboundId':inbound_id,'accessPath':path,'port':port,
-                             'policy':saved.get((scope,path),'normal'),'warpReady':warp,
+                             'policy':saved.get((scope,path),'normal'),'warpReady':warp,'warpPending':warp_pending,
                              'adblockReady':bool(block and str(block.get('protocol','')).lower()=='blackhole')})
         return {'inboundId':inbound_id,'remark':str(inbound.get('remark') or inbound.get('tag') or inbound_id),
                 'tag':str(inbound.get('tag') or ''),'rows':rows,'policies':sorted(MATRIX_POLICIES)}
