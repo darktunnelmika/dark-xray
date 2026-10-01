@@ -21,7 +21,7 @@ function card(name,status,detail){return '<div class="ov3-service '+tone(status)
 function aggregate(rows,get,ignored=[]){
  const values=rows.map(get).filter(x=>!ignored.includes(x));
  if(!values.length)return 'not_configured';
- return ['error','offline','stopped','stale','unknown','pending'].find(x=>values.includes(x))||'applied';
+ return ['error','offline','stopped','stale','unknown','unconfigured','pending'].find(x=>values.includes(x))||'applied';
 }
 function row(name,status,detail,error=''){
  return '<div class="ov3-detail-row"><b>'+esc(name)+'</b><span class="'+tone(status)+'">'+esc(label(status))+'</span><small>'+esc(detail)+'</small>'+(error?'<p class="ov3-error">'+esc(error)+'</p>':'')+'</div>';

@@ -38,3 +38,10 @@ test('disabled retired nodes cannot raise active dashboard sync alerts',()=>{
  assert.doesNotMatch(html,/Node sync errors|Retired/);assert.match(html,/All monitored systems nominal/);
  assert.doesNotMatch(source,/errors=nodes\.filter/);
 });
+
+test('an enabled bot without credentials never becomes an applied summary card',()=>{
+ const {ctx,o}=setup();o.telegram=[{owner:'fixture',enabled:true,configured:false,state:'unconfigured'}];
+ const html=ctx.DarkOperationsV3.render();
+ const telegram=html.slice(html.indexOf('Telegram bots'),html.indexOf('WARP configuration'));
+ assert.match(telegram,/Not configured/);assert.doesNotMatch(telegram,/Applied/);
+});
