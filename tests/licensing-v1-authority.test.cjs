@@ -1,0 +1,4 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
+const bot=fs.readFileSync('standalone/license-server/bot.py','utf8'),svc=fs.readFileSync('standalone/license-server/dark-license.service','utf8');
+test('operator bot is Telegram-admin allowlisted and never loads signing key',()=>{assert.match(bot,/DARK_LICENSE_TELEGRAM_ADMINS/);assert.match(bot,/uid not in ADMINS/);assert.doesNotMatch(bot,/SIGNING_KEY|signing\.key|Ed25519PrivateKey/);});
+test('authority service is loopback-only and hardened',()=>{assert.match(svc,/--host 127\.0\.0\.1 --port 8099/);assert.match(svc,/NoNewPrivileges=true/);assert.match(svc,/ProtectSystem=strict/);});
