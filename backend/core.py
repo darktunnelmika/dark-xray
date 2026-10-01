@@ -154,6 +154,8 @@ class CoreEngine:
             CREATE TABLE IF NOT EXISTS core_sections(name TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS warp_profiles(
               scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS warp_pending_profiles(
+              scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',created_at REAL NOT NULL,updated_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS traffic_matrix(
               scope TEXT NOT NULL,inbound_id INTEGER NOT NULL,access_path TEXT NOT NULL,policy TEXT NOT NULL,
               updated_at REAL NOT NULL,PRIMARY KEY(scope,inbound_id,access_path));

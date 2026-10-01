@@ -378,14 +378,37 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         return {'service':'DARK XRAY NODE','nodeId':node_id,'listenerReady':listener,'probe':probe,
                 'productionTrafficMutation':False}
 
+    @app.post('/node/api/v1/outbounds/probe')
+    def outbound_probe(body:dict,_scope:str=Depends(auth)):
+        tag=str(body.get('tag') or '') if isinstance(body,dict) else ''
+        attempts=body.get('attempts',2) if isinstance(body,dict) else 2
+        timeout=body.get('timeoutSeconds',5) if isinstance(body,dict) else 5
+        if not tag or len(tag)>128:
+            raise HTTPException(400,'Invalid outbound probe tag')
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout)is not int or not 1<=timeout<=10:
+            raise HTTPException(400,'Invalid outbound probe limits')
+        outbounds=engine.runtime_outbounds('hub')
+        if not any(isinstance(x,dict) and x.get('tag')==tag for x in outbounds):
+            raise HTTPException(409,'Outbound is missing on Node')
+        try:probe=probe_outbounds(engine._binary(),engine.config.xray_assets,outbounds,tags=[tag],
+                                  attempts=attempts,timeout=float(timeout),trace=True)[0]
+        except OutboundProbeError as ex:raise HTTPException(422,str(ex))
+        return {'service':'DARK XRAY NODE','nodeId':node_id,'probe':probe,'productionTrafficMutation':False}
+
     @app.post('/node/api/v1/warp/endpoints/probe')
     def warp_endpoint_probe(body:dict,_scope:str=Depends(auth)):
         endpoints=body.get('endpoints') if isinstance(body,dict) else None
         attempts=body.get('attempts',2) if isinstance(body,dict) else 2
         timeout=body.get('timeoutSeconds',4) if isinstance(body,dict) else 4
+        candidate=body.get('outbound') if isinstance(body,dict) else None
         if type(attempts)is not int or not 1<=attempts<=3 or type(timeout)is not int or not 1<=timeout<=10:
             raise HTTPException(400,'Invalid WARP endpoint probe limits')
-        outbound=next((x for x in engine.runtime_outbounds('hub') if isinstance(x,dict) and x.get('tag')=='warp'),None)
+        if candidate is not None:
+            if not isinstance(candidate,dict) or str(candidate.get('protocol','')).lower()!='wireguard':
+                raise HTTPException(400,'Invalid probe-only WARP outbound')
+            outbound=copy.deepcopy(candidate);outbound['tag']='warp'
+        else:
+            outbound=next((x for x in engine.runtime_outbounds('hub') if isinstance(x,dict) and x.get('tag')=='warp'),None)
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':raise HTTPException(409,'WARP outbound is missing on Node')
         peers=((outbound.get('settings') or {}).get('peers') or [{}]);current=str(peers[0].get('endpoint') or '') if peers else ''
         raw=endpoints if endpoints is not None else warp_endpoint_candidates(current)

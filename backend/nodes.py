@@ -1423,6 +1423,8 @@ class NodeRegistry:
     def traffic_matrix_probe(self,node_id:str,port:int,outbound_tag:str,*,attempts:int=2,timeout_seconds:int=5)->dict:
         if type(port)is not int or not 1<=port<=65535 or not isinstance(outbound_tag,str) or not outbound_tag:
             raise PolicyError('Invalid Traffic Matrix probe request')
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout_seconds)is not int or not 1<=timeout_seconds<=10:
+            raise PolicyError('Invalid Node probe limits')
         payload={'port':port,'outboundTag':outbound_tag,'attempts':attempts,'timeoutSeconds':timeout_seconds}
         doc,ms=self._request(node_id,'/node/api/v1/traffic-matrix/probe','POST',payload,
                              min(30.0,float(attempts*timeout_seconds+8)))
@@ -1432,9 +1434,28 @@ class NodeRegistry:
                 'probe':doc['probe'],'productionTrafficMutation':False}
 
     @installation_operation
-    def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4)->dict:
+    def outbound_probe(self,node_id:str,tag:str,*,attempts:int=2,timeout_seconds:int=5)->dict:
+        if not isinstance(tag,str) or not tag or len(tag)>128:
+            raise PolicyError('Invalid outbound probe tag')
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout_seconds)is not int or not 1<=timeout_seconds<=10:
+            raise PolicyError('Invalid Node outbound probe limits')
+        payload={'tag':tag,'attempts':attempts,'timeoutSeconds':timeout_seconds}
+        doc,ms=self._request(node_id,'/node/api/v1/outbounds/probe','POST',payload,
+                             min(30.0,float(attempts*timeout_seconds+8)))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('probe'),dict):
+            raise PolicyError('Invalid Node outbound probe response')
+        return {'node_id':node_id,'latency_ms':ms,'probe':doc['probe'],'productionTrafficMutation':False}
+
+    @installation_operation
+    def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4,
+                            outbound:dict|None=None)->dict:
+        if type(attempts)is not int or not 1<=attempts<=3 or type(timeout_seconds)is not int or not 1<=timeout_seconds<=10:
+            raise PolicyError('Invalid Node WARP probe limits')
+        if endpoints is not None and (not isinstance(endpoints,list) or not 1<=len(endpoints)<=20):
+            raise PolicyError('Select 1-20 WARP endpoints')
         payload={'tag':str(tag or 'warp'),'attempts':attempts,'timeoutSeconds':timeout_seconds}
         if endpoints is not None:payload['endpoints']=endpoints
+        if outbound is not None:payload['outbound']=outbound
         count=len(endpoints) if isinstance(endpoints,list) else 15
         doc,ms=self._request(node_id,'/node/api/v1/warp/endpoints/probe','POST',payload,
                              min(30.0,max(8.0,float(max(1,count)*timeout_seconds+8))))

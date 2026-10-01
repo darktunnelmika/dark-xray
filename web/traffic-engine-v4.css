@@ -53,3 +53,13 @@
 .xv3-rule-advanced>.xv3-section{border:0!important;border-radius:0!important;background:transparent!important;padding-inline:0!important}
 @media(max-width:1000px){.te5-routing .te4-rule{grid-template-columns:1fr}.te5-routing .te4-rule footer{justify-content:flex-start}.te5-routing .te4-bal-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:650px){.te5-routing-bar,.te5-routing .te4-bal-grid{grid-template-columns:1fr}}
+
+
+/* Xray Settings V5 · runtime-selectable live outbound probes */
+.te5-probe-bar{display:grid;grid-template-columns:minmax(220px,.8fr) auto 1fr;gap:8px;align-items:end;border:1px solid rgba(45,205,195,.11);background:#03090c;border-radius:9px;padding:9px}
+.te5-probe-bar label{display:grid;gap:4px}.te5-probe-bar label>span{font-size:8px;color:#57757b}.te5-probe-bar select{height:36px;border:1px solid rgba(49,199,196,.14);background:#02090c;color:#a8d0cc;border-radius:7px;padding:0 8px;font-size:9px}
+.te5-probe-bar>small{font-size:8px;color:#5d777c;align-self:center}
+.te5-out-live{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid rgba(56,189,248,.09);background:#02090d;border-radius:6px;padding:7px}
+.te5-out-live>span{font:7px var(--mono);letter-spacing:.08em;color:#506f75}.te5-out-probe{display:grid;gap:2px;text-align:end}.te5-out-probe b{font:10px var(--mono)}.te5-out-probe small{font-size:7px;color:#5b777c}.te5-out-probe.ok b{color:#59ecaa}.te5-out-probe.bad b{color:#ff7f8d}.te5-out-probe.testing b{color:#e5b361}.te5-out-probe.idle b{color:#607a80}
+@media(max-width:850px){.te5-probe-bar{grid-template-columns:1fr auto}.te5-probe-bar>small{grid-column:1/-1}}
+@media(max-width:650px){.te5-probe-bar{grid-template-columns:1fr}.te5-probe-bar select{font-size:16px;height:44px}.te5-probe-bar .btn{width:100%}.te5-out-live{align-items:flex-start}.te5-out-probe small{max-width:210px}}

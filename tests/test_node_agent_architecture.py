@@ -196,3 +196,60 @@ def test_node_provisioner_accepts_normal_source_ref_and_rejects_only_newlines():
     provision=(root/'tools/provision_node.py').read_text()
     assert "or '\\r' in a.source_ref or '\\n' in a.source_ref" in provision
     assert "for c in a.source_ref for c in" not in provision
+
+
+def _agent_env(tmp_path):
+    from fastapi.testclient import TestClient
+    from node_agent import AgentToken,make_agent_app
+    store=Store(tmp_path/'agent.sqlite3')
+    cfg=Config(xray_binary=str(tmp_path/'missing'),xray_assets=str(tmp_path),public_address='node.test',public_origin='https://node.test',secure_cookie=True,test_engine=True)
+    eng=CoreEngine(cfg,store,tmp_path/'runtime')
+    token_value='dkn_'+('Z'*60)
+    token_path=tmp_path/'token';token_path.write_text(token_value+'\n');os.chmod(token_path,0o600)
+    app=make_agent_app(eng,store,AgentToken(token_path),'node-probe-test',background=False)
+    client=TestClient(app,base_url='https://node.test');client.headers['Authorization']='Bearer '+token_value
+    return store,eng,client
+
+
+def test_node_agent_generic_outbound_probe_is_read_only(tmp_path,monkeypatch):
+    import node_agent
+    store,eng,c=_agent_env(tmp_path)
+    eng.save_section('outbounds',[{'tag':'direct','protocol':'freedom','settings':{}}])
+    monkeypatch.setattr(eng,'_binary',lambda:'/bin/true')
+    monkeypatch.setattr(node_agent,'probe_outbounds',lambda *a,**k:[{
+        'tag':'direct','testable':True,'success':True,'delayMs':18.0,'lossPercent':0.0,'jitterMs':1.0,
+        'egress':{'ip':'198.51.100.30','country':'DE','colo':'FRA','warp':'off'}
+    }])
+    before=eng.section('outbounds')
+    r=c.post('/node/api/v1/outbounds/probe',json={'tag':'direct','attempts':2,'timeoutSeconds':5})
+    assert r.status_code==200,r.text
+    assert r.json()['probe']['delayMs']==18.0
+    assert r.json()['productionTrafficMutation'] is False
+    assert eng.section('outbounds')==before
+    c.close();eng.close();store.close()
+
+
+def test_node_agent_pending_warp_candidate_probe_does_not_persist_profile(tmp_path,monkeypatch):
+    import node_agent
+    store,eng,c=_agent_env(tmp_path)
+    candidate={'tag':'warp','protocol':'wireguard','settings':{
+        'secretKey':'secret','address':['172.16.0.2/32'],
+        'peers':[{'publicKey':'peer','endpoint':'162.159.192.1:2408'}]
+    }}
+    seen={}
+    def fake_probe(binary,assets,outbounds,*,tags=None,attempts=1,timeout=5.0,trace=False):
+        seen['outbounds']=outbounds
+        return [{'tag':tags[0],'testable':True,'success':True,'delayMs':22.0,'lossPercent':0.0,'jitterMs':1.0,
+                 'warpVerified':True,'egress':{'ip':'198.51.100.31','country':'NL','colo':'AMS','warp':'on'}}]
+    monkeypatch.setattr(eng,'_binary',lambda:'/bin/true')
+    monkeypatch.setattr(node_agent,'probe_outbounds',fake_probe)
+    r=c.post('/node/api/v1/warp/endpoints/probe',json={
+        'outbound':candidate,'endpoints':['162.159.192.5:2408'],'attempts':2,'timeoutSeconds':4
+    })
+    assert r.status_code==200,r.text
+    assert r.json()['items'][0]['endpoint']=='162.159.192.5:2408'
+    assert r.json()['productionTrafficMutation'] is False
+    assert seen['outbounds'][0]['settings']['peers'][0]['endpoint']=='162.159.192.5:2408'
+    assert eng.warp_profile('hub') is None
+    assert not any(x.get('tag')=='warp' for x in eng.runtime_outbounds('hub'))
+    c.close();eng.close();store.close()

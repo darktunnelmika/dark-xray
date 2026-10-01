@@ -43,6 +43,7 @@ python -m pytest tests/test_node_pairing_cancellation.py -q --junitxml=qa/junit/
 python -m pytest tests/test_node_pairing_cancellation_guards.py -q --junitxml=qa/junit/node-pairing-cancellation-guards.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
 python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
+python -m pytest tests/test_traffic_matrix.py tests/test_traffic_matrix_api.py tests/test_traffic_engine_v4.py tests/test_warp_probe_limits.py -q --junitxml=qa/junit/xray-settings-v5.xml
 python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/preupdate-node-hardening.xml
 python -m pytest tests/test_node_guard_recovery.py -q --junitxml=qa/junit/node-guard-recovery.xml
 python -m pytest tests/test_hub_node_control_store.py -q --junitxml=qa/junit/hub-node-control-store.xml
@@ -95,6 +96,7 @@ node --test tests/ui-stability.test.cjs
 node --test tests/update-center.test.cjs
 node --test tests/nodes-v3.test.cjs
 node --test tests/hosts-v3.test.cjs
+node --test tests/traffic-matrix-ui.test.cjs tests/traffic-matrix-access.test.cjs
 node --test tests/traffic-engine-v4.test.cjs
 node --test tests/representatives-v2.test.cjs
 node --test tests/cyber-classic.test.cjs

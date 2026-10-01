@@ -80,3 +80,14 @@ test('Guided rule editor groups source identity and process matches under Advanc
   assert.match(guided,/Advanced match conditions/);
   assert.match(guided,/editor\.insertBefore\(sections\[3\],sections\[0\]\)/);
 });
+
+
+test('Traffic Engine V5 exposes live per-server outbound probes',()=>{
+ assert.match(traffic,/\/api\/traffic-engine\/outbound\/probe/);
+ assert.match(traffic,/data-te4-probe-server/);
+ assert.match(traffic,/Ping all outbounds/);
+ assert.match(traffic,/te4outprobe/);
+ assert.match(traffic,/probe_server/);
+ assert.match(css,/te5-probe-bar/);
+ assert.match(css,/te5-out-probe/);
+});
