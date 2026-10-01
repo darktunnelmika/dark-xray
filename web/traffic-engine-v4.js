@@ -69,6 +69,20 @@ function dependencyText(m){
  if(m.dialed_by?.length)out.push(L('Dialed by','Dial شده توسط')+': '+m.dialed_by.join(', '));
  return out;
 }
+function probeKey(tag){return state.te4.probeRuntime+'|'+String(tag||'');}
+function probeView(tag){
+ const p=state.te4.probes[probeKey(tag)];
+ if(!p)return '<span class="te5-probe idle">'+L('Not tested','تست نشده')+'</span>';
+ if(p.testing)return '<span class="te5-probe testing">…</span>';
+ const loc=[p.country,p.colo].filter(Boolean).join(' · ');
+ const delay=p.delayMs==null?'—':Math.round(Number(p.delayMs))+' ms';
+ const loss=p.lossPercent==null?'—':String(p.lossPercent)+'%';
+ return '<span class="te5-probe '+(p.success?'ok':'bad')+'"><b>'+(p.success?'PASS':'FAIL')+' · '+delay+'</b><small>'+esc((loc?loc+' · ':'')+loss+(p.egressIp?' · '+p.egressIp:'')||p.error||'—')+'</small></span>';
+}
+function outboundProbeBar(d){
+ const options=(d.runtimes||[]).map(r=>'<option value="'+esc(r.id)+'" '+(r.id===state.te4.probeRuntime?'selected':'')+' '+(r.online===false?'disabled':'')+'>'+esc((r.kind==='hub'?'HUB · ':'NODE · ')+(r.name||r.id)+(r.online===false?' · OFFLINE':''))+'</option>').join('');
+ return '<section class="te5-probe-bar"><label><span>'+L('Test outbounds from','تست اوتباندها از')+'</span><select data-te4-probe-runtime>'+options+'</select></label><button type="button" class="btn" data-act="te4probeall">'+icon('activity')+L('Test all outbounds','تست همه اوتباندها')+'</button><small>'+L('Ping and egress location are measured on the selected runtime; customer traffic is not changed.','پینگ و موقعیت خروجی روی همان سرور انتخابی اندازه‌گیری می‌شود و مسیر کاربران تغییر نمی‌کند.')+'</small></section>';
+}
 function outboundCard(o,index,meta){
  const deps=dependencyText(meta),chain=meta.dials_via;
  return `<article class="panel te4-out ${meta.default?'default':''}">
