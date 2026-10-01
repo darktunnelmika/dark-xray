@@ -1,0 +1,76 @@
+name: Verify and publish Operations V3 candidate
+on:
+  push:
+    branches: [automation/operations-v3-publisher-20261002]
+    paths: [.github/workflows/operations-v3-publish.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Reconstruct exact audited source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp qa/operations-v3-source.b64 /tmp/operations-v3-source.b64
+          git checkout --detach a0c2c265fe24fa8ff67bf8dea82516323f6964ee
+          python - <<'PY'
+          import base64,hashlib,json,lzma,subprocess
+          from pathlib import Path
+          raw=lzma.decompress(base64.b64decode(Path('/tmp/operations-v3-source.b64').read_text(),validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='8fbf99f6ee8f74d3e9660b6ca12fdc6a30b339d4b34f4c19d5ba6a61cbfcc716'
+          doc=json.loads(raw)
+          assert doc['base']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          allowed={'VERSION','backend/operations_overview.py','backend/server.py','docs/OPERATIONS-V3.md',
+                   'tests/browser-smoke.py','tests/operations-v3-browser.py','tests/operations-v3-ui.test.cjs',
+                   'tests/run-tests.sh','tests/test_operations_v3.py','web/index.html','web/operations-v3.js',
+                   'web/ops-v2.css','web/ops-v2.js','web/overview-v4.css','web/overview-v4.js'}
+          assert len(doc['files'])==len(allowed) and {x['path'] for x in doc['files']}==allowed
+          for item in doc['files']:
+              path=Path(item['path']);assert not path.is_symlink()
+              if item['before'] is None:
+                  assert not path.exists();old=''
+              else:
+                  old=path.read_text();assert hashlib.sha256(old.encode()).hexdigest()==item['before'],str(path)
+              text=old;end=len(old)
+              for start,stop,replacement in reversed(item['edits']):
+                  assert isinstance(start,int) and isinstance(stop,int) and 0<=start<=stop<=end
+                  assert isinstance(replacement,str)
+                  text=text[:start]+replacement+text[stop:];end=start
+              assert hashlib.sha256(text.encode()).hexdigest()==item['after'],str(path)
+              path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
+          subprocess.run(['git','add','--',*sorted(allowed)],check=True)
+          assert set(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())==allowed
+          names=sorted(p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\0') if p and p!='SHA256SUMS')
+          Path('SHA256SUMS').write_text(''.join(hashlib.sha256(Path(p).read_bytes()).hexdigest()+'  '+p+'\n' for p in names))
+          subprocess.run(['git','add','SHA256SUMS'],check=True)
+          print('Exact source verified; no Licensing/Node/Tunnel implementation changes.')
+          PY
+          git diff --cached --check
+          sha256sum -c SHA256SUMS > /tmp/ops-v3-checksums.log
+          diff -u <(git ls-files | grep -vx SHA256SUMS | LC_ALL=C sort) <(cut -c67- SHA256SUMS | LC_ALL=C sort)
+          python tools/repo-check.py
+      - name: Run isolated operations regressions
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+          PYTHONPATH: backend
+        run: |
+          python -m pip install -q -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+          python -m pytest tests/test_operations_v3.py tests/test_telegram_ops.py tests/test_traffic_matrix_api.py -q
+          node --test tests/operations-v3-ui.test.cjs tests/overview-v4.test.cjs
+          python tests/operations-v3-browser.py
+      - name: Publish candidate branch only; no merge or deployment
+        run: |
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'feat(operations): truthful owner service overview and rc32 acceptance'
+          git push origin HEAD:refs/heads/feature/operations-v3
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
