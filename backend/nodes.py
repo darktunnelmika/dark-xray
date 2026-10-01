@@ -1432,6 +1432,17 @@ class NodeRegistry:
                 'probe':doc['probe'],'productionTrafficMutation':False}
 
     @installation_operation
+    def outbound_probe(self,node_id:str,tag:str,*,attempts:int=2,timeout_seconds:int=5)->dict:
+        if not isinstance(tag,str) or not tag or len(tag)>128:
+            raise PolicyError('Invalid outbound probe tag')
+        payload={'tag':tag,'attempts':attempts,'timeoutSeconds':timeout_seconds}
+        doc,ms=self._request(node_id,'/node/api/v1/outbounds/probe','POST',payload,
+                             min(30.0,float(attempts*timeout_seconds+8)))
+        if not isinstance(doc,dict) or doc.get('service')!='DARK XRAY NODE' or not isinstance(doc.get('probe'),dict):
+            raise PolicyError('Invalid Node outbound probe response')
+        return {'node_id':node_id,'latency_ms':ms,'probe':doc['probe'],'productionTrafficMutation':False}
+
+    @installation_operation
     def warp_endpoint_probe(self,node_id:str,tag:str,endpoints:list[str]|None=None,*,attempts:int=2,timeout_seconds:int=4,
                             outbound:dict|None=None)->dict:
         payload={'tag':str(tag or 'warp'),'attempts':attempts,'timeoutSeconds':timeout_seconds}
