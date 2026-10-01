@@ -16,9 +16,9 @@ def test_node_warp_probe_rejects_invalid_timeout_before_network(tmp_path,monkeyp
     try:
         monkeypatch.setattr(reg,'_request',lambda *a,**k: (_ for _ in ()).throw(AssertionError('network must not run')))
         with pytest.raises(PolicyError,match='Invalid Node WARP probe limits'):
-            reg.warp_endpoint_probe('node-1','warp',None,attempts=2,timeout_seconds=0)
+            NodeRegistry.warp_endpoint_probe.__wrapped__(reg,'node-1','warp',None,attempts=2,timeout_seconds=0)
         with pytest.raises(PolicyError,match='Invalid Node WARP probe limits'):
-            reg.warp_endpoint_probe('node-1','warp',None,attempts=4,timeout_seconds=4)
+            NodeRegistry.warp_endpoint_probe.__wrapped__(reg,'node-1','warp',None,attempts=4,timeout_seconds=4)
     finally:
         reg.close();store.close()
 
@@ -28,9 +28,9 @@ def test_node_warp_probe_rejects_invalid_endpoint_count_before_network(tmp_path,
     try:
         monkeypatch.setattr(reg,'_request',lambda *a,**k: (_ for _ in ()).throw(AssertionError('network must not run')))
         with pytest.raises(PolicyError,match='Select 1-20 WARP endpoints'):
-            reg.warp_endpoint_probe('node-1','warp',[],attempts=2,timeout_seconds=4)
+            NodeRegistry.warp_endpoint_probe.__wrapped__(reg,'node-1','warp',[],attempts=2,timeout_seconds=4)
         with pytest.raises(PolicyError,match='Select 1-20 WARP endpoints'):
-            reg.warp_endpoint_probe('node-1','warp',['162.159.192.1:2408']*21,attempts=2,timeout_seconds=4)
+            NodeRegistry.warp_endpoint_probe.__wrapped__(reg,'node-1','warp',['162.159.192.1:2408']*21,attempts=2,timeout_seconds=4)
     finally:
         reg.close();store.close()
 
@@ -40,6 +40,6 @@ def test_node_traffic_matrix_probe_rejects_invalid_limits_before_network(tmp_pat
     try:
         monkeypatch.setattr(reg,'_request',lambda *a,**k: (_ for _ in ()).throw(AssertionError('network must not run')))
         with pytest.raises(PolicyError,match='Invalid Node probe limits'):
-            reg.traffic_matrix_probe('node-1',443,'direct',attempts=2,timeout_seconds=11)
+            NodeRegistry.traffic_matrix_probe.__wrapped__(reg,'node-1',443,'direct',attempts=2,timeout_seconds=11)
     finally:
         reg.close();store.close()
