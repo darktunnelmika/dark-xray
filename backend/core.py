@@ -153,7 +153,8 @@ class CoreEngine:
               up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS core_sections(name TEXT PRIMARY KEY,body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS warp_profiles(
-              scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL);
+              scope TEXT PRIMARY KEY,outbound_json TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',
+              selection_confirmed INTEGER NOT NULL DEFAULT 1,updated_at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS traffic_matrix(
               scope TEXT NOT NULL,inbound_id INTEGER NOT NULL,access_path TEXT NOT NULL,policy TEXT NOT NULL,
               updated_at REAL NOT NULL,PRIMARY KEY(scope,inbound_id,access_path));
@@ -200,6 +201,9 @@ class CoreEngine:
               AFTER DELETE ON core_sections WHEN OLD.name='ipguard'
               BEGIN UPDATE core_guard_revision SET revision=revision+1 WHERE id=1; END;
             ''')
+            warp_columns={row[1] for row in store.db.execute("PRAGMA table_info(warp_profiles)")}
+            if "selection_confirmed" not in warp_columns:
+                store.db.execute("ALTER TABLE warp_profiles ADD COLUMN selection_confirmed INTEGER NOT NULL DEFAULT 1")
         self.validate_schema_only=True
 
     def _write(self):
@@ -880,13 +884,21 @@ class CoreEngine:
             self._observed_exit_pid=p.pid;self.last_exit_code=code;self.last_exit_at=time.time()
         return False
 
-    def warp_profile(self,scope:str='hub')->dict|None:
+    def warp_profile_state(self,scope:str='hub')->dict|None:
         value=str(scope or 'hub').strip() or 'hub'
-        with self.store.lock:row=self.store.db.execute('SELECT outbound_json FROM warp_profiles WHERE scope=?',(value,)).fetchone()
+        with self.store.lock:
+            row=self.store.db.execute(
+                'SELECT outbound_json,device_id,selection_confirmed,updated_at FROM warp_profiles WHERE scope=?',(value,)).fetchone()
         if not row:return None
         try:out=json.loads(row['outbound_json'])
         except (TypeError,ValueError):return None
-        return copy.deepcopy(out) if isinstance(out,dict) else None
+        if not isinstance(out,dict):return None
+        return {'outbound':copy.deepcopy(out),'device_id':str(row['device_id'] or ''),
+                'selection_confirmed':bool(row['selection_confirmed']),'updated_at':float(row['updated_at'] or 0)}
+
+    def warp_profile(self,scope:str='hub')->dict|None:
+        state=self.warp_profile_state(scope)
+        return copy.deepcopy(state['outbound']) if state else None
 
     def runtime_outbounds(self,scope:str='hub')->list[dict]:
         base=[copy.deepcopy(x) for x in self.section('outbounds') if isinstance(x,dict)]
