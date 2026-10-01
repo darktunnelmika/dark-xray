@@ -22,6 +22,8 @@ function setup(role='owner',lang='en'){
   shell:()=>{buttons.forEach(b=>{b.active=b.dataset.page===scope.state.page;});return 'shell';},
   document:{querySelectorAll:()=>buttons,querySelector:()=>breadcrumb},
   runAction:async act=>'delegated:'+act,
+  toast:()=>{},confirm:()=>true,
+  renderPage:async()=>scope.enginePage(),
   go:async page=>{navigation.push(page);scope.state.page=page;scope.shell();return scope.enginePage();},
   api:async(url,method='GET',body)=>{requests.push([url,method]);
    if(url==='/api/inbounds')return [{id:1,remark:'Dark Vpn',protocol:'vless',port:8569}];
@@ -118,7 +120,7 @@ test('WARP center is runtime-first and manual selection is the default',async()=
  assert.match(html,/Create \+ Scan/);
  assert.match(source,/Select & Apply/);
  assert.match(source,/selectionConfirmed/);
- assert.match(source,/production WARP policies stay blocked/);
+ assert.match(source,/Production WARP policies stay blocked/i);
  assert.match(source,/data-act="xwauto"/);
 });
 
