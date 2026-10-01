@@ -88,11 +88,11 @@ def run():
                             assert page.locator('[data-dr-search]').evaluate('(el)=>document.activeElement===el')
                             assert page.locator('.drs-user-status .tag').inner_text()==('Needs source review' if lang=='en' else 'نیازمند بررسی مبدا')
                             assert not writes
-                            page.locator('[data-act=drsreview]').click();form=page.locator('#dialog-form')
+                            page.locator('[data-act=drdetail]').first.click();page.locator('[data-act=drsreview]').click();form=page.locator('#dialog-form')
                             assert form.locator('[name=upload]').input_value()==''
                             assert form.locator('[name=total]').input_value()==''
                             page.locator('.dialog-head [data-act=close]').click();assert not writes
-                            page.locator('[data-act=drsreview]').click();form=page.locator('#dialog-form')
+                            page.locator('[data-act=drdetail]').first.click();page.locator('[data-act=drsreview]').click();form=page.locator('#dialog-form')
                             for key,value in [('upload','0'),('download','0'),('total','50000')]:form.locator('[name='+key+']').fill(value)
                             form.locator('[name=noExpiry]').check();form.locator('[name=note]').fill('Checked against the isolated source fixture')
                             form.locator('[type=submit]').click();page.wait_for_timeout(100);assert not writes
@@ -102,7 +102,7 @@ def run():
                             if response.value.json().get('applied') is False:
                                 page.locator('.dialog .notice.warning').wait_for(state='visible');page.locator('.dialog-head [data-act=close]').click()
                             page.wait_for_function('id=>DarkRestoreGroups.state.data?.items.find(x=>x.id===id)?.service_status==="eligible"',arg=item['id'])
-                            page.locator('[data-act=drssuspend]').click();form=page.locator('#dialog-form');form.locator('[name=confirmed]').check()
+                            page.locator('[data-act=drdetail]').first.click();page.locator('[data-act=drssuspend]').click();form=page.locator('#dialog-form');form.locator('[name=confirmed]').check()
                             with page.expect_response(lambda r:'/suspension' in r.url and r.request.method=='PUT') as suspended:form.locator('[type=submit]').click()
                             assert suspended.value.status==200
                             if suspended.value.json().get('applied') is False:
