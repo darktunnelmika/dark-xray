@@ -4,7 +4,7 @@
 if(typeof enginePage!=='function'||typeof runAction!=='function')return;
 const baseEnginePage=enginePage,baseRunAction=runAction;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
-state.te4=state.te4||{preview:null,preview_seq:0,config_signature:''};
+state.te4=state.te4||{preview:null,preview_seq:0,config_signature:'',probeRuntime:'hub',probes:{}};
 
 const esc=v=>e(String(v??''));
 function trafficTabs(){
@@ -15,14 +15,17 @@ function trafficTabs(){
  </nav>`;
 }
 async function teData(){
- const [status,outbounds,routing,observatory,core]=await Promise.all([
+ const [status,outbounds,routing,observatory,core,runtimeDoc]=await Promise.all([
   api('/api/traffic-engine'),
   api('/api/settings/outbounds').then(x=>x.value||[]),
   api('/api/settings/routing').then(x=>x.value||{}),
   api('/api/settings/observatory').then(x=>x.value||{}),
-  api('/api/core/state')
+  api('/api/core/state'),
+  api('/api/traffic-matrix/runtimes')
  ]);
- return {status,outbounds,routing,observatory,core};
+ const runtimes=runtimeDoc?.items||[];
+ if(!runtimes.some(x=>x.id===state.te4.probeRuntime))state.te4.probeRuntime=runtimes[0]?.id||'hub';
+ return {status,outbounds,routing,observatory,core,runtimes};
 }
 function endpoint(o){
  const s=o?.settings||{},p=String(o?.protocol||'');
