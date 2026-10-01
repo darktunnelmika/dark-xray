@@ -237,7 +237,7 @@ async function makeDefault(index){
  const tag=list[index]?.tag;if(!confirm(L('Make this the first/default outbound? Unmatched traffic will use it.','این اوتباند اولین/پیش‌فرض شود؟ ترافیکی که با هیچ قانونی تطبیق نکند از آن استفاده می‌کند.')))return;
  const [item]=list.splice(index,1);list.unshift(item);await api('/api/settings/outbounds','PUT',{value:list});toast(L('Default outbound changed to ','اوتباند پیش‌فرض تغییر کرد به ')+tag);await refresh();
 }
-document.addEventListener('change',ev=>{
+if(typeof document.addEventListener==='function')document.addEventListener('change',ev=>{
  const el=ev.target;if(!el.matches('[data-te4-probe-runtime]'))return;
  state.te4.probeRuntime=String(el.value||'hub');state.te4.probes={};
  renderPage().catch(ex=>toast(ex.message,true));
