@@ -1,0 +1,19 @@
+[Unit]
+Description=DARK License Telegram Operator Bot
+After=dark-license.service network-online.target
+Requires=dark-license.service
+[Service]
+Type=simple
+User=dark-license
+Group=dark-license
+EnvironmentFile=/etc/dark-license/env
+WorkingDirectory=/opt/dark-license
+ExecStart=/opt/dark-license/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target
