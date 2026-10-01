@@ -53,6 +53,7 @@ test('WARP V5 is manual by default and Auto Best is explicit',()=>{
 test('Traffic Matrix previews route changes and shows WARP AdBlock state',()=>{
  assert.match(matrix,/Preview Traffic Matrix change/);
  assert.match(matrix,/Preview batch route change/);
- assert.match(matrix,/WARP ON/);
- assert.match(matrix,/AdBlock ON/);
+ assert.match(matrix,/warpOn/);
+ assert.match(matrix,/adblockOn/);
+ assert.match(matrix,/tm-policy-state/);
 });
