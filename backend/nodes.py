@@ -166,6 +166,7 @@ class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
         self.stop=threading.Event();self.thread:threading.Thread|None=None
+        self._monitor_lock=threading.RLock();self._monitor_state={}
         self._operation_locks={};self._operation_locks_guard=threading.Lock()
         with store.lock:
             store.db.executescript('''
@@ -453,6 +454,7 @@ class NodeRegistry:
         now=time.time()
         for r in rows:
             r.pop('token_enc',None)
+            with self._monitor_lock:r['monitor']=dict(self._monitor_state.get(r['id'],{}))
             try:r['health']=json.loads(r.pop('last_health','{}'))
             except Exception:r['health']={}
             with self.store.lock:
@@ -1259,71 +1261,128 @@ class NodeRegistry:
         return {'nodes':len(results),'items':results,'reset':True}
 
     def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None,lease_callback=None):
+        import logging
+        import math
         if self.thread and self.thread.is_alive():return
-        if interval<=0 or initial_delay<0:raise ValueError('Invalid node monitor interval')
-        if sync_provider is not None and not callable(sync_provider):raise ValueError('sync_provider must be callable')
-        if desired_provider is not None and not callable(desired_provider):raise ValueError('desired_provider must be callable')
-        if traffic_callback is not None and not callable(traffic_callback):raise ValueError('traffic_callback must be callable')
-        if security_callback is not None and not callable(security_callback):raise ValueError('security_callback must be callable')
-        if lease_callback is not None and not callable(lease_callback):raise ValueError('lease_callback must be callable')
-        self.stop.clear()
-        def run():
-            if self.stop.wait(initial_delay):return
-            while not self.stop.is_set():
-                with self.store.lock:ids=[r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1 ORDER BY id')]
-                for node_id in ids:
-                    if self.stop.is_set():return
-                    command=self.commands.status(node_id)
+        if not math.isfinite(interval) or not math.isfinite(initial_delay) or interval<=0 or initial_delay<0:
+            raise ValueError('Invalid node monitor interval')
+        callbacks={'sync_provider':sync_provider,'desired_provider':desired_provider,
+                   'traffic_callback':traffic_callback,'security_callback':security_callback,'lease_callback':lease_callback}
+        for name,callback in callbacks.items():
+            if callback is not None and not callable(callback):raise ValueError(name+' must be callable')
+        # A lease renewer cannot inherit the legacy 60s telemetry interval.
+        # Each node owns its cadence; no fleet-wide barrier or queued duplicates.
+        cadence=min(float(interval),5.0) if lease_callback is not None else float(interval)
+        stop=self.stop;stop.clear();workers={}
+        logger=logging.getLogger(__name__)
+        class Cancelled(Exception):pass
+
+        def cycle(node_id,retired):
+            def checkpoint():
+                if stop.is_set() or retired.is_set():raise Cancelled()
+                with self.store.lock:
+                    row=self.store.db.execute('SELECT enabled FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+                if not row or not row[0]:raise Cancelled()
+            def record(**values):
+                with self._monitor_lock:self._monitor_state.setdefault(node_id,{}).update(values)
+            def step(stage,function,*args,**kwargs):
+                checkpoint();record(stage=stage)
+                return function(*args,**kwargs)
+            def security():
+                if security_callback is None:return
+                try:
+                    result=step('security',self.sync_security,node_id)
+                    step('security_policy',security_callback,node_id,result)
+                    record(security_error='')
+                except (PolicyError,OSError,ValueError) as exc:
+                    record(security_error=str(exc)[:400])
+            started=time.monotonic();record(started_at=time.time(),cadence_seconds=cadence)
+            try:
+                # Pin this cycle to one installation, including its final grant.
+                with self.installations.operation(node_id):
+                    command=step('control',self.commands.status,node_id)
                     if command['pending'] and command['action']=='stop':
-                        try:self.deliver_pending_control(node_id)
-                        except (PolicyError,OSError,ValueError):pass
-                    desired_state=None
+                        step('stop',self.deliver_pending_control,node_id)
                     if desired_provider is not None:
-                        try:desired_state=desired_provider(node_id)
-                        except (PolicyError,OSError,ValueError):desired_state=None
-                    try:
-                        self.probe(node_id,timeout=5.0)
-                        traffic=self.sync_traffic(node_id);lease_traffic=traffic
-                        if traffic_callback is not None and traffic.get('charged_bytes'):traffic_callback(node_id,traffic)
-                        if security_callback is not None:
-                            try:
-                                security=self.sync_security(node_id);security_callback(node_id,security)
-                            except (PolicyError,OSError,ValueError):
-                                pass
-                        if desired_provider is not None:
-                            legacy_bundles=sync_provider(node_id) if sync_provider is not None else None
-                            # Traffic/security callbacks may just have disabled a client.
-                            # Persist before probing for offline visibility, but rebuild here
-                            # so this cycle never sends the pre-quota/pre-block payload.
-                            desired_state=desired_provider(node_id)
-                            self.sync_desired_state(node_id,desired_state,legacy_bundles=legacy_bundles)
-                            post=self.sync_traffic(node_id);lease_traffic=post
-                            if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
-                            if security_callback is not None:
-                                try:
-                                    security=self.sync_security(node_id);security_callback(node_id,security)
-                                except (PolicyError,OSError,ValueError):
-                                    pass
-                        elif sync_provider is not None:
-                            self.sync_mirrors(node_id,sync_provider(node_id))
-                            post=self.sync_traffic(node_id);lease_traffic=post
-                            if traffic_callback is not None and post.get('charged_bytes'):traffic_callback(node_id,post)
-                            if security_callback is not None:
-                                try:
-                                    security=self.sync_security(node_id);security_callback(node_id,security)
-                                except (PolicyError,OSError,ValueError):
-                                    pass
-                        if lease_callback is not None:lease_callback(node_id,lease_traffic)
-                        self.deliver_pending_control(node_id)
-                    except (PolicyError,OSError,ValueError):
-                        pass
-                if self.stop.wait(interval):return
+                        # Preserve pending/offline desired-state visibility.
+                        try:step('desired',desired_provider,node_id)
+                        except (PolicyError,OSError,ValueError):pass
+                    step('probe',self.probe,node_id,timeout=5.0)
+                    traffic=step('traffic',self.sync_traffic,node_id)
+                    if traffic_callback is not None and traffic.get('charged_bytes'):
+                        step('policy',traffic_callback,node_id,traffic)
+                    security()
+                    if desired_provider is not None:
+                        bundles=step('bundles',sync_provider,node_id) if sync_provider is not None else None
+                        state=step('desired',desired_provider,node_id)
+                        step('apply',self.sync_desired_state,node_id,state,legacy_bundles=bundles)
+                    elif sync_provider is not None:
+                        bundles=step('bundles',sync_provider,node_id)
+                        step('apply',self.sync_mirrors,node_id,bundles)
+                    if desired_provider is not None or sync_provider is not None:
+                        traffic=step('post_traffic',self.sync_traffic,node_id)
+                        if traffic_callback is not None and traffic.get('charged_bytes'):
+                            step('post_policy',traffic_callback,node_id,traffic)
+                        security()
+                    if lease_callback is not None:
+                        lease=step('lease',lease_callback,node_id,traffic)
+                        record(last_lease_at=time.time(),lease_remaining_seconds=(lease or {}).get('remaining_seconds'))
+                    step('control',self.deliver_pending_control,node_id)
+                record(stage='complete',last_success_at=time.time(),last_error='',consecutive_failures=0)
+            except Cancelled:
+                record(stage='cancelled')
+            except Exception as exc:
+                # Keep failures separate from transport health: a successful GET
+                # must not erase a refused accounting grant or kill the worker.
+                with self._monitor_lock:
+                    state=self._monitor_state.setdefault(node_id,{})
+                    state.update(last_error=type(exc).__name__+': '+str(exc)[:400],
+                                 last_error_at=time.time(),failed_stage=state.get('stage',''),
+                                 consecutive_failures=state.get('consecutive_failures',0)+1)
+                    stage=state.get('stage','')
+                logger.warning('Node monitor cycle failed for %s at %s (%s)',node_id,stage,type(exc).__name__)
+            finally:record(cycle_seconds=round(time.monotonic()-started,3))
+
+        def worker(node_id,retired):
+            while not stop.is_set() and not retired.is_set():
+                started=time.monotonic();cycle(node_id,retired)
+                # Fixed start-to-start cadence; slow work does not add another
+                # full sleep. A tiny floor prevents a retry/busy-loop storm.
+                wait=max(.01,cadence-(time.monotonic()-started))
+                if retired.wait(wait):return
+
+        def run():
+            try:
+                if stop.wait(initial_delay):return
+                while not stop.is_set():
+                    with self.store.lock:
+                        ids={r[0] for r in self.store.db.execute('SELECT id FROM remote_nodes WHERE enabled=1')}
+                    for node_id,(thread,retired) in list(workers.items()):
+                        if node_id not in ids:retired.set()
+                        if not thread.is_alive():
+                            workers.pop(node_id)
+                            if node_id not in ids:
+                                with self._monitor_lock:self._monitor_state.pop(node_id,None)
+                    for node_id in sorted(ids):
+                        if stop.is_set():break
+                        if node_id in workers:continue
+                        retired=threading.Event()
+                        thread=threading.Thread(target=worker,args=(node_id,retired),
+                                                name='dark-node-monitor-'+node_id,daemon=True)
+                        workers[node_id]=(thread,retired);thread.start()
+                    if stop.wait(min(1.0,cadence)):return
+            finally:
+                for thread,retired in workers.values():retired.set()
+                # Keep the supervisor alive until workers drain, preventing a
+                # start/close/start race from resurrecting an old generation.
+                for thread,_retired in workers.values():thread.join()
         self.thread=threading.Thread(target=run,name='dark-node-health',daemon=True);self.thread.start()
 
     def close(self):
         self.stop.set()
-        if self.thread:self.thread.join(timeout=6.0)
-        self.thread=None
+        if self.thread:
+            self.thread.join(timeout=6.0)
+            if not self.thread.is_alive():self.thread=None
 
     @installation_operation
     def remote_logs(self,node_id:str,kind:str='process',limit:int=300)->dict:
