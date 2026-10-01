@@ -17,7 +17,7 @@ def bot(c):
 
 def plan(c,inbound,price=200000):
     r=c.post('/api/commerce/simple-plans',json={
-        'name':'CUSTOMER V5','plan_type':'volume','price_minor':price,'duration_months':1,
+        'name':'CUSTOMER V5','plan_type':'volume','price_minor':price,'duration_days':30,
         'volume_gb':30,'ip_limit':2,'inbound_ids':[inbound],'activation_mode':'immediate','published':True})
     assert r.status_code==201,r.text
     return r.json()
@@ -150,7 +150,7 @@ def test_representative_customer_miniapp_is_owner_scoped(env):
         assert seller.put('/api/telegram/settings',json={
             'enabled':False,'bot_token':BOT_TOKEN,'admin_telegram_id':770001}).status_code==200
         created=seller.post('/api/commerce/simple-plans',json={
-            'name':'REP CUSTOMER PLAN','plan_type':'volume','price_minor':90000,'duration_months':1,
+            'name':'REP CUSTOMER PLAN','plan_type':'volume','price_minor':90000,'duration_days':30,
             'volume_gb':20,'ip_limit':1,'inbound_ids':[inbound],'published':True})
         assert created.status_code==201,created.text
         boot=seller.get('/api/telegram-customer/bootstrap',params={'owner':'mini-rep'},headers=h(881000))

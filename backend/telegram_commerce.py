@@ -57,9 +57,9 @@ class SimplePlanBody(Model):
     name: str = Field(min_length=1, max_length=128)
     plan_type: Literal['volume','unlimited'] = 'volume'
     price_minor: StrictInt = Field(ge=0, le=MAX_INT)
-    duration_months: Literal[1,2,3,6,12] = 1
+    duration_days: StrictInt = Field(default=30, ge=1, le=3650)
     volume_gb: StrictInt = Field(default=50, ge=0, le=1_000_000)
-    ip_limit: StrictInt = Field(default=1, ge=1, le=5)
+    ip_limit: StrictInt = Field(default=1, ge=1, le=1000)
     inbound_ids: list[StrictInt] = Field(min_length=1, max_length=256)
     description: str = Field(default='', max_length=2000)
     category: str = Field(default='General', min_length=1, max_length=64)
@@ -252,11 +252,10 @@ class TelegramCommerce:
         if plan_type not in ('volume','unlimited'):raise PolicyError('Simple plan type is invalid')
         price_minor=int(spec.get('price_minor') or 0)
         if not 0<=price_minor<=MAX_INT:raise PolicyError('Simple plan price is outside the allowed range')
-        months=int(spec.get('duration_months') or 1)
-        duration_days={1:30,2:60,3:90,6:180,12:365}.get(months)
-        if not duration_days:raise PolicyError('Simple plan duration must be 1, 2, 3, 6 or 12 months')
+        duration_days=int(spec.get('duration_days') or 30)
+        if not 1<=duration_days<=3650:raise PolicyError('Simple plan duration must be between 1 and 3650 days')
         ip_limit=int(spec.get('ip_limit') or 1)
-        if not 1<=ip_limit<=5:raise PolicyError('Simple plan IP limit must be between 1 and 5')
+        if not 1<=ip_limit<=1000:raise PolicyError('Simple plan IP limit must be between 1 and 1000')
         inbound_ids=sorted({int(x) for x in (spec.get('inbound_ids') or []) if type(x) is int and int(x)>0})
         if not inbound_ids:raise PolicyError('Select at least one Inbound')
         with self.store.lock:
@@ -287,7 +286,7 @@ class TelegramCommerce:
         if not 0<=hwid<=1000:raise PolicyError('HWID limit is outside the allowed range')
         published=bool(spec.get('published',False));now=time.time()
         product_id=_id('p');price_id=_id('v')
-        label=('Unlimited' if plan_type=='unlimited' else f'{volume_gb} GB')+f' / {months}M'
+        label=('Unlimited' if plan_type=='unlimited' else f'{volume_gb} GB')+f' / {duration_days}D'
         with self.store.transaction() as db:
             db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
               renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
@@ -577,7 +576,7 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
         writable();oid=commerce.owner_for(p)
         result=commerce.create_simple_plan(oid,body.model_dump())
         audit(p.actor,oid,'commerce.simple_plan_create',result['id'],
-              f"type={body.plan_type}; months={body.duration_months}; published={body.published}")
+              f"type={body.plan_type}; days={body.duration_days}; published={body.published}")
         return result
 
     @app.put('/api/commerce/products')

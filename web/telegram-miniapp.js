@@ -28,8 +28,8 @@ function plans(){
  return '<section class="ma-section"><div class="ma-card"><h2>➕ ساخت پلن فروش</h2><form id="plan-form" class="ma-form">'+
  '<label>نام پلن<input name="name" required maxlength="128" placeholder="Turbo 50GB"></label>'+
  '<div class="ma-grid"><label>نوع<select name="plan_type"><option value="volume">حجمی</option><option value="unlimited">نامحدود</option></select></label><label>قیمت تومان<input name="price" type="number" min="0" required></label></div>'+
- '<div class="ma-grid"><label>مدت<select name="months"><option>1</option><option>2</option><option>3</option><option>6</option><option>12</option></select></label><label>حجم GB<input name="volume" type="number" value="50" min="1"></label></div>'+
- '<label>IP Limit<select name="ip"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>'+
+ '<div class="ma-grid"><label>روز<input name="days" type="number" value="30" min="1" max="3650" required></label><label>حجم GB<input name="volume" type="number" value="50" min="1" max="1000000"></label></div>'+
+ '<label>IP Limit<input name="ip" type="number" value="1" min="1" max="1000" required></label>'+
  '<div><small class="ma-muted">لوکیشن‌ها</small><div class="ma-checks">'+inbounds.map(x=>'<label class="ma-check"><input type="checkbox" name="inbound" value="'+x.id+'"><span>'+esc(x.name)+' · :'+x.port+'</span></label>').join('')+'</div></div>'+
  '<button class="ma-btn primary" type="submit">انتشار پلن</button></form></div>'+
  '<div class="ma-card"><h2>پلن‌های فروش</h2><div class="ma-list">'+(plans.length?plans.map(p=>'<div class="ma-row"><div><b>'+esc(p.name)+'</b><small>'+esc(p.kind)+' · '+(p.active&&p.visible?'منتشر':'Draft')+'</small></div><span class="ma-pill">'+(p.prices?.length||0)+' variant</span></div>').join(''):'<span class="ma-muted">پلنی وجود ندارد.</span>')+'</div></div></section>';
@@ -65,7 +65,7 @@ async function openTicket(row){
 }
 function bind(){
  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render()});
- const form=document.getElementById('plan-form');if(form)form.onsubmit=async e=>{e.preventDefault();const fd=new FormData(form),ids=fd.getAll('inbound').map(Number);if(!ids.length){tg?.showAlert?.('حداقل یک لوکیشن انتخاب کن.');return}const type=String(fd.get('plan_type'));await api('/api/telegram-miniapp/simple-plans','POST',{name:String(fd.get('name')),plan_type:type,price_minor:Number(fd.get('price')),duration_months:Number(fd.get('months')),volume_gb:type==='unlimited'?0:Number(fd.get('volume')),ip_limit:Number(fd.get('ip')),inbound_ids:ids,published:true});await reload();tab='plans';render()};
+ const form=document.getElementById('plan-form');if(form)form.onsubmit=async e=>{e.preventDefault();const fd=new FormData(form),ids=fd.getAll('inbound').map(Number);if(!ids.length){tg?.showAlert?.('حداقل یک لوکیشن انتخاب کن.');return}const type=String(fd.get('plan_type'));await api('/api/telegram-miniapp/simple-plans','POST',{name:String(fd.get('name')),plan_type:type,price_minor:Number(fd.get('price')),duration_days:Number(fd.get('days')),volume_gb:type==='unlimited'?0:Number(fd.get('volume')),ip_limit:Number(fd.get('ip')),inbound_ids:ids,published:true});await reload();tab='plans';render()};
  document.querySelectorAll('[data-pay]').forEach(b=>b.onclick=async()=>{await api('/api/telegram-miniapp/payments/'+b.dataset.kind+'/'+b.dataset.row+'/'+b.dataset.pay,'POST',{});await reload();tab='payments';render()});
  document.querySelectorAll('[data-ticket]').forEach(b=>b.onclick=()=>openTicket(b.dataset.ticket));
 }

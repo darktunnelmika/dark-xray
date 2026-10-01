@@ -382,6 +382,9 @@ class BotWorker(CustomerBotFeatures):
             self.simple_plan_choose_type(chat_id,user_id,data.split(':',1)[1]);return
         if data.startswith('stsmonth:') and self.is_admin(user_id):
             self.simple_plan_choose_months(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='stsmonthcustom' and self.is_admin(user_id):
+            if self.sessions.get(user_id)!='store_simple_duration_wait':raise PolicyError('Simple plan wizard is not waiting for duration')
+            self.sessions[user_id]='store_simple_duration';self.api.send(chat_id,'تعداد روز را بفرست (۱ تا ۳۶۵۰).');return
         if data.startswith('stsvol:') and self.is_admin(user_id):
             self.simple_plan_choose_volume(chat_id,user_id,int(data.split(':',1)[1]));return
         if data=='stsvolcustom' and self.is_admin(user_id):
@@ -389,6 +392,9 @@ class BotWorker(CustomerBotFeatures):
             self.sessions[user_id]='store_simple_volume';self.api.send(chat_id,'حجم را به GB بفرست.');return
         if data.startswith('stsip:') and self.is_admin(user_id):
             self.simple_plan_choose_ip(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='stsipcustom' and self.is_admin(user_id):
+            if self.sessions.get(user_id)!='store_simple_ip_wait':raise PolicyError('Simple plan wizard is not waiting for IP limit')
+            self.sessions[user_id]='store_simple_ip';self.api.send(chat_id,'محدودیت IP را بفرست (۱ تا ۱۰۰۰).');return
         if data.startswith('stsinb:') and self.is_admin(user_id):
             self.simple_plan_toggle_inbound(chat_id,user_id,int(data.split(':',1)[1]));return
         if data=='stsinbdone' and self.is_admin(user_id):
@@ -754,7 +760,7 @@ class BotWorker(CustomerBotFeatures):
     def simple_plan_choose_months(self,chat_id:int,user_id:int,months:int):
         if self.sessions.get(user_id)!='store_simple_duration_wait':raise PolicyError('Simple plan wizard is not waiting for duration')
         if months not in (1,2,3,6,12):raise PolicyError('Invalid simple plan duration')
-        data=self.session_data[user_id];data['duration_months']=months
+        data=self.session_data[user_id];data['duration_days']={1:30,2:60,3:90,6:180,12:365}[months]
         if data.get('plan_type')=='unlimited':
             data['volume_gb']=0;self.simple_plan_ask_ip(chat_id,user_id);return
         self.sessions[user_id]='store_simple_volume_wait'
@@ -774,7 +780,8 @@ class BotWorker(CustomerBotFeatures):
         self.api.send(chat_id,'🌐 محدودیت IP را انتخاب کن:',{'inline_keyboard':[[
             {'text':'1','callback_data':'stsip:1'},{'text':'2','callback_data':'stsip:2'},
             {'text':'3','callback_data':'stsip:3'},{'text':'4','callback_data':'stsip:4'},
-            {'text':'5','callback_data':'stsip:5'}]]})
+            {'text':'5','callback_data':'stsip:5'}],
+            [{'text':'✍️ سفارشی','callback_data':'stsipcustom'}]]})
 
     def simple_plan_choose_ip(self,chat_id:int,user_id:int,limit:int):
         if self.sessions.get(user_id)!='store_simple_ip_wait':raise PolicyError('Simple plan wizard is not waiting for IP limit')
@@ -812,7 +819,7 @@ class BotWorker(CustomerBotFeatures):
         locations=' · '.join(catalog.get(i,{}).get('name',str(i)) for i in ids)
         quota='نامحدود' if data.get('plan_type')=='unlimited' else str(data.get('volume_gb'))+' GB'
         self.api.send(chat_id,
-            f"👁 پیش‌نمایش پلن\n{data['name']}\n{quota} · {data['duration_months']} ماه · IP {data['ip_limit']}\n"
+            f"👁 پیش‌نمایش پلن\n{data['name']}\n{quota} · {data['duration_days']} روز · IP {data['ip_limit']}\n"
             f"قیمت: {amount(data['price_minor'],'IRT')}\nلوکیشن‌ها: {locations}\n"
             "فعال‌سازی: اولین اتصال · تحویل: Subscription + Portal · QR روشن · HWID خاموش",
             {'inline_keyboard':[[{'text':'✅ انتشار پلن','callback_data':'stspublish'},
@@ -822,7 +829,7 @@ class BotWorker(CustomerBotFeatures):
         if self.sessions.get(user_id)!='store_simple_review':raise PolicyError('Simple plan wizard is not ready to publish')
         data=dict(self.session_data[user_id])
         payload={'name':data['name'],'plan_type':data['plan_type'],'price_minor':int(data['price_minor']),
-                 'duration_months':int(data['duration_months']),'volume_gb':int(data.get('volume_gb') or 0),
+                 'duration_days':int(data['duration_days']),'volume_gb':int(data.get('volume_gb') or 0),
                  'ip_limit':int(data['ip_limit']),'inbound_ids':[int(x) for x in data['inbound_ids']],
                  'activation_mode':'first_connection','delivery_mode':'subscription','hwid_limit':0,
                  'show_qr':True,'show_portal':True,'renewal_enabled':True,
@@ -856,8 +863,21 @@ class BotWorker(CustomerBotFeatures):
             self.api.send(chat_id,'مدت پلن را انتخاب کن:',{'inline_keyboard':[
                 [{'text':'1 ماه','callback_data':'stsmonth:1'},{'text':'2 ماه','callback_data':'stsmonth:2'},
                  {'text':'3 ماه','callback_data':'stsmonth:3'}],
-                [{'text':'6 ماه','callback_data':'stsmonth:6'},{'text':'12 ماه','callback_data':'stsmonth:12'}]
+                [{'text':'6 ماه','callback_data':'stsmonth:6'},{'text':'12 ماه','callback_data':'stsmonth:12'}],
+                [{'text':'✍️ روز سفارشی','callback_data':'stsmonthcustom'}]
             ]});return
+        if state=='store_simple_duration':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'روز باید عدد صحیح باشد.');return
+            if not 1<=n<=3650:self.api.send(chat_id,'روز باید بین ۱ تا ۳۶۵۰ باشد.');return
+            data['duration_days']=n
+            if data.get('plan_type')=='unlimited':data['volume_gb']=0;self.simple_plan_ask_ip(chat_id,user_id);return
+            self.sessions[user_id]='store_simple_volume_wait';self.api.send(chat_id,'📦 حجم را انتخاب کن:',{'inline_keyboard':[[{'text':'30 GB','callback_data':'stsvol:30'},{'text':'50 GB','callback_data':'stsvol:50'}],[{'text':'100 GB','callback_data':'stsvol:100'},{'text':'200 GB','callback_data':'stsvol:200'}],[{'text':'500 GB','callback_data':'stsvol:500'},{'text':'✍️ سفارشی','callback_data':'stsvolcustom'}]]});return
+        if state=='store_simple_ip':
+            try:n=int(value)
+            except ValueError:self.api.send(chat_id,'IP باید عدد صحیح باشد.');return
+            if not 1<=n<=1000:self.api.send(chat_id,'IP باید بین ۱ تا ۱۰۰۰ باشد.');return
+            data['ip_limit']=n;data['selected_inbounds']=[];self.sessions[user_id]='store_simple_inbounds';self.show_simple_plan_inbounds(chat_id,user_id);return
         if state=='store_simple_volume':
             try:n=int(value)
             except ValueError:self.api.send(chat_id,'حجم باید عدد صحیح GB باشد.');return
