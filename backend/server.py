@@ -217,6 +217,10 @@ class WarpEndpointSelect(Model):
     endpoint:str=Field(min_length=3,max_length=160)
 class WarpAutoSelect(Model):
     server:str=Field(default='hub',min_length=1,max_length=160)
+class OutboundRuntimeProbe(Model):
+    server:str=Field(default='hub',min_length=1,max_length=160)
+    tags:list[str]=Field(min_length=1,max_length=128)
+    attempts:StrictInt=Field(default=2,ge=1,le=3)
 
 class FullBackupBody(Model):
     passphrase:str=Field(min_length=12,max_length=512)
@@ -1803,6 +1807,46 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             raise HTTPException(409,'WARP endpoint apply failed and was rolled back: '+str(ex)[:300])
         manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',scope,endpoint)
         return {'server':target,'selected':endpoint,'selectionConfirmed':True,'test':checked,'applied':applied}
+
+    @app.post('/api/traffic-matrix/outbounds/probe')
+    def traffic_matrix_outbounds_probe(body:OutboundRuntimeProbe,p:Principal=Depends(owner)):
+        target=_runtime_target(body.server,require_online=True)
+        tags=list(dict.fromkeys(str(x or '').strip() for x in body.tags if str(x or '').strip()))
+        if not tags:raise HTTPException(400,'Select at least one outbound')
+        outbounds=engine.runtime_outbounds(body.server)
+        known={str(x.get('tag') or '') for x in outbounds if isinstance(x,dict)}
+        missing=[x for x in tags if x not in known]
+        if missing:raise HTTPException(409,'Outbound is not deployed on selected runtime: '+', '.join(missing[:8]))
+        items=[]
+        if target['kind']=='hub':
+            try:
+                raw=probe_outbounds(engine._binary(),config.xray_assets,outbounds,tags=tags,
+                                    attempts=int(body.attempts),timeout=5.0,trace=True)
+            except OutboundProbeError as ex:raise HTTPException(409,'Outbound probe failed: '+str(ex))
+            for row in raw:
+                e=row.get('egress') if isinstance(row.get('egress'),dict) else {}
+                items.append({'tag':str(row.get('tag') or ''),'success':bool(row.get('success')),
+                              'delayMs':row.get('delayMs'),'lossPercent':row.get('lossPercent'),'jitterMs':row.get('jitterMs'),
+                              'country':e.get('country',''),'colo':e.get('colo',''),'egressIp':e.get('ip',''),
+                              'warp':e.get('warp',''),'error':row.get('error','')})
+        else:
+            remote=nodes.remote_inbounds(target['nodeId'])
+            ports=[int(x.get('port') or 0) for x in remote.get('items',[]) if isinstance(x,dict) and x.get('enable',True) and 1<=int(x.get('port') or 0)<=65535]
+            if not ports:raise HTTPException(409,'Selected Node has no active inbound listener for outbound probing')
+            port=ports[0]
+            for tag in tags:
+                try:
+                    result=nodes.traffic_matrix_probe(target['nodeId'],port,tag,attempts=int(body.attempts),timeout_seconds=5)
+                    row=result.get('probe') or {};e=row.get('egress') if isinstance(row.get('egress'),dict) else {}
+                    items.append({'tag':tag,'success':bool(row.get('success')),
+                                  'delayMs':row.get('delayMs'),'lossPercent':row.get('lossPercent'),'jitterMs':row.get('jitterMs'),
+                                  'country':e.get('country',''),'colo':e.get('colo',''),'egressIp':e.get('ip',''),
+                                  'warp':e.get('warp',''),'listenerReady':bool(result.get('listenerReady')),
+                                  'error':row.get('error','')})
+                except (PolicyError,OSError,ValueError) as ex:
+                    items.append({'tag':tag,'success':False,'delayMs':None,'lossPercent':None,'jitterMs':None,
+                                  'country':'','colo':'','egressIp':'','warp':'','listenerReady':False,'error':str(ex)[:300]})
+        return {'server':target,'items':items,'productionTrafficMutation':False}
 
     @app.get('/api/traffic-matrix/runtimes')
     def traffic_matrix_runtimes(p:Principal=Depends(owner)):
