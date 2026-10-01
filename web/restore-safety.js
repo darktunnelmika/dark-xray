@@ -29,7 +29,7 @@ function decorate(){
   card.querySelector('.drs-user-status')?.remove();card.querySelector('.drs-user-actions')?.remove();
   const unknown=x.service_status==='needs_review',status=document.createElement('div');status.className='drs-user-status';
   status.innerHTML=badge(x.service_status)+(x.metadata_state==='manual'?'<small>'+L('Source metadata confirmed by owner','اطلاعات مبدا با تأیید مالک')+'</small>':'')+(unknown?'<small>'+L('No usable config is published until all four source fields are known.','تا مشخص‌شدن چهار فیلد مبدا، کانفیگ قابل استفاده منتشر نمی‌شود.')+'</small>':'');
-  card.querySelector('.dr-migration')?.prepend(status);
+  (card.querySelector('.dr-status')||card.querySelector('.dr-migration'))?.append(status);
   const sourceTag=card.querySelector('.dr-migration>.tag');
   if(sourceTag){sourceTag.textContent=x.metadata_state==='legacy_saved'?L('Saved source snapshot','اطلاعات ذخیره‌شدهٔ مبدا'):x.metadata_state==='manual'?L('Owner reviewed','بررسی‌شده توسط مالک'):x.metadata_state==='verified'?L('Complete source scan','اسکن کامل مبدا'):L('Incomplete source data','اطلاعات ناقص مبدا');sourceTag.classList.toggle('green',['manual','verified'].includes(x.metadata_state));sourceTag.classList.toggle('amber',!['manual','verified'].includes(x.metadata_state));}
   const migration=card.querySelectorAll('.dr-migration>small');
@@ -37,7 +37,7 @@ function decorate(){
   if(migration.length>1)migration[1].textContent=L('New subscription received: ','دریافت ساب جدید: ')+(x.subscription_received?new Date(x.first_seen*1000).toLocaleString():L('Not yet','هنوز دریافت نشده'));
   const usage=card.querySelectorAll('.dr-usage>small');
   if(usage.length>1)usage[1].textContent=L('Remaining: ','باقی‌مانده: ')+(unknown?L('Unknown · review required','نامشخص · نیازمند بررسی'):x.legacy_total?bytes(x.remaining||0):L('Unlimited','نامحدود'));
-  if(x.service_status!=='promoted'){
+  if(x.service_status!=='promoted'&&card.querySelector('.dr-actions')){
    const actions=document.createElement('div');actions.className='drs-user-actions';
    actions.innerHTML='<button type="button" class="btn mini" data-act="drsreview" data-id="'+esc(id)+'">'+L('Review source data','بررسی اطلاعات مبدا')+'</button><button type="button" class="btn mini" data-act="drssuspend" data-id="'+esc(id)+'">'+(x.service_status==='suspended'?L('Resume','رفع توقف'):L('Suspend','توقف'))+'</button>';
    card.querySelector('.dr-actions')?.append(actions);

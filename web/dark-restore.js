@@ -7,6 +7,7 @@ const DR={data:null,nodes:[],group:'',query:'',plan:'all',presence:'all',lifecyc
 const L=(en,fa)=>(localStorage.getItem('dark_lang')||'en')==='fa'?fa:en;
 const esc=v=>e(String(v??''));
 const stamp=v=>v?new Date(Number(v)*1000).toLocaleString((localStorage.getItem('dark_lang')||'en')==='fa'?'fa-IR':'en-US'):'—';
+const age=v=>v==null?'—':Number(v)<60?Number(v)+'s':Number(v)<3600?Math.floor(Number(v)/60)+'m':Number(v)<86400?Math.floor(Number(v)/3600)+'h':Math.floor(Number(v)/86400)+'d';
 const groupTitle=g=>g?.unassigned||g?.id==='grp_ungrouped'?L('Ungrouped · previous imports','بدون گروه · ساب‌های قبلی'):String(g?.name||'');
 enginePages.darkrestore=['DARK RESTORE'];
 navItems=function(){const n=baseNavItems();if(!isOwner()||n.some(x=>x[0]==='darkrestore'))return n;const i=Math.max(0,n.findIndex(x=>x[0]==='account'));n.splice(i,0,['darkrestore','DARK RESTORE','refresh']);return n;};
@@ -40,14 +41,21 @@ function groupCards(){
  const summary={limited:all.filter(x=>x.plan_type==='limited').length,unlimited:all.filter(x=>x.plan_type==='unlimited').length,online:all.filter(x=>x.presence_state==='online').length,promoted:all.filter(x=>x.promoted).length};
  return '<div class="dr-groups">'+tile('',L('All groups','همه گروه‌ها'),all.length,all.filter(x=>x.first_seen>0).length,used,summary)+(DR.data?.groups||[]).filter(g=>!g.unassigned||g.clients>0).map(g=>tile(g.id,groupTitle(g),g.clients,g.migrated,g.dark_used,g)).join('')+'</div>';
 }
+function presenceSignal(x){
+ const p=['online','idle','offline'].includes(x.presence_state)?x.presence_state:'offline';
+ const names={online:L('ONLINE','آنلاین'),idle:L('IDLE','کم‌فعال'),offline:L('OFFLINE','آفلاین')};
+ return '<div class="dr-live '+p+'"><span class="dr-orb"></span><b>'+names[p]+'</b><small>'+age(x.presence_age_seconds)+'</small></div>';
+}
 function users(rows){
  if(!rows.length)return '<div class="notice">'+L('No Restore users match this group or search.','کاربری در این گروه یا جست‌وجو پیدا نشد.')+'</div>';
- return '<div class="dr-users">'+rows.map(x=>{
+ return '<div class="dr-client-list"><div class="dr-list-head"><span></span><span>'+L('CLIENT','کاربر')+'</span><span>'+L('STATUS','وضعیت')+'</span><span>'+L('PLAN','پلن')+'</span><span>'+L('DARK USAGE','مصرف DARK')+'</span><span>'+L('EXPIRY','انقضا')+'</span><span></span></div>'+rows.map(x=>{
   const name=x.group_id==='grp_ungrouped'?L('Ungrouped','بدون گروه'):x.group_name;
-  const presence=x.presence_state==='online'?'<span class="dr-presence online">● ONLINE</span>':x.presence_state==='idle'?'<span class="dr-presence idle">● IDLE</span>':'<span class="dr-presence offline">● OFFLINE</span>';
+  const limited=x.plan_type!=='unlimited',remaining=limited?bytes(x.remaining||0):L('Unlimited','نامحدود');
+  const pct=limited&&Number(x.legacy_total)>0?Math.max(0,Math.min(100,Math.round(Number(x.effective_used||0)/Number(x.legacy_total)*100))):0;
+  const expiry=x.legacy_expire?stamp(x.legacy_expire):L('No expiry','بدون انقضا');
   const plan=x.plan_type==='unlimited'?'<span class="dr-plan unlimited">♾ '+L('Unlimited','نامحدود')+'</span>':'<span class="dr-plan limited">📦 '+L('Volume','حجمی')+'</span>';
-  const native=x.promoted?'<span class="dr-native">NATIVE → '+esc(x.promoted_owner)+'</span>':'';
-  return '<article class="dr-user '+(x.promoted?'promoted':'')+'"><label class="dr-check"><input type="checkbox" data-dr-select="'+esc(x.id)+'" '+(DR.selected.has(x.id)?'checked':'')+' '+(x.promoted?'disabled':'')+' aria-label="'+esc(L('Select Restore user','انتخاب کاربر ریستور'))+'"></label><div class="dr-identity"><div class="dr-badges">'+presence+plan+native+'</div><b data-no-i18n>'+esc(name)+'</b><small class="mono" data-no-i18n>'+esc(x.legacy_host)+'</small><code data-no-i18n title="'+esc(x.legacy_path)+'">'+esc(x.legacy_path)+'</code></div><div class="dr-usage"><span>'+L('Usage in DARK','مصرف در DARK')+'</span><strong data-dr-dark-usage>'+bytes(x.dark_used||0)+'</strong><small>'+L('Hub','هاب')+': '+bytes(x.local_used||0)+' · '+L('Nodes','نودها')+': '+bytes(x.node_used||0)+'</small><small>'+L('Remaining','باقی‌مانده')+': '+(x.legacy_total?bytes(x.remaining||0):L('Unlimited','نامحدود'))+'</small><details><summary>'+L('Previous quota metadata','اطلاعات سهمیهٔ قبلی')+'</summary><small>'+L('Legacy usage (excluded)','مصرف قدیمی (جدا از گزارش DARK)')+': '+bytes(x.legacy_used||0)+'<br>'+L('Original total','حجم کل قبلی')+': '+bytes(x.legacy_total||0)+'</small></details></div><div class="dr-migration">'+tag(x.scan_status)+'<small>'+L('Expiry','انقضا')+': '+(x.legacy_expire?stamp(x.legacy_expire):L('No expiry','بدون انقضا'))+'</small><small>'+L('Migration started','شروع مهاجرت')+': '+(x.first_seen?stamp(x.first_seen):L('Waiting for subscription update','منتظر آپدیت ساب'))+'</small><small>IN: '+esc((x.inbound_ids||[]).join(', ')||'—')+'</small></div><div class="dr-actions">'+(x.promoted?'<button type="button" class="btn mini" data-act="clients">'+L('Open native Clients','بازکردن Clients')+'</button>':'<button type="button" class="btn mini" data-act="drmap" data-id="'+esc(x.id)+'">'+L('Mapping','اتصال')+'</button><button type="button" class="btn mini" data-act="drmoveone" data-id="'+esc(x.id)+'">'+L('Group','گروه')+'</button><button type="button" class="btn mini" data-act="drdelete" data-id="'+esc(x.id)+'">'+L('Delete','حذف')+'</button>')+'</div></article>';
+  const native=x.promoted?'<span class="dr-native">'+L('NATIVE','Native')+' → '+esc(x.promoted_owner)+'</span>':'';
+  return '<article class="dr-user '+(x.promoted?'promoted':'')+'"><label class="dr-check"><input type="checkbox" data-dr-select="'+esc(x.id)+'" '+(DR.selected.has(x.id)?'checked':'')+' '+(x.promoted?'disabled':'')+'><span></span></label><button type="button" class="dr-client" data-act="drdetail" data-id="'+esc(x.id)+'"><span class="dr-avatar">'+esc((name||x.legacy_host||'R').slice(0,1).toUpperCase())+'</span><span><b>'+esc(name)+'</b><small class="mono" data-no-i18n>'+esc(x.legacy_host)+'</small><code data-no-i18n>'+esc(x.legacy_path)+'</code></span></button><div class="dr-status">'+presenceSignal(x)+(x.promoted?native:'')+'</div><div class="dr-plan-cell">'+plan+'<small>'+remaining+'</small></div><div class="dr-usage-compact"><strong data-dr-dark-usage>'+bytes(x.dark_used||0)+'</strong><small>'+L('Hub','هاب')+' '+bytes(x.local_used||0)+' · '+L('Nodes','نود')+' '+bytes(x.node_used||0)+'</small>'+(limited?'<div class="dr-meter"><i style="width:'+pct+'%"></i></div>':'')+'</div><div class="dr-expiry"><b>'+esc(expiry)+'</b><small>'+esc(String(x.scan_status||'').toUpperCase())+'</small></div><div class="dr-row-actions"><button type="button" class="btn mini" data-act="drdetail" data-id="'+esc(x.id)+'">'+L('OPEN','بازکردن')+'</button>'+(!x.promoted?'<button type="button" class="btn mini" data-act="drmap" data-id="'+esc(x.id)+'">'+L('MAP','اتصال')+'</button>':'<button type="button" class="btn mini" data-act="clients">'+L('CLIENT','کلاینت')+'</button>')+'</div></article>';
  }).join('')+'</div>';
 }
 function resultBody(){
@@ -108,6 +116,14 @@ async function promoteDialog(ids){
   else toast(out.promoted+' '+L('Restore users promoted to native Clients.','کاربر به Clients اصلی منتقل شدند.'));
  },L('Promote selected','انتقال انتخاب‌ها'));
 }
+async function detailDialog(id){
+ const d=DR.data||await load(),x=(d.items||[]).find(r=>r.id===id);if(!x)throw Error(L('Restore user not found','کاربر ریستور پیدا نشد'));
+ const limited=x.plan_type!=='unlimited',remaining=limited?bytes(x.remaining||0):L('Unlimited','نامحدود');
+ const title=(x.group_id==='grp_ungrouped'?L('Ungrouped','بدون گروه'):x.group_name)+' · '+x.legacy_host;
+ const body='<div class="dr-detail"><header>'+presenceSignal(x)+'<div><small>'+L('Restore identity','شناسه Restore')+'</small><h3 class="mono">'+esc(x.core_email)+'</h3></div>'+(x.promoted?'<span class="dr-native">NATIVE → '+esc(x.promoted_owner)+'</span>':'')+'</header><div class="dr-detail-grid"><section><span>'+L('PLAN','پلن')+'</span><b>'+(limited?L('Volume','حجمی'):L('Unlimited','نامحدود'))+'</b><small>'+L('Remaining','باقی‌مانده')+': '+remaining+'</small></section><section><span>'+L('DARK USAGE','مصرف DARK')+'</span><b>'+bytes(x.dark_used||0)+'</b><small>'+L('Hub','هاب')+': '+bytes(x.local_used||0)+' · '+L('Nodes','نودها')+': '+bytes(x.node_used||0)+'</small></section><section><span>'+L('EXPIRY','انقضا')+'</span><b>'+(x.legacy_expire?stamp(x.legacy_expire):L('No expiry','بدون انقضا'))+'</b><small>'+L('Migration','مهاجرت')+': '+(x.first_seen?stamp(x.first_seen):L('Waiting for subscription update','منتظر آپدیت ساب'))+'</small></section><section><span>'+L('TARGETS','مقصدها')+'</span><b>IN: '+esc((x.inbound_ids||[]).join(', ')||'—')+'</b><small>'+L('Nodes','نودها')+': '+esc((x.node_ids||[]).length?x.node_ids.join(', '):L('Automatic / Hub','خودکار / هاب'))+'</small></section><section class="wide"><span>'+L('LEGACY SOURCE','مبدا قبلی')+'</span><code>'+esc(x.legacy_host+x.legacy_path)+'</code><small>'+L('Legacy usage excluded from DARK','مصرف قبلی از DARK جداست')+': '+bytes(x.legacy_used||0)+'</small></section></div><footer>'+(!x.promoted?'<button type="button" class="btn" data-act="drmap" data-id="'+esc(x.id)+'">'+L('Mapping','اتصال')+'</button><button type="button" class="btn" data-act="drmoveone" data-id="'+esc(x.id)+'">'+L('Move group','تغییر گروه')+'</button><button type="button" class="btn" data-act="drsreview" data-id="'+esc(x.id)+'">'+L('Review source','بررسی مبدا')+'</button><button type="button" class="btn" data-act="drssuspend" data-id="'+esc(x.id)+'">'+(x.service_status==='suspended'?L('Resume','رفع توقف'):L('Suspend','توقف'))+'</button><button type="button" class="btn danger" data-act="drdelete" data-id="'+esc(x.id)+'">'+L('Delete','حذف')+'</button>':'<button type="button" class="btn" data-act="clients">'+L('Open native Clients','بازکردن Clients')+'</button>')+'</footer></div>';
+ dialog(L('Restore client','کاربر Restore')+' · '+title,body);
+ document.querySelector('#overlay .dialog')?.classList.add('dr-detail-dialog');
+}
 async function mappingDialog(id){
  const d=DR.data||await load(),x=(d.items||[]).find(r=>r.id===id);if(!x)throw Error(L('Restore user not found','کاربر ریستور پیدا نشد'));
  dialog(L('Restore mapping','اتصال ریستور'),'<div class="dr-editor"><div><b>Inbounds</b><div class="tg-list">'+inboundPicker(x.inbound_ids||[])+'</div></div><div><b>Nodes</b><div class="tg-list">'+nodePicker(x.node_ids||[])+'</div></div></div>',async fd=>{
@@ -135,6 +151,7 @@ runAction=async function(act,el){
  if(act==='drfiltergroup'){DR.group=el.dataset.group||'';DR.page=0;DR.selected.clear();return renderPage();}
  if(act==='drselectall'){const rows=filtered().filter(x=>!x.promoted);if(rows.every(x=>DR.selected.has(x.id)))DR.selected.clear();else rows.forEach(x=>DR.selected.add(x.id));paint();return;}
  if(act==='drprev'||act==='drnext'){DR.page+=act==='drprev'?-1:1;paint();return;}
+ if(act==='drdetail')return detailDialog(el.dataset.id);
  if(act==='drmap')return mappingDialog(el.dataset.id);
  if(act==='drdelete'){if(confirm(L('Delete this Restore user? Native users are not affected.','این کاربر ریستور حذف شود؟ کاربران اصلی تغییری نمی‌کنند.'))){await api('/api/dark-restore/'+enc(el.dataset.id),'DELETE');await reload();}return;}
  if(act==='drdomaincheck'){
