@@ -65,7 +65,7 @@ async function openTicket(row){
 }
 function bind(){
  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render()});
- const form=document.getElementById('plan-form');if(form)form.onsubmit=async e=>{e.preventDefault();const fd=new FormData(form),ids=fd.getAll('inbound').map(Number);if(!ids.length){tg?.showAlert?.('حداقل یک لوکیشن انتخاب کن.');return}const type=String(fd.get('plan_type'));await api('/api/telegram-miniapp/simple-plans','POST',{name:String(fd.get('name')),plan_type:type,price_minor:Number(fd.get('price')),duration_months:Number(fd.get('months')),volume_gb:type==='unlimited'?0:Number(fd.get('volume')),ip_limit:Number(fd.get('ip')),inbound_ids:ids,published:true});await reload();tab='plans';render()};
+ const form=document.getElementById('plan-form');if(form)form.onsubmit=async e=>{e.preventDefault();const fd=new FormData(form),ids=fd.getAll('inbound').map(Number);if(!ids.length){tg?.showAlert?.('حداقل یک لوکیشن انتخاب کن.');return}const type=String(fd.get('plan_type'));await api('/api/telegram-miniapp/simple-plans','POST',{name:String(fd.get('name')),plan_type:type,price_minor:Number(fd.get('price')),duration_days:Number(fd.get('days')),volume_gb:type==='unlimited'?0:Number(fd.get('volume')),ip_limit:Number(fd.get('ip')),inbound_ids:ids,published:true});await reload();tab='plans';render()};
  document.querySelectorAll('[data-pay]').forEach(b=>b.onclick=async()=>{await api('/api/telegram-miniapp/payments/'+b.dataset.kind+'/'+b.dataset.row+'/'+b.dataset.pay,'POST',{});await reload();tab='payments';render()});
  document.querySelectorAll('[data-ticket]').forEach(b=>b.onclick=()=>openTicket(b.dataset.ticket));
 }
