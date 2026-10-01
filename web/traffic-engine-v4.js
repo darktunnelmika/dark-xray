@@ -4,7 +4,7 @@
 if(typeof enginePage!=='function'||typeof runAction!=='function')return;
 const baseEnginePage=enginePage,baseRunAction=runAction;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
-state.te4=state.te4||{preview:null,preview_seq:0,config_signature:''};
+state.te4=state.te4||{preview:null,preview_seq:0,config_signature:'',probes:{},probe_server:'hub'};
 
 const esc=v=>e(String(v??''));
 function trafficTabs(){
@@ -50,6 +50,20 @@ function warnings(d){
  const rows=d.status.warnings||[];
  return rows.length?`<div class="te4-warnings">${rows.map(x=>`<div class="notice warning">${esc(x)}</div>`).join('')}</div>`:'';
 }
+function probeKey(server,tag){return String(server||'hub')+'|'+String(tag||'');}
+function probeView(tag){
+ const p=state.te4.probes[probeKey(state.te4.probe_server,tag)];
+ if(!p)return '<div class="te5-out-probe idle"><b>—</b><small>'+L('Not tested from selected server','از سرور انتخابی تست نشده')+'</small></div>';
+ if(p.testing)return '<div class="te5-out-probe testing"><b>…</b><small>'+L('Testing','در حال تست')+'</small></div>';
+ const delay=p.delayMs==null?'—':Math.round(Number(p.delayMs))+' ms',loss=p.lossPercent==null?'—':p.lossPercent+'%',jitter=p.jitterMs==null?'—':Math.round(Number(p.jitterMs))+' ms';
+ const loc=p.egress&&[p.egress.country,p.egress.colo].filter(Boolean).join(' · ');
+ return '<div class="te5-out-probe '+(p.success?'ok':'bad')+'"><b>'+(p.success?delay:'FAIL')+'</b><small>'+loss+' · J '+jitter+(loc?' · '+esc(loc):'')+'</small></div>';
+}
+function serverOptions(d){
+ const rows=d.status?.servers||[],current=state.te4.probe_server||'hub';
+ if(!rows.some(x=>x.id===current))state.te4.probe_server='hub';
+ return rows.map(x=>'<option value="'+esc(x.id)+'" '+(x.id===state.te4.probe_server?'selected':'')+' '+(x.online===false?'disabled':'')+'>'+esc((x.name||x.id)+(x.online===false?' · OFFLINE':''))+'</option>').join('');
+}
 function endpointMeta(o){
  const st=o?.streamSettings||{},so=st.sockopt||{},bits=[String(o.protocol||'').toUpperCase()];
  const ep=endpoint(o);if(ep)bits.push(ep);
@@ -68,13 +82,15 @@ function dependencyText(m){
 }
 function outboundCard(o,index,meta){
  const deps=dependencyText(meta),chain=meta.dials_via;
- return `<article class="panel te4-out ${meta.default?'default':''}">
+ return `<article class="panel te4-out ${meta.default?'default':''}" data-outbound-tag="${esc(o.tag)}">
   <header><div><small>#${index+1} · ${esc(o.protocol||'')}</small><h3>${esc(o.tag)}</h3></div><div class="te4-badges">${meta.default?chip(L('DEFAULT','پیش‌فرض'),'good'):''}${meta.observed?chip('OBSERVED','info'):''}${chain?chip('CHAIN','warn'):''}</div></header>
   <div class="te4-out-meta"><code>${esc(endpointMeta(o))}</code></div>
+  <div class="te5-out-live"><span>${L('LIVE TEST','تست زنده')}</span>${probeView(o.tag)}</div>
   ${chain?`<div class="te4-chain"><span>${L('DIAL PATH','مسیر Dial')}</span><b>${esc(o.tag)} → ${esc(chain)}</b></div>`:''}
   <div class="te4-deps"><span>${L('DEPENDENCIES','وابستگی‌ها')}</span>${deps.length?deps.map(x=>`<small>${esc(x)}</small>`).join(''):`<small>${L('No routing/balancer dependency','وابستگی مسیریابی/بالانسر ندارد')}</small>`}</div>
   <footer>
-   ${!meta.default?button(L('Make default','پیش‌فرض شود'),'te4default','check',`data-index="${index}"`,true):''}
+   ${button(L('Ping','پینگ'),'te4outprobe','activity',`data-tag="${esc(o.tag)}"`,true)}
+   ${!meta.default?button(L('Make default','پیش‌فرض شود'),'te4default','check',`data-index="${index}"`):''}
    ${button(L('Edit','ویرایش'),'te4outedit','edit',`data-index="${index}"`)}
    ${button(L('Clone','کپی'),'te4outclone','copy',`data-index="${index}"`)}
    ${button(L('Advanced JSON','JSON پیشرفته'),'te4outraw','terminal',`data-index="${index}"`)}
@@ -94,6 +110,7 @@ function outboundsPage(d){
  return heading(L('Traffic Engine · Outbounds','موتور ترافیک · اوتباندها'),L('Build egress paths, chains and proxy transports with explicit dependency visibility.','مسیرهای خروج، زنجیره‌ها و انتقال پروکسی را با وابستگی‌های کاملاً شفاف مدیریت کن.'),
   `${button(L('Import link','Import لینک'),'te4outimport','download')}${button(L('New outbound','اوتباند جدید'),'te4outnew','plus','',true)}`)+
   `<div class="te4">${trafficTabs()}${summary(d)}${warnings(d)}
+   <section class="te5-probe-bar"><label><span>${L('Test from server','تست از سرور')}</span><select data-te4-probe-server>${serverOptions(d)}</select></label><button type="button" class="btn" data-act="te4probeall">${icon('activity')}${L('Ping all outbounds','پینگ همه اوتباندها')}</button><small>${L('Results use the physical network of the selected HUB/Node.','نتیجه از شبکه واقعی HUB/Node انتخاب‌شده گرفته می‌شود.')}</small></section>
    <div class="notice">${L('Xray uses the first outbound when no routing rule matches. Use Make default to change that behavior explicitly.','اگر هیچ قانونی تطبیق نشود، Xray از اولین اوتباند استفاده می‌کند. برای تغییر این رفتار از «پیش‌فرض شود» استفاده کن.')}</div>
    <section class="te4-out-grid">${list.length?list.map((o,i)=>outboundCard(o,i,meta.get(o.tag)||{})).join(''):empty(L('No outbound configured.','اوتباندی تنظیم نشده است.'))}</section>
    ${graph(d)}
@@ -223,6 +240,8 @@ runAction=async function(act,el){
  if(act.startsWith('te4')&&['te4outnew','te4outedit','te4outclone','te4outimport','te4outraw','te4routesettings','te4rulenew','te4ruleedit','te4balnew','te4baledit','te4obsedit'].includes(act)&&!guided)throw Error(L('Guided Xray editor module is unavailable.','ماژول هدایت‌شدهٔ Xray در دسترس نیست.'));
  if(act==='te4xray'){await go('xray');return;}
  if(act==='te4default'){await makeDefault(Number(el.dataset.index));return;}
+ if(act==='te4outprobe'){await probeOutbound(String(el.dataset.tag||''));return;}
+ if(act==='te4probeall'){await probeAllOutbounds();return;}
  if(act==='te4outnew'){await guided.openOutbound();return;}
  if(act==='te4outedit'){await guided.openOutbound(Number(el.dataset.index));return;}
  if(act==='te4outclone'){await guided.openOutbound(Number(el.dataset.index),true);return;}
@@ -238,6 +257,33 @@ runAction=async function(act,el){
  return baseRunAction(act,el);
 };
 
+async function probeOutbound(tag){
+ if(!tag)throw Error(L('Outbound tag is missing.','تگ اوتباند مشخص نیست.'));
+ const server=state.te4.probe_server||'hub',key=probeKey(server,tag);
+ state.te4.probes[key]={testing:true};
+ const box=document.querySelector('[data-outbound-tag="'+CSS.escape(tag)+'"] .te5-out-live');
+ if(box)box.innerHTML='<span>'+L('LIVE TEST','تست زنده')+'</span>'+probeView(tag);
+ try{
+  const r=await api('/api/traffic-engine/outbound/probe','POST',{server,tag,attempts:2});
+  state.te4.probes[key]=r;
+  if(box)box.innerHTML='<span>'+L('LIVE TEST','تست زنده')+'</span>'+probeView(tag);
+  return r;
+ }catch(ex){
+  state.te4.probes[key]={success:false,delayMs:null,lossPercent:null,jitterMs:null,error:ex.message,egress:{}};
+  if(box)box.innerHTML='<span>'+L('LIVE TEST','تست زنده')+'</span>'+probeView(tag);
+  throw ex;
+ }
+}
+async function probeAllOutbounds(){
+ const tags=(state.te4.data?.outbounds||[]).map(x=>String(x.tag||'')).filter(Boolean);let failed=0;
+ for(const tag of tags){try{await probeOutbound(tag);}catch{failed++;}}
+ toast(failed?L('Some outbound tests failed.','بعضی تست‌های اوتباند ناموفق بودند.'):L('All testable outbounds passed.','همه اوتباندهای قابل تست سالم بودند.'),!!failed);
+}
+document.addEventListener('change',ev=>{
+ if(ev.target.matches('[data-te4-probe-server]')){
+  state.te4.probe_server=String(ev.target.value||'hub');state.te4.probes={};renderPage();
+ }
+});
 async function previewFromForm(form){
  if(!form)throw Error(L('Route preview form is unavailable.','فرم پیش‌نمایش مسیر در دسترس نیست.'));
  const submit=form.querySelector('[data-act="te4preview"]');if(submit)submit.disabled=true;
