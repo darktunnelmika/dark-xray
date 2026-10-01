@@ -22,6 +22,7 @@ from typing import Any
 from dark_policy import PolicyError, NAME_RE, Store, normalize_ip
 from node_commands import NodeCommands
 from node_installations import NodeInstallations, StaleInstallation, installation_operation
+from warp_paths import warp_endpoint_candidates
 
 
 def token_digest(value:str)->str:
