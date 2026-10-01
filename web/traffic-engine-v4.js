@@ -237,11 +237,32 @@ async function makeDefault(index){
  const tag=list[index]?.tag;if(!confirm(L('Make this the first/default outbound? Unmatched traffic will use it.','این اوتباند اولین/پیش‌فرض شود؟ ترافیکی که با هیچ قانونی تطبیق نکند از آن استفاده می‌کند.')))return;
  const [item]=list.splice(index,1);list.unshift(item);await api('/api/settings/outbounds','PUT',{value:list});toast(L('Default outbound changed to ','اوتباند پیش‌فرض تغییر کرد به ')+tag);await refresh();
 }
+document.addEventListener('change',ev=>{
+ const el=ev.target;if(!el.matches('[data-te4-probe-runtime]'))return;
+ state.te4.probeRuntime=String(el.value||'hub');state.te4.probes={};
+ renderPage().catch(ex=>toast(ex.message,true));
+});
+async function probeOutboundTags(tags){
+ const runtime=state.te4.probeRuntime;
+ const clean=[...new Set((tags||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+ if(!clean.length)return null;
+ for(const tag of clean)state.te4.probes[runtime+'|'+tag]={testing:true};
+ await renderPage();
+ try{
+  const r=await api('/api/traffic-matrix/outbounds/probe','POST',{server:runtime,tags:clean,attempts:2});
+  for(const item of (r.items||[]))state.te4.probes[runtime+'|'+item.tag]=item;
+  return r;
+ }finally{
+  await renderPage();
+ }
+}
 runAction=async function(act,el){
  const guided=globalThis.DarkXrayGuidedV3;
  if(act.startsWith('te4')&&['te4outnew','te4outedit','te4outclone','te4outimport','te4outraw','te4routesettings','te4rulenew','te4ruleedit','te4balnew','te4baledit','te4obsedit'].includes(act)&&!guided)throw Error(L('Guided Xray editor module is unavailable.','ماژول هدایت‌شدهٔ Xray در دسترس نیست.'));
  if(act==='te4xray'){await go('xray');return;}
  if(act==='te4default'){await makeDefault(Number(el.dataset.index));return;}
+ if(act==='te4outprobe'){await probeOutboundTags([String(el.dataset.tag||'')]);return;}
+ if(act==='te4probeall'){const tags=(state.te4.data?.outbounds||[]).map(x=>String(x.tag||'')).filter(Boolean);await probeOutboundTags(tags);return;}
  if(act==='te4outnew'){await guided.openOutbound();return;}
  if(act==='te4outedit'){await guided.openOutbound(Number(el.dataset.index));return;}
  if(act==='te4outclone'){await guided.openOutbound(Number(el.dataset.index),true);return;}
