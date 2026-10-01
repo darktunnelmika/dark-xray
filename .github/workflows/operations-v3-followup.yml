@@ -1,0 +1,55 @@
+name: Operations V3 retired-node alert follow-up
+on:
+  push:
+    branches: [automation/operations-v3-publisher-20261002]
+    paths: [.github/workflows/operations-v3-followup.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Apply and verify narrow follow-up
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach d88bb60064ff9f128650ab2973c13032c2b2b51f
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,subprocess
+          p=Path('web/overview-v4.js');s=p.read_text()
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='210d8646fae321498359ae8443e87e252a3ee948f3c40d718bfc30a078e2c1c1'
+          assert s.count('errors=nodes.filter(')==2
+          p.write_text(s.replace('errors=nodes.filter(','errors=enabled.filter('))
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='0536604f7b381a1aae8bc5c5132101ff2881404b2477378c55474d0796d20ffc'
+          p=Path('tests/operations-v3-ui.test.cjs')
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='8bf71fe895fbef1ca327a06f28e4ebbb068b73dd386dddbb79d0e0a49a8b849a'
+          extra=r'''
+          test('disabled retired nodes cannot raise active dashboard sync alerts',()=>{
+           const source=fs.readFileSync('web/overview-v4.js','utf8');
+           const code=source.slice(source.indexOf('function healthCard(){'),source.indexOf('const activityScopes='));
+           const ctx={state:{ov2:{core:{state:'running'},nodes:[{name:'Retired',enabled:false,last_error:'old failure'}]}},L:(en)=>en,e:x=>x,fa:x=>x};
+           vm.runInNewContext(code,ctx);const html=ctx.healthCard();
+           assert.doesNotMatch(html,/Node sync errors|Retired/);assert.match(html,/All monitored systems nominal/);
+           assert.doesNotMatch(source,/errors=nodes\.filter/);
+          });
+          '''
+          p.write_text(p.read_text()+extra)
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='bc51f37dc61704be8129642cc7f5b6b43d145e6585c8a0be34109810978a1158'
+          names=sorted(p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\0') if p and p!='SHA256SUMS')
+          Path('SHA256SUMS').write_text(''.join(hashlib.sha256(Path(p).read_bytes()).hexdigest()+'  '+p+'\n' for p in names))
+          subprocess.run(['git','add','web/overview-v4.js','tests/operations-v3-ui.test.cjs','SHA256SUMS'],check=True)
+          assert set(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())=={'web/overview-v4.js','tests/operations-v3-ui.test.cjs','SHA256SUMS'}
+          PY
+          sha256sum -c SHA256SUMS >/tmp/ops-followup-sums.log
+          git diff --cached --check
+          node --test tests/operations-v3-ui.test.cjs tests/overview-v4.test.cjs
+      - name: Publish tested candidate only
+        run: |
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(operations): exclude retired disabled Nodes from active alerts'
+          git push origin HEAD:refs/heads/feature/operations-v3
+          git rev-parse HEAD
