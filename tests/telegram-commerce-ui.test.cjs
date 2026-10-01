@@ -72,15 +72,22 @@ test('Simple Store V4 creates one reviewed sales plan without manual IDs',()=>{
   assert.match(js,/shell\(1,/);
   assert.match(js,/shell\(2,/);
   assert.match(js,/shell\(3,/);
-  assert.match(js,/duration_months/);
+  assert.match(js,/duration_days/);
+  assert.match(js,/Duration preset/);
+  assert.match(js,/Days · manual/);
+  assert.match(js,/Volume preset/);
+  assert.match(js,/Volume GB · manual/);
+  assert.match(js,/IP preset/);
+  assert.match(js,/IP limit · manual/);
   assert.match(js,/planInbound/);
   assert.match(js,/Advanced settings/);
   const start=js.indexOf('function simplePlanWizard(){');
   const end=js.indexOf('async function priceDialog(product){',start);
   const simple=js.slice(start,end);
   assert.doesNotMatch(simple,/field\(['"]ID['"]/);
-  assert.match(simple,/\['1'.*'2'.*'3'.*'6'.*'12'/s);
-  assert.match(simple,/\['1','1'\].*\['5','5'\]/s);
+  assert.match(simple,/30 days/);
+  assert.match(simple,/365 days/);
+  assert.match(simple,/Custom/);
   assert.match(simple,/\['volume'.*\['unlimited'/s);
 });
 
