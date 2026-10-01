@@ -33,7 +33,7 @@ def configure_bot(c,admin_id=700001,token=BOT_TOKEN):
 
 def simple_plan(c,inbound_id,name='OPS PLAN',price=250000):
     r=c.post('/api/commerce/simple-plans',json={
-        'name':name,'plan_type':'volume','price_minor':price,'duration_months':1,
+        'name':name,'plan_type':'volume','price_minor':price,'duration_days':30,
         'volume_gb':30,'ip_limit':1,'inbound_ids':[inbound_id],'published':True,
     })
     assert r.status_code==201,r.text
