@@ -34,3 +34,10 @@ test('owner page shows representative subscriptions and expiry state',()=>{
   assert.match(js,/Representative subscriptions/);
   assert.match(js,/expires_at/);
 });
+test('V2 uses guided creation and owner operations center',()=>{
+ for(const token of ['newPlanWizard','Step','shell(1,','shell(2,','shell(3,','Review & publish','representative-marketplace/orders','representative-marketplace/summary','Order operations'])assert.ok(js.includes(token),token);
+});
+test('V2 creation keeps technical limits advanced while buyer remains immutable',()=>{
+ const a=js.indexOf('function newPlanWizard(){'),b=js.indexOf('async function planDialog(',a),x=js.slice(a,b);
+ assert.match(x,/Advanced limits/);assert.match(x,/Max client IP/);assert.match(x,/Max client HWID/);assert.doesNotMatch(x,/buyer_telegram_id/);
+});
