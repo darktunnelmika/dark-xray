@@ -1,0 +1,6 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
+const js=fs.readFileSync('web/telegram-commerce.js','utf8');
+test('V6 keeps common plan creation free of IDs and day-level technical fields',()=>{const a=js.indexOf('function simplePlanWizard(){'),b=js.indexOf('async function priceDialog(product){',a),x=js.slice(a,b);assert.ok(a>0&&b>a);for(const token of ["field('ID'","Inbound IDs, comma separated","Duration days","Primary inbound ID"])assert.doesNotMatch(x,new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));});
+test('V6 is an explicit service then price then locations then review flow',()=>{for(const token of ['Step','shell(1,','shell(2,','shell(3,','4 · Review & publish','simplePlanInboundPicker','simplePlanReview'])assert.ok(js.includes(token),token);});
+test('advanced custom variant remains available but behind Advanced disclosure',()=>{assert.match(js,/tg-product-advanced/);assert.match(js,/Add custom variant/);assert.match(js,/async function priceDialog\(product\)/);});
+test('safe defaults remain first connection subscription portal QR and no HWID',()=>{for(const token of ["activation_mode:'first_connection'","delivery_mode:'subscription'","hwid_limit:0","show_qr:true","show_portal:true"])assert.ok(js.includes(token),token);});
