@@ -1826,28 +1826,33 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.post('/api/traffic-matrix/warp/endpoint')
     def traffic_matrix_warp_endpoint(body:WarpEndpointSelect,p:Principal=Depends(owner)):
-        writable();target=_runtime_target(body.server,require_online=True);old=_warp_profile(body.server)
-        if not old:raise HTTPException(409,'Create WARP on this runtime first')
+        writable();target=_runtime_target(body.server,require_online=True);old=_warp_profile(body.server);pending=_warp_pending(body.server)
+        source=pending or old
+        if not source:raise HTTPException(409,'Register WARP on this runtime before selecting a path')
         try:endpoint=validate_warp_endpoint(body.endpoint)
         except WarpRegistrationError as ex:raise HTTPException(400,str(ex))
-        candidate=copy.deepcopy(old);candidate['settings']['peers'][0]['endpoint']=endpoint
+        candidate=copy.deepcopy(source);candidate['tag']='warp';candidate['settings']['peers'][0]['endpoint']=endpoint
         try:
             if target['kind']=='hub':
                 checked=probe_outbounds(engine._binary(),config.xray_assets,[candidate],tags=['warp'],attempts=2,timeout=5.0,trace=True)[0]
             else:
-                checked=nodes.warp_endpoint_probe(target['nodeId'],'warp',[endpoint],attempts=2,timeout_seconds=5)['items'][0]
+                checked=nodes.warp_endpoint_probe(target['nodeId'],'warp',[endpoint],attempts=2,timeout_seconds=5,
+                                                  outbound=candidate if pending else None)['items'][0]
         except (OutboundProbeError,PolicyError) as ex:raise HTTPException(409,'Selected WARP path test failed: '+str(ex))
         if not checked.get('success') or not checked.get('warpVerified'):
             raise HTTPException(409,'Selected WARP path did not verify Cloudflare warp=on')
-        _warp_profile_save(body.server,candidate,'endpoint-change')
+        _warp_profile_save(body.server,candidate,'manual-endpoint-selection')
         try:applied=_apply_matrix_scope(body.server)
         except Exception as ex:
-            _warp_profile_save(body.server,old,'rollback')
+            if old is None:_warp_profile_delete(body.server)
+            else:_warp_profile_save(body.server,old,'rollback')
             try:_apply_matrix_scope(body.server)
             except Exception:pass
             raise HTTPException(409,'WARP endpoint apply failed and was rolled back: '+str(ex)[:300])
-        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',body.server,endpoint)
-        return {'server':target,'selected':endpoint,'test':checked,'applied':applied}
+        if pending:_warp_pending_delete(body.server)
+        manager.audit(p.actor,p.actor.id,'traffic_matrix.warp.endpoint',body.server,'manual endpoint='+endpoint)
+        return {'server':target,'selected':endpoint,'test':checked,'applied':applied,
+                'pendingRegistration':False,'manualSelectionRequired':False}
 
     @app.get('/api/inbounds')
     def inbounds(p:Principal=Depends(current)):
