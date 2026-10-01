@@ -87,7 +87,7 @@ enginePage=async function(){
  const html=active===pageId?await workspace():await previousEnginePage();
  return '<div class="xray-settings-workspace" data-xray-section="'+active+'">'+sectionNav(active)+html+'</div>';
 };
-document.addEventListener('change',ev=>{
+if(typeof document.addEventListener==='function')document.addEventListener('change',ev=>{
  const el=ev.target;if(!el.matches('[data-xw-runtime]'))return;
  WC.server=String(el.value||'hub');WC.items=[];WC.scannedServer='';renderPage().catch(ex=>toast(ex.message,true));
 });
