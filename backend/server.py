@@ -1752,12 +1752,14 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/traffic-matrix/warp')
     def traffic_matrix_warp_status(server:str='hub',p:Principal=Depends(owner)):
-        target=_runtime_target(server,require_online=False);profile=_warp_profile(server)
-        endpoint=''
-        if profile:
-            peers=((profile.get('settings') or {}).get('peers') or [{}])
-            if isinstance(peers,list) and peers and isinstance(peers[0],dict):endpoint=str(peers[0].get('endpoint') or '')
-        return {'server':target,'registered':bool(profile),'endpoint':endpoint}
+        target=_runtime_target(server,require_online=False);profile=_warp_profile(server);pending=_warp_pending(server)
+        def endpoint_of(value):
+            if not value:return ''
+            peers=((value.get('settings') or {}).get('peers') or [{}])
+            return str(peers[0].get('endpoint') or '') if isinstance(peers,list) and peers and isinstance(peers[0],dict) else ''
+        return {'server':target,'registered':bool(profile),'endpoint':endpoint_of(profile),
+                'pendingRegistration':bool(pending),'pendingEndpoint':endpoint_of(pending),
+                'manualSelectionRequired':bool(pending),'autoBestDefault':False}
 
     @app.post('/api/traffic-matrix/warp/create')
     def traffic_matrix_warp_create(body:WarpCreate,p:Principal=Depends(owner)):
