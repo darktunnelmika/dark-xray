@@ -877,7 +877,7 @@ def test_representative_bot_simple_plan_wizard_uses_only_allowed_inbounds(env):
 
 
 def test_simple_store_v6_accepts_manual_days_volume_and_ip(env):
-    c=env['client'];inbound_id=create_inbound(c)
+    store,engine,manager,auth,c=env;inbound_id=create_inbound(c)
     r=c.post('/api/commerce/simple-plans',json={
         'name':'MANUAL V6','plan_type':'volume','price_minor':123456,'duration_days':47,
         'volume_gb':73,'ip_limit':9,'inbound_ids':[inbound_id],'published':True})
@@ -888,7 +888,7 @@ def test_simple_store_v6_accepts_manual_days_volume_and_ip(env):
     assert price['ip_limit']==9
 
 def test_simple_store_v6_rejects_manual_values_outside_safe_ranges(env):
-    c=env['client'];inbound_id=create_inbound(c)
+    store,engine,manager,auth,c=env;inbound_id=create_inbound(c)
     base={'name':'BAD V6','plan_type':'volume','price_minor':1,'duration_days':30,'volume_gb':10,'ip_limit':1,'inbound_ids':[inbound_id]}
     for key,value in [('duration_days',0),('duration_days',3651),('volume_gb',1000001),('ip_limit',0),('ip_limit',1001)]:
         body=dict(base);body[key]=value
