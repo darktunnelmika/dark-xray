@@ -82,3 +82,75 @@ def test_warp_policy_applies_only_after_verified_probe(env,monkeypatch):
  with store.lock:
   row=store.db.execute("SELECT policy FROM traffic_matrix WHERE scope='hub' AND inbound_id=? AND access_path='direct'",(iid,)).fetchone()
  assert row and row["policy"]=="warp_ai"
+
+
+def _registration_payload():
+ return {"outbound":{"tag":"warp","protocol":"wireguard","settings":{"secretKey":"secret",
+         "address":["172.16.0.2/32"],"peers":[{"publicKey":"peer","endpoint":"162.159.192.1:2408"}]}},
+         "deviceId":"device-v5"}
+
+def test_warp_create_requires_manual_endpoint_selection_before_policy(env,monkeypatch):
+ import server
+ store,eng,c,iid=env
+ monkeypatch.setattr(server,"register_cloudflare_warp",lambda **k:_registration_payload())
+ def scan_probe(*args,**kwargs):
+  tags=kwargs.get("tags") or []
+  return [{"tag":tag,"success":True,"warpVerified":True,"delayMs":20.0+i,"lossPercent":0.0,
+           "jitterMs":1.0,"egress":{"country":"DE","colo":"FRA","ip":"198.51.100.1","warp":"on"}}
+          for i,tag in enumerate(tags)]
+ monkeypatch.setattr(server,"probe_outbounds",scan_probe)
+ monkeypatch.setattr(eng,"_binary",lambda:"/bin/true")
+
+ created=c.post("/api/traffic-matrix/warp/create",json={"server":"hub"})
+ assert created.status_code==200,created.text
+ doc=created.json()
+ assert doc["selectionRequired"] is True and doc["selectionConfirmed"] is False
+ assert len(doc["items"])>1
+ with store.lock:
+  row=store.db.execute("SELECT selection_confirmed FROM warp_profiles WHERE scope='hub'").fetchone()
+ assert row and row["selection_confirmed"]==0
+
+ status=c.get("/api/traffic-matrix/warp",params={"server":"hub"}).json()
+ assert status["state"]=="awaiting_selection"
+ assert status["endpoint"]==""
+ assert status["candidateEndpoint"]=="162.159.192.1:2408"
+
+ blocked=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"warp_ai"})
+ assert blocked.status_code==409
+ assert "Select and apply" in blocked.text
+
+ scan=c.post("/api/traffic-matrix/warp/scan",json={"server":"hub"})
+ assert scan.status_code==200,scan.text
+ assert scan.json()["selectionConfirmed"] is False
+ assert not any(x["selected"] for x in scan.json()["items"])
+
+ selected=c.post("/api/traffic-matrix/warp/endpoint",json={"server":"hub","endpoint":"162.159.192.5:2408"})
+ assert selected.status_code==200,selected.text
+ assert selected.json()["selectionConfirmed"] is True
+ with store.lock:
+  row=store.db.execute("SELECT selection_confirmed,outbound_json FROM warp_profiles WHERE scope='hub'").fetchone()
+ assert row["selection_confirmed"]==1
+ assert json.loads(row["outbound_json"])["settings"]["peers"][0]["endpoint"]=="162.159.192.5:2408"
+
+ applied=c.post("/api/traffic-matrix",json={"inboundId":iid,"server":"hub","accessPath":"direct","policy":"warp_ai"})
+ assert applied.status_code==200,applied.text
+
+
+def test_warp_auto_best_is_explicit_opt_in(env,monkeypatch):
+ import server
+ store,eng,c,iid=env
+ monkeypatch.setattr(server,"register_cloudflare_warp",lambda **k:_registration_payload())
+ monkeypatch.setattr(eng,"_binary",lambda:"/bin/true")
+ def probe(*args,**kwargs):
+  tags=kwargs.get("tags") or ["warp"]
+  out=[]
+  for i,tag in enumerate(tags):
+   out.append({"tag":tag,"success":True,"warpVerified":True,
+               "delayMs":80.0 if i==0 else 15.0+i,"lossPercent":0.0,
+               "jitterMs":2.0,"egress":{"country":"NL","colo":"AMS","ip":"203.0.113.2","warp":"on"}})
+  return out
+ monkeypatch.setattr(server,"probe_outbounds",probe)
+ assert c.post("/api/traffic-matrix/warp/create",json={"server":"hub"}).status_code==200
+ auto=c.post("/api/traffic-matrix/warp/auto",json={"server":"hub"})
+ assert auto.status_code==200,auto.text
+ assert auto.json()["autoSelected"] is True and auto.json()["selectionConfirmed"] is True
