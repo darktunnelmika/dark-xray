@@ -152,3 +152,31 @@ def test_route_preview_uses_first_outbound_when_no_rule_matches(env):
     doc=c.post('/api/traffic-engine/preview',json={'domain':'other.example','port':443,'network':'tcp'}).json()
     assert doc['result']=='default'
     assert doc['selected_outbound']=='custom-default'
+
+
+def test_live_outbound_probe_uses_selected_runtime_and_returns_real_metrics(env,monkeypatch):
+    import server
+    _,_,_,_,c=env
+    put(c,'outbounds',[
+        {'tag':'direct','protocol':'freedom','settings':{}},
+        {'tag':'edge','protocol':'freedom','settings':{}},
+    ])
+    monkeypatch.setattr(server,'probe_outbounds',lambda *a,**k:[{
+        'tag':'edge','testable':True,'success':True,'delayMs':27.5,'lossPercent':0.0,
+        'jitterMs':1.4,'egress':{'ip':'198.51.100.20','country':'NL','colo':'AMS','warp':'off'}
+    }])
+    r=c.post('/api/traffic-engine/outbound/probe',json={'server':'hub','tag':'edge','attempts':2})
+    assert r.status_code==200,r.text
+    doc=r.json()
+    assert doc['server']['id']=='hub'
+    assert doc['tag']=='edge' and doc['success'] is True
+    assert doc['delayMs']==27.5 and doc['lossPercent']==0.0 and doc['jitterMs']==1.4
+    assert doc['egress']['country']=='NL' and doc['egress']['colo']=='AMS'
+    assert doc['productionTrafficMutation'] is False
+
+
+def test_traffic_engine_exposes_runtime_catalog_for_probe_selector(env):
+    _,_,_,_,c=env
+    doc=c.get('/api/traffic-engine').json()
+    assert doc['live_outbound_probe'] is True
+    assert any(x['id']=='hub' for x in doc['servers'])
