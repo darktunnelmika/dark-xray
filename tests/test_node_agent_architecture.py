@@ -202,12 +202,12 @@ def _agent_env(tmp_path):
     from fastapi.testclient import TestClient
     from node_agent import AgentToken,make_agent_app
     store=Store(tmp_path/'agent.sqlite3')
-    cfg=Config(xray_binary=str(tmp_path/'missing'),xray_assets=str(tmp_path),public_address='node.test',public_origin='http://node.test',test_engine=True)
+    cfg=Config(xray_binary=str(tmp_path/'missing'),xray_assets=str(tmp_path),public_address='node.test',public_origin='https://node.test',test_engine=True)
     eng=CoreEngine(cfg,store,tmp_path/'runtime')
     token_value='dkn_'+('Z'*60)
     token_path=tmp_path/'token';token_path.write_text(token_value+'\n');os.chmod(token_path,0o600)
     app=make_agent_app(eng,store,AgentToken(token_path),'node-probe-test',background=False)
-    client=TestClient(app,base_url='http://node.test');client.headers['Authorization']='Bearer '+token_value
+    client=TestClient(app,base_url='https://node.test');client.headers['Authorization']='Bearer '+token_value
     return store,eng,client
 
 
