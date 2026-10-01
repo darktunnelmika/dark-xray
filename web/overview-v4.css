@@ -276,3 +276,9 @@ body.skin-cyber-classic .ov4-small-button:hover{
   .ov4-activity-list>div{grid-template-columns:1fr 1fr}
   .ov4-command-actions{gap:4px}.ov4-action span{display:none}.ov4-sep{display:none}
 }
+
+/* Tablet activity rows must fit a half-width dashboard card. */
+@media (max-width:1200px){
+ .ov4-activity-list>div{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+ .ov4-activity-list>div>*{min-width:0;overflow-wrap:anywhere}
+}

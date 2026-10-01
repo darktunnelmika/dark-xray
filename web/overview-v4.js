@@ -147,6 +147,8 @@ function healthCard(){
  if(errors.length)add('warn',L('Node sync errors','خطای همگام‌سازی نود'),errors.map(n=>n.name||n.id).join(', '));
  if(bans)add('warn',L('IP Guard bans','بن‌های IP Guard'),fa(bans));
  if(up.error)add('bad',L('Update broker error','خطای Update Broker'),up.error);
+ if(core.state!=='running')add('warn',L('Xray not running','Xray در حال اجرا نیست'),L('Review runtime state.','وضعیت اجرا را بررسی کن.'));
+ if(globalThis.DarkOperationsV3?.attention?.())add('warn',L('Service status needs attention','وضعیت سرویس نیاز به بررسی دارد'),L('See Service status for details or unavailable telemetry.','جزئیات یا اطلاعات ناموجود را در وضعیت سرویس‌ها ببین.'));
  if(!rows.length)add('good',L('All monitored systems nominal','همه سیستم‌های مانیتورشده سالم هستند'),L('No active runtime, node or update alert.','هشدار فعالی برای محیط اجرا، نود یا آپدیت وجود ندارد.'));
  return `<article class="ov4-card ov4-health-card"><header class="ov4-card-head"><div><span>${L('HEALTH & ALERTS','سلامت و هشدارها')}</span><small>${L('Operational issues first','اولویت با مشکلات عملیاتی')}</small></div><button class="ov4-link" data-act="ov4doctor">Doctor →</button></header><div class="ov4-alert-list">${rows.slice(0,5).map(r=>`<div class="${r.kind}"><i></i><span><b>${e(r.title)}</b><small>${e(r.detail)}</small></span></div>`).join('')}</div></article>`;
 }
@@ -182,7 +184,7 @@ function activityCard(){
 dashboard=function(){
  if(!state.me)return baseDashboard();
  return heading(L('System Overview','نمای کلی سیستم'),L('Live host, Xray and DARK control-plane telemetry.','تله‌متری زندهٔ میزبان، Xray و لایهٔ کنترل DARK.'))+notices()+
- `<div class="ov4">${commandBar()}${resourceRow()}<section class="ov4-main-grid">${trafficChart()}${connectionCard()}</section>${telemetryStrip()}${darkSummary()}<section class="ov4-management-grid">${nodeCard()}<div id="dark-update-center-slot"></div></section><section class="ov4-lower-grid">${backupCard()}${repsCard()}${healthCard()}${activityCard()}</section></div>`;
+ `<div class="ov4">${commandBar()}${resourceRow()}<section class="ov4-main-grid">${trafficChart()}${connectionCard()}</section>${telemetryStrip()}${darkSummary()}<section class="ov4-management-grid">${nodeCard()}<div id="dark-update-center-slot"></div></section>${globalThis.DarkOperationsV3?.render?.()||''}<section class="ov4-lower-grid">${backupCard()}${repsCard()}${healthCard()}${activityCard()}</section></div>`;
 };
 
 runAction=async function(act,el){

@@ -2539,6 +2539,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         pending={k:{'from':actual.get(k),'to':desired.get(k)} for k in compare if actual.get(k)!=desired.get(k)}
         return {'actual':actual,'desired':desired,'pending':pending,'apply_command':'sudo darkxray settings-apply'}
 
+    @app.get('/api/operations/overview')
+    def operations_overview(p:Principal=Depends(owner)):
+        from operations_overview import snapshot
+        return snapshot(store,engine,nodes,getattr(app.state,'telegram_runtime',None))
+
     @app.get('/api/core/state')
     def core_state(p:Principal=Depends(owner)):return engine.runtime_state()
 
