@@ -53,3 +53,9 @@
 .xv3-rule-advanced>.xv3-section{border:0!important;border-radius:0!important;background:transparent!important;padding-inline:0!important}
 @media(max-width:1000px){.te5-routing .te4-rule{grid-template-columns:1fr}.te5-routing .te4-rule footer{justify-content:flex-start}.te5-routing .te4-bal-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:650px){.te5-routing-bar,.te5-routing .te4-bal-grid{grid-template-columns:1fr}}
+
+.te5-probe-bar{display:grid;grid-template-columns:minmax(220px,.8fr) auto minmax(220px,1.4fr);gap:8px;align-items:end;border:1px solid rgba(45,205,195,.10);background:#03090c;border-radius:8px;padding:8px}
+.te5-probe-bar label{display:grid;gap:4px}.te5-probe-bar label>span{font-size:7px;color:#557279}.te5-probe-bar select{height:36px;border:1px solid rgba(49,199,196,.12);background:#030a0d;color:#9dcac5;border-radius:7px;padding:0 8px}.te5-probe-bar>small{font-size:7px;color:#557279;line-height:1.5}
+.te5-probe-slot{border:1px solid rgba(255,255,255,.04);background:#020709;border-radius:6px;padding:7px}.te5-probe{display:grid;gap:2px}.te5-probe b{font-size:8px}.te5-probe small{font-size:7px;color:#567079;overflow-wrap:anywhere}.te5-probe.ok b{color:#58e7a6}.te5-probe.bad b{color:#ef7886}.te5-probe.idle,.te5-probe.testing{font-size:8px;color:#5c777d}
+@media(max-width:850px){.te5-probe-bar{grid-template-columns:1fr 1fr}.te5-probe-bar>small{grid-column:1/-1}}
+@media(max-width:650px){.te5-probe-bar{grid-template-columns:1fr}.te5-probe-bar>small{grid-column:auto}.te5-probe-bar select{font-size:16px}.te5-probe-bar .btn{width:100%}}
