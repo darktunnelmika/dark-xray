@@ -693,6 +693,11 @@ if report['status']=='passed':
         report.update(status='failed',error='Xray Settings V5 browser flow failed')
     else:
         report['xray_settings_v5']=json.loads((OUT/'browser-xray-v5-results.json').read_text())
+        for script,key,receipt in [('representative-marketplace-v2-browser.py','representative_marketplace_v2','representative-marketplace-v2-browser.json'),('licensing-v1-browser.py','licensing_v1','licensing-v1-browser.json')]:
+            followup=subprocess.run([sys.executable,str(ROOT/'tests'/script)],check=False)
+            if followup.returncode:
+                report.update(status='failed',error=script+' failed');break
+            report[key]=json.loads((OUT/receipt).read_text())
 
 (OUT/'browser-results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=False,indent=2))
