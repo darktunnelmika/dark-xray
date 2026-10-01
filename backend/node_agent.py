@@ -383,9 +383,15 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
         endpoints=body.get('endpoints') if isinstance(body,dict) else None
         attempts=body.get('attempts',2) if isinstance(body,dict) else 2
         timeout=body.get('timeoutSeconds',4) if isinstance(body,dict) else 4
+        candidate=body.get('outbound') if isinstance(body,dict) else None
         if type(attempts)is not int or not 1<=attempts<=3 or type(timeout)is not int or not 1<=timeout<=10:
             raise HTTPException(400,'Invalid WARP endpoint probe limits')
-        outbound=next((x for x in engine.runtime_outbounds('hub') if isinstance(x,dict) and x.get('tag')=='warp'),None)
+        if candidate is not None:
+            if not isinstance(candidate,dict) or str(candidate.get('protocol','')).lower()!='wireguard':
+                raise HTTPException(400,'Invalid probe-only WARP outbound')
+            outbound=copy.deepcopy(candidate);outbound['tag']='warp'
+        else:
+            outbound=next((x for x in engine.runtime_outbounds('hub') if isinstance(x,dict) and x.get('tag')=='warp'),None)
         if not outbound or str(outbound.get('protocol','')).lower()!='wireguard':raise HTTPException(409,'WARP outbound is missing on Node')
         peers=((outbound.get('settings') or {}).get('peers') or [{}]);current=str(peers[0].get('endpoint') or '') if peers else ''
         raw=endpoints if endpoints is not None else warp_endpoint_candidates(current)
