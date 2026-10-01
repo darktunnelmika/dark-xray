@@ -266,6 +266,8 @@ class NodeTokenCreate(Model):
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
+    from licensing import LicenseClient
+    license_client=LicenseClient(Path(store.path).resolve().parent if store.path!=':memory:' else Path('/tmp/dark-xray-test-license'))
     from node_replacement import NodeReplacement
     replacements=NodeReplacement(nodes)
     node_reset_lock=threading.RLock()
@@ -451,13 +453,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                       lease_callback=renew_node_lease)
             bot_runtime=getattr(app.state,'telegram_runtime',None)
             if bot_runtime:bot_runtime.start()
+            license_client.start(config.public_origin)
         yield
         if bot_runtime:bot_runtime.close()
+        license_client.close()
         nodes.close();manager.close();engine.close()
     app=FastAPI(title='DARK XRAY',version=VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.replacements=replacements
     app.state.renew_node_lease=renew_node_lease
-    app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes
+    app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes;app.state.license=license_client
     from dark_restore import DarkRestore
     dark_restore=DarkRestore(store,engine,nodes,manager)
     app.state.dark_restore=dark_restore
@@ -537,8 +541,16 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def owner(p:Principal=Depends(current))->Principal:
         if p.actor.role!='owner' or p.key_id:raise HTTPException(403,'Interactive owner access required')
         return p
-    def writable():
+    def local_writable():
         if not config.writes_enabled:raise HTTPException(409,'Local writes disabled by administrator')
+    def writable():
+        local_writable()
+        license_client.refresh(config.public_origin)
+        status=license_client.status()
+        if not status['writes_allowed']:raise HTTPException(402,'DARK license is not active; panel is read-only')
+
+    from licensing import install_licensing
+    install_licensing(app,license_client,current,owner,local_writable,manager.audit,config.public_origin)
 
     from node_recovery import install_hub_recovery
     install_hub_recovery(app,nodes,owner,writable,manager.audit)
