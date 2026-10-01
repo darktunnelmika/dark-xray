@@ -176,7 +176,7 @@ def test_stop_observation_with_real_monitor_and_agent_receipts(hub, tmp_path, mo
         real_deliver = reg.deliver_pending_control
         def deliver(node):
             result = real_deliver(node)
-            if threading.current_thread() is reg.thread and result.get('executed'):
+            if threading.current_thread().name == 'dark-node-monitor-'+node and result.get('executed'):
                 finished.set()
             return result
         def record(node, action):
