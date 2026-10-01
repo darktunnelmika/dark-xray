@@ -124,3 +124,6 @@ python -m pytest tests/test_node_update_permissions.py -q --junitxml=qa/junit/no
 
 python -m pytest tests/test_xray_settings_v5.py -q --junitxml=qa/junit/xray-settings-v5.xml
 node --test tests/xray-settings-v5.test.cjs
+
+python -m pytest tests/test_licensing_v1.py tests/test_license_authority_v1.py -q --junitxml=qa/junit/licensing-v1.xml
+node --test tests/licensing-v1-ui.test.cjs

@@ -1,0 +1,3 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');const js=fs.readFileSync('web/settings-v2.js','utf8');
+test('license is a Settings tab with status configure activate and check',()=>{for(const x of ["['license',L('License'",'/api/license/status','license-config','license-activate','/api/license/check','Installation ID','Ed25519 public key'])assert.ok(js.includes(x),x);});
+test('UI explicitly documents read-only enforcement and no traffic termination',()=>{assert.match(js,/Read-only/);assert.match(js,/Existing customer traffic is not terminated by V1/);});
