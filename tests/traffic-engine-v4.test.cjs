@@ -86,7 +86,7 @@ test('Outbound V5 probes are explicit per runtime and show egress metadata',()=>
   assert.match(traffic,/data-te4-probe-runtime/);
   assert.match(traffic,/te4outprobe/);
   assert.match(traffic,/te4probeall/);
-  assert.match(traffic,//api/traffic-matrix/outbounds/probe/);
+  assert.match(traffic,/\/api\/traffic-matrix\/outbounds\/probe/);
   assert.match(traffic,/probeRuntime/);
   assert.match(traffic,/country/);
   assert.match(traffic,/colo/);
