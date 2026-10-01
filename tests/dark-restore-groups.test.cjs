@@ -19,7 +19,9 @@ test('Restore usage label reads DARK usage, never the legacy-inclusive effective
   effective_used:13000,legacy_used:10000,legacy_total:50000,remaining:37000,inbound_ids:[1],node_ids:[]}]);
  assert.match(html,/data-dr-dark-usage>bytes:3000<\/strong>/);
  assert.doesNotMatch(html,/bytes:13000/);
- assert.match(html,/<details>[\s\S]*bytes:10000/);
+ assert.doesNotMatch(html,/<details>/);
+ assert.match(source,/LEGACY SOURCE/);
+ assert.match(source,/legacy_used/);
  assert.match(html,/bytes:37000/);
 });
 test('Import requires a group choice and validates new names before sending',()=>{
