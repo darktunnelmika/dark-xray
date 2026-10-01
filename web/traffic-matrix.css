@@ -23,3 +23,9 @@
 .warp-scan-dialog{width:min(980px,calc(100vw - 24px))}
 @media(max-width:820px){.tm-warp-path{grid-template-columns:1fr 75px 70px 70px}.tm-warp-path>div:first-child{grid-column:1/-1}.tm-warp-path>span.tag,.tm-warp-path>div:last-child{grid-column:auto}.tm-warp-confirm-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:560px){.tm-warp-head{align-items:flex-start;flex-direction:column}.tm-warp-head>div{width:100%}.tm-warp-head .btn{flex:1}.tm-warp-path{grid-template-columns:repeat(3,1fr);padding:8px}.tm-warp-path>div:first-child,.tm-warp-path>div:last-child{grid-column:1/-1}.tm-warp-path>span.tag{grid-column:auto}.tm-warp-confirm-grid{grid-template-columns:1fr}}
+
+
+/* Routing/AdBlock V5 clarity */
+.tm-policy-state{display:flex;gap:5px;flex-wrap:wrap;margin-top:2px}.tm-policy-state i{font-style:normal;font:7px var(--mono);padding:2px 4px;border:1px solid rgba(255,255,255,.06);border-radius:4px;color:#667d73}.tm-policy-state i.on{color:#55e6a5;border-color:rgba(85,230,165,.2)}
+.tm-apply-preview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.tm-apply-preview>div{display:grid;gap:4px;border:1px solid rgba(25,255,134,.12);background:#020b07;padding:9px}.tm-apply-preview span{font-size:7px;color:#5d796b}.tm-apply-preview b{font-size:10px}.tm-apply-preview label{grid-column:1/-1}
+@media(max-width:560px){.tm-apply-preview{grid-template-columns:1fr}.tm-apply-preview label{grid-column:auto}}
