@@ -34,12 +34,12 @@ function routeRow(r){
   '<button type="button" class="btn btn-primary mini" data-act="tmapply" data-id="'+r.inboundId+'" data-server="'+esc(r.serverId)+'" data-path="'+esc(r.accessPath)+'">'+icon('check')+L('Apply','اعمال')+'</button></div></div>';
 }
 function serverCard(rows){
- const first=rows[0],server=first.server||{},same=rows.every(function(x){return x.policy===first.policy;}),both=same?first.policy:'normal',warp=rows.some(function(x){return x.warpReady;}),paths=rows.map(function(x){return x.accessPath;}).join(',');
+ const first=rows[0],server=first.server||{},same=rows.every(function(x){return x.policy===first.policy;}),both=same?first.policy:'normal',warpReady=rows.some(function(x){return x.warpReady;}),warpRegistered=rows.some(function(x){return x.warpRegistered;}),paths=rows.map(function(x){return x.accessPath;}).join(',');
  return '<article class="tm-server"><header><div><b>'+esc(server.name||first.serverId)+'</b><small class="mono">'+esc(server.address||'—')+' · '+(server.online===false?L('Offline','آفلاین'):L('Online','آنلاین'))+'</small></div>'+
   '<div class="tm-server-tools"><select data-matrix-both-policy>'+policyOptions(both)+'</select>'+
   '<button type="button" class="btn mini" data-act="tmapplyboth" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'" data-paths="'+esc(paths)+'">'+L('Apply both','اعمال روی هر دو')+'</button>'+
   '<button type="button" class="btn mini" data-act="tmprobeall" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'" data-paths="'+esc(paths)+'">'+icon('activity')+L('Test all','تست همه')+'</button>'+
-  (warp?'<button type="button" class="btn mini" data-act="tmwarpscan" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('activity')+'WARP Paths</button>':'<button type="button" class="btn mini" data-act="tmwarpcreate" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('plus')+L('Create WARP','ساخت WARP')+'</button>')+
+  (warpRegistered?'<button type="button" class="btn mini" data-act="tmwarpscan" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('activity')+(warpReady?L('WARP Paths','مسیرهای WARP'):L('Select WARP Path','انتخاب مسیر WARP'))+'</button>':'<button type="button" class="btn mini" data-act="tmwarpcreate" data-id="'+first.inboundId+'" data-server="'+esc(first.serverId)+'">'+icon('plus')+L('Create WARP','ساخت WARP')+'</button>')+
   '</div></header><div class="tm-routes">'+rows.map(routeRow).join('')+'</div></article>';
 }
 async function openMatrix(id){
@@ -76,19 +76,24 @@ async function probeAll(el){
  let failed=0;for(const path of paths){try{await probePath(id,server,path);}catch{failed++;}}
  toast(failed?L('Some Traffic Matrix tests failed.','بعضی تست‌های ماتریس ناموفق بودند.'):L('All Traffic Matrix paths passed.','همه مسیرهای ماتریس سالم هستند.'),!!failed);
 }
+function showWarpPaths(id,server,r){
+ const rows=(r.items||[]).map(function(x){
+  return '<div class="tm-warp-path"><div><b class="mono">'+esc(x.endpoint)+'</b><small>'+esc([x.country,x.colo].filter(Boolean).join(' · ')||'Cloudflare WARP')+(x.egressIp?' · '+esc(x.egressIp):'')+'</small></div>'+
+   '<span>'+(x.delayMs==null?'—':Math.round(Number(x.delayMs))+' ms')+'</span><span>'+(x.lossPercent==null?'—':x.lossPercent+'%')+'</span>'+
+   '<span class="tag '+(x.ready?'green':'red')+'">'+(x.ready?L('Ready','آماده'):L('Failed','ناموفق'))+'</span><div>'+
+   (x.selected?'<span class="tag green">'+L('Selected','انتخاب‌شده')+'</span>':x.ready?'<button type="button" class="btn btn-primary mini" data-act="tmwarpuse" data-id="'+id+'" data-server="'+esc(server)+'" data-endpoint="'+esc(x.endpoint)+'">'+L('Select & Apply','انتخاب و اعمال')+'</button>':'')+'</div></div>';
+ }).join('');
+ dialog(L('WARP Paths','مسیرهای WARP'),'<div class="notice">'+L('Scanning never activates a path. Choose one verified result to apply it.','اسکن هیچ مسیری را فعال نمی‌کند؛ یک نتیجه سالم را انتخاب و اعمال کن.')+'</div><div class="tm-warp-list">'+(rows||'—')+'</div>');
+}
 async function createWarp(el){
- const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');toast(L('Creating WARP profile…','در حال ساخت WARP…'));
- await api('/api/traffic-matrix/warp/create','POST',{server:server});toast(L('WARP created and installed.','WARP ساخته و نصب شد.'));await openMatrix(id);
+ const id=Number(el.dataset.id),server=String(el.dataset.server||'hub');toast(L('Creating WARP test profile…','در حال ساخت پروفایل تست WARP…'));
+ const r=await api('/api/traffic-matrix/warp/create','POST',{server:server});
+ toast(L('WARP registered. Select a verified path before using it.','WARP ثبت شد؛ قبل از استفاده یک مسیر سالم را انتخاب کن.'));
+ showWarpPaths(id,server,r);
 }
 async function scanWarp(el){
  const id=Number(el.dataset.id),server=String(el.dataset.server||'hub'),r=await api('/api/traffic-matrix/warp/scan','POST',{server:server});
- const rows=(r.items||[]).map(function(x){
-  return '<div class="tm-warp-path"><div><b class="mono">'+esc(x.endpoint)+'</b><small>'+esc([x.country,x.colo].filter(Boolean).join(' · ')||'Cloudflare WARP')+'</small></div>'+
-   '<span>'+(x.delayMs==null?'—':Math.round(Number(x.delayMs))+' ms')+'</span><span>'+(x.lossPercent==null?'—':x.lossPercent+'%')+'</span>'+
-   '<span class="tag '+(x.ready?'green':'red')+'">'+(x.ready?L('Ready','آماده'):L('Failed','ناموفق'))+'</span><div>'+
-   (x.selected?'<span class="tag">'+L('Current','فعلی')+'</span>':x.ready?'<button type="button" class="btn mini" data-act="tmwarpuse" data-id="'+id+'" data-server="'+esc(server)+'" data-endpoint="'+esc(x.endpoint)+'">'+L('Use','انتخاب')+'</button>':'')+'</div></div>';
- }).join('');
- dialog(L('WARP Paths','مسیرهای WARP'),'<div class="tm-warp-list">'+(rows||'—')+'</div>');
+ showWarpPaths(id,server,r);
 }
 async function useWarp(el){
  const id=Number(el.dataset.id),server=String(el.dataset.server||'hub'),endpoint=String(el.dataset.endpoint||'');
