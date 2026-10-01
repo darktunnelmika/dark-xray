@@ -215,6 +215,7 @@ def test_node_agent_generic_outbound_probe_is_read_only(tmp_path,monkeypatch):
     import node_agent
     store,eng,c=_agent_env(tmp_path)
     eng.save_section('outbounds',[{'tag':'direct','protocol':'freedom','settings':{}}])
+    monkeypatch.setattr(eng,'_binary',lambda:'/bin/true')
     monkeypatch.setattr(node_agent,'probe_outbounds',lambda *a,**k:[{
         'tag':'direct','testable':True,'success':True,'delayMs':18.0,'lossPercent':0.0,'jitterMs':1.0,
         'egress':{'ip':'198.51.100.30','country':'DE','colo':'FRA','warp':'off'}
@@ -240,6 +241,7 @@ def test_node_agent_pending_warp_candidate_probe_does_not_persist_profile(tmp_pa
         seen['outbounds']=outbounds
         return [{'tag':tags[0],'testable':True,'success':True,'delayMs':22.0,'lossPercent':0.0,'jitterMs':1.0,
                  'warpVerified':True,'egress':{'ip':'198.51.100.31','country':'NL','colo':'AMS','warp':'on'}}]
+    monkeypatch.setattr(eng,'_binary',lambda:'/bin/true')
     monkeypatch.setattr(node_agent,'probe_outbounds',fake_probe)
     r=c.post('/node/api/v1/warp/endpoints/probe',json={
         'outbound':candidate,'endpoints':['162.159.192.5:2408'],'attempts':2,'timeoutSeconds':4
