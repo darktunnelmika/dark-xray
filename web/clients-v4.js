@@ -3,7 +3,8 @@
 'use strict';
 if(typeof clientsPage!=='function'||typeof runAction!=='function'||typeof clientForm!=='function')return;
 const baseClientsPage=clientsPage,baseRunAction=runAction,baseClientForm=clientForm;
-state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',filters:false,delivery:null};
+state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',filters:false,delivery:null,page:1,pageSize:50};
+state.cv4.page=Math.max(1,Number(state.cv4.page||1));state.cv4.pageSize=[25,50,100].includes(Number(state.cv4.pageSize))?Number(state.cv4.pageSize):50;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 const pct=(u,t)=>t?Math.min(100,Math.max(0,100*Number(u||0)/Number(t))):0;
 const statusOf=r=>{const x=r.block_reasons||[];if(x.includes('client_manual')||r.client?.enable===false||r.observed_enable===false)return'disabled';if(x.length)return'blocked';return'active';};
@@ -49,18 +50,21 @@ function filteredV4(){
   return Number(b.activity_at||0)-Number(a.activity_at||0)||a.email.localeCompare(b.email);
  });
 }
+function compactDate(ms){if(!(Number(ms)>0))return L('Unlimited','نامحدود');const d=new Date(Number(ms));if(Number.isNaN(d.getTime()))return '—';const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;}
+function pageSlice(rows){const size=state.cv4.pageSize,totalPages=Math.max(1,Math.ceil(rows.length/size));state.cv4.page=Math.min(Math.max(1,state.cv4.page),totalPages);const start=(state.cv4.page-1)*size;return {items:rows.slice(start,start+size),totalPages,start,end:Math.min(rows.length,start+size)};}
+function pager(total,totalPages,start,end){if(!total)return'';return `<div class="cv4-pager"><div><b>${start+1}–${end}</b><small>${L('of','از')} ${total}</small></div><label><span>${L('Per page','در صفحه')}</span><select id="cv4-page-size">${opt([[25,'25'],[50,'50'],[100,'100']],state.cv4.pageSize)}</select></label><div class="cv4-page-actions"><button data-act="cv4page" data-page="${state.cv4.page-1}" ${state.cv4.page<=1?'disabled':''}>‹</button><b>${state.cv4.page} / ${totalPages}</b><button data-act="cv4page" data-page="${state.cv4.page+1}" ${state.cv4.page>=totalPages?'disabled':''}>›</button></div></div>`;}
 function opt(items,value){return items.map(([v,l])=>`<option value="${e(v)}" ${String(v)===String(value)?'selected':''}>${e(l)}</option>`).join('');}
 function mini(text,act,id,kind=''){return `<button type="button" class="cv4-action ${kind}" data-act="${act}" data-id="${e(id)}">${text}</button>`;}
 function row(r){
  const c=r.client||{},used=Number(r.used_bytes||0),total=Number(c.totalGB||0),ins=inboundNames(r),group=c.group||L('Ungrouped','بدون گروه');
- const expiry=c.expiryTime>0?new Date(c.expiryTime).toLocaleDateString((localStorage.getItem('dark_lang')||'en')==='fa'?'fa-IR':'en-US'):L('Unlimited','نامحدود');
+ const expiry=compactDate(c.expiryTime);
  return `<article class="cv4-row">
   <label class="cv4-check"><input type="checkbox" data-select="${e(r.email)}" ${state.selected.has(r.email)?'checked':''}><span></span></label>
   <button type="button" class="cv4-client" data-act="cv4detail" data-id="${e(r.email)}"><span class="cv4-avatar">${e(r.email.slice(0,1).toUpperCase())}</span><span><b>${e(r.email)}</b><small>${e(r.owner)} · ${e(group)}</small></span></button>
   <div class="cv4-live">${signal(r)}<span class="cv4-policy ${statusOf(r)}">${statusOf(r).toUpperCase()}</span></div>
-  <div class="cv4-service">${ins.slice(0,2).map(x=>`<span>${e(x)}</span>`).join('')}${ins.length>2?`<small>+${ins.length-2}</small>`:''}</div>
-  <div class="cv4-usage"><b class="mono">${bytes(used)}</b><small>${total?bytes(total):L('Unlimited','نامحدود')}</small>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</div>
-  <div class="cv4-expiry"><b>${e(expiry)}</b><small>${statusOf(r)==='active'?L('Service active','سرویس فعال'):statusOf(r)==='blocked'?L('Service limited','سرویس محدود'):L('Service disabled','سرویس قطع')}</small></div>
+  <div class="cv4-service">${ins.slice(0,1).map(x=>`<span>${e(x)}</span>`).join('')}${ins.length>1?`<small>+${ins.length-1}</small>`:''}</div>
+  <div class="cv4-usage"><b class="mono">${bytes(used)}${total?' / '+bytes(total):' / '+L('∞','∞')}</b>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</div>
+  <div class="cv4-expiry"><span>${L('EXP','انقضا')}</span><b class="mono">${e(expiry)}</b></div>
   <div class="cv4-row-actions">${mini(L('OPEN','بازکردن'),'cv4detail',r.email,'open')}${can('clients.credentials',r.owner)?mini(L('LINK','لینک'),'cv4delivery',r.email):''}</div>
  </article>`;
 }
@@ -78,7 +82,7 @@ function filters(){
  return `<div class="cv4-filterdeck ${f.filters?'show':''}"><label><span>${L('Owner','مالک')}</span><select data-cv4-filter="owner">${opt(ownerItems,f.owner)}</select></label><label><span>${L('Inbound','اینباند')}</span><select data-cv4-filter="inbound">${opt(inItems,f.inbound)}</select></label><label><span>${L('Group','گروه')}</span><select data-cv4-filter="group">${opt(groupItems,f.group)}</select></label><label><span>${L('Account state','وضعیت حساب')}</span><select data-cv4-filter="status">${opt(statusItems,f.status)}</select></label></div>`;
 }
 function clientsView(){
- const rows=filteredV4(),f=state.cv4,sortItems=[['activity',L('Recent activity','آخرین فعالیت')],['name',L('Name','نام')],['traffic',L('Traffic','مصرف')],['expiry',L('Expiry','انقضا')]];
+ const rows=filteredV4(),pg=pageSlice(rows),f=state.cv4,sortItems=[['activity',L('Recent activity','آخرین فعالیت')],['name',L('Name','نام')],['traffic',L('Traffic','مصرف')],['expiry',L('Expiry','انقضا')]];
  return heading(L('Clients','کاربران'),L('Clean control deck for live status, service access and customer organization.','مرکز کنترل خلوت برای وضعیت زنده، سرویس و سازماندهی کاربران.'),`${isOwner()&&can('clients.create')?button(L('Bulk create','ساخت گروهی'),'cv4bulk','users'):''}${can('clients.create')?button(L('Create client','ساخت کاربر'),'new','plus','',true):''}`)+notices()+`<div class="clients-v4">
   <div class="cv4-nav"><button class="active" data-act="cv4view" data-view="clients"><span>01</span>${L('Clients','کاربران')}</button><button data-act="cv4view" data-view="groups"><span>02</span>${L('Groups','گروه‌ها')}</button></div>
   ${stats()}
@@ -87,7 +91,7 @@ function clientsView(){
    ${filters()}
    ${state.selected.size?`<div class="cv4-bulkbar"><b>${state.selected.size} ${L('selected','انتخاب')}</b><span></span><button data-act="cv2bulkadjust">${L('Adjust','تغییر')}</button><button data-act="cv2bulkinbounds">${L('Inbounds','اینباند')}</button><button data-act="bulk">${L('State / Reset','وضعیت / ریست')}</button></div>`:''}
    <div class="cv4-head"><div></div><div>${L('CLIENT','کاربر')}</div><div>${L('LIVE / STATE','اتصال / وضعیت')}</div><div>${L('SERVICE','سرویس')}</div><div>${L('USAGE','مصرف')}</div><div>${L('EXPIRY / LIMITS','انقضا / محدودیت')}</div><div></div></div>
-   <div class="cv4-list">${rows.length?rows.map(row).join(''):`<div class="cv4-empty">${icon('users')}<b>${L('No clients found','کاربری پیدا نشد')}</b><small>${L('Change filters or create a new client.','فیلتر را تغییر بده یا کاربر جدید بساز.')}</small></div>`}</div>
+   <div class="cv4-list">${pg.items.length?pg.items.map(row).join(''):`<div class="cv4-empty">${icon('users')}<b>${L('No clients found','کاربری پیدا نشد')}</b><small>${L('Change filters or create a new client.','فیلتر را تغییر بده یا کاربر جدید بساز.')}</small></div>`}</div>${pager(rows.length,pg.totalPages,pg.start,pg.end)}
   </section>
  </div>`;
 }
@@ -271,8 +275,9 @@ runAction=async function(act,el){
  const id=el?.dataset?.id;
  if(act==='cv4view'){state.cv4.view=el.dataset.view;state.selected.clear();return renderPage();}
  if(act==='cv4filters'){state.cv4.filters=!state.cv4.filters;return renderPage();}
- if(act==='cv4quick'){if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
- if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity'});state.selected.clear();return renderPage();}
+ if(act==='cv4quick'){state.cv4.page=1;if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
+ if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',page:1});state.selected.clear();return renderPage();}
+ if(act==='cv4page'){state.cv4.page=Math.max(1,Number(el.dataset.page||1));return renderPage();}
  if(act==='cv4detail')return detail(id);
  if(act==='cv4delivery')return deliveryV4(id);
  if(act==='cv4dcopy')return copyDelivery(deliveryPayload(el.dataset.kind,Number(el.dataset.index||0)));
@@ -288,7 +293,8 @@ runAction=async function(act,el){
 };
 document.addEventListener('change',async ev=>{
  const el=ev.target;
- if(el?.dataset?.cv4Filter){state.cv4[el.dataset.cv4Filter]=el.value;if(el.dataset.cv4Filter==='owner'&&state.cv4.group!=='all'){const valid=new Set(groups(el.value).map(g=>groupKey(g.owner,g.name)));valid.add('__ungrouped');if(!valid.has(state.cv4.group))state.cv4.group='all';}state.selected.clear();await renderPage();}
- if(el?.id==='cv4-sort'){state.cv4.sort=el.value;await renderPage();}
+ if(el?.dataset?.cv4Filter){state.cv4.page=1;state.cv4[el.dataset.cv4Filter]=el.value;if(el.dataset.cv4Filter==='owner'&&state.cv4.group!=='all'){const valid=new Set(groups(el.value).map(g=>groupKey(g.owner,g.name)));valid.add('__ungrouped');if(!valid.has(state.cv4.group))state.cv4.group='all';}state.selected.clear();await renderPage();}
+ if(el?.id==='cv4-sort'){state.cv4.page=1;state.cv4.sort=el.value;await renderPage();}
+ if(el?.id==='cv4-page-size'){state.cv4.pageSize=Number(el.value);state.cv4.page=1;await renderPage();}
 });
 })();
