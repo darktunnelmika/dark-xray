@@ -3,23 +3,23 @@
 'use strict';
 if(typeof dashboard!=='function'||typeof load!=='function'||typeof enginePage!=='function'||typeof navItems!=='function'||typeof runAction!=='function'||typeof go!=='function')return;
 const baseLoad=load,baseEnginePage=enginePage,baseNavItems=navItems,baseRunAction=runAction,baseGo=go;
-state.ov2={audit:[],ip:null,core:null,backup:null,nodes:[],logKind:'process'};
+state.ov2={audit:[],ip:null,core:null,backup:null,nodes:[],overview:null,overviewError:'',overviewOwner:'',logKind:'process'};
 enginePages.logs=['Logs'];enginePages.backup=['Backup'];
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 navItems=function(){return baseNavItems();};
 load=async function(){
  await baseLoad();
- if(!state.me){state.ov2.audit=[];state.ov2.ip=null;state.ov2.core=null;state.ov2.backup=null;state.ov2.nodes=[];return;}
+ if(!state.me){state.ov2.audit=[];state.ov2.ip=null;state.ov2.core=null;state.ov2.backup=null;state.ov2.nodes=[];state.ov2.overview=null;state.ov2.overviewError='';state.ov2.overviewOwner='';return;}
  // Never retain privileged data in the in-memory dashboard cache after an
  // account/permission change. This matters on shared browsers after logout/login.
- if(!isOwner()){state.ov2.core=null;state.ov2.backup=null;state.ov2.nodes=[];}
+ if(!isOwner()){state.ov2.core=null;state.ov2.backup=null;state.ov2.nodes=[];state.ov2.overview=null;state.ov2.overviewError='';state.ov2.overviewOwner='';}
  if(!can('audit.read'))state.ov2.audit=[];
  if(!can('clients.ip'))state.ov2.ip=null;
  // Audit/IP payloads can be large. Fetch them only while the operations dashboard
  // is visible instead of adding three extra requests to every 12-second refresh.
  if(state.page!=='dashboard')return;
  let jobs=[];
- if(isOwner()){jobs.push((async()=>{try{state.ov2.core=await api('/api/core/state');}catch{state.ov2.core=null;}})());jobs.push((async()=>{try{state.ov2.backup=await api('/api/backup/status');}catch{state.ov2.backup=null;}})());jobs.push((async()=>{try{state.ov2.nodes=await api('/api/nodes');}catch{state.ov2.nodes=[];}})());}
+ if(isOwner()){jobs.push((async()=>{const account=state.me?.id||state.me?.username||'owner';try{const value=await api('/api/operations/overview');if(!isOwner()||account!==(state.me?.id||state.me?.username||'owner'))return;state.ov2.overview=value;state.ov2.overviewOwner=account;state.ov2.overviewError='';}catch{state.ov2.overview=null;state.ov2.overviewError='unavailable';}})());jobs.push((async()=>{try{state.ov2.core=await api('/api/core/state');}catch{state.ov2.core=null;}})());jobs.push((async()=>{try{state.ov2.backup=await api('/api/backup/status');}catch{state.ov2.backup=null;}})());jobs.push((async()=>{try{state.ov2.nodes=await api('/api/nodes');}catch{state.ov2.nodes=[];}})());}
  if(can('audit.read'))jobs.push((async()=>{try{state.ov2.audit=await api('/api/audit');}catch{state.ov2.audit=[];}})());
  if(can('clients.ip'))jobs.push((async()=>{try{state.ov2.ip=await api('/api/ip/events');}catch{state.ov2.ip=null;}})());
  await Promise.all(jobs);

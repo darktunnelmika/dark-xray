@@ -699,6 +699,13 @@ if report['status']=='passed':
                 report.update(status='failed',error=script+' failed');break
             report[key]=json.loads((OUT/receipt).read_text())
 
+if report['status']=='passed':
+    followup=subprocess.run([sys.executable,str(ROOT/'tests/operations-v3-browser.py')],check=False)
+    if followup.returncode:
+        report.update(status='failed',error='Operations V3 browser acceptance failed')
+    else:
+        report['operations_v3']=json.loads((OUT/'operations-v3-browser.json').read_text())
+
 (OUT/'browser-results.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(report,ensure_ascii=False,indent=2))
 sys.exit(0 if report['status']=='passed' else 1)
