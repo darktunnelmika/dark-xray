@@ -32,9 +32,12 @@ function context(){
 test('restricted account clears stale privileged Operations cache without heavy polling',async()=>{
  const {ctx,calls}=context();
  ctx.state.ov2.core={secret:'old-owner-core'};ctx.state.ov2.audit=[{target:'old-owner'}];ctx.state.ov2.ip={bans:[1]};
+ ctx.state.ov2.overview={secret:'old-owner-overview'};ctx.state.ov2.overviewOwner='dark';
  ctx.state.page='clients';ctx.state.me={id:'seller',role:'reseller',permissions:{}};
  await ctx.load();
  assert.equal(ctx.state.ov2.core,null);
+ assert.equal(ctx.state.ov2.overview,null);
+ assert.equal(ctx.state.ov2.overviewOwner,'');
  assert.equal(Array.isArray(ctx.state.ov2.audit),true);
  assert.equal(ctx.state.ov2.audit.length,0);
  assert.equal(ctx.state.ov2.ip,null);
@@ -45,12 +48,14 @@ test('dashboard fetches operational sources in addition to the base load',async(
  const {ctx,calls}=context();
  ctx.state.page='dashboard';ctx.state.me={id:'dark',role:'owner',permissions:{}};
  await ctx.load();
- assert.deepEqual(new Set(calls),new Set(['/api/core/state','/api/audit','/api/ip/events','/api/backup/status','/api/nodes']));
+ assert.deepEqual(new Set(calls),new Set(['/api/core/state','/api/audit','/api/ip/events','/api/backup/status','/api/nodes','/api/operations/overview']));
  assert.equal(ctx.state.ov2.core.state,'running');
  assert.equal(ctx.state.ov2.audit.length,1);
  assert.equal(ctx.state.ov2.ip.bans.length,1);
  assert.equal(ctx.state.ov2.backup.database_bytes,4096);
  assert.equal(ctx.state.ov2.nodes.length,1);
+ assert.equal(calls.filter(x=>x==='/api/operations/overview').length,1);
+ assert.equal(ctx.state.ov2.overviewOwner,'dark');
 });
 
 test('entering dashboard triggers an immediate fresh load instead of waiting for timer',async()=>{
