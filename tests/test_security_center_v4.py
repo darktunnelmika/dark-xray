@@ -84,3 +84,10 @@ def test_security_center_frontend_uses_native_guard_and_hwid_controls():
     assert "'limitHwid',c.limitHwid??0" in clients
     assert "limitHwid:Number(f.get('limitHwid')||0)" in clients
     assert 'کارگر Fail2ban' not in live
+
+
+def test_security_center_ui_distinguishes_direct_guard_from_opaque_tunnel_scope():
+    from pathlib import Path
+    ui=Path('web/ipguard-v4.js').read_text()
+    assert 'source_scope_complete' in ui and 'opaque_tunnel_ports' in ui
+    assert 'Opaque tunnel listeners are intentionally outside IP accounting' in ui
