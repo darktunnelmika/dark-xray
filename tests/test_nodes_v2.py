@@ -676,6 +676,8 @@ def test_global_ip_guard_aggregates_nodes_and_preserves_block_while_telemetry_st
   assert r.status_code==200,r.text
  with store.transaction() as db:
   db.execute('UPDATE remote_node_inbounds SET remote_inbound_id=7 WHERE local_inbound_id=?',(a,))
+ for node in ('ipn1','ipn2'):
+  desired=c.get('/api/nodes/'+node+'/desired');assert desired.status_code==200,desired.text
  reg=app.state.nodes
  def fake_request(node_id,path,method='GET',body=None,timeout=8.0):
   assert path=='/node/api/mirrors/security'
@@ -714,6 +716,43 @@ def test_global_ip_guard_aggregates_nodes_and_preserves_block_while_telemetry_st
  app.state.manager.tick(suppress=False)
  assert eng.client_detail('ip-user')['client']['enable'] is True
 
+
+
+def test_verified_direct_excess_blocks_even_when_node_tunnel_coverage_is_opaque(env,monkeypatch):
+ store,eng,app,c=env
+ ib=_test_vless('PARTIAL IP',24109,'partial-ip')
+ ib['panelMeta']={'deployLocal':False,'deploymentTargets':['node:partial-n1'],'tunnelPorts':{'node:partial-n1':25109}}
+ inbound=c.post('/api/inbounds',json=ib).json()['id']
+ _managed_client(c,'partial-user',inbound,{'limitIp':1})
+ out=c.post('/api/nodes',json={'id':'partial-n1','name':'partial-n1','origin':'https://partial-n1.example.com',
+   'token':'dkn_'+('P'*60),'enabled':True,'inboundIds':[inbound]})
+ assert out.status_code==200,out.text
+ with store.transaction() as db:
+  db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=71 WHERE node_id='partial-n1' AND local_inbound_id=?",(inbound,))
+ # Persist desired state so coverage inspection sees the opaque shadow listener.
+ desired=c.get('/api/nodes/partial-n1/desired');assert desired.status_code==200,desired.text
+ reg=app.state.nodes
+ now=time.time()
+ def security(node_id,path,method='GET',body=None,timeout=8.0):
+  assert node_id=='partial-n1' and path=='/node/api/mirrors/security'
+  return {'sourceVerified':True,'sourceScopeComplete':False,'opaqueTunnelPorts':[25109],
+    'items':[{'sourceEmail':'partial-user','ips':[
+      {'ip':'203.0.113.91','firstSeen':now-3,'lastSeen':now},
+      {'ip':'203.0.113.92','firstSeen':now-2,'lastSeen':now}], 'devices':[]}]},3
+ monkeypatch.setattr(reg,'_request',security)
+ reg.sync_security('partial-n1')
+ result=reg.reconcile_global_security(local_source_verified=False,local_source_complete=False,now=now)
+ item=next(x for x in result['items'] if x['client_id']=='partial-user')
+ assert item['ip_enforceable'] is True
+ assert item['ip_coverage_complete'] is False
+ assert item['remote_source_complete'] is False
+ assert item['ip_count']==2 and item['ip_blocked'] is True
+ # Incomplete coverage cannot clear a proven violation if one trusted IP later disappears.
+ with store.transaction() as db:
+  db.execute("DELETE FROM remote_node_ips WHERE node_id='partial-n1' AND ip='203.0.113.92'")
+ held=reg.reconcile_global_security(local_source_verified=False,local_source_complete=False,now=now+1)
+ held_item=next(x for x in held['items'] if x['client_id']=='partial-user')
+ assert held_item['ip_count']==1 and held_item['ip_coverage_complete'] is False and held_item['ip_blocked'] is True
 
 def test_global_device_hashes_from_two_nodes_enforce_hwid_limit(env,monkeypatch):
  store,eng,app,c=env
@@ -933,6 +972,11 @@ def test_hub_observe_node_enforce_is_translated_only_for_agent_payload(env):
  assert out.status_code==200,out.text
  with store.transaction() as db:
   db.execute("UPDATE remote_node_inbounds SET remote_inbound_id=56 WHERE node_id='guard-node' AND local_inbound_id=?",(inbound,))
+ state=c.get('/api/nodes/guard-node/desired');assert state.status_code==200,state.text
+ remote_guard=state.json()['payload']['sections']['ipguard']
+ assert remote_guard['mode']=='observe' and 'node_mode' not in remote_guard
+ with store.transaction() as db:
+  db.execute("INSERT INTO remote_node_security_state(node_id,source_verified,last_sync,last_error) VALUES('guard-node',1,?,'') ON CONFLICT(node_id) DO UPDATE SET source_verified=1,last_sync=excluded.last_sync,last_error=''",(time.time(),))
  state=c.get('/api/nodes/guard-node/desired');assert state.status_code==200,state.text
  remote_guard=state.json()['payload']['sections']['ipguard']
  assert remote_guard['mode']=='enforce' and 'node_mode' not in remote_guard

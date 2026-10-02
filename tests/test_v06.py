@@ -142,6 +142,27 @@ def test_guard_linked_real_ipc_with_simulated_kernel(env,tmp_path):
         assert c.put('/api/settings/ipguard',json={'value':{'mode':'observe','window_seconds':120,'ban_seconds':60,'exempt_ips':[]}}).status_code==200
     finally:server.shutdown();server.server_close();worker.join()
 
+def test_ip_guard_ignores_opaque_tunnel_shadow_access_events(env,tmp_path):
+    store,engine,manager,_,c=env;create(c);engine.config.direct_source_verified=True
+    cfg=dataclasses.replace(broker_config(allowed_ports=[19443]),allowed_uid=os.getuid())
+    fake=FakeNft();fw=NftFirewall(cfg,fake);fw.bootstrap()
+    path=tmp_path/'guard-shadow.sock';server=BrokerServer(str(path),fw)
+    worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start();engine.config.guard_socket=str(path)
+    try:
+        assert c.put('/api/settings/ipguard',json={'value':{'mode':'enforce','node_mode':'observe','window_seconds':120,'ban_seconds':60,'exempt_ips':[]}}).status_code==200
+        access=engine.runtime/'access.log'
+        access.write_text('from tcp:9.9.9.9:50001 accepted tcp:1.1.1.1:443 [dark-tunnel-1-21185 >> direct] email: dark-test\n')
+        engine.read_ip_log()
+        with store.lock:
+            assert store.db.execute('SELECT COUNT(*) FROM observations').fetchone()[0]==0
+            assert store.db.execute('SELECT COUNT(*) FROM bans').fetchone()[0]==0
+        with access.open('a') as f:
+            f.write('from tcp:8.8.8.8:50002 accepted tcp:1.1.1.1:443 [dark-test >> direct] email: dark-test\n')
+        engine.read_ip_log()
+        with store.lock:assert store.db.execute('SELECT COUNT(*) FROM observations').fetchone()[0]==1
+        assert engine.ip_status().get('opaque_events_ignored',0)>=1
+    finally:server.shutdown();server.server_close();worker.join()
+
 def test_lowering_ip_limit_rejects_excess_existing_source_on_next_event():
     db=Store(':memory:')
     try:
@@ -451,3 +472,15 @@ def test_ip_guard_policy_snapshot_is_reused_until_db_revision_changes(env,monkey
     assert c.patch('/api/clients/dark-test',json={'client':{'limitIp':2}}).status_code==202
     after=engine.sync_ip_guard()
     assert calls==2 and after.clients['dark-test'].limit_ip==2
+def test_ip_source_coverage_marks_tunnel_as_partial(env):
+    _,engine,_,_,_=env
+    engine.config.direct_source_verified=True
+    saved=engine.save_inbound({'remark':'scope','protocol':'vless','listen':'0.0.0.0','port':24567,'enable':True,
+        'settings':{'clients':[],'decryption':'none'},'streamSettings':{'network':'tcp','security':'none'},
+        'sniffing':{'enabled':False,'destOverride':[]},'panelMeta':{'deployLocal':True,'tunnelPorts':{'local':24568}}})
+    coverage=engine.ip_source_coverage()
+    assert coverage['direct_source_verified'] is True
+    assert coverage['direct_ports']==[24567]
+    assert coverage['opaque_tunnel_ports']==[24568]
+    assert coverage['opaque_tunnel_tags']==['dark-tunnel-1-24568']
+    assert coverage['source_scope_complete'] is False and coverage['packet_scope']=='direct-only'

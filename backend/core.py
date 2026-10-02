@@ -142,6 +142,7 @@ class CoreEngine:
         self._cpu_value=0.0;self._cpu_sample_at=0.0
         self.ip_error=''
         self._guard_status={'state':'pending','requested_mode':'observe','applied':False,'checked_at':0}
+        self._opaque_guard_events_ignored=0
         self._guard_boot=''
         self._guard_executor=None
         self._guard_policy_cache=None
@@ -1312,12 +1313,28 @@ class CoreEngine:
                 f.seek(self._access_position);data=f.read(1024*1024);self._access_position=f.tell()
             text=self._access_fragment+data.decode('utf-8',errors='replace');lines=text.split('\n');self._access_fragment=lines.pop()[-16384:]
             guard=Guard(policy,self.store,self._guard_executor)
+            coverage=self.ip_source_coverage()
+            direct_tags=set(coverage['direct_tags']);opaque_tags=set(coverage['opaque_tunnel_tags'])
+            opaque_ignored=0
             for line in lines:
                 obs=parse_access_line(line)
                 if obs:
+                    # Only the primary Direct Xray listeners are eligible for IP
+                    # leases. Shadow tunnel listeners terminate an opaque
+                    # backhaul and expose the peer source, not the end user.
+                    # If an inbound tag is missing while an opaque path exists,
+                    # fail safe and ignore the ambiguous event.
+                    if ((obs.inbound_tag and obs.inbound_tag in opaque_tags)
+                        or (obs.inbound_tag and direct_tags and obs.inbound_tag not in direct_tags)
+                        or (not obs.inbound_tag and opaque_tags)):
+                        opaque_ignored+=1
+                        continue
                     result=guard.observe(obs.email,obs.ip)
                     if result.get('decision')=='enforcement_failed':
                         self._guard_status.update(state='error',applied=False,error=result.get('reason','Enforcement failed'))
+            if opaque_ignored:
+                self._opaque_guard_events_ignored+=opaque_ignored
+                self._guard_status['opaque_events_ignored']=self._opaque_guard_events_ignored
             self.ip_error=''
         except (OSError,PolicyError) as ex:self.ip_error=str(ex)[:500]
 
@@ -1338,8 +1355,33 @@ class CoreEngine:
             db.execute('DELETE FROM observations WHERE ip=? AND granted=0',(ip,))
         return response
 
+    def ip_source_coverage(self)->dict:
+        direct_tags=[];direct_ports=[];opaque=[];opaque_tags=[]
+        for inbound in self.inbounds():
+            if not inbound.get('enable',True):continue
+            tag=str(inbound.get('tag') or '')
+            port=int(inbound.get('port') or 0)
+            if tag:direct_tags.append(tag)
+            if 1<=port<=65535:direct_ports.append(port)
+            meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta',{}),dict) else {}
+            raw=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            shadow=raw.get('local')
+            if type(shadow)is int and 1<=shadow<=65535:
+                opaque.append(int(shadow));opaque_tags.append('dark-tunnel-'+str(inbound.get('id'))+'-'+str(shadow))
+        direct_tags=sorted(set(direct_tags));direct_ports=sorted(set(direct_ports))
+        opaque=sorted(set(opaque));opaque_tags=sorted(set(opaque_tags))
+        direct_verified=bool(self.config.direct_source_verified)
+        return {'direct_source_verified':direct_verified,'direct_ports':direct_ports,'direct_tags':direct_tags,
+                'opaque_tunnel_ports':opaque,'opaque_tunnel_tags':opaque_tags,
+                'source_scope_complete':bool(direct_verified and not opaque),
+                'packet_scope':'all-visible-paths' if direct_verified and not opaque else ('direct-only' if direct_verified else 'observe-only')}
+
     def ip_status(self)->dict:
-        return {'mode':self.section('ipguard')['mode'],'source_verified':self.config.direct_source_verified,
+        coverage=self.ip_source_coverage()
+        return {'mode':self.section('ipguard')['mode'],'source_verified':coverage['direct_source_verified'],
+                'source_scope_complete':coverage['source_scope_complete'],'direct_ports':coverage['direct_ports'],
+                'opaque_tunnel_ports':coverage['opaque_tunnel_ports'],
+                'packet_scope':coverage['packet_scope'],'opaque_events_ignored':self._opaque_guard_events_ignored,
                 'window_seconds':self.section('ipguard')['window_seconds'],
                 'limiter':'independent DARK Guard','error':self.ip_error or self._guard_status.get('error',''),
                 'enforcement':'narrow root-owned Unix/nftables broker; panel remains unprivileged',

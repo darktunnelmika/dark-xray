@@ -1,0 +1,5 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');
+const ui=fs.readFileSync('web/ipguard-v4.js','utf8'),core=fs.readFileSync('backend/core.py','utf8'),runtime=fs.readFileSync('backend/node_runtime.py','utf8');
+test('security center distinguishes direct verification from opaque tunnel coverage',()=>{for(const x of ['source_scope_complete','opaque_tunnel_ports','Opaque tunnel listeners are intentionally outside IP accounting','Direct Guard can still enforce only on verified direct data ports'])assert.ok(ui.includes(x),x);});
+test('core drops dark tunnel shadow access events before IP leases',()=>{assert.match(core,/obs\.inbound_tag and obs\.inbound_tag in opaque_tags/);assert.match(core,/opaque_events_ignored/);});
+test('node guard allowlist stays direct listener only',()=>{assert.match(runtime,/Guard approval is intentionally direct-listener-only/);assert.doesNotMatch(runtime,/ports\.add\(int\(shadow\)\)/);});

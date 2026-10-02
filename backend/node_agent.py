@@ -497,8 +497,12 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
                          for r in store.db.execute('SELECT digest,device_os,model,first_seen,last_seen FROM core_devices WHERE email=? ORDER BY last_seen DESC',
                                                    (mapping['mirror_email'],))]
                 items.append({'sourceEmail':mapping['source_email'],'ips':ips,'devices':devices})
-        return {'sourceVerified':bool(engine.config.direct_source_verified and not engine.ip_error),
-                'items':items,'capturedAt':time.time(),'guard':engine.ip_status()}
+        guard=engine.ip_status()
+        return {'sourceVerified':bool(guard.get('source_verified') and not engine.ip_error),
+                'sourceScopeComplete':bool(guard.get('source_scope_complete') and not engine.ip_error),
+                'directSourceVerified':bool(guard.get('source_verified')),
+                'opaqueTunnelPorts':list(guard.get('opaque_tunnel_ports') or []),
+                'items':items,'capturedAt':time.time(),'guard':guard}
 
     @app.post('/node/api/mirrors/security/clear')
     @current_mutation

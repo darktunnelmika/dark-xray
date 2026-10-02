@@ -968,6 +968,28 @@ class NodeRegistry:
                 tuple(inbound_ids)).fetchall()
         return [str(r[0]) for r in rows]
 
+    def _node_source_scope_complete(self,node_id:str)->bool:
+        """True only when every desired customer listener on the Node exposes an end-user source.
+
+        A shadow tunnel listener is intentionally treated as opaque until a
+        future edge-attribution transport can prove the original source.
+        """
+        with self.store.lock:
+            row=self.store.db.execute('SELECT desired_json FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
+        if not row:return False
+        try:payload=json.loads(row['desired_json'] or '{}')
+        except Exception:return False
+        assignments=payload.get('assignments',[]) if isinstance(payload,dict) else []
+        if not isinstance(assignments,list):return False
+        for item in assignments:
+            inbound=item.get('inbound',{}) if isinstance(item,dict) else {}
+            if not isinstance(inbound,dict) or not inbound.get('enable',True):continue
+            meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta',{}),dict) else {}
+            raw=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
+            shadow=raw.get('local')
+            if type(shadow)is int and 1<=shadow<=65535:return False
+        return True
+
     @staticmethod
     def _security_stamp(value)->float:
         if isinstance(value,bool) or not isinstance(value,(int,float)):raise PolicyError('Invalid node security timestamp')
@@ -1028,9 +1050,12 @@ class NodeRegistry:
                            (node_id,str(ex)[:300]))
             raise
 
-    def reconcile_global_security(self,*,local_source_verified:bool,now:float|None=None,persist:bool=True,
+    def reconcile_global_security(self,*,local_source_verified:bool,local_source_complete:bool|None=None,
+                                  now:float|None=None,persist:bool=True,
                                   client_ids:list[str]|tuple[str,...]|set[str]|None=None)->dict:
         if type(local_source_verified)is not bool:raise PolicyError('local_source_verified must be boolean')
+        if local_source_complete is None:local_source_complete=local_source_verified
+        if type(local_source_complete)is not bool:raise PolicyError('local_source_complete must be boolean')
         if type(persist)is not bool:raise PolicyError('persist must be boolean')
         scoped=None
         if client_ids is not None:
@@ -1077,6 +1102,7 @@ class NodeRegistry:
             fresh=all(n in states and states[n]['last_sync'] and now-float(states[n]['last_sync'])<180
                       and not states[n]['last_error'] for n in assigned)
             verified=fresh and all(bool(states[n]['source_verified']) for n in assigned)
+            remote_scope_complete=fresh and all(self._node_source_scope_complete(n) for n in assigned)
             ip_values=set()
             if local_source_verified and local_required:
                 with self.store.lock:
@@ -1088,14 +1114,22 @@ class NodeRegistry:
                     ip_values.update(str(r[0]) for r in self.store.db.execute(
                         'SELECT DISTINCT ip FROM remote_node_ips WHERE client_id=? AND verified=1 AND last_seen>? '
                         'AND node_id IN ('+marks+')',(client_id,now-window,*assigned)))
-            ip_complete=bool(assigned) and (not local_required or local_source_verified) and verified
+            # Trusted Direct observations are monotonic evidence: seeing more
+            # distinct verified sources than the cap is sufficient to block even
+            # when an opaque tunnel also exists. Incomplete path coverage may
+            # hide additional sources, so it is never sufficient to CLEAR an
+            # existing block or to claim complete accounting.
+            evidence_ready=bool(assigned) and (not local_required or local_source_verified) and verified
+            ip_complete=bool(evidence_ready and (not local_required or local_source_complete) and remote_scope_complete)
             limit_ip=int(meta['limit_ip'] or 0)
             if not limit_ip or not assigned:
                 ip_block=False
+            elif evidence_ready and len(ip_values)>limit_ip:
+                ip_block=True
             elif not ip_complete:
                 ip_block=bool(meta['global_ip_block'])
             else:
-                ip_block=len(ip_values)>limit_ip
+                ip_block=False
 
             try:limit_hwid=int(json.loads(meta['desired']).get('limitHwid',0) or 0)
             except Exception:limit_hwid=0
@@ -1123,12 +1157,16 @@ class NodeRegistry:
                                    (int(ip_block),int(device_block),client_id))
                     changed.append(client_id)
             items.append({'client_id':client_id,'nodes':assigned,'ip_count':len(ip_values),'limit_ip':limit_ip,
-                          'ip_enforceable':ip_complete,'local_observation_required':local_required,'ip_blocked':ip_block,'device_count':len(device_values),
+                          'ip_enforceable':evidence_ready,'ip_coverage_complete':ip_complete,
+                          'local_observation_required':local_required,
+                          'local_source_complete':bool(not local_required or local_source_complete),
+                          'remote_source_complete':remote_scope_complete,'ip_blocked':ip_block,'device_count':len(device_values),
                           'limit_hwid':limit_hwid,'device_complete':device_complete,'device_blocked':device_block})
         return {'clients':len(items),'changed':changed,'items':items,'window_seconds':window}
 
-    def global_security(self,client_id:str,*,local_source_verified:bool)->dict:
-        result=self.reconcile_global_security(local_source_verified=local_source_verified,persist=False)
+    def global_security(self,client_id:str,*,local_source_verified:bool,local_source_complete:bool|None=None)->dict:
+        result=self.reconcile_global_security(local_source_verified=local_source_verified,
+                                              local_source_complete=local_source_complete,persist=False)
         item=next((x for x in result['items'] if x['client_id']==client_id),None)
         if item is None:raise PolicyError('Managed client not found')
         now=time.time();window=result['window_seconds'];assigned=item['nodes']

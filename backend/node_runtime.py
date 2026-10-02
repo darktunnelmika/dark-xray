@@ -428,10 +428,9 @@ class NodeRuntime:
             if not inbound.get('enable',True):continue
             primary=int(inbound.get('port') or 0)
             if primary>0:ports.add(primary)
-            meta=inbound.get('panelMeta',{}) if isinstance(inbound.get('panelMeta',{}),dict) else {}
-            raw=meta.get('tunnelPorts',{}) if isinstance(meta.get('tunnelPorts',{}),dict) else {}
-            shadow=raw.get('local')
-            if type(shadow)is int and 1<=shadow<=65535:ports.add(int(shadow))
+            # Guard approval is intentionally direct-listener-only. Tunnel
+            # shadow ports are opaque backhaul peers and must never enter the
+            # per-client source-IP nftables scope.
         ports=sorted(ports)
         client=BrokerClient(self.engine.config.guard_socket)
         try:status=client.status()

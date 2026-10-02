@@ -50,23 +50,24 @@ function banRow(x){
 }
 function architecture(d){
  const g=d.guard||{},a=d.architecture||{},nodes=d.nodes;
- const applied=!!g.applied,verified=!!g.source_verified;
+ const applied=!!g.applied,verified=!!g.source_verified,complete=!!g.source_scope_complete,opaque=(g.opaque_tunnel_ports||[]);
  return `<section class="ip4-architecture">
-  <article class="panel ip4-arch-card"><small>${L('01 / OBSERVE','۰۱ / مشاهده')}</small><h3>${L('Verified source observer','مشاهده‌گر IP مبدأ')}</h3><b class="${verified?'ok':'warn'}">${verified?L('VERIFIED DIRECT','مستقیم تأییدشده'):L('OBSERVE ONLY','فقط مشاهده')}</b><p>${L('DARK reads Xray access events and counts recent distinct source IPs.','DARK رویدادهای دسترسی هسته را می‌خواند و IPهای متمایز اخیر را می‌شمارد.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('01 / DIRECT SOURCE','۰۱ / مبدأ مستقیم')}</small><h3>${L('Direct source observer','مشاهده‌گر IP مستقیم')}</h3><b class="${verified?'ok':'warn'}">${verified?L('VERIFIED DIRECT','مستقیم تأییدشده'):L('OBSERVE ONLY','فقط مشاهده')}</b><p>${complete?L('All visible paths provide end-user source IP.','تمام مسیرهای قابل‌مشاهده IP واقعی کاربر را می‌دهند.'):verified?L('Direct paths are verified; opaque tunnel paths are excluded from IP leases and bans.','مسیر مستقیم تأییدشده است؛ مسیر تونل مبهم از شمارش IP و بن حذف می‌شود.'):L('DARK reads Xray access events but will not claim packet enforcement yet.','DARK رویدادهای Xray را می‌خواند ولی هنوز ادعای اعمال بسته‌ای ندارد.')}</p></article>
   <article class="panel ip4-arch-card"><small>${L('02 / LOCAL ENFORCE','۰۲ / اعمال محلی')}</small><h3>${L('Native nftables Guard','گارد بومی nftables')}</h3><b class="${applied?'ok':'warn'}">${applied?L('APPLIED','اعمال‌شده'):e(String(g.state||'OBSERVE').toUpperCase())}</b><p>${L('Root-owned DARK broker can block only approved Xray data ports on this host.','کارگزار روت DARK فقط پورت‌های دیتای Xray تأییدشدهٔ همین سرور را مسدود می‌کند.')}</p></article>
   <article class="panel ip4-arch-card"><small>${L('03 / GLOBAL POLICY','۰۳ / سیاست سراسری')}</small><h3>${L('Local + Node aggregation','تجمیع محلی + نود')}</h3><b class="ok">${L('CENTRAL POLICY','سیاست مرکزی')}</b><p>${L('Verified observations from assigned nodes are combined and can block the client service globally.','مشاهده‌های تأییدشده نودها تجمیع می‌شوند و می‌توانند سرویس کاربر را سراسری مسدود کنند.')}</p></article>
-  <article class="panel ip4-arch-card"><small>${L('04 / NODE TELEMETRY','۰۴ / تله‌متری نود')}</small><h3>${L('Security telemetry','تله‌متری امنیت')}</h3><b class="${nodes&&nodes.source_verified===nodes.total&&nodes.total?'ok':'warn'}">${nodes?fa(nodes.source_verified)+' / '+fa(nodes.total):'—'}</b><p>${L('Fresh / source-verified node security reports. Stale telemetry never creates a new block.','گزارش‌های تازه و دارای مبدأ تأییدشدهٔ نود؛ تله‌متری قدیمی مسدودی جدید ایجاد نمی‌کند.')}</p></article>
+  <article class="panel ip4-arch-card"><small>${L('04 / NODE TELEMETRY','۰۴ / تله‌متری نود')}</small><h3>${L('Security telemetry','تله‌متری امنیت')}</h3><b class="${nodes&&nodes.source_verified===nodes.total&&nodes.total?'ok':'warn'}">${nodes?fa(nodes.source_verified)+' / '+fa(nodes.total):'—'}</b><p>${nodes?L('Direct source verified: ','مبدأ مستقیم تأییدشده: ')+fa(nodes.source_verified||0)+' / '+fa(nodes.total||0)+L(' · full path coverage: ',' · پوشش کامل مسیر: ')+fa(nodes.source_scope_complete||0)+' / '+fa(nodes.total||0):L('Fresh / source-verified node security reports.','گزارش تازه و تأییدشده نود.')}</p></article>
   <article class="panel ip4-arch-card"><small>${L('05 / NODE ENFORCE','۰۵ / اعمال روی نود')}</small><h3>${L('Node Guard & convergence','گارد نود و همگرایی')}</h3><b class="${nodes&&nodes.guard_enforce>0&&nodes.guard_ready===nodes.guard_enforce?'ok':'warn'}">${nodes?fa(nodes.guard_ready||0)+' / '+fa(nodes.guard_enforce||0):'—'}</b><p>${nodes?L('Guard-ready / Enforce nodes. Policy pending: ','نود Guard-ready / Enforce. سیاست در انتظار: ')+fa(nodes.policy_pending||0)+L(' · offline: ',' · آفلاین: ')+fa(nodes.offline||0):L('Owner-only Node status.','وضعیت نود فقط برای مالک.')}</p></article>
  </section>`;
 }
 async function securityPage(){
- const d=await api('/api/security-center'),s=d.summary||{},g=d.guard||{};
+ const d=await api('/api/security-center'),s=d.summary||{},g=d.guard||{},opaque=(g.opaque_tunnel_ports||[]);
  state.ip4=d;
  const warning=!g.source_verified?`<div class="notice warning">${L('Direct packet source is not verified on this host. Local automatic nftables bans stay fail-safe/off until root explicitly verifies the source path.','مبدأ واقعی بسته روی این سرور تأیید نشده؛ بن خودکار nftables در حالت ایمن خاموش می‌ماند تا مسیر مبدأ توسط روت تأیید شود.')}</div>`:'';
+ const tunnelWarning=opaque.length?`<div class="notice warning">${L('Opaque tunnel listeners are intentionally outside IP accounting: ','لیسنرهای تونل مبهم عمداً از محاسبه IP خارج‌اند: ')}${opaque.map(x=>':'+x).join(' · ')} · ${L('Direct Guard can still enforce only on verified direct data ports.','Guard فقط روی پورت‌های مستقیم تأییدشده اعمال می‌شود.')}</div>`:'';
  const err=g.error?`<div class="notice error">${e(g.error)}</div>`:'';
  return heading(L('DARK Security Center','مرکز امنیت DARK'),L('Native IP/HWID policy across Local Xray and DARK nodes.','سیاست بومی IP/HWID بین Xray محلی و نودهای DARK.'),
   isOwner()?button(L('Guard settings','تنظیمات Guard'),'ip4settings','settings','',true):'')+
- `<div class="ip4">${warning}${err}
+ `<div class="ip4">${warning}${tunnelWarning}${err}
    ${architecture(d)}
    <section class="ip4-summary">
     ${metric(L('IP-limited clients','کاربران محدود IP'),fa(s.ip_limited||0))}
@@ -100,7 +101,8 @@ async function inspectClient(id){
   <section><header><h3>${L('Global policy decision','تصمیم سیاست سراسری')}</h3></header><div class="ip4-dialog-kv">
    <div><span>IP</span><b>${fa(global.ip_count||0)} / ${global.limit_ip?fa(global.limit_ip):'∞'}</b></div>
    <div><span>HWID</span><b>${fa(global.device_count||0)} / ${global.limit_hwid?fa(global.limit_hwid):'∞'}</b></div>
-   <div><span>${L('IP enforceable','قابل اعمال IP')}</span><b>${global.ip_enforceable?L('YES','بله'):L('NO / STALE','خیر / ناقص')}</b></div>
+   <div><span>${L('Verified IP evidence','شواهد IP تأییدشده')}</span><b>${global.ip_enforceable?L('READY','آماده'):L('NO / STALE','خیر / قدیمی')}</b></div>
+   <div><span>${L('Full path coverage','پوشش کامل مسیر')}</span><b>${global.ip_coverage_complete?L('COMPLETE','کامل'):L('PARTIAL / OPAQUE','ناقص / مبهم')}</b></div>
    <div><span>${L('Assigned nodes','نودهای مرتبط')}</span><b>${e((global.nodes||[]).join(', ')||'—')}</b></div>
    <div><span>${L('Authorization convergence','همگرایی مجوز')}</span><b>${conv.authorization_converged?L('CONVERGED','همگرا'):L('PENDING','در انتظار')}</b></div>
    <div><span>${L('Pending nodes','نودهای در انتظار')}</span><b>${e((conv.pending_nodes||[]).join(', ')||'—')}</b></div>

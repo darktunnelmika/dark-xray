@@ -598,6 +598,7 @@ class Observation:
     email: str
     ip: str
     timestamp: float
+    inbound_tag: str | None = None
 
 
 def parse_access_line(line: str, observed_at: float | None = None) -> Observation | None:
@@ -612,11 +613,12 @@ def parse_access_line(line: str, observed_at: float | None = None) -> Observatio
     match=re.search(r"(?:^|\s)(?:from\s+)?((?:(?:tcp|udp):)?(?:\[[0-9a-fA-F:.]+\]|[0-9a-fA-F:.]+):\d+)\s+accepted\s",line)
     user=re.search(r"\bemail:\s*([A-Za-z0-9_.@+\-]{1,128})(?=\s|\]|$)",line)
     if not match or not user:return None
+    inbound_match=re.search(r"\[([A-Za-z0-9_.:@+\-]{1,128})\s+(?:>>|->)",line)
     source=re.sub(r"^(?:tcp|udp):","",match.group(1))
     try:
         host,port=source.rsplit(":",1);integer(int(port),1,65535);ip=normalize_ip(host)
     except (ValueError,PolicyError):return None
-    return Observation(user.group(1),ip,time.time() if observed_at is None else observed_at)
+    return Observation(user.group(1),ip,time.time() if observed_at is None else observed_at,inbound_match.group(1) if inbound_match else None)
 
 
 class Guard:
