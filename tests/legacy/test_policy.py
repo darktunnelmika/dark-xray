@@ -129,6 +129,7 @@ def test_policy_file_ownership(tmp_path):
  ('2026/09/12 10:00:00 tcp:[2001:4860:4860::8888]:23456 accepted tcp:example.com:443 email: a','2001:4860:4860::8888')])
 def test_log_parser_source_only(line,ip):
     observation=parse_access_line(line,1000);assert observation.email=='a' and observation.ip==ip and observation.timestamp==1000
+    if '[a -> b]' in line:assert observation.inbound_tag=='a'
 
 @pytest.mark.parametrize('line',[
  'from 8.8.8.8:1 rejected tcp:example.com:443 email: a',
@@ -219,3 +220,9 @@ def test_backup_persistence(store,tmp_path):
     try:assert other.owner_stats(OWNER,'arda')['used_bytes']==40
     finally:other.close()
     with pytest.raises(PolicyError):store.backup(tmp_path/'backup.db')
+
+
+def test_log_parser_exposes_shadow_tunnel_tag_without_trusting_it():
+    line='from 5.6.7.8:5555 accepted tcp:example.com:443 [dark-tunnel-1-1185 >> direct] email: a'
+    obs=parse_access_line(line,1000)
+    assert obs and obs.ip=='5.6.7.8' and obs.inbound_tag=='dark-tunnel-1-1185'
