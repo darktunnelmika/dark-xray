@@ -39,6 +39,19 @@ test('Clients V4 removes the permanent sidebar and reduces row actions',()=>{
   assert.match(html,/cv4delivery/);
 });
 
+
+test('Clients V4 defaults to stable creation order instead of online or recent activity',()=>{
+  const ctx=context();
+  ctx.state.clients=[
+    {email:'old-online',owner:'dark',created_at:100,client:{enable:true},inboundIds:[],used_bytes:0,presence_state:'online',presence_age_seconds:1,activity_at:9999,block_reasons:[]},
+    {email:'new-offline',owner:'dark',created_at:200,client:{enable:true},inboundIds:[],used_bytes:0,presence_state:'offline',presence_age_seconds:999,activity_at:1,block_reasons:[]}
+  ];
+  const html=ctx.clientsPage();
+  assert.equal(ctx.state.cv4.sort,'created');
+  assert.ok(html.indexOf('new-offline')<html.indexOf('old-online'));
+  assert.doesNotMatch(html,/Recent activity/);
+});
+
 test('Clients V4 create editor is basic-first and low-frequency fields stay advanced or removed',()=>{
   const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
   assert.match(src,/cv4-editor-shell/);

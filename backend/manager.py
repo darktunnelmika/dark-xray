@@ -630,6 +630,7 @@ class Manager:
         if meta['external_disabled']:reasons.append('engine_manual_or_external_disable')
         activity=self._activity_for(email) if activity is None else activity
         return {'email':email,'owner':row['owner'],'client':client,'inboundIds':json.loads(meta['inbounds']),
+                'created_at':float(meta['created_at']),'updated_at':float(meta['updated_at']),
                 'used_bytes':row['used_bytes'],'block_reasons':reasons,'state':meta['state'],
                 'error':meta['error'],'observed_enable':engine.get('enable'),
                 'last_seen_at':activity['activity_at'],'activity_at':activity['activity_at'],

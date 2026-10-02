@@ -3,7 +3,8 @@
 'use strict';
 if(typeof clientsPage!=='function'||typeof runAction!=='function'||typeof clientForm!=='function')return;
 const baseClientsPage=clientsPage,baseRunAction=runAction,baseClientForm=clientForm;
-state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',filters:false,delivery:null,page:1,pageSize:50};
+state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',filters:false,delivery:null,page:1,pageSize:50};
+if(state.cv4.sort==='activity')state.cv4.sort='created';
 state.cv4.page=Math.max(1,Number(state.cv4.page||1));state.cv4.pageSize=[25,50,100].includes(Number(state.cv4.pageSize))?Number(state.cv4.pageSize):50;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 const pct=(u,t)=>t?Math.min(100,Math.max(0,100*Number(u||0)/Number(t))):0;
@@ -45,9 +46,9 @@ function filteredV4(){
  if(f.presence!=='all')rows=rows.filter(x=>presenceOf(x)===f.presence);
  return [...rows].sort((a,b)=>{
   if(f.sort==='name')return a.email.localeCompare(b.email);
-  if(f.sort==='traffic')return Number(b.used_bytes||0)-Number(a.used_bytes||0);
-  if(f.sort==='expiry'){const ae=Number(a.client?.expiryTime||0)||Number.MAX_SAFE_INTEGER,be=Number(b.client?.expiryTime||0)||Number.MAX_SAFE_INTEGER;return ae-be;}
-  return Number(b.activity_at||0)-Number(a.activity_at||0)||a.email.localeCompare(b.email);
+  if(f.sort==='traffic')return Number(b.used_bytes||0)-Number(a.used_bytes||0)||Number(b.created_at||0)-Number(a.created_at||0)||a.email.localeCompare(b.email);
+  if(f.sort==='expiry'){const ae=Number(a.client?.expiryTime||0)||Number.MAX_SAFE_INTEGER,be=Number(b.client?.expiryTime||0)||Number.MAX_SAFE_INTEGER;return ae-be||Number(b.created_at||0)-Number(a.created_at||0)||a.email.localeCompare(b.email);}
+  return Number(b.created_at||0)-Number(a.created_at||0)||a.email.localeCompare(b.email);
  });
 }
 function compactDate(ms){if(!(Number(ms)>0))return L('Unlimited','نامحدود');const d=new Date(Number(ms));if(Number.isNaN(d.getTime()))return '—';const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;}
@@ -82,7 +83,7 @@ function filters(){
  return `<div class="cv4-filterdeck ${f.filters?'show':''}"><label><span>${L('Owner','مالک')}</span><select data-cv4-filter="owner">${opt(ownerItems,f.owner)}</select></label><label><span>${L('Inbound','اینباند')}</span><select data-cv4-filter="inbound">${opt(inItems,f.inbound)}</select></label><label><span>${L('Group','گروه')}</span><select data-cv4-filter="group">${opt(groupItems,f.group)}</select></label><label><span>${L('Account state','وضعیت حساب')}</span><select data-cv4-filter="status">${opt(statusItems,f.status)}</select></label></div>`;
 }
 function clientsView(){
- const rows=filteredV4(),pg=pageSlice(rows),f=state.cv4,sortItems=[['activity',L('Recent activity','آخرین فعالیت')],['name',L('Name','نام')],['traffic',L('Traffic','مصرف')],['expiry',L('Expiry','انقضا')]];
+ const rows=filteredV4(),pg=pageSlice(rows),f=state.cv4,sortItems=[['created',L('Created · newest first','زمان ایجاد · جدیدترین')],['name',L('Name','نام')],['traffic',L('Traffic','مصرف')],['expiry',L('Expiry','انقضا')]];
  return heading(L('Clients','کاربران'),L('Clean control deck for live status, service access and customer organization.','مرکز کنترل خلوت برای وضعیت زنده، سرویس و سازماندهی کاربران.'),`${isOwner()&&can('clients.create')?button(L('Bulk create','ساخت گروهی'),'cv4bulk','users'):''}${can('clients.create')?button(L('Create client','ساخت کاربر'),'new','plus','',true):''}`)+notices()+`<div class="clients-v4">
   <div class="cv4-nav"><button class="active" data-act="cv4view" data-view="clients"><span>01</span>${L('Clients','کاربران')}</button><button data-act="cv4view" data-view="groups"><span>02</span>${L('Groups','گروه‌ها')}</button></div>
   ${stats()}
@@ -276,7 +277,7 @@ runAction=async function(act,el){
  if(act==='cv4view'){state.cv4.view=el.dataset.view;state.selected.clear();return renderPage();}
  if(act==='cv4filters'){state.cv4.filters=!state.cv4.filters;return renderPage();}
  if(act==='cv4quick'){state.cv4.page=1;if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
- if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'activity',page:1});state.selected.clear();return renderPage();}
+ if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',page:1});state.selected.clear();return renderPage();}
  if(act==='cv4page'){state.cv4.page=Math.max(1,Number(el.dataset.page||1));return renderPage();}
  if(act==='cv4detail')return detail(id);
  if(act==='cv4delivery')return deliveryV4(id);

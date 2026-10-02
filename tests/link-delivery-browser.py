@@ -56,8 +56,13 @@ with tempfile.TemporaryDirectory(prefix='dark-link-center.') as d:
             })""",inbound['id'])
             assert client.get('subscription_url'),client
             page.evaluate("refresh()");visit(page,'clients')
-            page.locator('[data-act="cv4delivery"][data-id="qr-delivery-user"]').click()
+            page.evaluate("window.__clientNoReload='alive'")
+            page.locator('.cv4-client[data-act="cv4detail"][data-id="qr-delivery-user"]').click()
+            page.locator('.cv4-detail-dialog').wait_for(state='visible',timeout=10000)
+            assert page.evaluate("()=>window.__clientNoReload==='alive' && state.page==='clients'")
+            page.locator('.cv4-detail-dialog [data-act="cv4delivery"][data-id="qr-delivery-user"]').click()
             page.locator('.cv4d-shell').wait_for(state='visible',timeout=10000)
+            assert page.evaluate("()=>window.__clientNoReload==='alive' && state.page==='clients'")
             page.locator('#cv4d-qr svg').wait_for(state='visible',timeout=10000)
             qr=page.locator('#cv4d-qr');svg=qr.locator('svg');box=qr.bounding_box();assert box
             assert qr.get_attribute('data-ready')=='true'
@@ -73,11 +78,13 @@ with tempfile.TemporaryDirectory(prefix='dark-link-center.') as d:
 
             pick=page.locator('.cv4d-config.primary [data-act="cv4dqr"]').first
             pick.click();page.wait_for_timeout(100)
+            assert page.evaluate("()=>window.__clientNoReload==='alive' && state.page==='clients'")
             assert page.locator('.cv4d-config.primary.selected').count()==1
             assert page.locator('#cv4d-selected-payload').inner_text().startswith('vless://')
             assert qr.get_attribute('data-ready')=='true'
 
             page.locator('.cv4d-sub [data-act="cv4dqr"]').click()
+            assert page.evaluate("()=>window.__clientNoReload==='alive' && state.page==='clients'")
             page.locator('[data-act="cv4dformat"][data-format="clash"]').click()
             page.wait_for_timeout(100)
             assert 'format=clash' in page.locator('#cv4d-selected-payload').inner_text()
