@@ -419,7 +419,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return {'server':target,'nodeSync':result}
 
     def apply_global_security(_node_id:str='',_result:dict|None=None,*,client_ids=None):
-        result=nodes.reconcile_global_security(local_source_verified=bool(config.direct_source_verified),client_ids=client_ids)
+        coverage=engine.ip_source_coverage()
+        result=nodes.reconcile_global_security(local_source_verified=bool(coverage['direct_source_verified']),
+                                               local_source_complete=bool(coverage['source_scope_complete']),
+                                               client_ids=client_ids)
         changed=list(result.get('changed') or [])
         if changed:
             manager.tick(suppress=True)
@@ -963,7 +966,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/clients/{email}/security-global')
     def global_security(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip')
-        return nodes.global_security(email,local_source_verified=bool(config.direct_source_verified))
+        return nodes.global_security(email,local_source_verified=bool(engine.ip_source_coverage()['direct_source_verified']),local_source_complete=bool(engine.ip_source_coverage()['source_scope_complete']))
     @app.get('/api/clients/{email}/ips')
     def ips(email:str,p:Principal=Depends(current)):
         manager.own_row(p.actor,email,'ip')
@@ -1115,7 +1118,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         # Nodes enforce through their own root-owned broker. Never send the
         # Central-only node_mode field to an Agent.
         node_guard=copy.deepcopy(sections['ipguard'])
-        node_guard['mode']=node_guard.get('node_mode',node_guard.get('mode','observe'))
+        requested_node_mode=node_guard.get('node_mode',node_guard.get('mode','observe'))
+        effective_node_mode=requested_node_mode
+        if requested_node_mode=='enforce':
+            with store.lock:
+                verified=store.db.execute(
+                    'SELECT source_verified,last_error FROM remote_node_security_state WHERE node_id=?',(node_id,)).fetchone()
+            if not verified or not bool(verified['source_verified']) or str(verified['last_error'] or ''):
+                effective_node_mode='observe'
+        node_guard['mode']=effective_node_mode
         node_guard.pop('node_mode',None);sections['ipguard']=node_guard
         return {'schema':1,'nodeId':node_id,'desiredRunning':True,'sections':sections,
                 'assignments':bundles,'security':{'clients':policies},'files':managed_files}
@@ -1308,8 +1319,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                             'SELECT digest,device_os,model,first_seen,last_seen FROM core_devices WHERE email=? ORDER BY last_seen DESC',
                             (mapping['mirror_email'],))]
             items.append({'sourceEmail':mapping['source_email'],'ips':ips,'devices':devices})
-        return {'sourceVerified':bool(config.direct_source_verified and not engine.ip_error),
-                'items':items,'capturedAt':time.time()}
+        guard=engine.ip_status()
+        return {'sourceVerified':bool(guard.get('source_verified') and not engine.ip_error),
+                'sourceScopeComplete':bool(guard.get('source_scope_complete') and not engine.ip_error),
+                'directSourceVerified':bool(guard.get('source_verified')),
+                'opaqueTunnelPorts':list(guard.get('opaque_tunnel_ports') or []),
+                'items':items,'capturedAt':time.time(),'guard':guard}
 
     @app.post('/node/api/mirrors/security/clear')
     def node_mirror_security_clear(body:NodeMirrorSecurityClear,token_id:str=Depends(node_agent)):
@@ -1970,17 +1985,20 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'block_reasons':item.get('block_reasons',[]),'presence_state':item.get('presence_state','offline'),
                 'last_seen_at':item.get('last_seen_at',0)})
         node_rows=nodes.list() if p.actor.role=='owner' else []
-        fresh_nodes=sum(1 for n in node_rows if n.get('security',{}).get('last_sync') and
+        active_node_rows=[n for n in node_rows if n.get('enabled')]
+        fresh_nodes=sum(1 for n in active_node_rows if n.get('security',{}).get('last_sync') and
                         now-float(n['security']['last_sync'])<180 and not n['security'].get('last_error'))
-        verified_nodes=sum(1 for n in node_rows if n.get('security',{}).get('source_verified') and
+        verified_nodes=sum(1 for n in active_node_rows if n.get('security',{}).get('source_verified') and
                            n.get('security',{}).get('last_sync') and now-float(n['security']['last_sync'])<180 and
                            not n['security'].get('last_error'))
+        complete_nodes=sum(1 for n in active_node_rows if nodes._node_source_scope_complete(str(n.get('id') or '')))
         node_guard_enforce=0;node_guard_ready=0;node_policy_pending=0;offline_nodes=0
-        for n in node_rows:
+        for n in active_node_rows:
             health=n.get('health') if isinstance(n.get('health'),dict) else {}
             remote_guard=health.get('guard') if isinstance(health.get('guard'),dict) else {}
             if remote_guard.get('requested_mode')=='enforce':node_guard_enforce+=1
-            if remote_guard.get('requested_mode')=='enforce' and remote_guard.get('state')=='applied' and remote_guard.get('applied') is True:
+            if (remote_guard.get('requested_mode')=='enforce' and remote_guard.get('state')=='applied'
+                and remote_guard.get('applied') is True and remote_guard.get('source_verified') is True):
                 node_guard_ready+=1
             if n.get('desired_state',{}).get('pending'):node_policy_pending+=1
             if not n.get('online'):offline_nodes+=1
@@ -1992,7 +2010,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             'active_local_bans':len(active_bans),'recent_violations':sum(1 for x in events if x['kind']=='violation' and now-float(x['at'])<=window)}
         return {'source':'DARK Native Security Center','guard':guard,'settings':settings,'summary':summary,
             'clients':client_rows,'events':events,'bans':active_bans,
-            'nodes':{'total':len(node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes,
+            'nodes':{'total':len(active_node_rows),'security_fresh':fresh_nodes,'source_verified':verified_nodes,
+                     'source_scope_complete':complete_nodes,
                      'guard_enforce':node_guard_enforce,'guard_ready':node_guard_ready,
                      'policy_pending':node_policy_pending,'offline':offline_nodes} if p.actor.role=='owner' else None,
             'architecture':{'local_observer':'Xray access log source-IP observation',
