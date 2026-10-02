@@ -55,6 +55,25 @@ def visit(page,name):
         page.locator(f'[data-xray-section="{name}"]').wait_for(state='visible',timeout=10000)
     report['pages'].append(name)
 
+def mobile_workspace_contract(page,pages,language):
+    receipts=[]
+    for width in (430,390,320):
+        page.set_viewport_size({'width':width,'height':844})
+        for name in pages:
+            page.evaluate("p=>go(p)",name)
+            page.wait_for_function("p=>state.page===p",arg=name,timeout=10000)
+            page.wait_for_function("()=>{const c=document.getElementById('content');return c&&c.getAttribute('aria-busy')!=='true'&&c.textContent.trim().length>0}",timeout=10000)
+            page.wait_for_timeout(60)
+            m=page.evaluate("""()=>{const c=document.querySelector('#content');const visible=x=>{const r=x.getBoundingClientRect();return r.width>0&&r.height>0};return {documentWidth:document.documentElement.scrollWidth,innerWidth:innerWidth,contentWidth:c.scrollWidth,contentClient:c.clientWidth,buttons:[...c.querySelectorAll('.btn,.cv4-action,.iv3-actions button')].filter(visible).map(x=>Math.round(x.getBoundingClientRect().height)),fields:[...c.querySelectorAll('input:not([type=checkbox]):not([type=radio]),select,textarea')].filter(visible).map(x=>Math.round(x.getBoundingClientRect().height))}}""")
+            assert m['documentWidth']<=m['innerWidth']+2,(language,width,name,m)
+            assert m['contentWidth']<=m['contentClient']+2,(language,width,name,m)
+            assert all(x>=34 for x in m['buttons']),(language,width,name,m['buttons'])
+            assert all(x>=38 for x in m['fields']),(language,width,name,m['fields'])
+            receipts.append({'language':language,'width':width,'page':name,**m})
+            if name=='clients' and width in (390,320):
+                page.screenshot(path=str(OUT/f'mobile-clients-{language}-{width}.png'),full_page=True)
+    return receipts
+
 def open_guided(page,locator,stage):
     errors_before=page.locator('.toast.error').count()
     locator.click()
@@ -169,6 +188,9 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 visit(page,name)
                 assert_language_surface(page,name)
             mark('all primary owner workspaces render in English without Persian leakage')
+            mobile_receipts=mobile_workspace_contract(page,pages,'en')
+            page.set_viewport_size({'width':1440,'height':1000})
+            mark('all primary owner workspaces pass the 430/390/320px English mobile contract')
             assert page.locator('.nav-btn[data-page="roles"]').count()==0
             assert page.locator('.nav-btn[data-page="logs"]').count()==0
             assert page.locator('.nav-btn[data-page="audit"]').count()==0
@@ -629,6 +651,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 visit(page,name)
                 assert_language_surface(page,name+' / Persian')
             mark('all primary owner workspaces render in Persian without English UI leakage')
+            mobile_receipts+=mobile_workspace_contract(page,pages,'fa')
+            (OUT/'mobile-responsive-v1.json').write_text(json.dumps(mobile_receipts,ensure_ascii=False,indent=2))
+            page.set_viewport_size({'width':1440,'height':1000})
+            mark('all primary owner workspaces pass the 430/390/320px Persian mobile contract')
 
             visit(page,'inbounds')
             page.locator('[data-v3-action="new"]').click()
