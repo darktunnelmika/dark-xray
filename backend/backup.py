@@ -146,6 +146,28 @@ def prepare_telegram_disaster_recovery(db: sqlite3.Connection) -> dict:
         if table in tables:result['commerce_tables_preserved'].append(table)
     return result
 
+def prepare_restore_domain_recovery(db: sqlite3.Connection) -> dict:
+    """Discard old-host readiness, never customer URLs, mappings or usage.
+
+    The dedicated ACME/nginx frontend is not part of the encrypted bundle.
+    A restored database cannot prove that DNS, certificates or listeners exist
+    on the destination. This runs only inside the isolated staging database.
+    """
+    result={'domain_rows_reset':0,'domains':[],'frontend_rebuild_required':False}
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='restore_domains'").fetchone():
+        return result
+    columns={r[1] for r in db.execute('PRAGMA table_info(restore_domains)')}
+    domains=[str(r[0]) for r in db.execute('SELECT domain FROM restore_domains ORDER BY domain')]
+    if not domains:return result
+    resets={'dns_status':'unchecked','ssl_status':'unchecked','cert_path':'',
+            'key_path':'','last_checked':0,'updated_at':time.time()}
+    fields=[name for name in resets if name in columns]
+    if fields:
+        db.execute('UPDATE restore_domains SET '+','.join(name+'=?' for name in fields),
+                   tuple(resets[name] for name in fields))
+    return {'domain_rows_reset':len(domains),'domains':domains,'frontend_rebuild_required':True}
+
+
 def create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
     data,config,output=Path(data),Path(config),Path(output)
     # These are privileged runtime inputs. Refuse indirection before resolve() so
@@ -200,7 +222,12 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
                     'bot_token_reset_on_restore':True,
                     'forum_and_topics_preserved':True,
                     'forum_rebind_required_after_restore':True},
-                'excluded': ['Xray binary and geo assets','root firewall allowlist','systemd service definitions',
+                'dark_restore_disaster_recovery':{
+                    'subscriptions_mappings_usage_preserved':True,
+                    'domain_readiness_reset_on_restore':True,
+                    'frontend_rebuild_required_after_restore':True},
+                'excluded': ['ACME-managed Dark Restore frontend TLS, renewal accounts and service configuration',
+                             'Xray binary and geo assets','root firewall allowlist','systemd service definitions',
                              'Node Agent host TLS (reissued when a disposable node is reinstalled)'],
                 'restore_into_empty_destination_only': True}
     files['manifest.json'] = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
@@ -284,6 +311,7 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
             # snapshots without live_sessions remain restorable.
             if 'live_sessions' in tables:db.execute('DELETE FROM live_sessions')
             telegram_recovery=prepare_telegram_disaster_recovery(db)
+            domain_recovery=prepare_restore_domain_recovery(db)
             db.commit()
         except sqlite3.Error as ex:raise PolicyError('Restored database validation failed') from ex
         finally:db.close()
@@ -294,6 +322,7 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
         (staging/'config.json').write_text(json.dumps(cfg,indent=2),encoding='utf-8')
         os.rename(staging,dest)
     return {'restored':True,'destination':str(dest),'core_autostart':False,
+            'live_activation_performed':False,'dark_restore_recovery':domain_recovery,
             'sessions_revoked':True,'mfa_key_restored':True,'telegram_recovery':telegram_recovery,
             'new_bot_token_required':bool(telegram_recovery.get('token_required')),
             'forum_rebind_required':bool(telegram_recovery.get('forum_rebind_required')),

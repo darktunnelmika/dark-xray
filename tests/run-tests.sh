@@ -130,3 +130,6 @@ node --test tests/licensing-v1-ui.test.cjs
 
 python -m pytest tests/test_operations_v3.py -q --junitxml=qa/junit/operations-v3.xml
 node --test tests/operations-v3-ui.test.cjs
+
+python -m pytest tests/test_backup_recovery_closeout.py -q --junitxml=qa/junit/backup-recovery-closeout.xml
+node --test tests/backup-recovery-ui.test.cjs

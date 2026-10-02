@@ -64,7 +64,13 @@ def main()->int:
             # The temporary rehearsal must disappear even if future restore code
             # creates extra regular files under the isolated destination.
             shutil.rmtree(dest,ignore_errors=True)
-        emit({'ok':True,'action':'verify','archive':str(a.archive.absolute()),'backup_version':result.get('backup_version','unknown'),'excluded':result.get('excluded',[])})
+        emit({'ok':True,'action':'verify','archive':str(a.archive.absolute()),
+              'backup_version':result.get('backup_version','unknown'),'excluded':result.get('excluded',[]),
+              'sessions_revoked':result['sessions_revoked'],'core_autostart':result['core_autostart'],
+              'new_bot_token_required':result['new_bot_token_required'],
+              'forum_rebind_required':result['forum_rebind_required'],
+              'dark_restore_recovery':result['dark_restore_recovery'],
+              'live_activation_performed':False})
         return 0
     except PolicyError as ex:
         print('Backup operation refused: '+str(ex),file=sys.stderr);return 2
