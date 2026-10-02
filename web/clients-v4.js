@@ -65,7 +65,7 @@ function row(r){
   <div class="cv4-service">${ins.slice(0,1).map(x=>`<span>${e(x)}</span>`).join('')}${ins.length>1?`<small>+${ins.length-1}</small>`:''}</div>
   <div class="cv4-usage"><b class="mono">${bytes(used)}${total?' / '+bytes(total):' / '+L('∞','∞')}</b>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</div>
   <div class="cv4-expiry"><span>${L('EXP','انقضا')}</span><b class="mono">${e(expiry)}</b></div>
-  <div class="cv4-row-actions">${mini('⋯','cv4detail',r.email,'open')}${can('clients.credentials',r.owner)?mini(L('LINK','لینک'),'cv4delivery',r.email):''}</div>
+  <div class="cv4-row-actions">${mini(L('OPEN','بازکردن'),'cv4detail',r.email,'open')}${can('clients.credentials',r.owner)?mini(L('LINK','لینک'),'cv4delivery',r.email):''}</div>
  </article>`;
 }
 function stats(){
