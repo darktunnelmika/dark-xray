@@ -1,0 +1,47 @@
+name: Operations V3 cache contract acceptance
+on:
+  push:
+    branches: [automation/operations-v3-publisher-20261002]
+    paths: [.github/workflows/operations-v3-cache-contract.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Update exact read-only request expectation and owner cache assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach d310866a783863a4f6ad240160974b72df8d6205
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,subprocess
+          p=Path('tests/ops-v2-cache.test.cjs');s=p.read_text()
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='f61dad1b77026f7d40bcbb1f61b43d5a91fbcbff4cfe8d08d761e73cf2f74a44'
+          a="new Set(['/api/core/state','/api/audit','/api/ip/events','/api/backup/status','/api/nodes'])"
+          b="new Set(['/api/core/state','/api/audit','/api/ip/events','/api/backup/status','/api/nodes','/api/operations/overview'])"
+          assert s.count(a)==1;s=s.replace(a,b)
+          s=s.replace(" ctx.state.page='clients';ctx.state.me={id:'seller',role:'reseller',permissions:{}};", " ctx.state.ov2.overview={secret:'old-owner-overview'};ctx.state.ov2.overviewOwner='dark';\n ctx.state.page='clients';ctx.state.me={id:'seller',role:'reseller',permissions:{}};",1)
+          s=s.replace(" assert.equal(ctx.state.ov2.core,null);", " assert.equal(ctx.state.ov2.core,null);\n assert.equal(ctx.state.ov2.overview,null);\n assert.equal(ctx.state.ov2.overviewOwner,'');",1)
+          s=s.replace(" assert.equal(ctx.state.ov2.nodes.length,1);", " assert.equal(ctx.state.ov2.nodes.length,1);\n assert.equal(calls.filter(x=>x==='/api/operations/overview').length,1);\n assert.equal(ctx.state.ov2.overviewOwner,'dark');",1)
+          p.write_text(s)
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='02acee9de904e53f8801d07339843d38cf2433d16c1ae5a8c051277a8e89fc75'
+          names=sorted(p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\0') if p and p!='SHA256SUMS')
+          Path('SHA256SUMS').write_text(''.join(hashlib.sha256(Path(p).read_bytes()).hexdigest()+'  '+p+'\n' for p in names))
+          subprocess.run(['git','add','tests/ops-v2-cache.test.cjs','SHA256SUMS'],check=True)
+          assert set(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())=={'tests/ops-v2-cache.test.cjs','SHA256SUMS'}
+          PY
+          sha256sum -c SHA256SUMS >/tmp/ops-cache-sums.log
+          git diff --cached --check
+          node --test tests/*.test.cjs
+      - name: Publish tested cache-contract update only
+        run: |
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'test(operations): extend exact cache contract for the new read-only source'
+          git push origin HEAD:refs/heads/feature/operations-v3
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
