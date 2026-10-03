@@ -14,11 +14,11 @@ class CustomerBotFeatures:
     @staticmethod
     def _store_category_icon(category:str)->str:
         value=str(category or '').lower()
-        if 'turbo' in value:return '⚡'
-        if 'vip' in value or 'prime' in value:return '💎'
+        if 'turbo' in value or 'توربو' in value:return '⚡'
+        if 'vip' in value or 'prime' in value or 'ویژه' in value:return '💎'
         if 'game' in value:return '🎮'
-        if 'multi' in value:return '🌍'
-        if 'econom' in value or 'eco' in value:return '🟢'
+        if 'multi' in value or 'مولتی' in value:return '🌍'
+        if 'econom' in value or 'eco' in value or 'اقتصادی' in value:return '🟢'
         return '◈'
 
     def _public_store_rows(self)->list[dict[str,Any]]:
@@ -65,7 +65,9 @@ class CustomerBotFeatures:
             icon=self._store_category_icon(str(p.get('category') or 'General'))
             buttons.append([{'text':f"{icon} {p['name']} · از {money(cheapest['price_minor'],cheapest['currency'])}"[:62],
                              'callback_data':'p:'+str(p['row_id'])}])
-        if anchor_row is not None:buttons.append([{'text':'‹ دسته‌بندی‌ها','callback_data':'shopback'}])
+        categories={str(p.get('category') or 'General') for p in self._public_store_rows()}
+        if anchor_row is not None and len(categories)>1:
+            buttons.append([{'text':'‹ دسته‌بندی‌ها','callback_data':'shopback'}])
         title=('همه محصولات' if anchor_row is None else category)
         self.api.send(chat_id,
             f"◈ DARK MARKET / {title}\nپلن را باز کن تا جزئیات و گزینه‌های خرید را ببینی.",
@@ -78,14 +80,17 @@ class CustomerBotFeatures:
               WHERE owner=? AND telegram_id=? AND status IN ('awaiting_receipt','review')""",
               (self.owner,int(user_id))).fetchone()[0])
         self.api.send(chat_id,
-            f"💰 کیف پول DARK\nموجودی: {money(wallet['balance_minor'],wallet['currency'])}\n"
-            f"شارژ در انتظار: {pending}",
+            f"◉ DARK WALLET\n● READY\n\nموجودی: {money(wallet['balance_minor'],wallet['currency'])}\n"
+            f"رسید در انتظار بررسی: {pending}\n\nمبلغ شارژ را انتخاب کن:",
             {'inline_keyboard':[
-                [{'text':'➕ 100,000 تومان','callback_data':'wtop:100000'},
-                 {'text':'➕ 200,000 تومان','callback_data':'wtop:200000'}],
-                [{'text':'➕ 500,000 تومان','callback_data':'wtop:500000'},
+                [{'text':'100K','callback_data':'wtop:100000'},
+                 {'text':'200K','callback_data':'wtop:200000'},
+                 {'text':'500K','callback_data':'wtop:500000'}],
+                [{'text':'1M','callback_data':'wtop:1000000'},
                  {'text':'✍️ مبلغ دلخواه','callback_data':'wcustom'}],
-                [{'text':'📜 تراکنش‌ها','callback_data':'whist'}]
+                [{'text':'📜 تاریخچه تراکنش','callback_data':'whist'},
+                 {'text':'⚡ خرید سرویس','callback_data':'shopback'}],
+                [{'text':'⌂ منوی اصلی','callback_data':'uhome'}]
             ]})
 
     def customer_start_topup(self,chat_id:int,user_id:int,username:str,amount_minor:int):
@@ -107,13 +112,13 @@ class CustomerBotFeatures:
     def customer_wallet_history(self,chat_id:int,user_id:int):
         rows=self.runtime.customer.ledger(self.owner,user_id,20)
         if not rows:self.api.send(chat_id,'هنوز تراکنشی در کیف پول ثبت نشده است.');return
-        lines=['📜 تراکنش‌های کیف پول']
-        labels={'topup':'شارژ','purchase':'خرید','renewal':'تمدید','referral':'پاداش زیرمجموعه','rep_purchase':'خرید نمایندگی','rep_renewal':'تمدید نمایندگی','rep_refund':'بازگشت وجه نمایندگی'}
+        lines=['◉ DARK WALLET / HISTORY']
+        labels={'topup':'شارژ','purchase':'خرید سرویس','renewal':'تمدید','referral':'پاداش دعوت','rep_purchase':'خرید نمایندگی','rep_renewal':'تمدید نمایندگی','rep_refund':'بازگشت وجه نمایندگی'}
         for r in rows:
-            sign='+' if int(r['delta_minor'])>=0 else ''
+            positive=int(r['delta_minor'])>=0;sign='+' if positive else ''
             when=time.strftime('%m/%d %H:%M',time.localtime(float(r['created_at'])))
-            lines.append(f"• {when} · {labels.get(r['kind'],r['kind'])} · {sign}{money(r['delta_minor'],r['currency'])}")
-        self.api.send(chat_id,'\n'.join(lines))
+            lines.append(f"{'＋' if positive else '−'} {when} · {labels.get(r['kind'],r['kind'])} · {sign}{money(r['delta_minor'],r['currency'])}")
+        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':[[{'text':'‹ کیف پول','callback_data':'wmenu'}]]})
 
     def _customer_services(self,user_id:int)->list[dict[str,Any]]:
         return [x for x in self.runtime.manager.list(self.actor())
@@ -141,8 +146,13 @@ class CustomerBotFeatures:
             for r in rows[:30]:
                 dbrow=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",
                                                     (r['email'],self.owner)).fetchone()
-                if dbrow:buttons.append([{'text':'📦 '+r['email'],'callback_data':'usvc:'+str(dbrow['rowid'])}])
-        self.api.send(chat_id,'📦 سرویس‌های من\nیک سرویس را انتخاب کن:',{'inline_keyboard':buttons})
+                if dbrow:
+                    state='●' if not (r.get('block_reasons') or []) else '○'
+                    buttons.append([{'text':f"{state} {r['email']}"[:62],'callback_data':'usvc:'+str(dbrow['rowid'])}])
+        buttons.append([{'text':'⚡ خرید سرویس جدید','callback_data':'shopback'},
+                        {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
+        self.api.send(chat_id,f"▣ DARK SERVICES\n{len(rows)} سرویس متصل به حساب شما\n● فعال · ○ محدود",
+                      {'inline_keyboard':buttons})
 
     def customer_service_detail(self,chat_id:int,user_id:int,row_id:int):
         email,detail=self._customer_client_row(user_id,row_id);c=detail.get('client') or {}
@@ -157,10 +167,17 @@ class CustomerBotFeatures:
                 p=self.runtime.store.db.execute("SELECT name,renewal_enabled FROM commerce_products WHERE owner=? AND id=?",
                                                 (self.owner,origin['product_id'])).fetchone()
             if p:product_name=str(p['name']);renewal=bool(p['renewal_enabled'])
-        text=(f"📦 {product_name}\nشناسه: {email}\nباقی‌مانده: {left}\n"
-              f"انقضا: {expiry_text}\nوضعیت: {'فعال ✅' if not detail.get('block_reasons') else 'محدود ⛔'}")
+        active=not detail.get('block_reasons')
+        usage='نامحدود' if quota==0 else f"{self.bytes(used)} / {self.bytes(quota)}"
+        activation=''
+        if origin and str(origin.get('status') or '')=='provisioned_waiting_activation':
+            activation='\n⏱ شروع زمان: با اولین اتصال واقعی'
+        text=(f"▣ DARK SERVICE\n{'● ACTIVE' if active else '○ LIMITED'}\n\n{product_name}\n"
+              f"شناسه: {email}\nمصرف: {usage}\nباقی‌مانده: {left}\nانقضا: {expiry_text}{activation}")
         buttons=[[{'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(row_id)}]]
         if renewal:buttons[0].append({'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(row_id)})
+        buttons.append([{'text':'⚡ خرید سرویس جدید','callback_data':'shopback'},
+                        {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         self.api.send(chat_id,text,{'inline_keyboard':buttons})
 
     def customer_connection(self,chat_id:int,user_id:int,row_id:int):
@@ -190,7 +207,7 @@ class CustomerBotFeatures:
                 dbrow=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(r['email'],self.owner)).fetchone()
                 if dbrow:buttons.append([{'text':'🔄 '+r['email'],'callback_data':'usvcrenew:'+str(dbrow['rowid'])}])
         if not buttons:self.api.send(chat_id,'تمدید برای سرویس‌های فعلی فعال نیست.');return
-        self.api.send(chat_id,'🔄 تمدید سرویس\nسرویس را انتخاب کن:',{'inline_keyboard':buttons})
+        self.api.send(chat_id,'↻ DARK RENEW\nسرویسی که می‌خواهی تمدید شود را انتخاب کن:',{'inline_keyboard':buttons})
 
     def customer_renew_options(self,chat_id:int,user_id:int,row_id:int):
         email,_=self._customer_client_row(user_id,row_id)
@@ -201,7 +218,7 @@ class CustomerBotFeatures:
             buttons.append([{'text':f"{p['label']} · {money(p['price_minor'],p['currency'])}"[:62],
                              'callback_data':f"urnp:{row_id}:{p['row_id']}"}])
         if not buttons:self.api.send(chat_id,'پلن تمدید فعالی وجود ندارد.');return
-        self.api.send(chat_id,f"🔄 تمدید {email}\nپلن را انتخاب کن:",{'inline_keyboard':buttons})
+        self.api.send(chat_id,f"↻ DARK RENEW\n{email}\nپلن تمدید را انتخاب کن:",{'inline_keyboard':buttons})
 
     def customer_referral_menu(self,chat_id:int,user_id:int):
         stats=self.runtime.customer.referral_stats(self.owner,user_id)
@@ -225,21 +242,21 @@ class CustomerBotFeatures:
             kb=[[{'text':f"🔄 {p['name']} · {money(p['price_minor'],p['currency'])}"[:62],
                   'callback_data':'rmrenew:'+str(p['row_id'])}] for p in plans]
             self.api.send(chat_id,
-                f"🏪 نمایندگی من\nشناسه: {sub['representative_id']}\nوضعیت: {status}\nانقضا: {expires}\n"
+                f"◆ DARK REPRESENTATIVE\nشناسه: {sub['representative_id']}\nوضعیت: {status}\nانقضا: {expires}\n"
                 f"تمدید فقط از پلن‌های منتشرشده توسط Owner انجام می‌شود.",
                 {'inline_keyboard':kb} if kb else None);return
         plans=self.runtime.marketplace.plan_rows(self.owner,public=True)
         if not plans:self.api.send(chat_id,'فعلاً پلن نمایندگی برای فروش منتشر نشده است.');return
         kb=[[{'text':f"🏪 {p['name']} · {money(p['price_minor'],p['currency'])}"[:62],
               'callback_data':'rmplan:'+str(p['row_id'])}] for p in plans]
-        self.api.send(chat_id,'🏪 خرید پنل نمایندگی\nپلن‌ها توسط Owner پنل تعریف شده‌اند؛ فقط یکی را انتخاب کن.',
+        self.api.send(chat_id,'◆ DARK REPRESENTATIVE MARKET\nپلن نمایندگی را انتخاب کن؛ مشخصات و اعتبار هر پلن قبل از پرداخت نمایش داده می‌شود.',
                       {'inline_keyboard':kb})
 
     def customer_representative_plan_detail(self,chat_id:int,user_id:int,row_id:int,renewal:bool=False):
         plan=self.runtime.marketplace.plan_by_rowid(self.owner,row_id,public=True)
         if renewal and not plan['renewal_enabled']:raise PolicyError('This plan is not available for renewal')
         inbounds=', '.join(map(str,plan['allowed_inbounds']))
-        text=(f"🏪 {plan['name']}\n{plan['description']}\n\n"
+        text=(f"◆ REPRESENTATIVE PLAN\n{plan['name']}\n{plan['description']}\n\n"
               f"قیمت: {money(plan['price_minor'],plan['currency'])}\nمدت: {plan['duration_days']} روز\n"
               f"اعتبار حجمی: {self.bytes(int(plan['volume_credit_bytes']))}\n"
               f"اعتبار نامحدود: {plan['unlimited_credit']}\nحداکثر Client: {plan['max_clients'] or 'نامحدود'}\n"
@@ -284,7 +301,9 @@ class CustomerBotFeatures:
         for t in rows[:15]:
             icon='🟢' if t['status']=='open' else ('🔵' if t['status']=='answered' else '⚫')
             kb.append([{'text':f"{icon} {t['subject']}"[:62],'callback_data':'supt:'+str(t['row_id'])}])
-        self.api.send(chat_id,'🎫 پشتیبانی\nتیکت جدید بساز یا یکی از تیکت‌های قبلی را باز کن.',
+        kb.append([{'text':'⌂ منوی اصلی','callback_data':'uhome'}])
+        self.api.send(chat_id,f"◇ DARK SUPPORT\n● {sum(1 for x in rows if x['status']!='closed')} گفت‌وگوی باز\n"
+                      "تیکت جدید بساز یا گفت‌وگوی قبلی را ادامه بده.",
                       {'inline_keyboard':kb})
 
     def customer_ticket_detail(self,chat_id:int,user_id:int,row_id:int):
@@ -325,6 +344,8 @@ class CustomerBotFeatures:
         self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb} if kb else None)
 
     def handle_customer_callback(self,data:str,chat_id:int,user_id:int,sender:dict[str,Any])->bool:
+        if data=='uhome':
+            self.send_home(chat_id,user_id);return True
         if data.startswith('rmplan:'):
             self.customer_representative_plan_detail(chat_id,user_id,int(data.split(':',1)[1]),False);return True
         if data.startswith('rmbuy:'):
