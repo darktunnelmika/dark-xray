@@ -28,6 +28,21 @@ def credit(center,uid,amount,ref):
         center._credit_tx(db,'dark',uid,amount,'topup',ref,'customer-v5-test')
 
 
+def test_customer_launch_metadata_exposes_only_public_bot_startapp(env):
+    store,_,_,_,c=env
+    bot(c)
+    with store.transaction() as db:
+        db.execute("UPDATE telegram_bots SET enabled=1,bot_username='DarkTestBot' WHERE owner='dark'")
+    r=c.get('/api/telegram-customer/launch',params={'owner':'dark'})
+    assert r.status_code==200,r.text
+    assert r.json()=={
+        'bot_username':'DarkTestBot',
+        'startapp_url':'https://t.me/DarkTestBot?startapp=dark',
+    }
+    raw=json.dumps(r.json()).lower()
+    assert 'token' not in raw and 'admin_telegram_id' not in raw
+
+
 def test_customer_signed_bootstrap_wallet_purchase_and_service_scope(env):
     _,_,_,_,c=env
     inbound=create_inbound(c);bot(c);p=plan(c,inbound,220000)

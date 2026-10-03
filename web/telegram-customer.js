@@ -1,6 +1,6 @@
 (()=>{'use strict';
 let tg=window.Telegram?.WebApp||null;const app=document.getElementById('app');
-const qs=new URLSearchParams(location.search),owner=qs.get('owner')||'',marker='/assets/telegram-customer.html',idx=location.pathname.lastIndexOf(marker),BASE=idx>=0?location.pathname.slice(0,idx):'';
+const qs=new URLSearchParams(location.search),owner=qs.get('owner')||'',botHint=(qs.get('bot')||'').replace(/^@/,''),marker='/assets/telegram-customer.html',idx=location.pathname.lastIndexOf(marker),BASE=idx>=0?location.pathname.slice(0,idx):'';
 let data=null,tab='shop';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>Number(v||0).toLocaleString('fa-IR')+' تومان';
@@ -22,6 +22,23 @@ async function waitForTelegramLaunch(timeout=4000){
   await new Promise(resolve=>setTimeout(resolve,80));
  }
  return {web:telegramWebApp(),raw:launchInitData()};
+}
+async function launchMetadata(){
+ const hinted=botHint?{bot_username:botHint,startapp_url:'https://t.me/'+botHint+'?startapp='+encodeURIComponent(owner)}:null;
+ try{
+  const r=await fetch(BASE+'/api/telegram-customer/launch?owner='+encodeURIComponent(owner),{headers:{'Accept':'application/json'}});
+  if(r.ok){const d=await r.json();if(d?.startapp_url)return d}
+ }catch{}
+ return hinted;
+}
+function renderAuthRecovery(message,meta){
+ const link=meta?.startapp_url||'';
+ app.innerHTML='<div class="cu-error"><b>⛔ فروشگاه باز نشد</b><br><br>'+esc(message)+
+  '<br><br><small>این Launch بدون هویت امضاشدهٔ Telegram باز شده است.</small>'+
+  (link?'<br><br><button class="cu-btn primary" id="secure-relaunch">باز کردن امن Mini App</button>':'')+
+  '<br><br><button class="cu-btn" onclick="location.reload()">تلاش دوباره</button></div>';
+ const btn=document.getElementById('secure-relaunch');
+ if(btn)btn.onclick=()=>{const web=telegramWebApp();if(web?.openTelegramLink)web.openTelegramLink(link);else location.href=link};
 }
 async function api(path,method='GET',body){
  const sep=path.includes('?')?'&':'?',url=BASE+path+sep+'owner='+encodeURIComponent(owner);
@@ -155,12 +172,15 @@ async function boot(){
   if(window.__darkTelegramSdkError)throw Error('اتصال به Telegram Mini App برقرار نشد. Mini App را از پروفایل یا منوی همین ربات دوباره باز کن.');
   const launch=await waitForTelegramLaunch();
   if(!launch.web)throw Error('Telegram Mini App SDK در دسترس نیست. Mini App را از پروفایل یا منوی همین ربات باز کن.');
-  if(!launch.raw)throw Error('احراز هویت Telegram دریافت نشد. Mini App را از پروفایل یا منوی همین ربات دوباره باز کن.');
+  if(!launch.raw){const err=new Error('احراز هویت Telegram دریافت نشد. Profile App باید به‌صورت Main Mini App واقعی باز شود.');err.code='AUTH_MISSING';throw err}
   if(!owner)throw Error('شناسه فروشگاه مشخص نیست.');
   tg=launch.web;tg.ready();tg.expand();
   await reload();
  }catch(e){
   const message=e?.message||String(e)||'خطای ناشناخته Mini App';
+  if(e?.code==='AUTH_MISSING'&&app){
+   const meta=await launchMetadata();renderAuthRecovery(message,meta);return;
+  }
   if(app)app.innerHTML='<div class="cu-error"><b>⛔ فروشگاه باز نشد</b><br><br>'+esc(message)+'<br><br><button class="cu-btn" onclick="location.reload()">تلاش دوباره</button></div>';
  }
 }

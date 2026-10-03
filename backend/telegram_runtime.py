@@ -4,6 +4,7 @@ import secrets
 import threading
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -84,6 +85,15 @@ class BotWorker(CustomerBotFeatures):
             with self.runtime.store.transaction() as db:
                 db.execute("UPDATE telegram_bots SET bot_username=?,last_error='',last_seen=? WHERE owner=?",
                            (str(me.get('username') or ''),time.time(),self.owner))
+            ops=getattr(self.runtime,'ops',None)
+            if ops:
+                try:
+                    self.api.call('setChatMenuButton',{'menu_button':{
+                        'type':'web_app','text':'DARK Mini App',
+                        'web_app':{'url':ops.customer_mini_app_url(self.owner)}
+                    }})
+                except Exception:
+                    pass
             self.status('online')
             self.maybe_forum_prompt()
         except Exception as ex:
@@ -142,7 +152,7 @@ class BotWorker(CustomerBotFeatures):
 
     def main_keyboard(self,admin:bool)->dict:
         ops=getattr(self.runtime,'ops',None)
-        customer_app={'text':'◈ DARK Mini App','web_app':{'url':ops.customer_mini_app_url(self.owner)}} if ops else '◈ DARK Mini App'
+        customer_app='◈ DARK Mini App'
         rows=[
             ['⚡ خرید سرویس','📦 سرویس‌های من'],
             ['🔄 تمدید سرویس','💳 کیف پول'],
@@ -1249,16 +1259,22 @@ class BotWorker(CustomerBotFeatures):
         https=url.startswith('https://')
         username=str(cfg.get('bot_username') or '')
         bot_label=('@'+username) if username else 'Bot'
+        deep_link=(f"https://t.me/{username}?startapp={quote(str(self.owner),safe='')}" if username else '')
         text=(f"📱 فعال‌سازی Customer Mini App\n\n"
               f"Bot: {bot_label}\nOwner: {self.owner}\n"
               f"HTTPS: {'آماده ✅' if https else 'نامعتبر ⛔'}\n\n"
               f"URL مخصوص این ربات:\n{url}\n\n"
-              "BotFather → Bot Settings → Configure Mini App / Main Mini App\n"
-              "همین URL را بدون تغییر Paste کن. بعد از فعال‌سازی، دکمه «📱 فروشگاه» داخل ربات همین Mini App را باز می‌کند.")
-        self.api.send(chat_id,text,{'inline_keyboard':[
-            [{'text':'🚀 تست Mini App','web_app':{'url':url}}],
+              "برای بازشدن مستقیم از پروفایل Bot:\n"
+              "BotFather → Bot Settings → Configure Mini App → Main Mini App\n"
+              "حتماً Main Mini App را فعال کن؛ فقط Menu Button کافی نیست.\n"
+              "همین URL را بدون تغییر Paste کن.\n\n"
+              "دکمه داخل ربات و Menu Button توسط DARK با WebApp امن باز می‌شوند.")
+        kb=[
+            [{'text':'🚀 تست WebApp امن','web_app':{'url':url}}],
             [{'text':'🔄 دریافت دوباره URL','callback_data':'miniappsetup'}]
-        ]})
+        ]
+        if deep_link:kb.insert(1,[{'text':'◆ تست Profile / startapp','url':deep_link}])
+        self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def admin_settings(self,chat_id:int):
         cfg=self.bot_config();forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()

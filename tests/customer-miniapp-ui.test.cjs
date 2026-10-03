@@ -32,6 +32,22 @@ test('Customer Mini App supports signed Bot Profile / Main Mini App launch witho
  assert.match(js,/X-Telegram-Init-Data':launchInitData\(\)/);
 });
 
+test('Customer Mini App recovers missing signed profile launch through official startapp',()=>{
+ assert.match(js,/launchMetadata/);
+ assert.match(js,/\/api\/telegram-customer\/launch/);
+ assert.match(js,/startapp=/);
+ assert.match(js,/secure-relaunch/);
+ assert.match(js,/openTelegramLink/);
+ assert.match(js,/AUTH_MISSING/);
+});
+
+test('customer bot no longer launches auth-required Mini App from reply keyboard web_app',()=>{
+ assert.match(runtime,/customer_app='◈ DARK Mini App'/);
+ assert.match(runtime,/setChatMenuButton/);
+ assert.match(runtime,/تست WebApp امن/);
+ assert.match(runtime,/Main Mini App/);
+});
+
 test('Customer Mini App covers purchase services wallet support and representative purchase without referral UI',()=>{
  for(const token of ['خرید اشتراک','سرویس‌های من','کیف پول','پشتیبانی','پنل نمایندگی'])
    assert.ok(js.includes(token)||html.includes(token),token);
