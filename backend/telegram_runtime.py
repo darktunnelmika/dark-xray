@@ -160,9 +160,11 @@ class BotWorker(CustomerBotFeatures):
                 for update in updates:
                     uid=int(update.get('update_id') or 0)
                     try:self.handle(update)
+                    except httpx.TransportError:
+                        self.network_failed()
                     except Exception as ex:
                         self.runtime.persist_error(self.owner,str(ex))
-                        self.notify_admin('خطای پردازش ربات:\n'+str(ex)[:700])
+                        self.notify_admin('🚨 یک درخواست ربات کامل نشد.\nجزئیات در وضعیت رباتِ پنل ثبت شد؛ درخواست را دوباره بررسی کن.')
                     finally:
                         if uid:
                             with self.runtime.store.transaction() as db:
@@ -806,7 +808,7 @@ class BotWorker(CustomerBotFeatures):
         d=ops.dashboard(self.owner);a=self._admin_attention_counts()
         text=(f"◆ DARK CONTROL / BOT V6\n"
               f"● ONLINE · ACTION CENTER\n\n"
-              f"💰 امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']}/{d['orders_today']} سفارش\n"
+              f"💰 امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']} پرداخت · {d['orders_today']} سفارش جدید\n"
               f"📈 ۷ روز: {amount(d['revenue_7d'],d['currency'])} · Conversion {d['conversion_7d']}%\n"
               f"◈ محصول فعال: {d['published_plans']} · خریدار: {d['customers']}\n"
               f"◉ موجودی کیف پول مشتریان: {amount(d['wallet_liability'],d['currency'])}\n\n"

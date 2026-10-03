@@ -34,6 +34,7 @@ def test_reports_use_confirmed_payment_time_owner_and_currency_without_double_co
         seed_order(db,'pending',700000,day+300)
         seed_order(db,'other-owner',900000,day+400,day+450,owner='other')
         seed_order(db,'today',200000,day+500,now-200)
+        seed_order(db,'old-created-paid-today',30000,day-10*86400,now-300)
         seed_order(db,'rial',5000000,day+600,day+700,currency='IRR')
         # A second paid attempt is still one sale.
         db.execute("INSERT INTO commerce_payments SELECT 'pay-duplicate',order_id,owner,gateway_id,amount_minor,currency,status,external_ref,created_at,updated_at+1 FROM commerce_payments WHERE id='pay-yesterday'")
@@ -45,9 +46,9 @@ def test_reports_use_confirmed_payment_time_owner_and_currency_without_double_co
     yesterday=sales_summary(store.db,'dark',day,day+86400)
     assert yesterday=={'count':2,'amounts':{'IRR':5000000,'IRT':100000}}
     dashboard=c.app.state.telegram_runtime.ops.dashboard('dark')
-    assert dashboard['paid_today']==1 and dashboard['revenue_today']==200000
-    assert dashboard['revenue_7d']==300000
-    assert dashboard['revenue_7d_by_currency']=={'IRR':5000000,'IRT':300000}
+    assert dashboard['paid_today']==2 and dashboard['revenue_today']==230000
+    assert dashboard['revenue_7d']==330000 and dashboard['conversion_7d']==60.0
+    assert dashboard['revenue_7d_by_currency']=={'IRR':5000000,'IRT':330000}
     report=c.app.state.telegram_runtime.forum.daily_summary_text('dark',datetime(2026,10,2).date(),'UTC')
     assert 'فروش قطعی: 5,000,000 ریال · 100,000 تومان' in report
     assert 'شارژ کیف پول این روز: 1,000,000 تومان' in report

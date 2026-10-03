@@ -157,6 +157,12 @@ class TelegramOperations:
             orders_week=int(db.execute(ORDERS_CTE+"SELECT COUNT(*) FROM orders WHERE owner=? AND created_at>=? AND created_at<?",(owner,week,now+0.001)).fetchone()[0])
             week_sales=sales_summary(db,owner,week,now+0.001)
             paid_week=week_sales['count'];revenue_week=week_sales['amounts'].get('IRT',0)
+            converted_week=int(db.execute(SALES_CTE+"""SELECT COUNT(*) FROM sales s JOIN (
+              SELECT id,owner,created_at FROM commerce_orders UNION ALL
+              SELECT id,owner,created_at FROM representative_market_orders
+              ) o ON o.id=s.id AND o.owner=s.owner
+              WHERE s.owner=? AND o.created_at>=? AND o.created_at<? AND s.paid_at<?""",
+              (owner,week,now+0.001,now+0.001)).fetchone()[0])
             pending_payments=int(db.execute("SELECT COUNT(*) FROM commerce_payments WHERE owner=? AND status='review'",(owner,)).fetchone()[0])
             pending_topups=int(db.execute("SELECT COUNT(*) FROM customer_topups WHERE owner=? AND status='review'",(owner,)).fetchone()[0])
             wallet_liability=int(db.execute("SELECT COALESCE(SUM(balance_minor),0) FROM customer_wallets WHERE owner=?",(owner,)).fetchone()[0])
@@ -173,7 +179,7 @@ class TelegramOperations:
             reps=int(db.execute("SELECT COUNT(*) FROM api_admins WHERE role='reseller' AND disabled=0").fetchone()[0]) if role=='owner' else 0
         return {'owner':owner,'role':role,'orders_today':orders_today,'paid_today':paid_today,'revenue_today':revenue_today,
                 'orders_7d':orders_week,'paid_7d':paid_week,'revenue_7d':revenue_week,
-                'conversion_7d':round((paid_week/orders_week*100.0) if orders_week else 0.0,1),
+                'conversion_7d':round((converted_week/orders_week*100.0) if orders_week else 0.0,1),
                 'pending_payments':pending_payments+pending_topups,'wallet_liability':wallet_liability,
                 'published_plans':products,'customers':customers,'support_open':support_open,
                 'support_urgent':support_urgent,'representatives':reps,'top_products':top,'currency':'IRT',
