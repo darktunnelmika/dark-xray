@@ -367,10 +367,24 @@ class BotWorker(CustomerBotFeatures):
         return dict(row)
 
     def send_delivery(self,chat_id:int,result:dict[str,Any]):
-        text=f"✅ پرداخت تأیید شد و سرویس شما ساخته شد.\nشناسه: {result.get('client_id','')}"
-        if result.get('activation_pending'):
-            text+="\n⏱ مدت سرویس از اولین اتصال واقعی شروع می‌شود."
-        self.api.send(chat_id,text)
+        client_id=str(result.get('client_id') or '')
+        activation_pending=bool(result.get('activation_pending'))
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(self.owner,client_id)).fetchone() if client_id else None
+        state='READY · WAITING FIRST CONNECTION' if activation_pending else 'ACTIVE'
+        text=(f"◆ DARK SERVICE READY\n● {state}\n\n"
+              f"سرویس: {client_id or '—'}\n"
+              +("⏱ زمان سرویس هنوز شروع نشده؛ با اولین اتصال واقعی فعال می‌شود.\n"
+                "بعد از اولین اتصال، همین ربات زمان شروع و انقضا را اعلام می‌کند."
+                if activation_pending else
+                "✅ سرویس ساخته و فعال شد؛ اطلاعات اتصال آماده است."))
+        kb=[]
+        if row:
+            rid=int(row['rowid'])
+            kb.append([{'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(rid)},
+                       {'text':'📦 وضعیت سرویس','callback_data':'usvc:'+str(rid)}])
+        kb.append([{'text':'◈ فروشگاه','callback_data':'shopback'}])
+        self.api.send(chat_id,text,{'inline_keyboard':kb})
         delivery=result.get('delivery') or {}
         if delivery.get('subscription_url'):
             self.api.send(chat_id,'🔗 Subscription\n'+str(delivery['subscription_url']))
@@ -2209,11 +2223,16 @@ class TelegramBotRuntime:
                     text=(f"◆ DARK SERVICE ALERT\n{title}\n"
                           f"سرویس: {client_id}\n"
                           f"باقی‌مانده: {'نامحدود' if not total else BotWorker.bytes(remaining)}")
+                    with self.store.lock:
+                        dbrow=self.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(owner,client_id)).fetchone()
+                    kb=[]
+                    if dbrow:
+                        rid=int(dbrow['rowid'])
+                        kb.append([{'text':'📦 وضعیت سرویس','callback_data':'usvc:'+str(rid)},
+                                   {'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(rid)}])
+                    kb.append([{'text':'◈ فروشگاه','callback_data':'shopback'}])
                     try:
-                        worker.api.send(telegram_id,text,{'inline_keyboard':[[
-                            {'text':'📦 سرویس‌های من','callback_data':'svcmy'},
-                            {'text':'🔄 تمدید','callback_data':'svcmy'}
-                        ]]})
+                        worker.api.send(telegram_id,text,{'inline_keyboard':kb})
                     except Exception:continue
                     self._mark_notification(owner,telegram_id,client_id,event_key)
 
@@ -2223,12 +2242,22 @@ class TelegramBotRuntime:
             with self.lock:worker=self.workers.get(owner)
             if not worker:continue
             expires=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(float(item['expires_at'])))
-            text=f"✅ اولین اتصال ثبت شد. مدت سرویس شروع شد.\nسرویس: {item['client_id']}\nانقضا: {expires}"
-            try:worker.api.send(int(item['buyer_telegram_id']),text)
+            client_id=str(item['client_id'])
+            with self.store.lock:
+                row=self.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(owner,client_id)).fetchone()
+            text=(f"◆ DARK SERVICE ACTIVATED\n● FIRST CONNECTION VERIFIED\n\n"
+                  f"اولین اتصال واقعی ثبت شد؛ زمان سرویس از همین لحظه شروع شد.\n"
+                  f"سرویس: {client_id}\nانقضا: {expires}")
+            kb=[]
+            if row:
+                rid=int(row['rowid'])
+                kb.append([{'text':'📦 وضعیت سرویس','callback_data':'usvc:'+str(rid)},
+                           {'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(rid)}])
+            try:worker.api.send(int(item['buyer_telegram_id']),text,{'inline_keyboard':kb} if kb else None)
             except Exception:pass
             try:
                 self.manager.audit(self.commerce.actor_for(owner),owner,'commerce.first_connection_activate',
-                                   item['client_id'],f"order={item['order_id']}; expires_at={item['expires_at']}")
+                                   client_id,f"order={item['order_id']}; expires_at={item['expires_at']}")
                 self.forum.report(worker.api,owner,'services',text)
             except Exception:pass
 
