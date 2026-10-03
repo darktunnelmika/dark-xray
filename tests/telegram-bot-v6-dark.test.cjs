@@ -35,7 +35,7 @@ test('DARK Store V6 keeps common product creation simple with presets',()=>{
 });
 
 test('first-connect customer promise remains visible in delivery and product review',()=>{
-  assert.match(runtime,/مدت سرویس از اولین اتصال واقعی شروع می‌شود/);
+  assert.match(runtime,/زمان سرویس هنوز شروع نشده؛ با اولین اتصال واقعی فعال می‌شود/);
   assert.match(runtime,/شروع زمان: اولین اتصال واقعی/);
 });
 
