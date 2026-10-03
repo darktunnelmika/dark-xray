@@ -675,6 +675,7 @@ class BotWorker(CustomerBotFeatures):
     def _service_attention(self)->dict[str,Any]:
         now_ms=int(time.time()*1000);expiring=[];low=[]
         for row in self.runtime.manager.list(self.actor()):
+            if row.get('owner')!=self.owner:continue
             client=row.get('client') or {};email=str(row.get('email') or client.get('email') or '')
             if not email:continue
             expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
@@ -2049,6 +2050,7 @@ class TelegramBotRuntime:
             try:rows=self.manager.list(self.commerce.actor_for(owner))
             except Exception:continue
             for row in rows:
+                if row.get('owner')!=owner:continue
                 client=row.get('client') or {};telegram_id=int(client.get('tgId') or 0)
                 client_id=str(row.get('email') or client.get('email') or '')
                 if not telegram_id or not client_id:continue
