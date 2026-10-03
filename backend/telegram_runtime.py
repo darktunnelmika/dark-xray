@@ -165,8 +165,8 @@ class BotWorker(CustomerBotFeatures):
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
                 ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
                 ['📊 گزارش‌ها','🎫 پشتیبانی'],
-                ['📱 Mini App','⚙️ تنظیمات ربات'],
-                ['💾 بکاپ'],
+                ['📣 اعلان‌ها','📱 Mini App'],
+                ['⚙️ تنظیمات ربات','💾 بکاپ'],
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
@@ -209,6 +209,20 @@ class BotWorker(CustomerBotFeatures):
         with self.runtime.store.lock:
             pending_orders=int(self.runtime.store.db.execute(
                 "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND status='pending'",(self.owner,)).fetchone()[0])
+        if self.owner_role()=='reseller':
+            stats=self.runtime.store.owner_stats(self.actor(),self.owner);profile=self.runtime.manager.profile(self.owner)
+            rem=stats.get('volume_credit_remaining_bytes')
+            rem_text='—' if rem is None else self.bytes(int(rem))
+            unlimited=stats.get('unlimited_credit_remaining')
+            self.api.send(chat_id,
+                f"◆ DARK REP CONTROL\n● BOT ONLINE\n\n"
+                f"👥 Client: {stats['client_count']}/{stats['max_clients'] or '∞'}\n"
+                f"📦 اعتبار حجمی باقی‌مانده: {rem_text}\n"
+                f"♾ اعتبار نامحدود: {unlimited if unlimited is not None else '—'}\n"
+                f"🌍 Inbound مجاز: {len(profile.get('allowed') or [])}\n"
+                f"🛒 محصولات فعال: {active_products} · سفارش Pending: {pending_orders}\n\n"
+                "مدیریت نمایندگی آماده است.",
+                self.main_keyboard(True));return
         self.api.send(chat_id,
             f"⚡ DARK CONTROL / OWNER TERMINAL\n● BOT ONLINE\n\n"
             f"🛒 محصولات فعال: {active_products}\n🧾 سفارش Pending: {pending_orders}\n"
@@ -278,6 +292,8 @@ class BotWorker(CustomerBotFeatures):
             self.handle_store_text(chat_id,user_id,text);return
         if session.startswith('service_') and self.is_admin(user_id):
             self.handle_service_text(chat_id,user_id,text);return
+        if session.startswith('broadcast_') and self.is_admin(user_id):
+            self.handle_broadcast_text(chat_id,user_id,text);return
         if session=='new_rep':
             self.create_representative_from_text(chat_id,user_id,text);return
         if low.startswith('/start') or low=='start':
@@ -311,6 +327,7 @@ class BotWorker(CustomerBotFeatures):
         if text in ('💳 پرداخت‌ها','💳 پرداخت دستی') and self.is_admin(user_id):self.admin_payments(chat_id);return
         if text=='📱 Mini App' and self.is_admin(user_id):self.admin_mini_app(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
+        if text=='📣 اعلان‌ها' and self.is_admin(user_id):self.admin_broadcast_menu(chat_id);return
         if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
         if text=='⚙️ تنظیمات ربات' and self.is_admin(user_id):self.admin_settings(chat_id);return
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
