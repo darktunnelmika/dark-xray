@@ -902,7 +902,7 @@ def test_customer_receipt_goes_directly_to_admin_pv_not_forum(env):
     assert client.put('/api/telegram/settings',json={
         'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
     center=client.app.state.telegram_runtime.customer
-    center.ensure_user('dark',user_id,'receipt-user')
+    center.ensure_referral_profile('dark',user_id)
     top=center.create_topup('dark',user_id,'receipt-user',250000)
     worker=BotWorker(client.app.state.telegram_runtime,'dark',token,'receipt-pv-test')
     calls=[];fallback=[]
