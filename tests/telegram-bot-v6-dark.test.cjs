@@ -55,3 +55,16 @@ test('Bot V6 Stage 2 keeps deduplicated service health notifications',()=>{
     assert.ok(runtime.includes(token),token);
   assert.match(runtime,/last_notification_scan>=300/);
 });
+
+test('Bot V6 Stage 3 exposes representative control and durable Broadcast Center',()=>{
+  for(const token of ['DARK REP CONTROL','DARK REPRESENTATIVES','repctl:','repclients:','DARK BROADCAST CENTER','bcseg:all','bcseg:active','bcseg:expiring','bcseg:low','telegram_broadcasts','telegram_broadcast_recipients','process_broadcasts'])
+    assert.ok(runtime.includes(token),token);
+  assert.match(runtime,/📣 اعلان‌ها/);
+});
+
+test('Bot V6 Stage 3 keeps broadcasts scoped and queued rather than synchronous fanout',()=>{
+  assert.match(runtime,/row\.get\('owner'\)!=self\.owner:continue/);
+  assert.match(runtime,/LIMIT 15/);
+  assert.match(runtime,/status IN \('queued','running'\)/);
+  assert.match(runtime,/telegram\.broadcast_complete/);
+});

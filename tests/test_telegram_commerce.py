@@ -573,6 +573,57 @@ def test_bot_v6_action_center_and_service_alert_dedupe(env):
         worker.api.close()
 
 
+def test_bot_v6_broadcast_queue_is_owner_scoped_and_idempotent(env):
+    store,_,_,_,c=env
+    create_inbound(c)
+    create(c,email='broadcast-v6',extra={'tgId':994101,'totalGB':5*1024**3})
+    worker,sent=_bot_worker(c,992108)
+    runtime=c.app.state.telegram_runtime
+    previous=runtime.workers.get('dark')
+    runtime.workers['dark']=worker
+    try:
+        worker.start_broadcast(992108,992108,'all')
+        assert worker.sessions[992108]=='broadcast_text'
+        worker.handle_broadcast_text(992108,992108,'Maintenance notice V6')
+        assert worker.sessions[992108]=='broadcast_review'
+        worker.queue_broadcast(992108,992108)
+        with store.lock:
+            job=store.db.execute("SELECT id,status,total FROM telegram_broadcasts WHERE owner='dark' ORDER BY created_at DESC LIMIT 1").fetchone()
+        assert job and job['status']=='queued' and job['total']==1
+        runtime.process_broadcasts()
+        notices=[x for x in sent if x[0]==994101 and 'DARK NOTICE' in x[1]]
+        assert len(notices)==1 and 'Maintenance notice V6' in notices[0][1]
+        runtime.process_broadcasts()
+        notices=[x for x in sent if x[0]==994101 and 'DARK NOTICE' in x[1]]
+        assert len(notices)==1
+        with store.lock:
+            done=store.db.execute("SELECT status,sent,failed FROM telegram_broadcasts WHERE id=?",(job['id'],)).fetchone()
+        assert tuple(done)==('completed',1,0)
+    finally:
+        if previous is None:runtime.workers.pop('dark',None)
+        else:runtime.workers['dark']=previous
+        worker.api.close()
+
+
+def test_bot_v6_owner_representative_control_center(env):
+    _,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/repcontrol',json={
+        'name':'Rep Control','allowed':[inbound_id],'volume_credit_bytes':120*1024**3,
+        'unlimited_credit':3,'max_clients':25}).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'repcontrol','password':'RepControlPass88','role':'reseller'}).status_code==200
+    worker,sent=_bot_worker(c,992109)
+    try:
+        worker.representatives(992109)
+        assert any(any(btn.get('callback_data')=='repctl:repcontrol' for row in (markup or {}).get('inline_keyboard',[]) for btn in row)
+                   for _,_,markup in sent)
+        worker.representative_detail(992109,'repcontrol')
+        assert any('REP CONTROL' in text and 'Rep Control' in text and '120.0 GiB' in text for _,text,_ in sent)
+    finally:
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)

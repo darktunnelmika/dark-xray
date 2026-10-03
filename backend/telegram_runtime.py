@@ -165,8 +165,8 @@ class BotWorker(CustomerBotFeatures):
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
                 ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
                 ['📊 گزارش‌ها','🎫 پشتیبانی'],
-                ['📱 Mini App','⚙️ تنظیمات ربات'],
-                ['💾 بکاپ'],
+                ['📣 اعلان‌ها','📱 Mini App'],
+                ['⚙️ تنظیمات ربات','💾 بکاپ'],
             ]
             if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
@@ -209,6 +209,20 @@ class BotWorker(CustomerBotFeatures):
         with self.runtime.store.lock:
             pending_orders=int(self.runtime.store.db.execute(
                 "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND status='pending'",(self.owner,)).fetchone()[0])
+        if self.owner_role()=='reseller':
+            stats=self.runtime.store.owner_stats(self.actor(),self.owner);profile=self.runtime.manager.profile(self.owner)
+            rem=stats.get('volume_credit_remaining_bytes')
+            rem_text='—' if rem is None else self.bytes(int(rem))
+            unlimited=stats.get('unlimited_credit_remaining')
+            self.api.send(chat_id,
+                f"◆ DARK REP CONTROL\n● BOT ONLINE\n\n"
+                f"👥 Client: {stats['client_count']}/{stats['max_clients'] or '∞'}\n"
+                f"📦 اعتبار حجمی باقی‌مانده: {rem_text}\n"
+                f"♾ اعتبار نامحدود: {unlimited if unlimited is not None else '—'}\n"
+                f"🌍 Inbound مجاز: {len(profile.get('allowed') or [])}\n"
+                f"🛒 محصولات فعال: {active_products} · سفارش Pending: {pending_orders}\n\n"
+                "مدیریت نمایندگی آماده است.",
+                self.main_keyboard(True));return
         self.api.send(chat_id,
             f"⚡ DARK CONTROL / OWNER TERMINAL\n● BOT ONLINE\n\n"
             f"🛒 محصولات فعال: {active_products}\n🧾 سفارش Pending: {pending_orders}\n"
@@ -278,6 +292,8 @@ class BotWorker(CustomerBotFeatures):
             self.handle_store_text(chat_id,user_id,text);return
         if session.startswith('service_') and self.is_admin(user_id):
             self.handle_service_text(chat_id,user_id,text);return
+        if session.startswith('broadcast_') and self.is_admin(user_id):
+            self.handle_broadcast_text(chat_id,user_id,text);return
         if session=='new_rep':
             self.create_representative_from_text(chat_id,user_id,text);return
         if low.startswith('/start') or low=='start':
@@ -311,6 +327,7 @@ class BotWorker(CustomerBotFeatures):
         if text in ('💳 پرداخت‌ها','💳 پرداخت دستی') and self.is_admin(user_id):self.admin_payments(chat_id);return
         if text=='📱 Mini App' and self.is_admin(user_id):self.admin_mini_app(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
+        if text=='📣 اعلان‌ها' and self.is_admin(user_id):self.admin_broadcast_menu(chat_id);return
         if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
         if text=='⚙️ تنظیمات ربات' and self.is_admin(user_id):self.admin_settings(chat_id);return
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
@@ -492,6 +509,25 @@ class BotWorker(CustomerBotFeatures):
             self.price_inbounds_done(chat_id,user_id);return
         if data.startswith('stprimary:') and self.is_admin(user_id):
             self.price_choose_primary(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='repback' and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representatives(chat_id);return
+        if data.startswith('repctl:') and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representative_detail(chat_id,data.split(':',1)[1]);return
+        if data.startswith('repclients:') and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representative_clients(chat_id,data.split(':',1)[1]);return
+        if data.startswith('repclient:') and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representative_client_detail(chat_id,int(data.split(':',1)[1]));return
+        if data=='bcmenu' and self.is_admin(user_id):
+            self.admin_broadcast_menu(chat_id);return
+        if data=='bcstatus' and self.is_admin(user_id):
+            self.admin_broadcast_status(chat_id);return
+        if data.startswith('bcseg:') and self.is_admin(user_id):
+            self.start_broadcast(chat_id,user_id,data.split(':',1)[1]);return
+        if data=='bcsend' and self.is_admin(user_id):
+            self.queue_broadcast(chat_id,user_id);return
+        if data=='bccancel' and self.is_admin(user_id):
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'اعلان لغو شد.');self.admin_broadcast_menu(chat_id);return
         if data=='ops_action' and self.is_admin(user_id):
             self.admin_action_center(chat_id);return
         if data=='ops_attention' and self.is_admin(user_id):
@@ -639,6 +675,7 @@ class BotWorker(CustomerBotFeatures):
     def _service_attention(self)->dict[str,Any]:
         now_ms=int(time.time()*1000);expiring=[];low=[]
         for row in self.runtime.manager.list(self.actor()):
+            if row.get('owner')!=self.owner:continue
             client=row.get('client') or {};email=str(row.get('email') or client.get('email') or '')
             if not email:continue
             expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
@@ -1297,6 +1334,121 @@ class BotWorker(CustomerBotFeatures):
         self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_delete',p['id'],mode)
         self.api.send(chat_id,'✅ '+mode)
 
+    def _broadcast_targets(self,segment:str)->list[int]:
+        if segment not in ('all','active','expiring','low'):raise PolicyError('Unknown broadcast segment')
+        admin=int(self.bot_config()['admin_telegram_id'])
+        if segment=='all':
+            ids=set()
+            with self.runtime.store.lock:
+                for sql in (
+                    "SELECT telegram_id FROM customer_wallets WHERE owner=?",
+                    "SELECT buyer_telegram_id FROM commerce_orders WHERE owner=?",
+                    "SELECT telegram_id FROM customer_support_tickets WHERE owner=?",
+                    "SELECT telegram_id FROM customer_referrals WHERE owner=?"
+                ):
+                    try:
+                        ids.update(int(r[0]) for r in self.runtime.store.db.execute(sql,(self.owner,)) if int(r[0] or 0)>0)
+                    except Exception:
+                        pass
+            for row in self.runtime.manager.list(self.actor()):
+                if row.get('owner')!=self.owner:continue
+                tid=int((row.get('client') or {}).get('tgId') or 0)
+                if tid>0:ids.add(tid)
+            ids.discard(admin);return sorted(ids)
+        now_ms=int(time.time()*1000);ids=set()
+        for row in self.runtime.manager.list(self.actor()):
+            if row.get('owner')!=self.owner:continue
+            client=row.get('client') or {};tid=int(client.get('tgId') or 0)
+            if tid<=0 or tid==admin:continue
+            expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
+            used=int(row.get('used_bytes') or 0);remaining=max(0,total-used) if total else 0
+            enabled=client.get('enable') is not False and not row.get('block_reasons')
+            if segment=='active' and enabled and (not expiry or expiry>now_ms):ids.add(tid)
+            elif segment=='expiring' and expiry and now_ms<expiry<=now_ms+72*3600*1000:ids.add(tid)
+            elif segment=='low' and total and remaining/total<=0.20:ids.add(tid)
+        return sorted(ids)
+
+    def admin_broadcast_menu(self,chat_id:int):
+        counts={s:len(self._broadcast_targets(s)) for s in ('all','active','expiring','low')}
+        with self.runtime.store.lock:
+            recent=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,status,total,sent,failed,created_at
+              FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 3""",(self.owner,))]
+        text=(f"📣 DARK BROADCAST CENTER\n"
+              f"همه مشتری‌ها: {counts['all']} · فعال: {counts['active']}\n"
+              f"نزدیک انقضا: {counts['expiring']} · کم‌حجم: {counts['low']}\n\n"
+              "پیام‌ها Queue می‌شوند و به‌صورت کنترل‌شده ارسال می‌شوند.")
+        if recent:
+            text+='\n\nآخرین ارسال‌ها:'
+            for row in recent:
+                text+=f"\n• {row['status']} · {row['sent']}/{row['total']} · fail {row['failed']}"
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':f"👥 همه · {counts['all']}",'callback_data':'bcseg:all'},
+             {'text':f"● فعال · {counts['active']}",'callback_data':'bcseg:active'}],
+            [{'text':f"⌛ نزدیک انقضا · {counts['expiring']}",'callback_data':'bcseg:expiring'},
+             {'text':f"📉 کم‌حجم · {counts['low']}",'callback_data':'bcseg:low'}],
+            [{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}]
+        ]})
+
+    def start_broadcast(self,chat_id:int,user_id:int,segment:str):
+        targets=self._broadcast_targets(segment)
+        if not targets:
+            self.api.send(chat_id,'برای این گروه هیچ مشتری واجد شرایطی وجود ندارد.');return
+        labels={'all':'همه مشتری‌ها','active':'سرویس فعال','expiring':'نزدیک انقضا','low':'کم‌حجم'}
+        self.sessions[user_id]='broadcast_text'
+        self.session_data[user_id]={'segment':segment}
+        self.api.send(chat_id,f"📣 اعلان به {labels[segment]} · {len(targets)} نفر\n"
+                      "متن پیام را بفرست (حداکثر ۳۵۰۰ کاراکتر).\nبرای لغو: /cancel")
+
+    def handle_broadcast_text(self,chat_id:int,user_id:int,text:str):
+        if self.sessions.get(user_id)!='broadcast_text':raise PolicyError('Broadcast is not waiting for text')
+        message=text.strip()
+        if not 1<=len(message)<=3500:
+            self.api.send(chat_id,'متن اعلان باید بین ۱ تا ۳۵۰۰ کاراکتر باشد.');return
+        data=self.session_data.setdefault(user_id,{})
+        segment=str(data.get('segment') or '');targets=self._broadcast_targets(segment)
+        if not targets:
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'مخاطبی برای این اعلان باقی نمانده است.');return
+        data['message']=message;data['target_count']=len(targets);self.sessions[user_id]='broadcast_review'
+        preview=message if len(message)<=700 else message[:700]+'…'
+        self.api.send(chat_id,f"👁 پیش‌نمایش اعلان\nگیرنده: {len(targets)} نفر\n\n{preview}",
+                      {'inline_keyboard':[[
+                          {'text':'✅ قرار دادن در صف','callback_data':'bcsend'},
+                          {'text':'❌ لغو','callback_data':'bccancel'}
+                      ]]})
+
+    def queue_broadcast(self,chat_id:int,user_id:int):
+        if self.sessions.get(user_id)!='broadcast_review':raise PolicyError('Broadcast is not ready to queue')
+        data=dict(self.session_data.get(user_id) or {});segment=str(data.get('segment') or '')
+        message=str(data.get('message') or '');targets=self._broadcast_targets(segment)
+        if not targets:raise PolicyError('Broadcast target set is empty')
+        bid='bc_'+secrets.token_hex(8);now=time.time()
+        with self.runtime.store.transaction() as db:
+            db.execute("""INSERT INTO telegram_broadcasts
+              (id,owner,created_by,segment,message,status,total,sent,failed,created_at,started_at,completed_at)
+              VALUES(?,?,?,?,?,'queued',?,0,0,?,0,0)""",
+              (bid,self.owner,int(user_id),segment,message,len(targets),now))
+            db.executemany("""INSERT INTO telegram_broadcast_recipients
+              (broadcast_id,telegram_id,status,error,updated_at) VALUES(?,?,'pending','',?)""",
+              [(bid,int(tid),now) for tid in targets])
+        self.runtime.manager.audit(self.actor(),self.owner,'telegram.broadcast_queue',bid,
+                                   f"segment={segment}; targets={len(targets)}")
+        self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,f"✅ اعلان در صف قرار گرفت.\nID: {bid}\nگیرنده: {len(targets)} نفر",
+                      {'inline_keyboard':[[{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}]]})
+
+    def admin_broadcast_status(self,chat_id:int):
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,segment,status,total,sent,failed,created_at
+              FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 8""",(self.owner,))]
+        if not rows:
+            self.api.send(chat_id,'📊 هنوز اعلانی در صف ثبت نشده است.');return
+        lines=['📊 DARK BROADCAST STATUS']
+        for r in rows:
+            when=time.strftime('%m/%d %H:%M',time.localtime(float(r['created_at'])))
+            lines.append(f"• {when} · {r['segment']} · {r['status']} · {r['sent']}/{r['total']} · fail {r['failed']}")
+        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':[[{'text':'‹ اعلان‌ها','callback_data':'bcmenu'}]]})
+
     def admin_reports(self,chat_id:int):
         st=self.runtime.forum.status(self.owner)
         if st.get('rebind_required'):
@@ -1673,14 +1825,86 @@ class BotWorker(CustomerBotFeatures):
 
     def representatives(self,chat_id:int):
         with self.runtime.store.lock:
-            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT a.id,a.disabled,p.name,o.volume_credit_bytes,o.unlimited_credit
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT a.id,a.disabled,p.name,o.volume_credit_bytes,
+              o.unlimited_credit,o.max_clients,COALESCE(t.enabled,0) bot_enabled,COALESCE(t.bot_username,'') bot_username
               FROM api_admins a JOIN owner_profiles p ON p.id=a.id JOIN owners o ON o.id=a.id
+              LEFT JOIN telegram_bots t ON t.owner=a.id
               WHERE a.role='reseller' ORDER BY p.name,a.id""")]
         if not rows:self.api.send(chat_id,'هنوز نماینده‌ای ساخته نشده است.');return
-        lines=['🤝 نمایندگان']
-        for r in rows[:30]:
-            lines.append(f"• {r['name']} ({r['id']}) · {self.bytes(r['volume_credit_bytes'])} · Unlimited {r['unlimited_credit']} · {'غیرفعال' if r['disabled'] else 'فعال'}")
-        self.api.send(chat_id,'\n'.join(lines))
+        kb=[]
+        for r in rows[:40]:
+            with self.runtime.store.lock:
+                clients=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM clients WHERE owner=?",(r['id'],)).fetchone()[0])
+            state='●' if not r['disabled'] else '○'
+            bot='🤖' if r['bot_enabled'] else '—'
+            label=f"{state} {r['name']} · {clients}/{r['max_clients'] or '∞'} · {bot}"
+            kb.append([{'text':label[:62],'callback_data':'repctl:'+r['id']}])
+        self.api.send(chat_id,f"◆ DARK REPRESENTATIVES\n{len(rows)} نماینده ثبت‌شده",{'inline_keyboard':kb})
+
+    def representative_detail(self,chat_id:int,rid:str):
+        if self.owner_role()!='owner':raise PolicyError('Owner admin required')
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute("""SELECT a.id,a.disabled,p.name,p.allowed,p.prefix,p.max_client_ips,p.max_client_hwid,
+              o.max_clients,o.volume_credit_bytes,o.unlimited_credit
+              FROM api_admins a JOIN owner_profiles p ON p.id=a.id JOIN owners o ON o.id=a.id
+              WHERE a.id=? AND a.role='reseller'""",(rid,)).fetchone()
+        if not row:raise PolicyError('Representative not found')
+        profile=dict(row)
+        try:allowed=json.loads(profile.get('allowed') or '[]')
+        except Exception:allowed=[]
+        stats=self.runtime.store.owner_stats(self.actor(),rid)
+        bot=self.runtime.commerce.bot_row(rid) or {}
+        products=self.runtime.commerce.product_rows(rid)
+        active_products=sum(1 for x in products if x.get('active') and x.get('visible'))
+        rem=stats.get('volume_credit_remaining_bytes')
+        rem_text='—' if rem is None else self.bytes(int(rem))
+        unlimited=stats.get('unlimited_credit_remaining')
+        bot_state='● آنلاین/فعال' if bot.get('enabled') else ('○ تنظیم‌شده ولی خاموش' if bot.get('configured') else '— تنظیم نشده')
+        text=(f"◆ REP CONTROL\n{profile['name']} · {rid}\n"
+              f"وضعیت حساب: {'○ غیرفعال' if profile['disabled'] else '● فعال'}\n"
+              f"👥 Client: {stats['client_count']}/{profile['max_clients'] or '∞'}\n"
+              f"📦 اعتبار حجمی باقی‌مانده: {rem_text}\n"
+              f"♾ Unlimited باقی‌مانده: {unlimited if unlimited is not None else '—'}\n"
+              f"🌍 Inbound مجاز: {len(allowed)}\n"
+              f"🛡 سقف IP/HWID: {profile['max_client_ips']}/{profile['max_client_hwid']}\n"
+              f"🛒 محصولات فعال: {active_products}\n"
+              f"🤖 Bot: {bot_state}"
+              +(f" · @{bot.get('bot_username')}" if bot.get('bot_username') else ''))
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'👥 مشتری‌های نماینده','callback_data':'repclients:'+rid}],
+            [{'text':'‹ نمایندگان','callback_data':'repback'}]
+        ]})
+
+    def representative_clients(self,chat_id:int,rid:str):
+        if self.owner_role()!='owner':raise PolicyError('Owner admin required')
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT c.rowid,c.id,c.used_bytes,c.quota_bytes,c.expires_at
+              FROM clients c WHERE c.owner=? ORDER BY c.rowid DESC LIMIT 30""",(rid,))]
+        if not rows:
+            self.api.send(chat_id,'این نماینده هنوز Client ندارد.',
+                          {'inline_keyboard':[[{'text':'‹ نماینده','callback_data':'repctl:'+rid}]]});return
+        kb=[]
+        for r in rows:
+            state='●' if not int(r.get('expires_at') or 0) or int(r['expires_at'])>int(time.time()*1000) else '○'
+            kb.append([{'text':f"{state} {r['id']}"[:62],'callback_data':'repclient:'+str(r['rowid'])}])
+        kb.append([{'text':'‹ نماینده','callback_data':'repctl:'+rid}])
+        self.api.send(chat_id,f"👥 مشتری‌های {rid}\n{len(rows)} Client آخر",{'inline_keyboard':kb})
+
+    def representative_client_detail(self,chat_id:int,row_id:int):
+        if self.owner_role()!='owner':raise PolicyError('Owner admin required')
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute("SELECT id,owner FROM clients WHERE rowid=?",(int(row_id),)).fetchone()
+        if not row or row['owner']==self.owner:raise PolicyError('Representative client not found')
+        detail=self.runtime.manager.detail(self.actor(),str(row['id']),credentials=False)
+        c=detail.get('client') or {};quota=int(c.get('totalGB') or 0);used=int(detail.get('used_bytes') or 0)
+        expiry=int(c.get('expiryTime') or 0)
+        expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+        self.api.send(chat_id,
+            f"👤 REP CLIENT\n{row['id']}\nنماینده: {row['owner']}\n"
+            f"وضعیت: {'● فعال' if not detail.get('block_reasons') else '○ محدود'}\n"
+            f"مصرف: {self.bytes(used)} / {self.bytes(quota) if quota else 'نامحدود'}\n"
+            f"انقضا: {expiry_text}",
+            {'inline_keyboard':[[{'text':'‹ مشتری‌های نماینده','callback_data':'repclients:'+str(row['owner'])}]]})
 
     def create_representative_from_text(self,chat_id:int,user_id:int,text:str):
         if not self.is_admin(user_id) or self.owner_role()!='owner':
@@ -1719,6 +1943,17 @@ class TelegramBotRuntime:
               owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,client_id TEXT NOT NULL,
               event_key TEXT NOT NULL,sent_at REAL NOT NULL,
               PRIMARY KEY(owner,telegram_id,client_id,event_key))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS telegram_broadcasts(
+              id TEXT PRIMARY KEY,owner TEXT NOT NULL,created_by INTEGER NOT NULL,
+              segment TEXT NOT NULL,message TEXT NOT NULL,status TEXT NOT NULL,
+              total INTEGER NOT NULL DEFAULT 0,sent INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,
+              created_at REAL NOT NULL,started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS telegram_broadcast_recipients(
+              broadcast_id TEXT NOT NULL,telegram_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
+              error TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL,
+              PRIMARY KEY(broadcast_id,telegram_id))""")
+            db.execute("CREATE INDEX IF NOT EXISTS telegram_broadcast_owner ON telegram_broadcasts(owner,created_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS telegram_broadcast_pending ON telegram_broadcast_recipients(broadcast_id,status)")
 
     def start(self):
         if self.thread and self.thread.is_alive():return
@@ -1741,6 +1976,7 @@ class TelegramBotRuntime:
                 self.sync_workers()
                 activated=self.commerce.activate_first_connections(self.manager)
                 self.notify_activations(activated)
+                self.process_broadcasts()
                 now=time.time()
                 if now-self.last_notification_scan>=300:
                     self.notify_service_health();self.last_notification_scan=now
@@ -1748,6 +1984,52 @@ class TelegramBotRuntime:
                 pass
             self.wake_event.wait(3);self.wake_event.clear()
         self.sync_workers(stop_all=True)
+
+    def process_broadcasts(self):
+        with self.lock:workers=dict(self.workers)
+        for owner,worker in workers.items():
+            with self.store.lock:
+                job=self.store.db.execute("""SELECT * FROM telegram_broadcasts
+                  WHERE owner=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1""",(owner,)).fetchone()
+            if not job:continue
+            job=dict(job);bid=str(job['id']);now=time.time()
+            if job['status']=='queued':
+                with self.store.transaction() as db:
+                    db.execute("UPDATE telegram_broadcasts SET status='running',started_at=? WHERE id=? AND status='queued'",(now,bid))
+            with self.store.lock:
+                recipients=[dict(r) for r in self.store.db.execute("""SELECT telegram_id FROM telegram_broadcast_recipients
+                  WHERE broadcast_id=? AND status='pending' ORDER BY telegram_id LIMIT 15""",(bid,))]
+            for row in recipients:
+                tid=int(row['telegram_id'])
+                try:
+                    worker.api.send(tid,'◆ DARK NOTICE\n\n'+str(job['message']))
+                    state='sent';error=''
+                except Exception as ex:
+                    state='failed';error=str(ex)[:500]
+                with self.store.transaction() as db:
+                    db.execute("""UPDATE telegram_broadcast_recipients SET status=?,error=?,updated_at=?
+                      WHERE broadcast_id=? AND telegram_id=? AND status='pending'""",
+                      (state,error,time.time(),bid,tid))
+            with self.store.lock:
+                stats=self.store.db.execute("""SELECT
+                  SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)
+                  FROM telegram_broadcast_recipients WHERE broadcast_id=?""",(bid,)).fetchone()
+            sent=int(stats[0] or 0);failed=int(stats[1] or 0);pending=int(stats[2] or 0)
+            completed=pending==0
+            with self.store.transaction() as db:
+                db.execute("""UPDATE telegram_broadcasts SET sent=?,failed=?,status=?,completed_at=?
+                  WHERE id=?""",(sent,failed,'completed' if completed else 'running',
+                                 time.time() if completed else 0,bid))
+            if completed:
+                try:
+                    admin=int(worker.bot_config()['admin_telegram_id'])
+                    worker.api.send(admin,f"✅ اعلان DARK تکمیل شد.\nID: {bid}\nارسال موفق: {sent}\nناموفق: {failed}")
+                except Exception:
+                    pass
+                try:self.manager.audit(self.commerce.actor_for(owner),owner,'telegram.broadcast_complete',bid,f"sent={sent}; failed={failed}")
+                except Exception:pass
 
     def _notification_sent(self,owner:str,telegram_id:int,client_id:str,event_key:str)->bool:
         with self.store.lock:
@@ -1768,6 +2050,7 @@ class TelegramBotRuntime:
             try:rows=self.manager.list(self.commerce.actor_for(owner))
             except Exception:continue
             for row in rows:
+                if row.get('owner')!=owner:continue
                 client=row.get('client') or {};telegram_id=int(client.get('tgId') or 0)
                 client_id=str(row.get('email') or client.get('email') or '')
                 if not telegram_id or not client_id:continue
