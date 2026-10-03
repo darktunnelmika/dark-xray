@@ -159,3 +159,18 @@ test('Bot V6 Stage 10 startup and manual repair share one Telegram surface contr
   assert.match(repair,/configure_telegram_surface/);
   assert.match(repair,/self\.runtime\.wake\(\)/);
 });
+
+test('Bot V6 Final Closeout standardizes owner and customer navigation',()=>{
+  for(const token of ["data=='ahome'","callback_data':'ahome'","callback_data':'uhome'","callback_data':'sthome'","callback_data':'rmmarket'"])
+    assert.ok(runtime.includes(token)||customer.includes(token),token);
+  assert.match(runtime,/⌂ داشبورد ربات/);
+  assert.match(customer,/⌂ منوی اصلی/);
+  assert.match(customer,/‹ وضعیت سرویس/);
+  assert.match(customer,/‹ پشتیبانی/);
+});
+
+test('Bot V6 Final Closeout preserves compact primary menus',()=>{
+  assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
+  assert.match(runtime,/\['📈 رشد و فروش','🎫 پشتیبانی'\]/);
+  assert.match(runtime,/'text':'فروشگاه'/);
+});

@@ -449,6 +449,8 @@ class BotWorker(CustomerBotFeatures):
                 self.api.send(chat_id,text,{'inline_keyboard':[[{'text':'🪙 رفتن به درگاه پرداخت','url':result['checkout_url']}]]})
             else:self.api.send(chat_id,'این درگاه هنوز Checkout قابل استفاده ندارد؛ روش دیگری را انتخاب کن.')
             return
+        if data=='sthome' and self.is_admin(user_id):
+            self.admin_store(chat_id);return
         if data=='stnew' and self.is_admin(user_id):
             self.start_simple_plan_create(chat_id,user_id);return
         if data=='stlist' and self.is_admin(user_id):
@@ -543,6 +545,8 @@ class BotWorker(CustomerBotFeatures):
             self.representative_clients(chat_id,data.split(':',1)[1]);return
         if data.startswith('repclient:') and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representative_client_detail(chat_id,int(data.split(':',1)[1]));return
+        if data=='ahome' and self.is_admin(user_id):
+            self.send_home(chat_id,user_id);return
         if data=='growth' and self.is_admin(user_id):
             self.admin_growth_center(chat_id);return
         if data.startswith('growtpl:') and self.is_admin(user_id):
@@ -799,7 +803,8 @@ class BotWorker(CustomerBotFeatures):
              {'text':'🎫 پشتیبانی','callback_data':'ops_support'}],
             [{'text':'🔌 منتظر اتصال','callback_data':'ordlist:waiting'},
              {'text':'⚠️ سفارش‌های مشکل‌دار','callback_data':'ordlist:failed'}],
-            [{'text':'📦 سرویس‌های حساس','callback_data':'ops_attention'}]
+            [{'text':'📦 سرویس‌های حساس','callback_data':'ops_attention'}],
+            [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
         ]})
 
     def admin_attention_services(self,chat_id:int):
@@ -809,12 +814,14 @@ class BotWorker(CustomerBotFeatures):
         for email,remaining,total in attention['low']:
             pct=int(remaining*100/max(1,total));items.setdefault(email,[]).append(f'📉 {pct}%')
         if not items:
-            self.api.send(chat_id,'📦 سرویس حساس نداریم؛ کم‌حجم یا نزدیک انقضا نیست.');return
+            self.api.send(chat_id,'📦 سرویس حساس نداریم؛ کم‌حجم یا نزدیک انقضا نیست.',
+                          {'inline_keyboard':[[{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]]});return
         kb=[]
         with self.runtime.store.lock:
             for email,flags in list(items.items())[:30]:
                 row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(email,self.owner)).fetchone()
                 if row:kb.append([{'text':(' · '.join(flags)+' · '+email)[:62],'callback_data':'cl:'+str(row['rowid'])}])
+        kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,f"📦 DARK SERVICE WATCH\n{len(items)} سرویس نیازمند توجه",{'inline_keyboard':kb})
 
 
@@ -832,7 +839,8 @@ class BotWorker(CustomerBotFeatures):
               WHERE owner=? AND status='provisioned_waiting_activation'""",(self.owner,)).fetchone()[0])
         lines += [f"✅ فعال: {active}",f"⛔ محدود/غیرفعال: {disabled}",f"⌛ منقضی: {expired}",
                   f"🔌 منتظر اولین اتصال: {waiting}",'','برای جستجوی سرویس: /user USERNAME']
-        self.api.send(chat_id,'\n'.join(lines))
+        self.api.send(chat_id,'\n'.join(lines),
+                      {'inline_keyboard':[[{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]]})
 
     def inbound_catalog(self)->list[dict[str,Any]]:
         profile=self.runtime.manager.profile(self.owner)
@@ -867,7 +875,8 @@ class BotWorker(CustomerBotFeatures):
                 [{'text':'⚡ ساخت سریع محصول','callback_data':'stnew'},
                  {'text':'📦 محصولات','callback_data':'stlist'}],
                 [{'text':'👁 پیش‌نمایش فروشگاه','callback_data':'stshoppreview'}],
-                [{'text':'⚙️ ساخت پیشرفته','callback_data':'stadvanced'}]
+                [{'text':'⚙️ ساخت پیشرفته','callback_data':'stadvanced'}],
+                [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
             ]})
 
     def admin_store_products(self,chat_id:int):
@@ -882,6 +891,8 @@ class BotWorker(CustomerBotFeatures):
             state='🟢' if r['active'] and r['visible'] else ('🟡' if r['active'] else '🔴')
             kb.append([{'text':f"{state} {r['name']} · {r.get('category') or 'General'}"[:62],
                         'callback_data':'stprod:'+str(r['row_id'])}])
+        kb.append([{'text':'‹ مدیریت فروشگاه','callback_data':'sthome'},
+                   {'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,'📦 محصولات فروشگاه · یک محصول را باز کن:',{'inline_keyboard':kb})
 
     def admin_product_row(self,row_id:int)->dict[str,Any]:
@@ -923,7 +934,9 @@ class BotWorker(CustomerBotFeatures):
              {'text':('🙈 مخفی' if p['visible'] else '👁 نمایش'),'callback_data':f"sttoggle:{row_id}:visible"}],
             [{'text':('🔁 تمدید ON' if p.get('renewal_enabled') else '🔁 تمدید OFF'),'callback_data':'strenew:'+str(row_id)},
              {'text':('+GB ON' if p.get('add_volume_enabled') else '+GB OFF'),'callback_data':'staddvol:'+str(row_id)}],
-            [{'text':'➕ Price Variant','callback_data':'stpriceadd:'+str(row_id)}]
+            [{'text':'➕ Price Variant','callback_data':'stpriceadd:'+str(row_id)}],
+            [{'text':'‹ محصولات','callback_data':'stlist'},
+             {'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
         ]
         for price in prices[:20]:
             kb.append([{'text':f"{'🟢' if price['active'] else '🔴'} {price['label']} · {amount(price['price_minor'],price['currency'])}"[:62],
@@ -1443,7 +1456,8 @@ class BotWorker(CustomerBotFeatures):
             [{'text':f"⌛ یادآوری تمدید · {g['expiring']}",'callback_data':'growtpl:expiring'},
              {'text':f"📉 یادآوری حجم · {g['low']}",'callback_data':'growtpl:low'}],
             [{'text':'📣 Broadcast Center','callback_data':'bcmenu'},
-             {'text':'📊 گزارش‌های سیستم','callback_data':'growthreports'}]
+             {'text':'📊 گزارش‌های سیستم','callback_data':'growthreports'}],
+            [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
         ]})
 
     def growth_campaign_preview(self,chat_id:int,user_id:int,segment:str):
@@ -1530,7 +1544,8 @@ class BotWorker(CustomerBotFeatures):
              {'text':f"📉 کم‌حجم · {counts['low']}",'callback_data':'bcseg:low'}],
             [{'text':f"🧾 پرداخت‌نشده · {counts['pending']}",'callback_data':'bcseg:pending'},
              {'text':f"♻️ منقضی · {counts['expired']}",'callback_data':'bcseg:expired'}],
-            [{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}]
+            [{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}],
+            [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
         ]})
 
     def start_broadcast(self,chat_id:int,user_id:int,segment:str):
@@ -1593,7 +1608,10 @@ class BotWorker(CustomerBotFeatures):
         for r in rows:
             when=time.strftime('%m/%d %H:%M',time.localtime(float(r['created_at'])))
             lines.append(f"• {when} · {r['kind']} · {r['segment']} · {r['status']} · {r['sent']}/{r['total']} · fail {r['failed']} · skip {r['skipped']}")
-        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':[[{'text':'‹ اعلان‌ها','callback_data':'bcmenu'}]]})
+        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':[[
+            {'text':'‹ اعلان‌ها','callback_data':'bcmenu'},
+            {'text':'⌂ داشبورد ربات','callback_data':'ahome'}
+        ]]})
 
     def admin_reports(self,chat_id:int):
         st=self.runtime.forum.status(self.owner)
@@ -1601,10 +1619,12 @@ class BotWorker(CustomerBotFeatures):
             state='♻️ نیازمند اتصال مجدد بعد از Restore'
         else:state='✅ متصل' if st.get('configured') else '⛔ متصل نیست'
         topics=len(st.get('topics') or [])
+        kb=[]
+        if st.get('rebind_required'):kb.append([{'text':'♻️ اتصال مجدد بکاپ','callback_data':'forumrebind'}])
+        kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,f"📊 مرکز گزارش DARK\nوضعیت: {state}\nTopicها: {topics}/8\n"
                       "فروش · پرداخت · سرویس · خطا · سیستم · بکاپ · امنیت · گزارش روزانه",
-                      {'inline_keyboard':[[{'text':'♻️ اتصال مجدد بکاپ','callback_data':'forumrebind'}]]}
-                      if st.get('rebind_required') else None)
+                      {'inline_keyboard':kb})
 
     def admin_backup(self,chat_id:int):
         with self.runtime.store.lock:
@@ -1614,7 +1634,8 @@ class BotWorker(CustomerBotFeatures):
         self.api.send(chat_id,"💾 DARK Full Backup\n"
                       "بکاپ ربات جدا نیست؛ همان Full Backup پنل شامل Users/Products/Orders/Card/Forum/Topics/Representatives است.\n"
                       "بعد Restore، Bot Token عمداً حذف می‌شود و Token جدید + Rebind لازم است.\n"
-                      f"آخرین وضعیت: {last}")
+                      f"آخرین وضعیت: {last}",
+                      {'inline_keyboard':[[{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]]})
 
     def mini_app_setup(self,chat_id:int):
         ops=getattr(self.runtime,'ops',None)
@@ -1682,7 +1703,8 @@ class BotWorker(CustomerBotFeatures):
         self.api.send(chat_id,text,{'inline_keyboard':[
             [{'text':'♻️ Repair Telegram Surface','callback_data':'botrepair'}],
             [{'text':'📱 Mini App Setup','callback_data':'miniappsetup'},
-             {'text':'🔄 Refresh Health','callback_data':'bothealth'}]
+             {'text':'🔄 Refresh Health','callback_data':'bothealth'}],
+            [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
         ]})
 
     def repair_telegram_surface(self,chat_id:int,user_id:int):
@@ -1710,7 +1732,8 @@ class BotWorker(CustomerBotFeatures):
                       {'inline_keyboard':[
                           [{'text':'📱 فعال‌سازی Mini App','callback_data':'miniappsetup'}],
                           [{'text':'🩺 سلامت و Repair ربات','callback_data':'bothealth'}],
-                          [{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}]
+                          [{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}],
+                          [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
                       ]})
 
     def client_row(self,row_id:int)->str:
@@ -2022,7 +2045,8 @@ class BotWorker(CustomerBotFeatures):
                 ORDER BY o.created_at DESC LIMIT 20""",tuple(params))]
         tabs=[[{'text':'همه','callback_data':'ordlist:all'},{'text':'Pending','callback_data':'ordlist:pending'}],
               [{'text':'اولین اتصال','callback_data':'ordlist:waiting'},{'text':'تکمیل','callback_data':'ordlist:done'}],
-              [{'text':'⚠️ مشکل‌دار','callback_data':'ordlist:failed'}]]
+              [{'text':'⚠️ مشکل‌دار','callback_data':'ordlist:failed'}],
+              [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]]
         if not rows:
             self.api.send(chat_id,'🧾 DARK ORDERS\nدر این فیلتر سفارشی وجود ندارد.',{'inline_keyboard':tabs});return
         states={'pending':'⏳','awaiting_payment':'💳','payment_review':'👁','paid':'⚙️',
@@ -2047,7 +2071,8 @@ class BotWorker(CustomerBotFeatures):
               f"فعال‌سازی: {r.get('activation_mode') or '—'} · تحویل: {r.get('delivery_mode') or '—'}\n"
               f"IP/HWID: {r.get('ip_limit') or 0}/{r.get('hwid_limit') or 0}\nزمان: {created}")
         if r.get('fulfillment_error'):text+='\n⚠️ '+str(r['fulfillment_error'])[:600]
-        kb=[[{'text':'‹ سفارش‌ها','callback_data':'ordlist:all'}]]
+        kb=[[{'text':'‹ سفارش‌ها','callback_data':'ordlist:all'},
+             {'text':'⌂ داشبورد ربات','callback_data':'ahome'}]]
         if r.get('client_id'):
             with self.runtime.store.lock:
                 client=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(self.owner,r['client_id'])).fetchone()
@@ -2081,7 +2106,8 @@ class BotWorker(CustomerBotFeatures):
                        {'text':'❌ رد','callback_data':f"opspayno:{row['kind']}:{row['row_id']}"}])
         kb.append([{'text':'💳 تنظیم کارت دستی','callback_data':'paycfg'},
                    {'text':'📱 Payment Center','web_app':{'url':ops.mini_app_url(self.owner)}}])
-        kb.append([{'text':'‹ Action Center','callback_data':'ops_action'}])
+        kb.append([{'text':'‹ Action Center','callback_data':'ops_action'},
+                   {'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def admin_gateways(self,chat_id:int):
@@ -2164,6 +2190,7 @@ class BotWorker(CustomerBotFeatures):
             bot='🤖' if r['bot_enabled'] else '—'
             label=f"{state} {r['name']} · {clients}/{r['max_clients'] or '∞'} · {bot}"
             kb.append([{'text':label[:62],'callback_data':'repctl:'+r['id']}])
+        kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,f"◆ DARK REPRESENTATIVES\n{len(rows)} نماینده ثبت‌شده",{'inline_keyboard':kb})
 
     def representative_detail(self,chat_id:int,rid:str):
@@ -2197,7 +2224,8 @@ class BotWorker(CustomerBotFeatures):
               +(f" · @{bot.get('bot_username')}" if bot.get('bot_username') else ''))
         self.api.send(chat_id,text,{'inline_keyboard':[
             [{'text':'👥 مشتری‌های نماینده','callback_data':'repclients:'+rid}],
-            [{'text':'‹ نمایندگان','callback_data':'repback'}]
+            [{'text':'‹ نمایندگان','callback_data':'repback'},
+             {'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
         ]})
 
     def representative_clients(self,chat_id:int,rid:str):

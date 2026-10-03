@@ -925,6 +925,76 @@ def test_bot_v6_health_and_surface_repair_reapply_safe_telegram_contract(env):
         worker.api.close()
 
 
+def test_bot_v6_final_closeout_navigation_owner_rep_customer(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    customer_id=998301
+    create(c,email='closeout-v6',extra={
+        'tgId':customer_id,'totalGB':5*1024**3,
+        'expiryTime':int(time.time()*1000)+7*86400*1000,
+    })
+    center=c.app.state.telegram_runtime.customer
+    ticket=center.create_ticket('dark',customer_id,'closeout','Closeout support')
+    center.add_ticket_message('dark',ticket['id'],'customer',customer_id,text='navigation check')
+    worker,sent=_bot_worker(c,992117)
+
+    def callbacks(markup):
+        return [str(b.get('callback_data') or '') for row in (markup or {}).get('inline_keyboard',[]) for b in row]
+
+    try:
+        worker.admin_store(992117)
+        worker.admin_growth_center(992117)
+        worker.admin_settings(992117)
+        worker.admin_support(992117)
+        admin_screens=[x for x in sent if any(k in x[1] for k in (
+            'DARK STORE / V6','DARK GROWTH CENTER','تنظیمات DARK BOT','DARK SUPPORT CENTER'))]
+        assert len(admin_screens)>=4
+        for _,_,markup in admin_screens[-4:]:
+            assert 'ahome' in callbacks(markup)
+
+        with store.lock:
+            row_id=int(store.db.execute("SELECT rowid FROM clients WHERE owner='dark' AND id='closeout-v6'").fetchone()[0])
+        worker.customer_service_detail(customer_id,customer_id,row_id)
+        worker.customer_service_doctor(customer_id,customer_id,row_id)
+        worker.customer_notification_preferences(customer_id,customer_id)
+        worker.customer_ticket_detail(customer_id,customer_id,int(ticket['row_id']))
+        customer_screens=[x for x in sent if x[0]==customer_id and any(k in x[1] for k in (
+            'DARK SERVICE\n','DARK SERVICE DOCTOR','DARK NOTIFICATION CONTROL','Closeout support'))]
+        assert len(customer_screens)>=4
+        for _,_,markup in customer_screens[-4:]:
+            assert 'uhome' in callbacks(markup)
+
+        owner_labels=[x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row]
+        assert '📈 رشد و فروش' in owner_labels
+        assert '📊 گزارش‌ها' not in owner_labels
+        assert '◈ DARK Mini App' not in owner_labels
+    finally:
+        worker.api.close()
+
+    assert c.put('/api/owners/closeoutrep',json={
+        'name':'Closeout Rep','allowed':[inbound_id],'volume_credit_bytes':50*1024**3,
+        'unlimited_credit':2,'max_clients':20}).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'closeoutrep','password':'CloseoutRepPass88','role':'reseller'}).status_code==200
+    rep_token,principal=auth.login('closeoutrep','CloseoutRepPass88','','127.0.0.9',3600,'closeout-rep')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',rep_token);seller.headers['X-Dark-CSRF']=principal.csrf
+        bot_token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+        assert seller.put('/api/telegram/settings',json={
+            'enabled':False,'bot_token':bot_token,'admin_telegram_id':998399}).status_code==200
+        rep=BotWorker(seller.app.state.telegram_runtime,'closeoutrep',bot_token,'closeout-rep-bot')
+        rep_sent=[]
+        rep.api.send=lambda chat_id,text,reply_markup=None: rep_sent.append((chat_id,text,reply_markup))
+        try:
+            labels=[x['text'] for row in rep.main_keyboard(True)['keyboard'] for x in row]
+            assert '➕ ساخت نماینده' not in labels and '🤝 نمایندگان' not in labels
+            assert '📈 رشد و فروش' in labels
+            rep.admin_store(998399)
+            assert 'ahome' in callbacks(rep_sent[-1][2])
+        finally:
+            rep.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)

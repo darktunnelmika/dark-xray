@@ -231,7 +231,8 @@ class CustomerBotFeatures:
         kb=[[{'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(row_id)},
              {'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(row_id)}],
             [{'text':'🛟 هنوز مشکل دارم','callback_data':'usvchelp:'+str(row_id)}],
-            [{'text':'‹ وضعیت سرویس','callback_data':'usvc:'+str(row_id)}]]
+            [{'text':'‹ وضعیت سرویس','callback_data':'usvc:'+str(row_id)},
+             {'text':'⌂ منوی اصلی','callback_data':'uhome'}]]
         self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def customer_service_help(self,chat_id:int,user_id:int,row_id:int,username:str):
@@ -243,7 +244,11 @@ class CustomerBotFeatures:
               ORDER BY updated_at DESC LIMIT 1""",(self.owner,int(user_id),subject)).fetchone()
         if existing:
             self.api.send(chat_id,'🎫 برای این سرویس یک تیکت باز وجود دارد؛ همان گفت‌وگو را ادامه بده.',
-                          {'inline_keyboard':[[{'text':'بازکردن تیکت','callback_data':'supt:'+str(existing['row_id'])}]]});return
+                          {'inline_keyboard':[
+                              [{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(existing['row_id'])}],
+                              [{'text':'‹ وضعیت سرویس','callback_data':'usvc:'+str(row_id)},
+                               {'text':'⌂ منوی اصلی','callback_data':'uhome'}]
+                          ]});return
         ticket=self.runtime.customer.create_ticket(self.owner,user_id,username,subject)
         snapshot=(f"Service Doctor Snapshot\n"
                   f"Service: {d['email']}\nState: {d['state']}\n"
@@ -254,8 +259,11 @@ class CustomerBotFeatures:
         self.notify_admin(f"🩺 Smart Ticket\n{d['email']}\nکاربر: {user_id}\n{d['state']}",
                           {'inline_keyboard':[[{'text':'باز کردن تیکت','callback_data':'asupt:'+str(ticket['row_id'])}]]})
         self.api.send(chat_id,'✅ تیکت هوشمند با Snapshot همین سرویس برای پشتیبانی ساخته شد.',
-                      {'inline_keyboard':[[{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(ticket['row_id'])},
-                                           {'text':'📦 سرویس من','callback_data':'usvc:'+str(row_id)}]]})
+                      {'inline_keyboard':[
+                          [{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(ticket['row_id'])},
+                           {'text':'📦 سرویس من','callback_data':'usvc:'+str(row_id)}],
+                          [{'text':'⌂ منوی اصلی','callback_data':'uhome'}]
+                      ]})
 
     def customer_connection(self,chat_id:int,user_id:int,row_id:int):
         email,detail=self._customer_client_row(user_id,row_id)
@@ -284,6 +292,7 @@ class CustomerBotFeatures:
                 dbrow=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(r['email'],self.owner)).fetchone()
                 if dbrow:buttons.append([{'text':'🔄 '+r['email'],'callback_data':'usvcrenew:'+str(dbrow['rowid'])}])
         if not buttons:self.api.send(chat_id,'تمدید برای سرویس‌های فعلی فعال نیست.');return
+        buttons.append([{'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         self.api.send(chat_id,'↻ DARK RENEW\nسرویسی که می‌خواهی تمدید شود را انتخاب کن:',{'inline_keyboard':buttons})
 
     def customer_renew_options(self,chat_id:int,user_id:int,row_id:int):
@@ -295,6 +304,8 @@ class CustomerBotFeatures:
             buttons.append([{'text':f"{p['label']} · {money(p['price_minor'],p['currency'])}"[:62],
                              'callback_data':f"urnp:{row_id}:{p['row_id']}"}])
         if not buttons:self.api.send(chat_id,'پلن تمدید فعالی وجود ندارد.');return
+        buttons.append([{'text':'‹ وضعیت سرویس','callback_data':'usvc:'+str(row_id)},
+                        {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         self.api.send(chat_id,f"↻ DARK RENEW\n{email}\nپلن تمدید را انتخاب کن:",{'inline_keyboard':buttons})
 
     def customer_referral_menu(self,chat_id:int,user_id:int):
@@ -306,7 +317,10 @@ class CustomerBotFeatures:
             f"دعوت‌شده‌ها: {stats['invited']}\nخرید موفق: {stats['qualified']}\n"
             f"پاداش دریافت‌شده: {money(stats['earned'])}\n"
             f"پاداش هر اولین خرید موفق: {money(stats['reward_minor'])}",
-            {'inline_keyboard':[[{'text':'🔄 بروزرسانی','callback_data':'uref'}]]})
+            {'inline_keyboard':[
+                [{'text':'🔄 بروزرسانی','callback_data':'uref'}],
+                [{'text':'⌂ منوی اصلی','callback_data':'uhome'}]
+            ]})
 
     def customer_representative_marketplace(self,chat_id:int,user_id:int):
         if self.owner_role()!='owner':
@@ -318,6 +332,7 @@ class CustomerBotFeatures:
             plans=self.runtime.marketplace.plan_rows(self.owner,public=True,renewal=True)
             kb=[[{'text':f"🔄 {p['name']} · {money(p['price_minor'],p['currency'])}"[:62],
                   'callback_data':'rmrenew:'+str(p['row_id'])}] for p in plans]
+            kb.append([{'text':'⌂ منوی اصلی','callback_data':'uhome'}])
             self.api.send(chat_id,
                 f"◆ DARK REPRESENTATIVE\nشناسه: {sub['representative_id']}\nوضعیت: {status}\nانقضا: {expires}\n"
                 f"تمدید فقط از پلن‌های منتشرشده توسط Owner انجام می‌شود.",
@@ -326,6 +341,7 @@ class CustomerBotFeatures:
         if not plans:self.api.send(chat_id,'فعلاً پلن نمایندگی برای فروش منتشر نشده است.');return
         kb=[[{'text':f"🏪 {p['name']} · {money(p['price_minor'],p['currency'])}"[:62],
               'callback_data':'rmplan:'+str(p['row_id'])}] for p in plans]
+        kb.append([{'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         self.api.send(chat_id,'◆ DARK REPRESENTATIVE MARKET\nپلن نمایندگی را انتخاب کن؛ مشخصات و اعتبار هر پلن قبل از پرداخت نمایش داده می‌شود.',
                       {'inline_keyboard':kb})
 
@@ -341,7 +357,11 @@ class CustomerBotFeatures:
               f"Inbounds: {inbounds}\nBot مستقل: {'✅' if plan['bot_allowed'] else '⛔'}")
         action='rmrenewbuy:' if renewal else 'rmbuy:'
         label='✅ انتخاب پلن تمدید' if renewal else '✅ خرید این پلن'
-        self.api.send(chat_id,text,{'inline_keyboard':[[{'text':label,'callback_data':action+str(row_id)}]]})
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':label,'callback_data':action+str(row_id)}],
+            [{'text':'‹ پنل نمایندگی','callback_data':'rmmarket'},
+             {'text':'⌂ منوی اصلی','callback_data':'uhome'}]
+        ]})
 
     def customer_representative_checkout(self,chat_id:int,user_id:int,username:str,row_id:int,kind:str):
         order=self.runtime.marketplace.create_order(self.owner,user_id,username,row_id,kind)
@@ -350,6 +370,8 @@ class CustomerBotFeatures:
         kb=[]
         if enough:kb.append([{'text':'✅ پرداخت از کیف پول','callback_data':'rmpay:'+order['id']}])
         kb.append([{'text':'💰 شارژ کیف پول','callback_data':'wmenu'}])
+        kb.append([{'text':'‹ پنل نمایندگی','callback_data':'rmmarket'},
+                   {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         title='خرید نمایندگی' if kind=='purchase' else 'تمدید نمایندگی'
         self.api.send(chat_id,f"🏪 {title}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
                       f"موجودی کیف پول: {money(wallet['balance_minor'])}\n"
@@ -400,7 +422,8 @@ class CustomerBotFeatures:
                   'callback_data':'nptoggle:service'}],
                 [{'text':('عدم دریافت پیام‌های فروش' if p['marketing_enabled'] else 'دریافت پیام‌های فروش'),
                   'callback_data':'nptoggle:marketing'}],
-                [{'text':'‹ پشتیبانی','callback_data':'suplist'}]
+                [{'text':'‹ پشتیبانی','callback_data':'suplist'},
+                 {'text':'⌂ منوی اصلی','callback_data':'uhome'}]
             ]})
 
     def toggle_customer_notification(self,chat_id:int,user_id:int,key:str):
@@ -423,9 +446,11 @@ class CustomerBotFeatures:
             lines.append(f"\n{who}: {body[:700]}")
         kb=[]
         if t['status']!='closed':
-            kb=[[{'text':'✍️ پاسخ','callback_data':'supreply:'+str(row_id)},
-                 {'text':'✅ بستن تیکت','callback_data':'supclose:'+str(row_id)}]]
-        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb} if kb else None)
+            kb.append([{'text':'✍️ پاسخ','callback_data':'supreply:'+str(row_id)},
+                       {'text':'✅ بستن تیکت','callback_data':'supclose:'+str(row_id)}])
+        kb.append([{'text':'‹ پشتیبانی','callback_data':'suplist'},
+                   {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
+        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb})
 
     def admin_support(self,chat_id:int):
         rows=self.runtime.customer.open_tickets(self.owner,50)
@@ -442,6 +467,7 @@ class CustomerBotFeatures:
             age=max(0,int((time.time()-float(t.get('updated_at') or 0))/60))
             kb.append([{'text':f"{icon} {t['subject']} · {age}m"[:62],
                         'callback_data':'asupt:'+str(t['row_id'])}])
+        kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,
             f"◇ DARK SUPPORT CENTER\n🟠 منتظر پاسخ: {opened} · 🔵 پاسخ‌داده‌شده: {answered}",
             {'inline_keyboard':kb})
@@ -466,6 +492,8 @@ class CustomerBotFeatures:
             ]
         else:
             kb=[[{'text':'👤 Customer 360','callback_data':'asupcrm:'+str(row_id)}]]
+        kb.append([{'text':'‹ پشتیبانی','callback_data':'ops_support'},
+                   {'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb})
 
     def admin_support_customer(self,chat_id:int,telegram_id:int):
@@ -511,6 +539,8 @@ class CustomerBotFeatures:
             self.send_home(chat_id,user_id);return True
         if data=='svcmy':
             self.customer_services(chat_id,user_id);return True
+        if data=='rmmarket':
+            self.customer_representative_marketplace(chat_id,user_id);return True
         if data=='nprefs':
             self.customer_notification_preferences(chat_id,user_id);return True
         if data.startswith('nptoggle:'):
