@@ -87,3 +87,10 @@ test('Bot V6 Stage 5 connects purchase, first-connect, alerts and renewal lifecy
   assert.match(runtime,/usvcrenew:/);
   assert.match(runtime,/DARK SERVICE ALERT/);
 });
+
+test('Bot V6 Stage 6 exposes Support Center V2 quick replies and CRM bridge',()=>{
+  for(const token of ['DARK SUPPORT CENTER','SUPPORT TICKET','asupquick:','asupcrm:','Customer 360','telegram.support_quick'])
+    assert.ok(customer.includes(token)||runtime.includes(token),token);
+  assert.match(customer,/حل شد \+ بستن/);
+  assert.match(customer,/Subscription را در برنامه بروزرسانی کن/);
+});
