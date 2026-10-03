@@ -23,8 +23,8 @@ test('Customer Mini App is wired to Telegram signed initData and customer-only A
  assert.doesNotMatch(js,/\/api\/telegram\/operations\//);
 });
 
-test('Customer Mini App covers purchase services wallet support referral and representative purchase',()=>{
- for(const token of ['خرید اشتراک','سرویس‌های من','کیف پول','پشتیبانی','دعوت دوستان','پنل نمایندگی'])
+test('Customer Mini App covers purchase services wallet support and representative purchase without referral UI',()=>{
+ for(const token of ['خرید اشتراک','سرویس‌های من','کیف پول','پشتیبانی','پنل نمایندگی'])
    assert.ok(js.includes(token)||html.includes(token),token);
  assert.match(js,/data-checkout-wallet/);
  assert.match(js,/data-checkout-crypto/);
@@ -32,6 +32,10 @@ test('Customer Mini App covers purchase services wallet support referral and rep
  assert.match(js,/repCheckout/);
  assert.match(js,/openTelegramLink/);
  assert.match(js,/ارسال رسید در ربات/);
+ assert.doesNotMatch(js,/دعوت دوستان|زیرمجموعه|ref\.url|ref\.invited|ref\.earned/);
+ assert.match(js,/ACCOUNT OVERVIEW/);
+ assert.match(css,/\.cu-command/);
+ assert.match(css,/backdrop-filter:blur\(22px\)/);
 });
 
 test('Customer Mini App is mobile first and uses persistent five-tab navigation',()=>{
