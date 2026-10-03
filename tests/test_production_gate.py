@@ -70,3 +70,14 @@ def test_real_smoke_report_uses_repository_version():
     assert "report={'version':VERSION" in source
     assert 'DARK-XRAY-REAL-E2E-{VERSION}' in source
     assert "'version':'0.6.0'" not in source
+
+
+def test_vps_verify_guard_probe_uses_service_identity_when_root():
+    source=(ROOT/'tools/vps-verify.py').read_text(encoding='utf-8')
+    assert 'def guard_status_as_service' in source
+    assert "pwd.getpwnam('darkxray')" in source
+    assert 'os.setgroups([])' in source
+    assert 'os.setgid(account.pw_gid)' in source
+    assert 'os.setuid(account.pw_uid)' in source
+    assert 'guard=guard_status_as_service(cfg)' in source
+    assert 'try:guard=BrokerClient(cfg.guard_socket).status()' not in source
