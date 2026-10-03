@@ -124,3 +124,21 @@ test('Bot V6 Stage 8 doctor stays account scoped and does not probe tunnels',()=
   assert.match(block,/_customer_client_row/);
   assert.doesNotMatch(block,/\/api\/nodes|tunnel|restart|probe/);
 });
+
+test('Bot V6 Stage 9 exposes notification preferences and consent-aware campaigns',()=>{
+  for(const token of ['DARK NOTIFICATION CONTROL','nprefs','nptoggle:service','nptoggle:marketing','telegram_customer_preferences'])
+    assert.ok(runtime.includes(token)||customer.includes(token),token);
+  assert.match(runtime,/marketing_enabled/);
+  assert.match(runtime,/service_alerts_enabled/);
+  assert.match(runtime,/marketing_opt_out/);
+  assert.match(runtime,/kind TEXT NOT NULL DEFAULT 'operational'/);
+  assert.match(runtime,/skipped INTEGER NOT NULL DEFAULT 0/);
+});
+
+test('Bot V6 Stage 9 keeps essential messaging separate from optional alerts and marketing',()=>{
+  assert.match(runtime,/notification_preferences\(owner,telegram_id\)\['service_alerts_enabled'\]/);
+  assert.match(runtime,/growth_campaign_preview[\s\S]*marketing=True/);
+  assert.match(runtime,/\'kind\':\'marketing\'/);
+  assert.match(runtime,/\'kind\':\'operational\'/);
+  assert.match(customer,/پیام‌های ضروری خرید، پرداخت، اولین اتصال و پشتیبانی همیشه ارسال می‌شوند/);
+});

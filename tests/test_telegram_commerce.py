@@ -822,6 +822,71 @@ def test_bot_v6_service_doctor_and_smart_ticket_dedup(env):
         worker.api.close()
 
 
+def test_bot_v6_notification_preferences_gate_marketing_and_service_alerts(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(
+        inbound_id,price_id='prefs-plan',price_minor=100000,volume_bytes=5*1024**3)).status_code==200
+    order=c.app.state.telegram_commerce.create_order('dark',998201,'prefsuser','turbo','prefs-plan')
+    with store.transaction() as db:
+        db.execute("UPDATE commerce_orders SET created_at=? WHERE id=?",(time.time()-4000,order['id']))
+    now_ms=int(time.time()*1000)
+    create(c,email='prefs-service',extra={
+        'tgId':998201,'totalGB':5*1024**3,'expiryTime':now_ms+48*3600*1000,
+    })
+    worker,sent=_bot_worker(c,992115)
+    runtime=c.app.state.telegram_runtime
+    previous=runtime.workers.get('dark')
+    runtime.workers['dark']=worker
+    try:
+        defaults=runtime.notification_preferences('dark',998201)
+        assert defaults['marketing_enabled'] is True and defaults['service_alerts_enabled'] is True
+
+        worker.customer_notification_preferences(998201,998201)
+        assert any(chat==998201 and 'DARK NOTIFICATION CONTROL' in text for chat,text,_ in sent)
+
+        worker.growth_campaign_preview(992115,992115,'pending')
+        assert worker.sessions[992115]=='broadcast_review'
+        assert worker.session_data[992115]['kind']=='marketing'
+        worker.queue_broadcast(992115,992115)
+        with store.lock:
+            job=store.db.execute("""SELECT id,kind,total,status FROM telegram_broadcasts
+              WHERE owner='dark' ORDER BY created_at DESC LIMIT 1""").fetchone()
+        assert tuple(job)[1:]==('marketing',1,'queued')
+
+        runtime.set_notification_preference('dark',998201,'marketing_enabled',False)
+        runtime.process_broadcasts()
+        notices=[x for x in sent if x[0]==998201 and 'DARK NOTICE' in x[1]]
+        assert notices==[]
+        with store.lock:
+            done=store.db.execute("SELECT status,sent,failed,skipped FROM telegram_broadcasts WHERE id=?",(job['id'],)).fetchone()
+        assert tuple(done)==('completed',0,0,1)
+        assert worker._broadcast_targets('pending',marketing=True)==[]
+        assert 998201 in worker._broadcast_targets('all')
+
+        runtime.set_notification_preference('dark',998201,'service_alerts_enabled',False)
+        runtime.notify_service_health()
+        alerts=[x for x in sent if x[0]==998201 and 'DARK SERVICE ALERT' in x[1]]
+        assert alerts==[]
+        runtime.set_notification_preference('dark',998201,'service_alerts_enabled',True)
+        runtime.notify_service_health()
+        alerts=[x for x in sent if x[0]==998201 and 'DARK SERVICE ALERT' in x[1]]
+        assert len(alerts)==1
+
+        worker.toggle_customer_notification(998201,998201,'marketing')
+        p=runtime.notification_preferences('dark',998201)
+        assert p['marketing_enabled'] is True
+        with store.lock:
+            audit=store.db.execute("""SELECT 1 FROM live_audit WHERE action='telegram.notification_preference'
+              AND target='998201' ORDER BY id DESC LIMIT 1""").fetchone()
+        assert audit
+    finally:
+        if previous is None:runtime.workers.pop('dark',None)
+        else:runtime.workers['dark']=previous
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)

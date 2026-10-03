@@ -1396,7 +1396,7 @@ class BotWorker(CustomerBotFeatures):
               WHERE owner=? AND created_at<=? AND status IN ('pending','awaiting_payment','payment_review')""",
               (self.owner,now-1800)).fetchone()[0])
         ops=getattr(self.runtime,'ops',None);d=ops.dashboard(self.owner) if ops else {}
-        segments={s:len(self._broadcast_targets(s)) for s in ('pending','expired','expiring','low')}
+        segments={s:len(self._broadcast_targets(s,marketing=True)) for s in ('pending','expired','expiring','low')}
         return {'revenue_today':int(d.get('revenue_today') or 0),'revenue_7d':int(d.get('revenue_7d') or 0),
                 'revenue_30d':revenue_30,'conversion_7d':float(d.get('conversion_7d') or 0),
                 'success_30d':success_30,'buyers_30d':buyers_30,'repeat_30d':repeat_30,'renewals_30d':renew_30,
@@ -1435,11 +1435,11 @@ class BotWorker(CustomerBotFeatures):
             'low':"📉 حجم سرویس شما رو به پایان است. وضعیت سرویس را بررسی کنید و در صورت نیاز تمدید یا خرید جدید انجام دهید."
         }
         if segment not in templates:raise PolicyError('Unknown growth campaign')
-        targets=self._broadcast_targets(segment)
+        targets=self._broadcast_targets(segment,marketing=True)
         if not targets:
-            self.api.send(chat_id,'برای این کمپین در حال حاضر مخاطبی وجود ندارد.');return
+            self.api.send(chat_id,'برای این کمپین در حال حاضر مخاطب مجاز به دریافت پیام بازاریابی وجود ندارد.');return
         self.sessions[user_id]='broadcast_review'
-        self.session_data[user_id]={'segment':segment,'message':templates[segment],'target_count':len(targets)}
+        self.session_data[user_id]={'segment':segment,'message':templates[segment],'target_count':len(targets),'kind':'marketing'}
         self.api.send(chat_id,
             f"👁 GROWTH CAMPAIGN PREVIEW\nSegment: {segment}\nگیرنده: {len(targets)} نفر\n\n{templates[segment]}",
             {'inline_keyboard':[[
@@ -1447,7 +1447,7 @@ class BotWorker(CustomerBotFeatures):
                 {'text':'❌ لغو','callback_data':'bccancel'}
             ]]})
 
-    def _broadcast_targets(self,segment:str)->list[int]:
+    def _broadcast_targets(self,segment:str,marketing:bool=False)->list[int]:
         if segment not in ('all','active','expiring','low','pending','expired'):raise PolicyError('Unknown broadcast segment')
         admin=int(self.bot_config()['admin_telegram_id'])
         if segment=='all':
@@ -1467,7 +1467,7 @@ class BotWorker(CustomerBotFeatures):
                 if row.get('owner')!=self.owner:continue
                 tid=int((row.get('client') or {}).get('tgId') or 0)
                 if tid>0:ids.add(tid)
-            ids.discard(admin);return sorted(ids)
+            ids.discard(admin);return self.runtime._marketing_targets(self.owner,ids) if marketing else sorted(ids)
         now_ms=int(time.time()*1000);ids=set()
         if segment=='pending':
             cutoff=time.time()-1800
@@ -1476,7 +1476,7 @@ class BotWorker(CustomerBotFeatures):
                   FROM commerce_orders WHERE owner=? AND created_at<=?
                   AND status IN ('pending','awaiting_payment','payment_review')""",(self.owner,cutoff))
                            if int(r[0] or 0)>0)
-            ids.discard(admin);return sorted(ids)
+            ids.discard(admin);return self.runtime._marketing_targets(self.owner,ids) if marketing else sorted(ids)
         for row in self.runtime.manager.list(self.actor()):
             if row.get('owner')!=self.owner:continue
             client=row.get('client') or {};tid=int(client.get('tgId') or 0)
@@ -1488,22 +1488,22 @@ class BotWorker(CustomerBotFeatures):
             elif segment=='expiring' and expiry and now_ms<expiry<=now_ms+72*3600*1000:ids.add(tid)
             elif segment=='low' and total and remaining/total<=0.20:ids.add(tid)
             elif segment=='expired' and expiry and now_ms-7*86400*1000<=expiry<=now_ms:ids.add(tid)
-        return sorted(ids)
+        return self.runtime._marketing_targets(self.owner,ids) if marketing else sorted(ids)
 
     def admin_broadcast_menu(self,chat_id:int):
         counts={s:len(self._broadcast_targets(s)) for s in ('all','active','expiring','low','pending','expired')}
         with self.runtime.store.lock:
-            recent=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,status,total,sent,failed,created_at
+            recent=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,status,total,sent,failed,skipped,kind,created_at
               FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 3""",(self.owner,))]
         text=(f"📣 DARK BROADCAST CENTER\n"
               f"همه مشتری‌ها: {counts['all']} · فعال: {counts['active']}\n"
               f"نزدیک انقضا: {counts['expiring']} · کم‌حجم: {counts['low']}\n"
               f"پرداخت‌نشده: {counts['pending']} · منقضی ۷ روز: {counts['expired']}\n\n"
-              "پیام‌ها Queue می‌شوند و به‌صورت کنترل‌شده ارسال می‌شوند.")
+              "پیام‌های دستی Operational هستند؛ کمپین‌های Growth بازاریابی‌اند و Opt-out مشتری را رعایت می‌کنند. همه پیام‌ها Queue می‌شوند.")
         if recent:
             text+='\n\nآخرین ارسال‌ها:'
             for row in recent:
-                text+=f"\n• {row['status']} · {row['sent']}/{row['total']} · fail {row['failed']}"
+                text+=f"\n• {row['kind']} · {row['status']} · {row['sent']}/{row['total']} · fail {row['failed']} · skip {row['skipped']}"
         self.api.send(chat_id,text,{'inline_keyboard':[
             [{'text':f"👥 همه · {counts['all']}",'callback_data':'bcseg:all'},
              {'text':f"● فعال · {counts['active']}",'callback_data':'bcseg:active'}],
@@ -1520,8 +1520,8 @@ class BotWorker(CustomerBotFeatures):
             self.api.send(chat_id,'برای این گروه هیچ مشتری واجد شرایطی وجود ندارد.');return
         labels={'all':'همه مشتری‌ها','active':'سرویس فعال','expiring':'نزدیک انقضا','low':'کم‌حجم','pending':'پرداخت‌نشده','expired':'منقضی‌شده'}
         self.sessions[user_id]='broadcast_text'
-        self.session_data[user_id]={'segment':segment}
-        self.api.send(chat_id,f"📣 اعلان به {labels[segment]} · {len(targets)} نفر\n"
+        self.session_data[user_id]={'segment':segment,'kind':'operational'}
+        self.api.send(chat_id,f"📣 اعلان عملیاتی به {labels[segment]} · {len(targets)} نفر\n"
                       "متن پیام را بفرست (حداکثر ۳۵۰۰ کاراکتر).\nبرای لغو: /cancel")
 
     def handle_broadcast_text(self,chat_id:int,user_id:int,text:str):
@@ -1530,7 +1530,7 @@ class BotWorker(CustomerBotFeatures):
         if not 1<=len(message)<=3500:
             self.api.send(chat_id,'متن اعلان باید بین ۱ تا ۳۵۰۰ کاراکتر باشد.');return
         data=self.session_data.setdefault(user_id,{})
-        segment=str(data.get('segment') or '');targets=self._broadcast_targets(segment)
+        segment=str(data.get('segment') or '');kind=str(data.get('kind') or 'operational');targets=self._broadcast_targets(segment,marketing=(kind=='marketing'))
         if not targets:
             self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
             self.api.send(chat_id,'مخاطبی برای این اعلان باقی نمانده است.');return
@@ -1545,14 +1545,16 @@ class BotWorker(CustomerBotFeatures):
     def queue_broadcast(self,chat_id:int,user_id:int):
         if self.sessions.get(user_id)!='broadcast_review':raise PolicyError('Broadcast is not ready to queue')
         data=dict(self.session_data.get(user_id) or {});segment=str(data.get('segment') or '')
-        message=str(data.get('message') or '');targets=self._broadcast_targets(segment)
+        kind=str(data.get('kind') or 'operational')
+        if kind not in ('operational','marketing'):raise PolicyError('Unknown broadcast kind')
+        message=str(data.get('message') or '');targets=self._broadcast_targets(segment,marketing=(kind=='marketing'))
         if not targets:raise PolicyError('Broadcast target set is empty')
         bid='bc_'+secrets.token_hex(8);now=time.time()
         with self.runtime.store.transaction() as db:
             db.execute("""INSERT INTO telegram_broadcasts
-              (id,owner,created_by,segment,message,status,total,sent,failed,created_at,started_at,completed_at)
-              VALUES(?,?,?,?,?,'queued',?,0,0,?,0,0)""",
-              (bid,self.owner,int(user_id),segment,message,len(targets),now))
+              (id,owner,created_by,segment,message,status,total,sent,failed,created_at,started_at,completed_at,kind,skipped)
+              VALUES(?,?,?,?,?,'queued',?,0,0,?,0,0,?,0)""",
+              (bid,self.owner,int(user_id),segment,message,len(targets),now,kind))
             db.executemany("""INSERT INTO telegram_broadcast_recipients
               (broadcast_id,telegram_id,status,error,updated_at) VALUES(?,?,'pending','',?)""",
               [(bid,int(tid),now) for tid in targets])
@@ -1564,14 +1566,14 @@ class BotWorker(CustomerBotFeatures):
 
     def admin_broadcast_status(self,chat_id:int):
         with self.runtime.store.lock:
-            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,segment,status,total,sent,failed,created_at
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,segment,status,total,sent,failed,skipped,kind,created_at
               FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 8""",(self.owner,))]
         if not rows:
             self.api.send(chat_id,'📊 هنوز اعلانی در صف ثبت نشده است.');return
         lines=['📊 DARK BROADCAST STATUS']
         for r in rows:
             when=time.strftime('%m/%d %H:%M',time.localtime(float(r['created_at'])))
-            lines.append(f"• {when} · {r['segment']} · {r['status']} · {r['sent']}/{r['total']} · fail {r['failed']}")
+            lines.append(f"• {when} · {r['kind']} · {r['segment']} · {r['status']} · {r['sent']}/{r['total']} · fail {r['failed']} · skip {r['skipped']}")
         self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':[[{'text':'‹ اعلان‌ها','callback_data':'bcmenu'}]]})
 
     def admin_reports(self,chat_id:int):
@@ -2188,11 +2190,20 @@ class TelegramBotRuntime:
               owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,client_id TEXT NOT NULL,
               event_key TEXT NOT NULL,sent_at REAL NOT NULL,
               PRIMARY KEY(owner,telegram_id,client_id,event_key))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS telegram_customer_preferences(
+              owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,
+              service_alerts_enabled INTEGER NOT NULL DEFAULT 1,
+              marketing_enabled INTEGER NOT NULL DEFAULT 1,
+              updated_at REAL NOT NULL,
+              PRIMARY KEY(owner,telegram_id))""")
             db.execute("""CREATE TABLE IF NOT EXISTS telegram_broadcasts(
               id TEXT PRIMARY KEY,owner TEXT NOT NULL,created_by INTEGER NOT NULL,
               segment TEXT NOT NULL,message TEXT NOT NULL,status TEXT NOT NULL,
               total INTEGER NOT NULL DEFAULT 0,sent INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,
               created_at REAL NOT NULL,started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0)""")
+            broadcast_cols={r[1] for r in db.execute("PRAGMA table_info(telegram_broadcasts)")}
+            if 'kind' not in broadcast_cols:db.execute("ALTER TABLE telegram_broadcasts ADD COLUMN kind TEXT NOT NULL DEFAULT 'operational'")
+            if 'skipped' not in broadcast_cols:db.execute("ALTER TABLE telegram_broadcasts ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0")
             db.execute("""CREATE TABLE IF NOT EXISTS telegram_broadcast_recipients(
               broadcast_id TEXT NOT NULL,telegram_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
               error TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL,
@@ -2230,6 +2241,37 @@ class TelegramBotRuntime:
             self.wake_event.wait(3);self.wake_event.clear()
         self.sync_workers(stop_all=True)
 
+    def notification_preferences(self,owner:str,telegram_id:int)->dict[str,Any]:
+        tid=int(telegram_id)
+        with self.store.lock:
+            row=self.store.db.execute("""SELECT service_alerts_enabled,marketing_enabled,updated_at
+              FROM telegram_customer_preferences WHERE owner=? AND telegram_id=?""",(owner,tid)).fetchone()
+        if not row:return {'owner':owner,'telegram_id':tid,'service_alerts_enabled':True,'marketing_enabled':True,'updated_at':0.0}
+        return {'owner':owner,'telegram_id':tid,
+                'service_alerts_enabled':bool(row['service_alerts_enabled']),
+                'marketing_enabled':bool(row['marketing_enabled']),
+                'updated_at':float(row['updated_at'] or 0)}
+
+    def set_notification_preference(self,owner:str,telegram_id:int,field:str,enabled:bool)->dict[str,Any]:
+        if field not in ('service_alerts_enabled','marketing_enabled'):raise PolicyError('Unknown notification preference')
+        tid=int(telegram_id);now=time.time()
+        current=self.notification_preferences(owner,tid)
+        service=int(bool(enabled)) if field=='service_alerts_enabled' else int(current['service_alerts_enabled'])
+        marketing=int(bool(enabled)) if field=='marketing_enabled' else int(current['marketing_enabled'])
+        with self.store.transaction() as db:
+            db.execute("""INSERT INTO telegram_customer_preferences(owner,telegram_id,service_alerts_enabled,marketing_enabled,updated_at)
+              VALUES(?,?,?,?,?) ON CONFLICT(owner,telegram_id) DO UPDATE SET
+              service_alerts_enabled=excluded.service_alerts_enabled,
+              marketing_enabled=excluded.marketing_enabled,updated_at=excluded.updated_at""",
+              (owner,tid,service,marketing,now))
+        return self.notification_preferences(owner,tid)
+
+    def _marketing_targets(self,owner:str,ids:set[int]|list[int])->list[int]:
+        out=[]
+        for tid in sorted({int(x) for x in ids if int(x)>0}):
+            if self.notification_preferences(owner,tid)['marketing_enabled']:out.append(tid)
+        return out
+
     def process_broadcasts(self):
         with self.lock:workers=dict(self.workers)
         for owner,worker in workers.items():
@@ -2246,11 +2288,14 @@ class TelegramBotRuntime:
                   WHERE broadcast_id=? AND status='pending' ORDER BY telegram_id LIMIT 15""",(bid,))]
             for row in recipients:
                 tid=int(row['telegram_id'])
-                try:
-                    worker.api.send(tid,'◆ DARK NOTICE\n\n'+str(job['message']))
-                    state='sent';error=''
-                except Exception as ex:
-                    state='failed';error=str(ex)[:500]
+                if str(job.get('kind') or 'operational')=='marketing' and not self.notification_preferences(owner,tid)['marketing_enabled']:
+                    state='skipped';error='marketing_opt_out'
+                else:
+                    try:
+                        worker.api.send(tid,'◆ DARK NOTICE\n\n'+str(job['message']))
+                        state='sent';error=''
+                    except Exception as ex:
+                        state='failed';error=str(ex)[:500]
                 with self.store.transaction() as db:
                     db.execute("""UPDATE telegram_broadcast_recipients SET status=?,error=?,updated_at=?
                       WHERE broadcast_id=? AND telegram_id=? AND status='pending'""",
@@ -2259,18 +2304,19 @@ class TelegramBotRuntime:
                 stats=self.store.db.execute("""SELECT
                   SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END),
                   SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END),
                   SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)
                   FROM telegram_broadcast_recipients WHERE broadcast_id=?""",(bid,)).fetchone()
-            sent=int(stats[0] or 0);failed=int(stats[1] or 0);pending=int(stats[2] or 0)
+            sent=int(stats[0] or 0);failed=int(stats[1] or 0);skipped=int(stats[2] or 0);pending=int(stats[3] or 0)
             completed=pending==0
             with self.store.transaction() as db:
-                db.execute("""UPDATE telegram_broadcasts SET sent=?,failed=?,status=?,completed_at=?
-                  WHERE id=?""",(sent,failed,'completed' if completed else 'running',
+                db.execute("""UPDATE telegram_broadcasts SET sent=?,failed=?,skipped=?,status=?,completed_at=?
+                  WHERE id=?""",(sent,failed,skipped,'completed' if completed else 'running',
                                  time.time() if completed else 0,bid))
             if completed:
                 try:
                     admin=int(worker.bot_config()['admin_telegram_id'])
-                    worker.api.send(admin,f"✅ اعلان DARK تکمیل شد.\nID: {bid}\nارسال موفق: {sent}\nناموفق: {failed}")
+                    worker.api.send(admin,f"✅ اعلان DARK تکمیل شد.\nID: {bid}\nارسال موفق: {sent}\nناموفق: {failed}\nOpt-out: {skipped}")
                 except Exception:
                     pass
                 try:self.manager.audit(self.commerce.actor_for(owner),owner,'telegram.broadcast_complete',bid,f"sent={sent}; failed={failed}")
@@ -2299,6 +2345,7 @@ class TelegramBotRuntime:
                 client=row.get('client') or {};telegram_id=int(client.get('tgId') or 0)
                 client_id=str(row.get('email') or client.get('email') or '')
                 if not telegram_id or not client_id:continue
+                if not self.notification_preferences(owner,telegram_id)['service_alerts_enabled']:continue
                 expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
                 used=int(row.get('used_bytes') or 0);remaining=max(0,total-used) if total else 0
                 events=[]
