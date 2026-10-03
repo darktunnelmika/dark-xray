@@ -306,7 +306,15 @@ class NodeRegistry:
         sync_error=str(assignment.get('last_error') or '')
         runtime_block=NodeRegistry._runtime_block_reason(node)
         deployed=bool(remote_id and not sync_error and not runtime_block)
-        online=bool(node.get('enabled') and node.get('last_seen') and now-float(node.get('last_seen') or 0)<180 and not node.get('last_error'))
+        telemetry_fresh=bool(node.get('last_seen') and now-float(node.get('last_seen') or 0)<180)
+        # Subscription/failover routing must not flap on a single short control-plane
+        # timeout. The Node monitor already tracks consecutive transport failures and
+        # clears failure_count on recovery. Keep a previously healthy deployed route
+        # through two transient failures; three consecutive failures (or stale
+        # telemetry) remove it. Explicit maintenance/config/runtime failures remain
+        # immediate below.
+        transport_stable=bool(not node.get('last_error') or int(node.get('failure_count') or 0)<3)
+        online=bool(node.get('enabled') and telemetry_fresh and transport_stable)
         if sync_error:deployment_state='sync_error'
         elif runtime_block:deployment_state=runtime_block
         elif remote_id:deployment_state='deployed'

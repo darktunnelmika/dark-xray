@@ -854,11 +854,24 @@ def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
   db.execute("UPDATE remote_node_inbounds SET last_error='' WHERE node_id='edge1' AND local_inbound_id=?",(a,))
  assert len(app.state.nodes.failover_targets('fail-user'))==1
 
+ # One or two transient control-plane failures must not churn a healthy
+ # subscription route. A sustained third failure removes it until recovery.
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_error='network down' WHERE id='edge1'")
+  db.execute("UPDATE remote_nodes SET last_error='network down',failure_count=1 WHERE id='edge1'")
+ assert len(app.state.nodes.failover_targets('fail-user'))==1
+ sub=c.get(client['subscription_url']+'?format=clash')
+ assert sub.status_code==200 and 'data-edge.example.com' in sub.text
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET failure_count=2 WHERE id='edge1'")
+ assert len(app.state.nodes.failover_targets('fail-user'))==1
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET failure_count=3 WHERE id='edge1'")
  assert app.state.nodes.failover_targets('fail-user')==[]
  sub=c.get(client['subscription_url']+'?format=clash')
  assert sub.status_code==200 and 'data-edge.example.com' not in sub.text
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_error='',failure_count=0,last_seen=? WHERE id='edge1'",(time.time(),))
+ assert len(app.state.nodes.failover_targets('fail-user'))==1
 
 
 def test_node_orchestration_explains_deployment_and_subscription_readiness(env):
