@@ -89,7 +89,7 @@ class BotWorker(CustomerBotFeatures):
             if ops:
                 try:
                     self.api.call('setChatMenuButton',{'menu_button':{
-                        'type':'web_app','text':'DARK Mini App',
+                        'type':'web_app','text':'فروشگاه',
                         'web_app':{'url':ops.customer_mini_app_url(self.owner)}
                     }})
                 except Exception:
@@ -152,7 +152,6 @@ class BotWorker(CustomerBotFeatures):
 
     def main_keyboard(self,admin:bool)->dict:
         ops=getattr(self.runtime,'ops',None)
-        customer_app='◈ DARK Mini App'
         rows=[
             ['⚡ خرید سرویس','📦 سرویس‌های من'],
             ['🔄 تمدید سرویس','💳 کیف پول'],
@@ -160,7 +159,6 @@ class BotWorker(CustomerBotFeatures):
         ]
         if self.owner_role()=='owner':
             rows.append(['🏪 پنل نمایندگی'])
-        rows.append([customer_app])
         if admin:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],

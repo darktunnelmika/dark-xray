@@ -577,7 +577,7 @@ def test_owner_customer_menu_adds_representative_marketplace(env):
             '⚡ خرید سرویس','📦 سرویس‌های من',
             '🔄 تمدید سرویس','💳 کیف پول',
             '🎫 پشتیبانی','🎁 دعوت دوستان',
-            '🏪 پنل نمایندگی','◈ DARK Mini App',
+            '🏪 پنل نمایندگی',
         ]
     finally:
         worker.api.close()
@@ -788,7 +788,7 @@ def test_representative_panel_has_independent_bot_customer_wallet_store_and_supp
             assert customer_labels==[
                 '⚡ خرید سرویس','📦 سرویس‌های من',
                 '🔄 تمدید سرویس','💳 کیف پول',
-                '🎫 پشتیبانی','🎁 دعوت دوستان','◈ DARK Mini App',
+                '🎫 پشتیبانی','🎁 دعوت دوستان',
             ]
         finally:
             worker.api.close()

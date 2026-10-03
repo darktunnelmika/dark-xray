@@ -3,8 +3,10 @@ const runtime=fs.readFileSync('backend/telegram_runtime.py','utf8');
 const customer=fs.readFileSync('backend/telegram_customer_runtime.py','utf8');
 
 test('Bot V6 customer terminal exposes live branded home and clean primary actions',()=>{
-  for(const token of ['DARK XRAY / CUSTOMER TERMINAL','● ONLINE · SECURE ACCESS','⚡ خرید سرویس','📦 سرویس‌های من','💳 کیف پول','◈ DARK Mini App'])
+  for(const token of ['DARK XRAY / CUSTOMER TERMINAL','● ONLINE · SECURE ACCESS','⚡ خرید سرویس','📦 سرویس‌های من','💳 کیف پول'])
     assert.ok(runtime.includes(token),token);
+  assert.match(runtime,/'text':'فروشگاه'/);
+  assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
 });
 
 test('Bot V6 shop is category driven and shows compact product economics',()=>{
