@@ -25,14 +25,14 @@ function header(){return '<header class="cu-head"><div class="cu-brand"><span cl
 function orderRows(limit=5){const rows=data.orders||[];return rows.length?'<div class="cu-list">'+rows.slice(0,limit).map(o=>'<button class="cu-row cu-btn" data-order="'+esc(o.id)+'"><div><b>'+esc(o.product_name||o.product_id)+'</b><small>'+money(o.amount_minor)+' · '+new Date(o.created_at*1000).toLocaleString('fa-IR')+'</small></div>'+state(o.status)+'</button>').join('')+'</div>':'<div class="cu-empty">هنوز سفارشی ثبت نشده است.</div>'}
 function serviceSummary(s){const pct=s.unlimited?0:Math.min(100,Math.round((s.used_bytes/Math.max(1,s.total_bytes))*100));return '<button class="cu-row cu-btn" data-service="'+encodeURIComponent(s.id)+'"><div><b>'+esc(s.name)+'</b><small>'+esc(s.id)+'</small><div class="cu-progress"><i style="width:'+pct+'%"></i></div><em>'+(s.unlimited?'نامحدود':bytes(s.remaining_bytes)+' باقی‌مانده')+' · '+date(s.expiry_ms)+'</em></div><span class="cu-pill '+(!s.blocked&&s.enabled?'ok':'warn')+'">'+(!s.blocked&&s.enabled?'فعال':'محدود')+'</span></button>'}
 function home(){
- const ref=data.referral||{},rep=data.representative||{};
- return '<section><div class="cu-grid">'+
-  '<div class="cu-card cu-stat"><small>کیف پول</small><b>'+money(data.wallet?.balance_minor||0)+'</b><em>'+(data.ledger?.length||0)+' تراکنش اخیر</em></div>'+
-  '<div class="cu-card cu-stat"><small>سرویس‌های من</small><b>'+(data.services?.length||0)+'</b><em>'+(data.services||[]).filter(x=>!x.blocked&&x.enabled).length+' فعال</em></div>'+
-  '<div class="cu-card cu-stat"><small>زیرمجموعه</small><b>'+(ref.invited||0)+'</b><em>'+money(ref.earned||0)+' پاداش</em></div>'+
- '</div><div class="cu-card"><h2>سفارش‌های اخیر</h2>'+orderRows(4)+'</div>'+
- '<div class="cu-card"><h2>دعوت دوستان</h2><small>پاداش هر اولین خرید موفق: '+money(ref.reward_minor||0)+'</small><div class="cu-link"><code>'+esc(ref.url||'لینک دعوت هنوز آماده نیست')+'</code><div class="cu-actions"><button class="cu-btn" data-copy="'+esc(ref.url||'')+'">کپی لینک</button></div></div></div>'+
- (rep.available?'<div class="cu-card"><h2>پنل نمایندگی</h2><small>'+(rep.subscription?'نمایندگی فعال داری؛ تمدید از پلن‌های منتشرشده انجام می‌شود.':'می‌توانی پنل نمایندگی تعریف‌شده توسط Owner را بخری.')+'</small><button class="cu-btn primary wide" data-rep-open>مشاهده پلن‌های نمایندگی</button></div>':'')+
+ const rep=data.representative||{},active=(data.services||[]).filter(x=>!x.blocked&&x.enabled).length;
+ return '<section><div class="cu-command"><div><span>ACCOUNT OVERVIEW</span><h2>مرکز کاربری</h2><p>سرویس‌ها، پرداخت‌ها و سفارش‌ها در یک نمای سریع.</p></div><i>SECURE</i></div>'+
+ '<div class="cu-metrics">'+
+  '<div class="cu-metric"><small>WALLET</small><b>'+money(data.wallet?.balance_minor||0)+'</b><em>موجودی حساب</em></div>'+
+  '<div class="cu-metric"><small>ACTIVE</small><b>'+active+'</b><em>سرویس فعال</em></div>'+
+  '<div class="cu-metric"><small>ORDERS</small><b>'+(data.orders?.length||0)+'</b><em>سفارش ثبت‌شده</em></div>'+
+ '</div><div class="cu-section-head"><div><span>RECENT ACTIVITY</span><h3>سفارش‌های اخیر</h3></div><button class="cu-text-btn" data-go-shop>مشاهده فروشگاه</button></div><div class="cu-card">'+orderRows(4)+'</div>'+
+ (rep.available?'<div class="cu-card cu-rep"><span>REPRESENTATIVE ACCESS</span><h2>پنل نمایندگی</h2><small>'+(rep.subscription?'نمایندگی فعال داری؛ تمدید از پلن‌های منتشرشده انجام می‌شود.':'پلن نمایندگی منتشرشده توسط Owner را از همین‌جا تهیه کن.')+'</small><button class="cu-btn primary wide" data-rep-open>مشاهده پلن‌های نمایندگی</button></div>':'')+
  '</section>';
 }
 function shop(){
@@ -124,7 +124,7 @@ async function repCheckout(planRow,kind){
  }catch(e){showError(e)}
 }
 function bind(){
- document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render()});bindUtility();
+ document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render()});document.querySelector('[data-go-shop]')?.addEventListener('click',()=>{tab='shop';render()});bindUtility();
  document.querySelectorAll('[data-order]').forEach(b=>b.onclick=()=>openOrder(b.dataset.order));
  document.querySelectorAll('[data-service]').forEach(b=>b.onclick=()=>openService(decodeURIComponent(b.dataset.service)));
  document.querySelectorAll('[data-buy-product]').forEach(b=>b.onclick=()=>checkout(b.dataset.buyProduct,b.dataset.buyPrice));
