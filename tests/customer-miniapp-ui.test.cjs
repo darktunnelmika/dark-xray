@@ -39,7 +39,9 @@ test('Customer Mini App is mobile first and uses persistent five-tab navigation'
  assert.match(css,/grid-template-columns:repeat\(5,1fr\)/);
  assert.match(css,/@media\(min-width:720px\)/);
  assert.match(js,/\['home','⌂','خانه'\]/);
- assert.match(js,/\['support','🎫','پشتیبانی'\]/);
+ assert.match(js,/\['support','◇','پشتیبانی'\]/);
+ assert.match(css,/body,#app,\.cu-shell\{color:#eaf8ff!important\}/);
+ assert.match(css,/\.cu-form input,.cu-form select,.cu-form textarea/);
 });
 
 test('customer bot keyboard exposes WebApp launcher for owner and representative bots',()=>{

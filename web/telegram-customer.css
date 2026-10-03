@@ -24,3 +24,21 @@ body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.20;ba
 .cu-price{position:relative;overflow:hidden;border-color:rgba(53,231,255,.14);background:rgba(3,11,18,.75);transition:.15s}.cu-price:active{transform:scale(.98);border-color:var(--dx-cyan)}.cu-price b{color:#e9fbff}.cu-price small:last-child{color:#6fa3b7}
 .cu-nav{border-top:1px solid rgba(53,231,255,.12);background:rgba(3,10,16,.94)}.cu-nav button.active{color:var(--dx-cyan);background:rgba(53,231,255,.08);box-shadow:inset 0 0 0 1px rgba(53,231,255,.08)}
 .cu-error{max-width:390px;margin:22vh auto 0;padding:22px 18px;border:1px solid rgba(255,101,118,.2);border-radius:16px;background:rgba(35,9,15,.75);line-height:1.8}
+
+/* rc41: DARK is a fixed dark surface; never inherit Telegram light-theme text colors. */
+body,#app,.cu-shell{color:#eaf8ff!important}
+.cu-head h1,.cu-card h2,.cu-shop-hero h2,.cu-row b,.cu-price b,.cu-stat b,.cu-selected b{color:#f3fbff!important}
+.cu-card>small,.cu-muted,.cu-row small,.cu-row em,.cu-price small,.cu-stat small,.cu-stat em,.cu-shop-hero p,.cu-form label,.cu-empty{color:#9ab3c2!important}
+.cu-brand small{color:#6fa5bb!important}.cu-brand em{color:#9fc1d0!important}
+.cu-btn{color:#eaf8ff!important}
+.cu-nav button{color:#879eab!important}.cu-nav button.active{color:#43e8ff!important}
+.cu-form input,.cu-form select,.cu-form textarea{
+ color:#071019!important;background:#f7fbff!important;border-color:#b8d0dc!important;
+ caret-color:#071019!important
+}
+.cu-form input::placeholder,.cu-form textarea::placeholder{color:#71818b!important;opacity:1}
+.cu-link code{color:#071019!important;background:#f7fbff;border-radius:8px;padding:9px}
+.cu-link:has(code){color:#eaf8ff}
+.cu-notice{color:#ffd78c!important;background:rgba(255,193,93,.10)!important}
+.cu-order-state small{color:#a9c1ce!important}
+.cu-pill{color:#a8bdc8!important}.cu-pill.ok{color:#63efb0!important}.cu-pill.warn{color:#ffd071!important}
