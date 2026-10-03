@@ -89,7 +89,14 @@ class TelegramOperations:
         return self.public_url('/assets/telegram-miniapp.html')+'?owner='+quote(str(owner),safe='')
 
     def customer_mini_app_url(self,owner:str)->str:
-        return self.public_url('/assets/telegram-customer.html')+'?owner='+quote(str(owner),safe='')
+        url=self.public_url('/assets/telegram-customer.html')+'?owner='+quote(str(owner),safe='')
+        try:
+            row=self.commerce.bot_row(owner) or {}
+            username=str(row.get('bot_username') or '').strip().lstrip('@')
+        except Exception:
+            username=''
+        if username:url+='&bot='+quote(username,safe='')
+        return url
 
     def webhook_url(self,owner:str,gateway_id:str)->str:
         return self.public_url('/api/telegram/crypto/webhook/'+quote(str(owner),safe='')+'/'+quote(str(gateway_id),safe=''))
