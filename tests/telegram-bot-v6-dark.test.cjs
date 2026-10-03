@@ -68,3 +68,14 @@ test('Bot V6 Stage 3 keeps broadcasts scoped and queued rather than synchronous 
   assert.match(runtime,/status IN \('queued','running'\)/);
   assert.match(runtime,/telegram\.broadcast_complete/);
 });
+
+test('Bot V6 Stage 4 exposes Customer CRM, 360 view and direct messaging',()=>{
+  for(const token of ['DARK CUSTOMER CRM','CUSTOMER 360','cuslist:active','cuslist:online','cuslist:expiring','cuslist:blocked','cusorders:','custickets:','clmsg:','DARK MESSAGE','telegram.crm_message'])
+    assert.ok(runtime.includes(token),token);
+});
+
+test('Bot V6 Stage 4 keeps CRM owner scoped',()=>{
+  assert.match(runtime,/r\.get\('owner'\)==self\.owner/);
+  assert.match(runtime,/WHERE owner=\? AND telegram_id=\?/);
+  assert.match(runtime,/WHERE o\.owner=\? AND o\.buyer_telegram_id=\?/);
+});

@@ -294,6 +294,8 @@ class BotWorker(CustomerBotFeatures):
             self.handle_service_text(chat_id,user_id,text);return
         if session.startswith('broadcast_') and self.is_admin(user_id):
             self.handle_broadcast_text(chat_id,user_id,text);return
+        if session.startswith('crm_') and self.is_admin(user_id):
+            self.handle_crm_text(chat_id,user_id,text);return
         if session=='new_rep':
             self.create_representative_from_text(chat_id,user_id,text);return
         if low.startswith('/start') or low=='start':
@@ -544,6 +546,22 @@ class BotWorker(CustomerBotFeatures):
         if data.startswith('opspayno:') and self.is_admin(user_id):
             _,kind,row=data.split(':',2);getattr(self.runtime,'ops').payment_action(self.owner,kind,int(row),'reject')
             self.api.send(chat_id,'❌ پرداخت رد شد.');self.admin_payments(chat_id);return
+        if data.startswith('cuslist:') and self.is_admin(user_id):
+            self.admin_clients(chat_id,data.split(':',1)[1]);return
+        if data.startswith('cusorders:') and self.is_admin(user_id):
+            self.customer_orders_admin(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('custickets:') and self.is_admin(user_id):
+            self.customer_tickets_admin(chat_id,int(data.split(':',1)[1]));return
+        if data.startswith('clmsg:') and self.is_admin(user_id):
+            self.start_direct_message(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='crmsend' and self.is_admin(user_id):
+            self.send_direct_message(chat_id,user_id);return
+        if data=='crmcancel' and self.is_admin(user_id):
+            data0=self.session_data.get(user_id) or {};row_id=int(data0.get('row_id') or 0)
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            if row_id:self.client_detail(chat_id,row_id)
+            else:self.admin_clients(chat_id)
+            return
         if data.startswith('clrenew:') and self.is_admin(user_id):
             self.client_renew_menu(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('clr:') and self.is_admin(user_id):
@@ -1514,15 +1532,43 @@ class BotWorker(CustomerBotFeatures):
         if not row or row['owner']!=self.owner:raise PolicyError('Client not found in this bot scope')
         return str(row['id'])
 
-    def admin_clients(self,chat_id:int):
-        rows=self.runtime.manager.list(self.actor())[-12:]
-        if not rows:self.api.send(chat_id,'کاربری وجود ندارد.');return
-        buttons=[]
+    def _crm_clients(self,view:str='recent')->list[dict[str,Any]]:
+        if view not in ('recent','active','online','expiring','blocked'):raise PolicyError('Unknown customer view')
+        now_ms=int(time.time()*1000)
+        rows=[r for r in self.runtime.manager.list(self.actor()) if r.get('owner')==self.owner]
+        rows.sort(key=lambda x:float(x.get('created_at') or 0),reverse=True)
+        if view=='recent':return rows
+        out=[]
+        for r in rows:
+            c=r.get('client') or {};expiry=int(c.get('expiryTime') or 0)
+            enabled=c.get('enable') is not False and not r.get('block_reasons') and (not expiry or expiry>now_ms)
+            if view=='active' and enabled:out.append(r)
+            elif view=='online' and enabled and r.get('presence_state')=='online':out.append(r)
+            elif view=='expiring' and expiry and now_ms<expiry<=now_ms+72*3600*1000:out.append(r)
+            elif view=='blocked' and not enabled:out.append(r)
+        return out
+
+    def admin_clients(self,chat_id:int,view:str='recent'):
+        rows=self._crm_clients(view)
+        all_rows=self._crm_clients('recent')
+        if not all_rows:self.api.send(chat_id,'👥 هنوز مشتری‌ای وجود ندارد.');return
+        buttons=[
+            [{'text':'جدیدترین','callback_data':'cuslist:recent'},{'text':'● فعال','callback_data':'cuslist:active'}],
+            [{'text':'🟢 آنلاین','callback_data':'cuslist:online'},{'text':'⌛ نزدیک انقضا','callback_data':'cuslist:expiring'}],
+            [{'text':'○ محدود/خاموش','callback_data':'cuslist:blocked'}]
+        ]
         with self.runtime.store.lock:
-            for r in reversed(rows):
+            for r in rows[:20]:
                 dbrow=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(r['email'],self.owner)).fetchone()
-                if dbrow:buttons.append([{'text':r['email'],'callback_data':'cl:'+str(dbrow['rowid'])}])
-        self.api.send(chat_id,'👥 آخرین کاربران\nبرای جستجوی مستقیم: /user USERNAME',{'inline_keyboard':buttons})
+                if not dbrow:continue
+                if r.get('block_reasons'):(state:='○')
+                elif r.get('presence_state')=='online':state='🟢'
+                else:state='●'
+                buttons.append([{'text':f"{state} {r['email']}"[:62],'callback_data':'cl:'+str(dbrow['rowid'])}])
+        self.api.send(chat_id,
+            f"👥 DARK CUSTOMER CRM / {view.upper()}\n{len(rows)} نتیجه از {len(all_rows)} مشتری\n"
+            "جستجوی مستقیم: /user USERNAME",
+            {'inline_keyboard':buttons})
 
     def admin_user_search(self,chat_id:int,email:str):
         try:
@@ -1539,24 +1585,116 @@ class BotWorker(CustomerBotFeatures):
         expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
         activity=float(detail.get('activity_at') or 0)
         activity_text='—' if activity<=0 else time.strftime('%Y-%m-%d %H:%M',time.localtime(activity))
-        inbounds=detail.get('inboundIds') or []
-        quota=int(c.get('totalGB') or 0)
-        text=(f"👤 {email}\n"
-              f"وضعیت: {'فعال ✅' if enabled and not detail.get('block_reasons') else 'محدود/خاموش ⛔'}\n"
+        inbounds=detail.get('inboundIds') or [];quota=int(c.get('totalGB') or 0);tgid=int(c.get('tgId') or 0)
+        wallet=orders=open_tickets=service_count=0;username=''
+        if tgid:
+            with self.runtime.store.lock:
+                w=self.runtime.store.db.execute("SELECT balance_minor FROM customer_wallets WHERE owner=? AND telegram_id=?",(self.owner,tgid)).fetchone()
+                wallet=int(w['balance_minor']) if w else 0
+                orders=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND buyer_telegram_id=?",(self.owner,tgid)).fetchone()[0])
+                open_tickets=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM customer_support_tickets
+                  WHERE owner=? AND telegram_id=? AND status<>'closed'""",(self.owner,tgid)).fetchone()[0])
+                o=self.runtime.store.db.execute("""SELECT buyer_username FROM commerce_orders
+                  WHERE owner=? AND buyer_telegram_id=? ORDER BY created_at DESC LIMIT 1""",(self.owner,tgid)).fetchone()
+                username=str(o['buyer_username'] or '') if o else ''
+            service_count=sum(1 for r in self._crm_clients('recent') if int((r.get('client') or {}).get('tgId') or 0)==tgid)
+        text=(f"◆ CUSTOMER 360\n{email}\n"
+              f"وضعیت: {'● فعال' if enabled and not detail.get('block_reasons') else '○ محدود/خاموش'}\n"
               f"مصرف: {self.bytes(int(detail.get('used_bytes') or 0))} / {self.bytes(quota) if quota else 'نامحدود'}\n"
-              f"انقضا: {expiry_text}\nIP Limit: {int(c.get('limitIp') or 0)} · HWID: {int(c.get('limitHwid') or 0)}\n"
-              f"Telegram: {c.get('tgId') or '—'}\nInboundها: {', '.join(map(str,inbounds)) or '—'}\n"
+              f"انقضا: {expiry_text}\nIP/HWID: {int(c.get('limitIp') or 0)}/{int(c.get('limitHwid') or 0)}\n"
+              f"Telegram: {tgid or '—'}"+(f" @{username}" if username else '')+f"\n"
+              f"Wallet: {amount(wallet,'IRT')} · سرویس‌ها: {service_count}\n"
+              f"Orders: {orders} · تیکت باز: {open_tickets}\n"
+              f"Inbounds: {', '.join(map(str,inbounds)) or '—'}\n"
               f"آخرین فعالیت: {activity_text} · {detail.get('presence_source') or '—'}")
-        kb=[[{'text':'⛔ غیرفعال' if enabled else '✅ فعال','callback_data':('cloff:' if enabled else 'clon:')+str(row_id)},
-             {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}],
-            [{'text':'🗓 تمدید','callback_data':'clrenew:'+str(row_id)},
-             {'text':'➕ حجم','callback_data':'clvol:'+str(row_id)}],
-            [{'text':'🌐 IP Limit','callback_data':'clip:'+str(row_id)},
-             {'text':'🧬 HWID','callback_data':'clhw:'+str(row_id)}],
-            [{'text':'🌍 لوکیشن/Inbound','callback_data':'clinb:'+str(row_id)},
-             {'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}],
-            [{'text':'🗑 حذف سرویس','callback_data':'cldel:'+str(row_id)}]]
+        kb=[]
+        if tgid:
+            kb += [[{'text':'📨 پیام مستقیم','callback_data':'clmsg:'+str(row_id)}],
+                   [{'text':'🧾 سفارش‌های مشتری','callback_data':'cusorders:'+str(tgid)},
+                    {'text':'🎫 تیکت‌های مشتری','callback_data':'custickets:'+str(tgid)}]]
+        kb += [[{'text':'⛔ غیرفعال' if enabled else '✅ فعال','callback_data':('cloff:' if enabled else 'clon:')+str(row_id)},
+                {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}],
+               [{'text':'🗓 تمدید','callback_data':'clrenew:'+str(row_id)},
+                {'text':'➕ حجم','callback_data':'clvol:'+str(row_id)}],
+               [{'text':'🌐 IP Limit','callback_data':'clip:'+str(row_id)},
+                {'text':'🧬 HWID','callback_data':'clhw:'+str(row_id)}],
+               [{'text':'🌍 لوکیشن/Inbound','callback_data':'clinb:'+str(row_id)},
+                {'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}],
+               [{'text':'🗑 حذف سرویس','callback_data':'cldel:'+str(row_id)},
+                {'text':'‹ مشتری‌ها','callback_data':'cuslist:recent'}]]
         self.api.send(chat_id,text,{'inline_keyboard':kb})
+
+    def customer_orders_admin(self,chat_id:int,telegram_id:int):
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT o.rowid AS row_id,o.*,
+              COALESCE(p.name,o.product_id) product_name FROM commerce_orders o
+              LEFT JOIN commerce_products p ON p.owner=o.owner AND p.id=o.product_id
+              WHERE o.owner=? AND o.buyer_telegram_id=? ORDER BY o.created_at DESC LIMIT 20""",
+              (self.owner,int(telegram_id)))]
+        if not rows:
+            self.api.send(chat_id,'این مشتری سفارشی ندارد.');return
+        icons={'pending':'⏳','awaiting_payment':'💳','payment_review':'👁','paid':'⚙️',
+               'provisioned_waiting_activation':'🔌','provisioned':'✅','payment_rejected':'❌','failed':'⚠️'}
+        kb=[]
+        for r in rows:
+            icon=icons.get(str(r['status']),'•')
+            kb.append([{'text':f"{icon} {r['product_name']} · {amount(r['amount_minor'],r['currency'])}"[:62],
+                        'callback_data':'ord:'+str(r['row_id'])}])
+        self.api.send(chat_id,f"🧾 CUSTOMER ORDERS\nTelegram: {telegram_id}\n{len(rows)} سفارش آخر",
+                      {'inline_keyboard':kb})
+
+    def customer_tickets_admin(self,chat_id:int,telegram_id:int):
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT rowid AS row_id,* FROM customer_support_tickets
+              WHERE owner=? AND telegram_id=? ORDER BY updated_at DESC LIMIT 20""",(self.owner,int(telegram_id)))]
+        if not rows:
+            self.api.send(chat_id,'این مشتری تیکتی ندارد.');return
+        kb=[]
+        for t in rows:
+            icon='🟢' if t['status']=='open' else ('🔵' if t['status']=='answered' else '⚫')
+            kb.append([{'text':f"{icon} {t['subject']}"[:62],'callback_data':'asupt:'+str(t['row_id'])}])
+        self.api.send(chat_id,f"🎫 CUSTOMER SUPPORT\nTelegram: {telegram_id}\n{len(rows)} تیکت آخر",
+                      {'inline_keyboard':kb})
+
+    def start_direct_message(self,chat_id:int,user_id:int,row_id:int):
+        email=self.client_row(row_id);detail=self.runtime.manager.detail(self.actor(),email,credentials=True)
+        telegram_id=int((detail.get('client') or {}).get('tgId') or 0)
+        if telegram_id<=0:
+            self.api.send(chat_id,'این مشتری Telegram ID متصل ندارد.');return
+        self.sessions[user_id]='crm_message'
+        self.session_data[user_id]={'row_id':row_id,'telegram_id':telegram_id,'email':email}
+        self.api.send(chat_id,f"📨 پیام مستقیم به {email}\nمتن پیام را بفرست (حداکثر ۳۵۰۰ کاراکتر).\nبرای لغو: /cancel")
+
+    def handle_crm_text(self,chat_id:int,user_id:int,text:str):
+        if self.sessions.get(user_id)!='crm_message':raise PolicyError('CRM is not waiting for a direct message')
+        message=text.strip()
+        if not 1<=len(message)<=3500:
+            self.api.send(chat_id,'متن پیام باید بین ۱ تا ۳۵۰۰ کاراکتر باشد.');return
+        data=self.session_data.setdefault(user_id,{})
+        data['message']=message;self.sessions[user_id]='crm_review'
+        preview=message if len(message)<=700 else message[:700]+'…'
+        self.api.send(chat_id,f"👁 پیش‌نمایش پیام مستقیم\nگیرنده: {data.get('email') or '—'}\n\n{preview}",
+                      {'inline_keyboard':[[
+                          {'text':'✅ ارسال','callback_data':'crmsend'},
+                          {'text':'❌ لغو','callback_data':'crmcancel'}
+                      ]]})
+
+    def send_direct_message(self,chat_id:int,user_id:int):
+        if self.sessions.get(user_id)!='crm_review':raise PolicyError('CRM direct message is not ready')
+        data=dict(self.session_data.get(user_id) or {})
+        telegram_id=int(data.get('telegram_id') or 0);row_id=int(data.get('row_id') or 0)
+        email=str(data.get('email') or '');message=str(data.get('message') or '')
+        if telegram_id<=0 or not message:raise PolicyError('CRM direct message lost its target')
+        try:
+            self.api.send(telegram_id,'◆ DARK MESSAGE\n\n'+message)
+            self.runtime.manager.audit(self.actor(),self.owner,'telegram.crm_message',email,
+                                       f"telegram={telegram_id}; chars={len(message)}")
+            result='✅ پیام برای مشتری ارسال شد.'
+        except Exception as ex:
+            result='ارسال پیام انجام نشد: '+str(ex)[:500]
+        self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,result)
+        if row_id:self.client_detail(chat_id,row_id)
 
     def client_delivery(self,chat_id:int,row_id:int):
         email=self.client_row(row_id)

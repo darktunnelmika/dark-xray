@@ -624,6 +624,47 @@ def test_bot_v6_owner_representative_control_center(env):
         worker.api.close()
 
 
+def test_bot_v6_customer_crm_filters_360_and_direct_message(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    now_ms=int(time.time()*1000)
+    create(c,email='crm-v6',extra={
+        'tgId':995001,'totalGB':10*1024**3,
+        'expiryTime':now_ms+48*3600*1000,
+    })
+    center=c.app.state.telegram_runtime.customer
+    with center.store.transaction() as db:
+        center._credit_tx(db,'dark',995001,200000,'topup','crm-wallet','crm test')
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(inbound_id)).status_code==200
+    c.app.state.telegram_commerce.create_order('dark',995001,'crmuser','turbo','turbo-30')
+    ticket=center.create_ticket('dark',995001,'crmuser','CRM support')
+    center.add_ticket_message('dark',ticket['id'],'customer',995001,text='Need help')
+    worker,sent=_bot_worker(c,992110)
+    try:
+        worker.admin_clients(992110,'expiring')
+        assert any('DARK CUSTOMER CRM / EXPIRING' in text for _,text,_ in sent)
+        with store.lock:
+            row_id=int(store.db.execute("SELECT rowid FROM clients WHERE owner='dark' AND id='crm-v6'").fetchone()[0])
+        worker.client_detail(992110,row_id)
+        assert any('CUSTOMER 360' in text and 'crm-v6' in text and 'Orders: 1' in text and 'تیکت باز: 1' in text for _,text,_ in sent)
+        worker.customer_orders_admin(992110,995001)
+        assert any('CUSTOMER ORDERS' in text for _,text,_ in sent)
+        worker.customer_tickets_admin(992110,995001)
+        assert any('CUSTOMER SUPPORT' in text for _,text,_ in sent)
+        worker.start_direct_message(992110,992110,row_id)
+        worker.handle_crm_text(992110,992110,'Hello from DARK CRM')
+        worker.send_direct_message(992110,992110)
+        direct=[x for x in sent if x[0]==995001 and 'DARK MESSAGE' in x[1]]
+        assert len(direct)==1 and 'Hello from DARK CRM' in direct[0][1]
+        with store.lock:
+            audit=store.db.execute("""SELECT 1 FROM live_audit WHERE action='telegram.crm_message'
+              AND target='crm-v6' ORDER BY id DESC LIMIT 1""").fetchone()
+        assert audit
+    finally:
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
