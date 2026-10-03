@@ -401,7 +401,7 @@ def test_admin_v2_centers_render_without_external_side_effects(env):
     finally:
         worker.api.close()
     text='\n'.join(x[1] for x in sent)
-    assert 'DARK BOT ADMIN V3 → OPERATIONS V4' in text
+    assert 'DARK CONTROL / BOT V6' in text
     assert 'سرویس‌ها' in text
     assert 'مرکز گزارش DARK' in text
     assert 'DARK Full Backup' in text
