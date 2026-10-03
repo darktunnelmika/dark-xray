@@ -164,7 +164,7 @@ class BotWorker(CustomerBotFeatures):
                 ['🏠 داشبورد','👥 کاربران'],
                 ['📦 سرویس‌ها','🧾 سفارش‌ها'],
                 ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
-                ['📊 گزارش‌ها','🎫 پشتیبانی'],
+                ['📈 رشد و فروش','🎫 پشتیبانی'],
                 ['📣 اعلان‌ها','📱 Mini App'],
                 ['⚙️ تنظیمات ربات','💾 بکاپ'],
             ]
@@ -328,6 +328,7 @@ class BotWorker(CustomerBotFeatures):
         if text=='🛠 مدیریت فروشگاه' and self.is_admin(user_id):self.admin_store(chat_id);return
         if text in ('💳 پرداخت‌ها','💳 پرداخت دستی') and self.is_admin(user_id):self.admin_payments(chat_id);return
         if text=='📱 Mini App' and self.is_admin(user_id):self.admin_mini_app(chat_id);return
+        if text=='📈 رشد و فروش' and self.is_admin(user_id):self.admin_growth_center(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
         if text=='📣 اعلان‌ها' and self.is_admin(user_id):self.admin_broadcast_menu(chat_id);return
         if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
@@ -533,6 +534,12 @@ class BotWorker(CustomerBotFeatures):
             self.representative_clients(chat_id,data.split(':',1)[1]);return
         if data.startswith('repclient:') and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representative_client_detail(chat_id,int(data.split(':',1)[1]));return
+        if data=='growth' and self.is_admin(user_id):
+            self.admin_growth_center(chat_id);return
+        if data.startswith('growtpl:') and self.is_admin(user_id):
+            self.growth_campaign_preview(chat_id,user_id,data.split(':',1)[1]);return
+        if data=='growthreports' and self.is_admin(user_id):
+            self.admin_reports(chat_id);return
         if data=='bcmenu' and self.is_admin(user_id):
             self.admin_broadcast_menu(chat_id);return
         if data=='bcstatus' and self.is_admin(user_id):
@@ -754,7 +761,8 @@ class BotWorker(CustomerBotFeatures):
              {'text':'💳 پرداخت‌ها','callback_data':'ops_payments'}],
             [{'text':'📦 سرویس‌های حساس','callback_data':'ops_attention'},
              {'text':'🎫 پشتیبانی','callback_data':'ops_support'}],
-            [{'text':'📱 Mini App مدیریت','web_app':{'url':ops.mini_app_url(self.owner)}}]
+            [{'text':'📈 Growth Center','callback_data':'growth'},
+             {'text':'📱 Mini App مدیریت','web_app':{'url':ops.mini_app_url(self.owner)}}]
         ]})
 
     def admin_action_center(self,chat_id:int):
@@ -1366,8 +1374,81 @@ class BotWorker(CustomerBotFeatures):
         self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_delete',p['id'],mode)
         self.api.send(chat_id,'✅ '+mode)
 
+    def _growth_metrics(self)->dict[str,Any]:
+        now=time.time();day=now-86400;week=now-7*86400;month=now-30*86400
+        success=('paid','provisioned_waiting_activation','provisioned','renewed')
+        marks=','.join('?' for _ in success)
+        with self.runtime.store.lock:
+            db=self.runtime.store.db
+            revenue_30=int(db.execute(f"""SELECT COALESCE(SUM(amount_minor),0) FROM commerce_orders
+              WHERE owner=? AND updated_at>=? AND status IN ({marks})""",(self.owner,month,*success)).fetchone()[0])
+            success_30=int(db.execute(f"""SELECT COUNT(*) FROM commerce_orders
+              WHERE owner=? AND updated_at>=? AND status IN ({marks})""",(self.owner,month,*success)).fetchone()[0])
+            buyers_30=int(db.execute(f"""SELECT COUNT(DISTINCT buyer_telegram_id) FROM commerce_orders
+              WHERE owner=? AND updated_at>=? AND status IN ({marks})""",(self.owner,month,*success)).fetchone()[0])
+            repeat_30=int(db.execute(f"""SELECT COUNT(*) FROM (
+              SELECT buyer_telegram_id FROM commerce_orders WHERE owner=? AND updated_at>=?
+              AND status IN ({marks}) GROUP BY buyer_telegram_id HAVING COUNT(*)>=2)""",
+              (self.owner,month,*success)).fetchone()[0])
+            renew_30=int(db.execute("""SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND updated_at>=?
+              AND order_type='renewal' AND status='renewed'""",(self.owner,month)).fetchone()[0])
+            pending_value=int(db.execute("""SELECT COALESCE(SUM(amount_minor),0) FROM commerce_orders
+              WHERE owner=? AND created_at<=? AND status IN ('pending','awaiting_payment','payment_review')""",
+              (self.owner,now-1800)).fetchone()[0])
+        ops=getattr(self.runtime,'ops',None);d=ops.dashboard(self.owner) if ops else {}
+        segments={s:len(self._broadcast_targets(s)) for s in ('pending','expired','expiring','low')}
+        return {'revenue_today':int(d.get('revenue_today') or 0),'revenue_7d':int(d.get('revenue_7d') or 0),
+                'revenue_30d':revenue_30,'conversion_7d':float(d.get('conversion_7d') or 0),
+                'success_30d':success_30,'buyers_30d':buyers_30,'repeat_30d':repeat_30,'renewals_30d':renew_30,
+                'pending_value':pending_value,**segments}
+
+    def admin_growth_center(self,chat_id:int):
+        g=self._growth_metrics()
+        aov=int(g['revenue_30d']/g['success_30d']) if g['success_30d'] else 0
+        repeat_rate=round(g['repeat_30d']/g['buyers_30d']*100,1) if g['buyers_30d'] else 0.0
+        text=(f"📈 DARK GROWTH CENTER\n"
+              f"● SALES + RETENTION\n\n"
+              f"💰 امروز: {amount(g['revenue_today'],'IRT')}\n"
+              f"📊 ۷ روز: {amount(g['revenue_7d'],'IRT')} · Conversion {g['conversion_7d']}%\n"
+              f"◆ ۳۰ روز: {amount(g['revenue_30d'],'IRT')} · {g['success_30d']} فروش\n"
+              f"میانگین سفارش: {amount(aov,'IRT')}\n"
+              f"خریدار: {g['buyers_30d']} · تکرار خرید: {g['repeat_30d']} ({repeat_rate}%)\n"
+              f"تمدید موفق: {g['renewals_30d']}\n\n"
+              f"🎯 RETENTION POOLS\n"
+              f"🧾 پرداخت‌نشده >۳۰m: {g['pending']} · {amount(g['pending_value'],'IRT')}\n"
+              f"♻️ منقضی ۷ روز اخیر: {g['expired']}\n"
+              f"⌛ نزدیک انقضا: {g['expiring']} · 📉 کم‌حجم: {g['low']}")
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':f"🧾 بازیابی پرداخت · {g['pending']}",'callback_data':'growtpl:pending'},
+             {'text':f"♻️ بازگشت منقضی · {g['expired']}",'callback_data':'growtpl:expired'}],
+            [{'text':f"⌛ یادآوری تمدید · {g['expiring']}",'callback_data':'growtpl:expiring'},
+             {'text':f"📉 یادآوری حجم · {g['low']}",'callback_data':'growtpl:low'}],
+            [{'text':'📣 Broadcast Center','callback_data':'bcmenu'},
+             {'text':'📊 گزارش‌های سیستم','callback_data':'growthreports'}]
+        ]})
+
+    def growth_campaign_preview(self,chat_id:int,user_id:int,segment:str):
+        templates={
+            'pending':"🧾 سفارش شما هنوز تکمیل نشده است. اگر قصد خرید دارید، از فروشگاه DARK وارد شوید و پرداخت را کامل کنید.",
+            'expired':"♻️ سرویس شما اخیراً منقضی شده است. برای فعال‌سازی دوباره، وارد سرویس‌های من شوید و تمدید را انجام دهید.",
+            'expiring':"⌛ کمتر از ۳ روز تا پایان سرویس شما باقی مانده است. برای جلوگیری از قطع سرویس، تمدید را زودتر انجام دهید.",
+            'low':"📉 حجم سرویس شما رو به پایان است. وضعیت سرویس را بررسی کنید و در صورت نیاز تمدید یا خرید جدید انجام دهید."
+        }
+        if segment not in templates:raise PolicyError('Unknown growth campaign')
+        targets=self._broadcast_targets(segment)
+        if not targets:
+            self.api.send(chat_id,'برای این کمپین در حال حاضر مخاطبی وجود ندارد.');return
+        self.sessions[user_id]='broadcast_review'
+        self.session_data[user_id]={'segment':segment,'message':templates[segment],'target_count':len(targets)}
+        self.api.send(chat_id,
+            f"👁 GROWTH CAMPAIGN PREVIEW\nSegment: {segment}\nگیرنده: {len(targets)} نفر\n\n{templates[segment]}",
+            {'inline_keyboard':[[
+                {'text':'✅ قرار دادن در صف','callback_data':'bcsend'},
+                {'text':'❌ لغو','callback_data':'bccancel'}
+            ]]})
+
     def _broadcast_targets(self,segment:str)->list[int]:
-        if segment not in ('all','active','expiring','low'):raise PolicyError('Unknown broadcast segment')
+        if segment not in ('all','active','expiring','low','pending','expired'):raise PolicyError('Unknown broadcast segment')
         admin=int(self.bot_config()['admin_telegram_id'])
         if segment=='all':
             ids=set()
@@ -1388,6 +1469,14 @@ class BotWorker(CustomerBotFeatures):
                 if tid>0:ids.add(tid)
             ids.discard(admin);return sorted(ids)
         now_ms=int(time.time()*1000);ids=set()
+        if segment=='pending':
+            cutoff=time.time()-1800
+            with self.runtime.store.lock:
+                ids.update(int(r[0]) for r in self.runtime.store.db.execute("""SELECT DISTINCT buyer_telegram_id
+                  FROM commerce_orders WHERE owner=? AND created_at<=?
+                  AND status IN ('pending','awaiting_payment','payment_review')""",(self.owner,cutoff))
+                           if int(r[0] or 0)>0)
+            ids.discard(admin);return sorted(ids)
         for row in self.runtime.manager.list(self.actor()):
             if row.get('owner')!=self.owner:continue
             client=row.get('client') or {};tid=int(client.get('tgId') or 0)
@@ -1398,16 +1487,18 @@ class BotWorker(CustomerBotFeatures):
             if segment=='active' and enabled and (not expiry or expiry>now_ms):ids.add(tid)
             elif segment=='expiring' and expiry and now_ms<expiry<=now_ms+72*3600*1000:ids.add(tid)
             elif segment=='low' and total and remaining/total<=0.20:ids.add(tid)
+            elif segment=='expired' and expiry and now_ms-7*86400*1000<=expiry<=now_ms:ids.add(tid)
         return sorted(ids)
 
     def admin_broadcast_menu(self,chat_id:int):
-        counts={s:len(self._broadcast_targets(s)) for s in ('all','active','expiring','low')}
+        counts={s:len(self._broadcast_targets(s)) for s in ('all','active','expiring','low','pending','expired')}
         with self.runtime.store.lock:
             recent=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,status,total,sent,failed,created_at
               FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 3""",(self.owner,))]
         text=(f"📣 DARK BROADCAST CENTER\n"
               f"همه مشتری‌ها: {counts['all']} · فعال: {counts['active']}\n"
-              f"نزدیک انقضا: {counts['expiring']} · کم‌حجم: {counts['low']}\n\n"
+              f"نزدیک انقضا: {counts['expiring']} · کم‌حجم: {counts['low']}\n"
+              f"پرداخت‌نشده: {counts['pending']} · منقضی ۷ روز: {counts['expired']}\n\n"
               "پیام‌ها Queue می‌شوند و به‌صورت کنترل‌شده ارسال می‌شوند.")
         if recent:
             text+='\n\nآخرین ارسال‌ها:'
@@ -1418,6 +1509,8 @@ class BotWorker(CustomerBotFeatures):
              {'text':f"● فعال · {counts['active']}",'callback_data':'bcseg:active'}],
             [{'text':f"⌛ نزدیک انقضا · {counts['expiring']}",'callback_data':'bcseg:expiring'},
              {'text':f"📉 کم‌حجم · {counts['low']}",'callback_data':'bcseg:low'}],
+            [{'text':f"🧾 پرداخت‌نشده · {counts['pending']}",'callback_data':'bcseg:pending'},
+             {'text':f"♻️ منقضی · {counts['expired']}",'callback_data':'bcseg:expired'}],
             [{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}]
         ]})
 
@@ -1425,7 +1518,7 @@ class BotWorker(CustomerBotFeatures):
         targets=self._broadcast_targets(segment)
         if not targets:
             self.api.send(chat_id,'برای این گروه هیچ مشتری واجد شرایطی وجود ندارد.');return
-        labels={'all':'همه مشتری‌ها','active':'سرویس فعال','expiring':'نزدیک انقضا','low':'کم‌حجم'}
+        labels={'all':'همه مشتری‌ها','active':'سرویس فعال','expiring':'نزدیک انقضا','low':'کم‌حجم','pending':'پرداخت‌نشده','expired':'منقضی‌شده'}
         self.sessions[user_id]='broadcast_text'
         self.session_data[user_id]={'segment':segment}
         self.api.send(chat_id,f"📣 اعلان به {labels[segment]} · {len(targets)} نفر\n"
