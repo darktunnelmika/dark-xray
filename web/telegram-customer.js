@@ -1,5 +1,5 @@
 (()=>{'use strict';
-const tg=window.Telegram?.WebApp,app=document.getElementById('app');
+let tg=window.Telegram?.WebApp||null;const app=document.getElementById('app');
 const qs=new URLSearchParams(location.search),owner=qs.get('owner')||'',marker='/assets/telegram-customer.html',idx=location.pathname.lastIndexOf(marker),BASE=idx>=0?location.pathname.slice(0,idx):'';
 let data=null,tab='shop';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -7,9 +7,25 @@ const money=v=>Number(v||0).toLocaleString('fa-IR')+' تومان';
 const bytes=n=>{n=Number(n||0);if(!n)return '0 B';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i>1?n.toFixed(n>=10?1:2):Math.round(n))+' '+u[i]};
 const date=ms=>!ms?'بدون انقضا':new Date(Number(ms)).toLocaleString('fa-IR');
 const copy=async v=>{try{await navigator.clipboard.writeText(String(v));tg?.HapticFeedback?.notificationOccurred('success');return true}catch{return false}};
+function telegramWebApp(){tg=window.Telegram?.WebApp||tg;return tg}
+function launchInitData(){
+ const web=telegramWebApp();
+ if(web?.initData)return web.initData;
+ const read=params=>{try{return new URLSearchParams(params||'').get('tgWebAppData')||''}catch{return ''}};
+ return read(location.hash.replace(/^#/,''))||read(location.search.replace(/^\?/,''))||'';
+}
+async function waitForTelegramLaunch(timeout=4000){
+ const started=Date.now();
+ while(Date.now()-started<timeout){
+  const web=telegramWebApp(),raw=launchInitData();
+  if(web&&raw)return {web,raw};
+  await new Promise(resolve=>setTimeout(resolve,80));
+ }
+ return {web:telegramWebApp(),raw:launchInitData()};
+}
 async function api(path,method='GET',body){
  const sep=path.includes('?')?'&':'?',url=BASE+path+sep+'owner='+encodeURIComponent(owner);
- const r=await fetch(url,{method,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':tg?.initData||''},body:body===undefined?undefined:JSON.stringify(body)});
+ const r=await fetch(url,{method,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':launchInitData()},body:body===undefined?undefined:JSON.stringify(body)});
  const t=await r.text();let d={};try{d=t?JSON.parse(t):{};}catch{d={detail:t}}
  if(!r.ok)throw Error(d.detail||('HTTP '+r.status));return d;
 }
@@ -136,10 +152,12 @@ function bind(){
 async function boot(){
  try{
   if(!app)throw Error('محل نمایش Mini App پیدا نشد.');
-  if(window.__darkTelegramSdkError||!tg)throw Error('اتصال به Telegram Mini App برقرار نشد. ربات را ببند و دوباره از دکمه فروشگاه باز کن.');
-  if(!tg.initData)throw Error('فروشگاه باید از داخل دکمه Mini App همین ربات باز شود.');
+  if(window.__darkTelegramSdkError)throw Error('اتصال به Telegram Mini App برقرار نشد. Mini App را از پروفایل یا منوی همین ربات دوباره باز کن.');
+  const launch=await waitForTelegramLaunch();
+  if(!launch.web)throw Error('Telegram Mini App SDK در دسترس نیست. Mini App را از پروفایل یا منوی همین ربات باز کن.');
+  if(!launch.raw)throw Error('احراز هویت Telegram دریافت نشد. Mini App را از پروفایل یا منوی همین ربات دوباره باز کن.');
   if(!owner)throw Error('شناسه فروشگاه مشخص نیست.');
-  tg.ready();tg.expand();
+  tg=launch.web;tg.ready();tg.expand();
   await reload();
  }catch(e){
   const message=e?.message||String(e)||'خطای ناشناخته Mini App';
