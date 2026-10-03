@@ -36,3 +36,9 @@ test('first-connect customer promise remains visible in delivery and product rev
   assert.match(runtime,/مدت سرویس از اولین اتصال واقعی شروع می‌شود/);
   assert.match(runtime,/شروع زمان: اولین اتصال واقعی/);
 });
+
+test('customer account surfaces share the DARK V6 language',()=>{
+  for(const token of ['◉ DARK WALLET','▣ DARK SERVICES','◇ DARK SUPPORT','◆ DARK REPRESENTATIVE MARKET','⌂ منوی اصلی'])
+    assert.ok(customer.includes(token),token);
+  assert.match(customer,/شروع زمان: با اولین اتصال واقعی/);
+});
