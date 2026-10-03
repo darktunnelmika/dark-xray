@@ -1314,6 +1314,121 @@ class BotWorker(CustomerBotFeatures):
         self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_delete',p['id'],mode)
         self.api.send(chat_id,'✅ '+mode)
 
+    def _broadcast_targets(self,segment:str)->list[int]:
+        if segment not in ('all','active','expiring','low'):raise PolicyError('Unknown broadcast segment')
+        admin=int(self.bot_config()['admin_telegram_id'])
+        if segment=='all':
+            ids=set()
+            with self.runtime.store.lock:
+                for sql in (
+                    "SELECT telegram_id FROM customer_wallets WHERE owner=?",
+                    "SELECT buyer_telegram_id FROM commerce_orders WHERE owner=?",
+                    "SELECT telegram_id FROM customer_support_tickets WHERE owner=?",
+                    "SELECT telegram_id FROM customer_referrals WHERE owner=?"
+                ):
+                    try:
+                        ids.update(int(r[0]) for r in self.runtime.store.db.execute(sql,(self.owner,)) if int(r[0] or 0)>0)
+                    except Exception:
+                        pass
+            for row in self.runtime.manager.list(self.actor()):
+                if row.get('owner')!=self.owner:continue
+                tid=int((row.get('client') or {}).get('tgId') or 0)
+                if tid>0:ids.add(tid)
+            ids.discard(admin);return sorted(ids)
+        now_ms=int(time.time()*1000);ids=set()
+        for row in self.runtime.manager.list(self.actor()):
+            if row.get('owner')!=self.owner:continue
+            client=row.get('client') or {};tid=int(client.get('tgId') or 0)
+            if tid<=0 or tid==admin:continue
+            expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
+            used=int(row.get('used_bytes') or 0);remaining=max(0,total-used) if total else 0
+            enabled=client.get('enable') is not False and not row.get('block_reasons')
+            if segment=='active' and enabled and (not expiry or expiry>now_ms):ids.add(tid)
+            elif segment=='expiring' and expiry and now_ms<expiry<=now_ms+72*3600*1000:ids.add(tid)
+            elif segment=='low' and total and remaining/total<=0.20:ids.add(tid)
+        return sorted(ids)
+
+    def admin_broadcast_menu(self,chat_id:int):
+        counts={s:len(self._broadcast_targets(s)) for s in ('all','active','expiring','low')}
+        with self.runtime.store.lock:
+            recent=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,status,total,sent,failed,created_at
+              FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 3""",(self.owner,))]
+        text=(f"📣 DARK BROADCAST CENTER\n"
+              f"همه مشتری‌ها: {counts['all']} · فعال: {counts['active']}\n"
+              f"نزدیک انقضا: {counts['expiring']} · کم‌حجم: {counts['low']}\n\n"
+              "پیام‌ها Queue می‌شوند و به‌صورت کنترل‌شده ارسال می‌شوند.")
+        if recent:
+            text+='\n\nآخرین ارسال‌ها:'
+            for row in recent:
+                text+=f"\n• {row['status']} · {row['sent']}/{row['total']} · fail {row['failed']}"
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':f"👥 همه · {counts['all']}",'callback_data':'bcseg:all'},
+             {'text':f"● فعال · {counts['active']}",'callback_data':'bcseg:active'}],
+            [{'text':f"⌛ نزدیک انقضا · {counts['expiring']}",'callback_data':'bcseg:expiring'},
+             {'text':f"📉 کم‌حجم · {counts['low']}",'callback_data':'bcseg:low'}],
+            [{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}]
+        ]})
+
+    def start_broadcast(self,chat_id:int,user_id:int,segment:str):
+        targets=self._broadcast_targets(segment)
+        if not targets:
+            self.api.send(chat_id,'برای این گروه هیچ مشتری واجد شرایطی وجود ندارد.');return
+        labels={'all':'همه مشتری‌ها','active':'سرویس فعال','expiring':'نزدیک انقضا','low':'کم‌حجم'}
+        self.sessions[user_id]='broadcast_text'
+        self.session_data[user_id]={'segment':segment}
+        self.api.send(chat_id,f"📣 اعلان به {labels[segment]} · {len(targets)} نفر\n"
+                      "متن پیام را بفرست (حداکثر ۳۵۰۰ کاراکتر).\nبرای لغو: /cancel")
+
+    def handle_broadcast_text(self,chat_id:int,user_id:int,text:str):
+        if self.sessions.get(user_id)!='broadcast_text':raise PolicyError('Broadcast is not waiting for text')
+        message=text.strip()
+        if not 1<=len(message)<=3500:
+            self.api.send(chat_id,'متن اعلان باید بین ۱ تا ۳۵۰۰ کاراکتر باشد.');return
+        data=self.session_data.setdefault(user_id,{})
+        segment=str(data.get('segment') or '');targets=self._broadcast_targets(segment)
+        if not targets:
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'مخاطبی برای این اعلان باقی نمانده است.');return
+        data['message']=message;data['target_count']=len(targets);self.sessions[user_id]='broadcast_review'
+        preview=message if len(message)<=700 else message[:700]+'…'
+        self.api.send(chat_id,f"👁 پیش‌نمایش اعلان\nگیرنده: {len(targets)} نفر\n\n{preview}",
+                      {'inline_keyboard':[[
+                          {'text':'✅ قرار دادن در صف','callback_data':'bcsend'},
+                          {'text':'❌ لغو','callback_data':'bccancel'}
+                      ]]})
+
+    def queue_broadcast(self,chat_id:int,user_id:int):
+        if self.sessions.get(user_id)!='broadcast_review':raise PolicyError('Broadcast is not ready to queue')
+        data=dict(self.session_data.get(user_id) or {});segment=str(data.get('segment') or '')
+        message=str(data.get('message') or '');targets=self._broadcast_targets(segment)
+        if not targets:raise PolicyError('Broadcast target set is empty')
+        bid='bc_'+secrets.token_hex(8);now=time.time()
+        with self.runtime.store.transaction() as db:
+            db.execute("""INSERT INTO telegram_broadcasts
+              (id,owner,created_by,segment,message,status,total,sent,failed,created_at,started_at,completed_at)
+              VALUES(?,?,?,?,?,'queued',?,0,0,?,0,0)""",
+              (bid,self.owner,int(user_id),segment,message,len(targets),now))
+            db.executemany("""INSERT INTO telegram_broadcast_recipients
+              (broadcast_id,telegram_id,status,error,updated_at) VALUES(?,?,'pending','',?)""",
+              [(bid,int(tid),now) for tid in targets])
+        self.runtime.manager.audit(self.actor(),self.owner,'telegram.broadcast_queue',bid,
+                                   f"segment={segment}; targets={len(targets)}")
+        self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+        self.api.send(chat_id,f"✅ اعلان در صف قرار گرفت.\nID: {bid}\nگیرنده: {len(targets)} نفر",
+                      {'inline_keyboard':[[{'text':'📊 وضعیت ارسال‌ها','callback_data':'bcstatus'}]]})
+
+    def admin_broadcast_status(self,chat_id:int):
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT id,segment,status,total,sent,failed,created_at
+              FROM telegram_broadcasts WHERE owner=? ORDER BY created_at DESC LIMIT 8""",(self.owner,))]
+        if not rows:
+            self.api.send(chat_id,'📊 هنوز اعلانی در صف ثبت نشده است.');return
+        lines=['📊 DARK BROADCAST STATUS']
+        for r in rows:
+            when=time.strftime('%m/%d %H:%M',time.localtime(float(r['created_at'])))
+            lines.append(f"• {when} · {r['segment']} · {r['status']} · {r['sent']}/{r['total']} · fail {r['failed']}")
+        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':[[{'text':'‹ اعلان‌ها','callback_data':'bcmenu'}]]})
+
     def admin_reports(self,chat_id:int):
         st=self.runtime.forum.status(self.owner)
         if st.get('rebind_required'):
