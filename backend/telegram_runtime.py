@@ -71,29 +71,38 @@ class BotWorker(CustomerBotFeatures):
     def status(self,state:str,error:str=''):
         self.runtime.set_status(self.owner,state,error)
 
+    def configure_telegram_surface(self)->dict[str,Any]:
+        me=self.api.call('getMe');self.bot_id=int(me.get('id') or 0)
+        info=self.api.call('getWebhookInfo') or {}
+        webhook_removed=False
+        if info.get('url'):
+            self.api.call('deleteWebhook',{'drop_pending_updates':False});webhook_removed=True
+        self.api.call('setMyCommands',{'commands':[
+            {'command':'start','description':'شروع / منوی اصلی'},
+            {'command':'shop','description':'فروشگاه'},
+            {'command':'services','description':'سرویس‌های من'},
+            {'command':'status','description':'وضعیت'},
+        ]})
+        menu_ok=False;menu_error=''
+        ops=getattr(self.runtime,'ops',None)
+        if ops:
+            try:
+                self.api.call('setChatMenuButton',{'menu_button':{
+                    'type':'web_app','text':'فروشگاه',
+                    'web_app':{'url':ops.customer_mini_app_url(self.owner)}
+                }})
+                menu_ok=True
+            except Exception as ex:
+                menu_error=str(ex)[:500]
+        with self.runtime.store.transaction() as db:
+            db.execute("UPDATE telegram_bots SET bot_username=?,last_error='',last_seen=? WHERE owner=?",
+                       (str(me.get('username') or ''),time.time(),self.owner))
+        return {'username':str(me.get('username') or ''),'bot_id':self.bot_id,
+                'webhook_removed':webhook_removed,'menu_ok':menu_ok,'menu_error':menu_error}
+
     def run(self):
         try:
-            me=self.api.call('getMe');self.bot_id=int(me.get('id') or 0)
-            info=self.api.call('getWebhookInfo')
-            if info.get('url'):self.api.call('deleteWebhook',{'drop_pending_updates':False})
-            self.api.call('setMyCommands',{'commands':[
-                {'command':'start','description':'شروع / منوی اصلی'},
-                {'command':'shop','description':'فروشگاه'},
-                {'command':'services','description':'سرویس‌های من'},
-                {'command':'status','description':'وضعیت'},
-            ]})
-            with self.runtime.store.transaction() as db:
-                db.execute("UPDATE telegram_bots SET bot_username=?,last_error='',last_seen=? WHERE owner=?",
-                           (str(me.get('username') or ''),time.time(),self.owner))
-            ops=getattr(self.runtime,'ops',None)
-            if ops:
-                try:
-                    self.api.call('setChatMenuButton',{'menu_button':{
-                        'type':'web_app','text':'فروشگاه',
-                        'web_app':{'url':ops.customer_mini_app_url(self.owner)}
-                    }})
-                except Exception:
-                    pass
+            self.configure_telegram_surface()
             self.status('online')
             self.maybe_forum_prompt()
         except Exception as ex:
@@ -610,6 +619,16 @@ class BotWorker(CustomerBotFeatures):
             except Exception as ex:
                 self.api.send(chat_id,'اتصال مجدد انجام نشد: '+str(ex)[:700])
             return
+        if data=='bothealth' and self.is_admin(user_id):
+            self.bot_health(chat_id);return
+        if data=='botrepair' and self.is_admin(user_id):
+            self.api.send(chat_id,'Telegram commands/menu/webhook دوباره تنظیم شود؟',
+                          {'inline_keyboard':[[
+                              {'text':'✅ Repair','callback_data':'botrepairok'},
+                              {'text':'❌ لغو','callback_data':'noop'}
+                          ]]});return
+        if data=='botrepairok' and self.is_admin(user_id):
+            self.repair_telegram_surface(chat_id,user_id);return
         if data=='miniappsetup' and self.is_admin(user_id):
             self.mini_app_setup(chat_id);return
         if data=='paycfg' and self.is_admin(user_id):
@@ -1621,6 +1640,64 @@ class BotWorker(CustomerBotFeatures):
         if deep_link:kb.insert(1,[{'text':'◆ تست Profile / startapp','url':deep_link}])
         self.api.send(chat_id,text,{'inline_keyboard':kb})
 
+    def bot_health(self,chat_id:int):
+        cfg=self.bot_config();runtime=self.runtime.status(self.owner);now=time.time()
+        seen=float(cfg.get('last_seen') or 0);seen_age=None if seen<=0 else max(0,int(now-seen))
+        api_state='○ unavailable';api_username=str(cfg.get('bot_username') or '')
+        webhook='—';menu='—';surface_error=''
+        try:
+            me=self.api.call('getMe') or {};api_username=str(me.get('username') or api_username)
+            api_state='● API OK'
+        except Exception as ex:
+            surface_error='getMe: '+str(ex)[:300]
+        try:
+            info=self.api.call('getWebhookInfo') or {}
+            webhook='● polling' if not info.get('url') else '○ webhook set'
+        except Exception as ex:
+            if not surface_error:surface_error='webhook: '+str(ex)[:300]
+        try:
+            m=self.api.call('getChatMenuButton') or {}
+            menu=('● '+str(m.get('text') or m.get('type') or 'configured')) if m else '○ unknown'
+        except Exception:
+            menu='○ unknown'
+        forum=self.runtime.forum.status(self.owner)
+        with self.runtime.store.lock:
+            queued=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM telegram_broadcasts
+              WHERE owner=? AND status IN ('queued','running')""",(self.owner,)).fetchone()[0])
+            failed=int(self.runtime.store.db.execute("""SELECT COALESCE(SUM(failed),0) FROM telegram_broadcasts
+              WHERE owner=? AND created_at>=?""",(self.owner,now-86400)).fetchone()[0])
+        worker_alive=bool(self.thread and self.thread.is_alive())
+        state=str(runtime.get('runtime_state') or 'stopped')
+        last_error=str(cfg.get('last_error') or runtime.get('runtime_error') or '')
+        text=(f"🩺 DARK BOT HEALTH\n"
+              f"{api_state} · @{api_username or '—'}\n"
+              f"Runtime: {state} · Worker: {'● alive' if worker_alive else '○ not-threaded'}\n"
+              f"Last seen: {str(seen_age)+'s ago' if seen_age is not None else '—'}\n"
+              f"Update offset: {int(cfg.get('update_offset') or 0)}\n"
+              f"Webhook: {webhook}\nMenu: {menu}\n"
+              f"Forum: {'● connected' if forum.get('configured') else '○ not connected'}\n"
+              f"Broadcast queue: {queued} · fail 24h: {failed}")
+        if last_error:text+="\nLast error: "+last_error[:500]
+        if surface_error:text+="\nSurface check: "+surface_error[:500]
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'♻️ Repair Telegram Surface','callback_data':'botrepair'}],
+            [{'text':'📱 Mini App Setup','callback_data':'miniappsetup'},
+             {'text':'🔄 Refresh Health','callback_data':'bothealth'}]
+        ]})
+
+    def repair_telegram_surface(self,chat_id:int,user_id:int):
+        if not self.is_admin(user_id):raise PolicyError('Telegram admin required')
+        result=self.configure_telegram_surface();self.status('online');self.runtime.wake()
+        detail=f"webhook_removed={int(result['webhook_removed'])}; menu_ok={int(result['menu_ok'])}"
+        if result.get('menu_error'):detail+='; menu_error='+str(result['menu_error'])[:300]
+        self.runtime.manager.audit(self.actor(),self.owner,'telegram.bot_surface_repair',
+                                   str(result.get('username') or self.owner),detail)
+        self.api.send(chat_id,
+            "✅ Telegram Surface Repair انجام شد.\n"
+            f"Commands: applied\nWebhook: {'removed' if result['webhook_removed'] else 'already polling'}\n"
+            f"Store menu: {'applied' if result['menu_ok'] else 'needs attention'}")
+        self.bot_health(chat_id)
+
     def admin_settings(self,chat_id:int):
         cfg=self.bot_config();forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
         customer=self.runtime.customer.settings(self.owner)
@@ -1632,6 +1709,7 @@ class BotWorker(CustomerBotFeatures):
                       "Mini App URL برای همین Bot/Owner به‌صورت خودکار ساخته می‌شود.",
                       {'inline_keyboard':[
                           [{'text':'📱 فعال‌سازی Mini App','callback_data':'miniappsetup'}],
+                          [{'text':'🩺 سلامت و Repair ربات','callback_data':'bothealth'}],
                           [{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}]
                       ]})
 
