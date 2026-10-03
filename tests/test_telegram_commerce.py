@@ -893,3 +893,80 @@ def test_simple_store_v6_rejects_manual_values_outside_safe_ranges(env):
     for key,value in [('duration_days',0),('duration_days',3651),('volume_gb',1000001),('ip_limit',0),('ip_limit',1001)]:
         body=dict(base);body[key]=value
         assert c.post('/api/commerce/simple-plans',json=body).status_code in (400,422)
+
+def test_customer_receipt_goes_directly_to_admin_pv_not_forum(env):
+    store,_,_,_,client=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    admin_id=993001
+    user_id=993002
+    assert client.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
+    center=client.app.state.telegram_runtime.customer
+    center.ensure_referral_profile('dark',user_id)
+    top=center.create_topup('dark',user_id,'receipt-user',250000)
+    worker=BotWorker(client.app.state.telegram_runtime,'dark',token,'receipt-pv-test')
+    calls=[];fallback=[]
+    worker.api.call=lambda method,payload=None: calls.append((method,payload or {})) or {'message_id':1}
+    worker.api.send=lambda chat_id,text,reply_markup=None: fallback.append((chat_id,text,reply_markup))
+    forum_calls=[]
+    worker.runtime.forum.report_media=lambda *args,**kwargs: forum_calls.append((args,kwargs)) or True
+    try:
+        handled=worker.handle_customer_media(user_id,user_id,{'photo':[{'file_id':'small'},{'file_id':'receipt-photo'}]})
+    finally:
+        worker.api.close()
+    assert handled is True
+    media=[payload for method,payload in calls if method=='sendPhoto']
+    assert len(media)==1
+    assert media[0]['chat_id']==admin_id
+    assert media[0]['photo']=='receipt-photo'
+    assert 'رسید شارژ کیف پول' in media[0]['caption']
+    assert media[0]['reply_markup']['inline_keyboard'][0][0]['callback_data'].startswith('utopok:')
+    assert forum_calls==[]
+    with store.lock:
+        row=store.db.execute('SELECT status,receipt_ref FROM customer_topups WHERE id=?',(top['id'],)).fetchone()
+    assert row['status']=='review' and row['receipt_ref']=='telegram:photo:receipt-photo'
+
+
+def test_bot_settings_exposes_owner_scoped_customer_miniapp_setup(env):
+    store,_,_,auth,client=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    owner_admin=994001
+    assert client.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':owner_admin}).status_code==200
+    owner=BotWorker(client.app.state.telegram_runtime,'dark',token,'miniapp-owner')
+    owner_sent=[]
+    owner.api.send=lambda chat_id,text,reply_markup=None: owner_sent.append((chat_id,text,reply_markup))
+    try:
+        owner.admin_settings(owner_admin)
+        settings_markup=owner_sent[-1][2]
+        assert settings_markup['inline_keyboard'][0][0]['callback_data']=='miniappsetup'
+        owner.mini_app_setup(owner_admin)
+        text=owner_sent[-1][1];markup=owner_sent[-1][2]
+        assert 'فعال‌سازی Customer Mini App' in text
+        assert 'owner=dark' in text
+        assert 'URL مخصوص این ربات' in text and 'BotFather' in text
+        assert 'owner=dark' in markup['inline_keyboard'][0][0]['web_app']['url']
+    finally:
+        owner.api.close()
+
+    assert client.put('/api/owners/seller',json={
+        'name':'Seller','allowed':[],'volume_credit_bytes':50*1024**3,
+        'unlimited_credit':1,'max_clients':10}).status_code==200
+    assert client.post('/api/admins',json={
+        'username':'seller','password':'SellerPass88','role':'reseller'}).status_code==200
+    with store.transaction() as db:
+        db.execute("INSERT INTO telegram_bots(owner,enabled,token_enc,admin_telegram_id,updated_at) VALUES(?,?,?,?,?)",
+                   ('seller',0,auth.cipher.encrypt(token.encode()).decode(),994002,1.0))
+    seller=BotWorker(client.app.state.telegram_runtime,'seller',token,'miniapp-seller')
+    seller_sent=[]
+    seller.api.send=lambda chat_id,text,reply_markup=None: seller_sent.append((chat_id,text,reply_markup))
+    try:
+        seller.admin_settings(994002)
+        assert seller_sent[-1][2]['inline_keyboard'][0][0]['callback_data']=='miniappsetup'
+        seller.mini_app_setup(994002)
+        text=seller_sent[-1][1];url=seller_sent[-1][2]['inline_keyboard'][0][0]['web_app']['url']
+        assert 'Owner: seller' in text
+        assert 'owner=seller' in text and 'owner=seller' in url
+        assert 'owner=dark' not in url
+    finally:
+        seller.api.close()

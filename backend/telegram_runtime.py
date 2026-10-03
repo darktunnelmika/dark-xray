@@ -484,6 +484,8 @@ class BotWorker(CustomerBotFeatures):
             except Exception as ex:
                 self.api.send(chat_id,'اتصال مجدد انجام نشد: '+str(ex)[:700])
             return
+        if data=='miniappsetup' and self.is_admin(user_id):
+            self.mini_app_setup(chat_id);return
         if data=='paycfg' and self.is_admin(user_id):
             self.start_payment_setup(chat_id,user_id);return
         if data=='paytoggle' and self.is_admin(user_id):
@@ -1153,6 +1155,24 @@ class BotWorker(CustomerBotFeatures):
                       "بعد Restore، Bot Token عمداً حذف می‌شود و Token جدید + Rebind لازم است.\n"
                       f"آخرین وضعیت: {last}")
 
+    def mini_app_setup(self,chat_id:int):
+        ops=getattr(self.runtime,'ops',None)
+        if not ops:self.api.send(chat_id,'Mini App هنوز آماده نیست.');return
+        cfg=self.bot_config();url=ops.customer_mini_app_url(self.owner)
+        https=url.startswith('https://')
+        username=str(cfg.get('bot_username') or '')
+        bot_label=('@'+username) if username else 'Bot'
+        text=(f"📱 فعال‌سازی Customer Mini App\n\n"
+              f"Bot: {bot_label}\nOwner: {self.owner}\n"
+              f"HTTPS: {'آماده ✅' if https else 'نامعتبر ⛔'}\n\n"
+              f"URL مخصوص این ربات:\n{url}\n\n"
+              "BotFather → Bot Settings → Configure Mini App / Main Mini App\n"
+              "همین URL را بدون تغییر Paste کن. بعد از فعال‌سازی، دکمه «📱 فروشگاه» داخل ربات همین Mini App را باز می‌کند.")
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'🚀 تست Mini App','web_app':{'url':url}}],
+            [{'text':'🔄 دریافت دوباره URL','callback_data':'miniappsetup'}]
+        ]})
+
     def admin_settings(self,chat_id:int):
         cfg=self.bot_config();forum=self.runtime.forum.status(self.owner);gateway=self.manual_gateway()
         customer=self.runtime.customer.settings(self.owner)
@@ -1161,8 +1181,11 @@ class BotWorker(CustomerBotFeatures):
                       f"Bot: @{cfg.get('bot_username') or '—'}\nAdmin ID: {cfg.get('admin_telegram_id')}\n"
                       f"Forum: {forum_state}\nPayment: {'فعال' if gateway and gateway.get('enabled') else 'غیرفعال/تنظیم نشده'}\n"
                       f"Referral reward: {amount(customer['referral_reward_minor'],'IRT')}\n"
-                      "Token از پنل وب تغییر می‌کند؛ پرداخت دستی از همین Bot مدیریت می‌شود.",
-                      {'inline_keyboard':[[{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}]]})
+                      "Mini App URL برای همین Bot/Owner به‌صورت خودکار ساخته می‌شود.",
+                      {'inline_keyboard':[
+                          [{'text':'📱 فعال‌سازی Mini App','callback_data':'miniappsetup'}],
+                          [{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}]
+                      ]})
 
     def client_row(self,row_id:int)->str:
         with self.runtime.store.lock:

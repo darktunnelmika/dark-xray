@@ -464,12 +464,11 @@ class CustomerBotFeatures:
         caption=f"💰 رسید شارژ کیف پول\nکاربر: {user_id}\nمبلغ: {money(top['amount_minor'],top['currency'])}"
         markup={'inline_keyboard':[[{'text':'✅ تأیید شارژ','callback_data':'utopok:'+str(top['row_id'])},
                                     {'text':'❌ رد رسید','callback_data':'utopno:'+str(top['row_id'])}]]}
-        routed=False
-        try:routed=self.runtime.forum.report_media(self.api,self.owner,'payments',method,kind,file_id,caption,markup)
-        except Exception:routed=False
-        if not routed:
-            admin=int(self.bot_config()['admin_telegram_id'])
-            try:self.api.call(method,{'chat_id':admin,kind:file_id,'caption':caption,'reply_markup':markup})
-            except Exception:self.api.send(admin,caption,markup)
+        # Payment receipts are an actionable private admin message, not a
+        # reporting/forum artifact. Always deliver the original media directly
+        # to the configured admin PV so approve/reject controls stay with it.
+        admin=int(self.bot_config()['admin_telegram_id'])
+        try:self.api.call(method,{'chat_id':admin,kind:file_id,'caption':caption,'reply_markup':markup})
+        except Exception:self.api.send(admin,caption,markup)
         self.api.send(chat_id,'✅ رسید شارژ ثبت شد و برای مدیریت ارسال شد.')
         return True
