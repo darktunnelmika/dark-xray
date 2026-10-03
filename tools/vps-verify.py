@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import pwd
 import shutil
 import socket
 import sqlite3
@@ -34,6 +35,31 @@ def run_text(args:list[str],timeout:float=10)->tuple[int,str]:
         return cp.returncode,(cp.stdout or cp.stderr or '').strip()
     except (OSError,subprocess.TimeoutExpired) as ex:
         return 127,type(ex).__name__+': '+str(ex)
+
+
+def guard_status_as_service(cfg:Config)->dict:
+    """Read broker status through the same Unix peer identity as the panel service."""
+    if os.geteuid()!=0:
+        return BrokerClient(cfg.guard_socket).status()
+    account=pwd.getpwnam('darkxray')
+    code=(
+        "import json,sys;"
+        "sys.path.insert(0,sys.argv[1]);"
+        "from guard_bridge import BrokerClient;"
+        "print(json.dumps(BrokerClient(sys.argv[2]).status(),separators=(',',':')))"
+    )
+    def service_identity():
+        os.setgroups([])
+        os.setgid(account.pw_gid)
+        os.setuid(account.pw_uid)
+    cp=subprocess.run([sys.executable,'-c',code,str(ROOT/'backend'),cfg.guard_socket],
+                      capture_output=True,text=True,timeout=5,check=False,preexec_fn=service_identity)
+    if cp.returncode:
+        raise RuntimeError((cp.stderr or cp.stdout or 'Guard status probe failed').strip()[:500])
+    value=json.loads(cp.stdout)
+    if not isinstance(value,dict):
+        raise RuntimeError('Invalid Guard status response')
+    return value
 
 
 def sha256(path:Path)->str:
@@ -184,7 +210,7 @@ def main()->None:
 
         nft=shutil.which('nft') is not None
         guard=None
-        try:guard=BrokerClient(cfg.guard_socket).status()
+        try:guard=guard_status_as_service(cfg)
         except Exception as ex:guard={'ok':False,'error':type(ex).__name__+': '+str(ex)}
         if ipguard.get('mode')=='enforce':
             hard('ipguard_nft',nft,'nft binary required for enforcement')
