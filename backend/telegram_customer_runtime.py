@@ -603,7 +603,7 @@ class CustomerBotFeatures:
             self.runtime.customer.add_ticket_message(self.owner,ticket_id,'admin',user_id,text=value)
             ticket=self.runtime.customer.ticket(ticket_id,self.owner)
             self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
-            self.api.send(int(ticket['telegram_id']),f"◇ DARK SUPPORT\n{ticket['subject']}\n\n{value}",
+            self.api.send(int(ticket['telegram_id']),f"◇ DARK SUPPORT · پاسخ پشتیبانی\n{ticket['subject']}\n\n{value}",
                           {'inline_keyboard':[[{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(ticket['row_id'])},
                                                {'text':'📦 سرویس‌های من','callback_data':'svcmy'}]]})
             self.api.send(chat_id,'✅ پاسخ ارسال شد.');return
