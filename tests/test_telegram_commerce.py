@@ -376,8 +376,9 @@ def test_admin_v2_keyboard_exposes_daily_management_centers(env):
     try:
         text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
         for label in ('🏠 داشبورد','👥 کاربران','📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی',
-                      '📊 گزارش‌ها','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
+                      '📈 رشد و فروش','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
             assert label in text
+        assert '📊 گزارش‌ها' not in text
     finally:
         worker.api.close()
 
