@@ -492,6 +492,12 @@ class BotWorker(CustomerBotFeatures):
             self.price_inbounds_done(chat_id,user_id);return
         if data.startswith('stprimary:') and self.is_admin(user_id):
             self.price_choose_primary(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='ops_action' and self.is_admin(user_id):
+            self.admin_action_center(chat_id);return
+        if data=='ops_attention' and self.is_admin(user_id):
+            self.admin_attention_services(chat_id);return
+        if data.startswith('ordlist:') and self.is_admin(user_id):
+            self.admin_orders(chat_id,data.split(':',1)[1]);return
         if data=='ops_payments' and self.is_admin(user_id):
             self.admin_payments(chat_id);return
         if data=='ops_support' and self.is_admin(user_id):
@@ -630,28 +636,90 @@ class BotWorker(CustomerBotFeatures):
         pay_state='فعال ✅' if gateway and gateway.get('enabled') else ('غیرفعال ⛔' if gateway else 'تنظیم نشده')
         self.api.send(chat_id,f"📊 وضعیت DARK BOT\nForum: {forum_state}\nپرداخت دستی: {pay_state}\nکاربران: {clients}\nمحصولات: {products}\nسفارش‌ها: {orders}\nنیازمند پیگیری: {pending}")
 
+    def _service_attention(self)->dict[str,Any]:
+        now_ms=int(time.time()*1000);expiring=[];low=[]
+        for row in self.runtime.manager.list(self.actor()):
+            client=row.get('client') or {};email=str(row.get('email') or client.get('email') or '')
+            if not email:continue
+            expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
+            used=int(row.get('used_bytes') or 0);remaining=max(0,total-used) if total else 0
+            if expiry and now_ms<expiry<=now_ms+72*3600*1000:expiring.append((email,expiry))
+            if total and remaining/total<=0.20:low.append((email,remaining,total))
+        return {'expiring':expiring,'low':low}
+
+    def _admin_attention_counts(self)->dict[str,int]:
+        attention=self._service_attention()
+        with self.runtime.store.lock:
+            waiting=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM commerce_orders
+              WHERE owner=? AND status='provisioned_waiting_activation'""",(self.owner,)).fetchone()[0])
+            failed=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM commerce_orders
+              WHERE owner=? AND (fulfillment_error<>'' OR status IN ('payment_rejected','failed'))""",(self.owner,)).fetchone()[0])
+        open_support=len(self.runtime.customer.open_tickets(self.owner,100))
+        ops=getattr(self.runtime,'ops',None)
+        pending_payments=sum(1 for x in ops.payment_rows(self.owner,100) if x.get('reviewable')) if ops else 0
+        return {'payments':pending_payments,'waiting':waiting,'failed':failed,'support':open_support,
+                'expiring':len(attention['expiring']),'low':len(attention['low'])}
+
     def admin_dashboard(self,chat_id:int):
         ops=getattr(self.runtime,'ops',None)
         if not ops:
             self.api.send(chat_id,'داشبورد عملیات هنوز آماده نیست.');return
-        d=ops.dashboard(self.owner)
-        text=(f"🏠 DARK BOT ADMIN V3 → OPERATIONS V4\n"
-              f"💰 فروش امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']}/{d['orders_today']} سفارش\n"
+        d=ops.dashboard(self.owner);a=self._admin_attention_counts()
+        text=(f"◆ DARK CONTROL / BOT V6\n"
+              f"● ONLINE · ACTION CENTER\n\n"
+              f"💰 امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']}/{d['orders_today']} سفارش\n"
               f"📈 ۷ روز: {amount(d['revenue_7d'],d['currency'])} · Conversion {d['conversion_7d']}%\n"
-              f"🛍 پلن منتشرشده: {d['published_plans']} · مشتری خریدار: {d['customers']}\n"
-              f"💳 پرداخت نیازمند بررسی: {d['pending_payments']}\n"
-              f"💰 مانده کیف پول مشتری‌ها: {amount(d['wallet_liability'],d['currency'])}\n"
-              f"🎫 پشتیبانی باز: {d['support_open']} · فوری {d['support_urgent']}")
+              f"◈ محصول فعال: {d['published_plans']} · خریدار: {d['customers']}\n"
+              f"◉ Wallet Liability: {amount(d['wallet_liability'],d['currency'])}\n\n"
+              f"⚠️ نیازمند اقدام: {sum(a.values())}\n"
+              f"پرداخت {a['payments']} · پشتیبانی {a['support']} · خطای سفارش {a['failed']}\n"
+              f"اولین اتصال {a['waiting']} · نزدیک انقضا {a['expiring']} · کم‌حجم {a['low']}")
         if self.owner_role()=='owner':text+=f"\n🤝 نمایندگان فعال: {d['representatives']}"
         top=d.get('top_products') or []
         if top:
-            text+='\n\n🏆 Top Plans'
+            text+='\n\n🏆 TOP PLANS'
             for row in top[:3]:text+=f"\n• {row['name']} · {row['sales']} فروش · {amount(row['revenue_minor'],d['currency'])}"
         self.api.send(chat_id,text,{'inline_keyboard':[
-            [{'text':'📱 بازکردن Mini App مدیریت','web_app':{'url':ops.mini_app_url(self.owner)}}],
-            [{'text':'💳 Payment Center','callback_data':'ops_payments'},
-             {'text':'🎫 Support Center','callback_data':'ops_support'}]
+            [{'text':'⚠️ Action Center','callback_data':'ops_action'}],
+            [{'text':'🧾 سفارش‌ها','callback_data':'ordlist:all'},
+             {'text':'💳 پرداخت‌ها','callback_data':'ops_payments'}],
+            [{'text':'📦 سرویس‌های حساس','callback_data':'ops_attention'},
+             {'text':'🎫 پشتیبانی','callback_data':'ops_support'}],
+            [{'text':'📱 Mini App مدیریت','web_app':{'url':ops.mini_app_url(self.owner)}}]
         ]})
+
+    def admin_action_center(self,chat_id:int):
+        a=self._admin_attention_counts();total=sum(a.values())
+        text=(f"⚠️ DARK ACTION CENTER\n"
+              f"{'● همه‌چیز آرام است' if total==0 else 'مواردی که نیاز به نگاه شما دارند'}\n\n"
+              f"💳 پرداخت نیازمند بررسی: {a['payments']}\n"
+              f"🎫 تیکت باز: {a['support']}\n"
+              f"⚠️ سفارش خطادار/ردشده: {a['failed']}\n"
+              f"🔌 منتظر اولین اتصال: {a['waiting']}\n"
+              f"⌛ انقضا تا ۷۲ ساعت: {a['expiring']}\n"
+              f"📉 حجم باقی‌مانده ≤۲۰٪: {a['low']}")
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'💳 پرداخت‌ها','callback_data':'ops_payments'},
+             {'text':'🎫 پشتیبانی','callback_data':'ops_support'}],
+            [{'text':'🔌 منتظر اتصال','callback_data':'ordlist:waiting'},
+             {'text':'⚠️ سفارش‌های مشکل‌دار','callback_data':'ordlist:failed'}],
+            [{'text':'📦 سرویس‌های حساس','callback_data':'ops_attention'}]
+        ]})
+
+    def admin_attention_services(self,chat_id:int):
+        attention=self._service_attention();items={};now_ms=int(time.time()*1000)
+        for email,expiry in attention['expiring']:
+            hours=max(0,int((expiry-now_ms)/3600000));items.setdefault(email,[]).append(f'⌛ {hours}h')
+        for email,remaining,total in attention['low']:
+            pct=int(remaining*100/max(1,total));items.setdefault(email,[]).append(f'📉 {pct}%')
+        if not items:
+            self.api.send(chat_id,'📦 سرویس حساس نداریم؛ کم‌حجم یا نزدیک انقضا نیست.');return
+        kb=[]
+        with self.runtime.store.lock:
+            for email,flags in list(items.items())[:30]:
+                row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(email,self.owner)).fetchone()
+                if row:kb.append([{'text':(' · '.join(flags)+' · '+email)[:62],'callback_data':'cl:'+str(row['rowid'])}])
+        self.api.send(chat_id,f"📦 DARK SERVICE WATCH\n{len(items)} سرویس نیازمند توجه",{'inline_keyboard':kb})
 
 
     def admin_services(self,chat_id:int):
@@ -1463,16 +1531,31 @@ class BotWorker(CustomerBotFeatures):
         self.api.send(chat_id,'✅ Inboundهای سرویس بروزرسانی شدند.')
         self.client_detail(chat_id,row_id)
 
-    def admin_orders(self,chat_id:int):
+    def admin_orders(self,chat_id:int,view:str='all'):
+        where="o.owner=?";params:list[Any]=[self.owner]
+        if view=='pending':where+=" AND o.status IN ('pending','awaiting_payment','payment_review','paid')"
+        elif view=='waiting':where+=" AND o.status='provisioned_waiting_activation'"
+        elif view=='done':where+=" AND o.status='provisioned'"
+        elif view=='failed':where+=" AND (o.fulfillment_error<>'' OR o.status IN ('payment_rejected','failed'))"
         with self.runtime.store.lock:
             rows=[dict(r) for r in self.runtime.store.db.execute(
-                "SELECT rowid AS row_id,* FROM commerce_orders WHERE owner=? ORDER BY created_at DESC LIMIT 15",(self.owner,))]
-        if not rows:self.api.send(chat_id,'هنوز سفارشی وجود ندارد.');return
-        buttons=[]
+                f"""SELECT o.rowid AS row_id,o.*,COALESCE(p.name,o.product_id) product_name
+                FROM commerce_orders o LEFT JOIN commerce_products p
+                ON p.owner=o.owner AND p.id=o.product_id WHERE {where}
+                ORDER BY o.created_at DESC LIMIT 20""",tuple(params))]
+        tabs=[[{'text':'همه','callback_data':'ordlist:all'},{'text':'Pending','callback_data':'ordlist:pending'}],
+              [{'text':'اولین اتصال','callback_data':'ordlist:waiting'},{'text':'تکمیل','callback_data':'ordlist:done'}],
+              [{'text':'⚠️ مشکل‌دار','callback_data':'ordlist:failed'}]]
+        if not rows:
+            self.api.send(chat_id,'🧾 DARK ORDERS\nدر این فیلتر سفارشی وجود ندارد.',{'inline_keyboard':tabs});return
+        states={'pending':'⏳','awaiting_payment':'💳','payment_review':'👁','paid':'⚙️',
+                'provisioned_waiting_activation':'🔌','provisioned':'✅','payment_rejected':'❌','failed':'⚠️'}
+        buttons=list(tabs)
         for r in rows:
-            label=f"{r['status']} · {amount(r['amount_minor'],r['currency'])} · {r['buyer_telegram_id']}"
-            buttons.append([{'text':label[:60],'callback_data':'ord:'+str(r['row_id'])}])
-        self.api.send(chat_id,'🧾 آخرین سفارش‌ها · برای جزئیات انتخاب کن:',{'inline_keyboard':buttons})
+            icon=states.get(str(r['status']),'•')
+            label=f"{icon} {r['product_name']} · {amount(r['amount_minor'],r['currency'])}"
+            buttons.append([{'text':label[:62],'callback_data':'ord:'+str(r['row_id'])}])
+        self.api.send(chat_id,f"🧾 DARK ORDERS / {view.upper()}\n{len(rows)} سفارش آخر",{'inline_keyboard':buttons})
 
     def order_detail(self,chat_id:int,row_id:int):
         with self.runtime.store.lock:
@@ -1487,7 +1570,12 @@ class BotWorker(CustomerBotFeatures):
               f"فعال‌سازی: {r.get('activation_mode') or '—'} · تحویل: {r.get('delivery_mode') or '—'}\n"
               f"IP/HWID: {r.get('ip_limit') or 0}/{r.get('hwid_limit') or 0}\nزمان: {created}")
         if r.get('fulfillment_error'):text+='\n⚠️ '+str(r['fulfillment_error'])[:600]
-        self.api.send(chat_id,text)
+        kb=[[{'text':'‹ سفارش‌ها','callback_data':'ordlist:all'}]]
+        if r.get('client_id'):
+            with self.runtime.store.lock:
+                client=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(self.owner,r['client_id'])).fetchone()
+            if client:kb.insert(0,[{'text':'📦 بازکردن سرویس','callback_data':'cl:'+str(client['rowid'])}])
+        self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def manual_gateway(self)->dict[str,Any]|None:
         return next((r for r in self.runtime.commerce.gateway_rows(self.owner)
@@ -1622,6 +1710,12 @@ class TelegramBotRuntime:
         self.marketplace=RepresentativeMarketplace(self.store,manager,auth,self.customer,commerce)
         self.stop_event=threading.Event();self.wake_event=threading.Event();self.thread=None
         self.workers:dict[str,BotWorker]={};self.statuses:dict[str,dict[str,Any]]={};self.lock=threading.RLock()
+        self.last_notification_scan=0.0
+        with self.store.transaction() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS telegram_customer_notifications(
+              owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,client_id TEXT NOT NULL,
+              event_key TEXT NOT NULL,sent_at REAL NOT NULL,
+              PRIMARY KEY(owner,telegram_id,client_id,event_key))""")
 
     def start(self):
         if self.thread and self.thread.is_alive():return
@@ -1644,10 +1738,60 @@ class TelegramBotRuntime:
                 self.sync_workers()
                 activated=self.commerce.activate_first_connections(self.manager)
                 self.notify_activations(activated)
+                now=time.time()
+                if now-self.last_notification_scan>=300:
+                    self.notify_service_health();self.last_notification_scan=now
             except Exception:
                 pass
             self.wake_event.wait(3);self.wake_event.clear()
         self.sync_workers(stop_all=True)
+
+    def _notification_sent(self,owner:str,telegram_id:int,client_id:str,event_key:str)->bool:
+        with self.store.lock:
+            return bool(self.store.db.execute("""SELECT 1 FROM telegram_customer_notifications
+              WHERE owner=? AND telegram_id=? AND client_id=? AND event_key=?""",
+              (owner,int(telegram_id),client_id,event_key)).fetchone())
+
+    def _mark_notification(self,owner:str,telegram_id:int,client_id:str,event_key:str):
+        with self.store.transaction() as db:
+            db.execute("""INSERT OR IGNORE INTO telegram_customer_notifications
+              (owner,telegram_id,client_id,event_key,sent_at) VALUES(?,?,?,?,?)""",
+              (owner,int(telegram_id),client_id,event_key,time.time()))
+
+    def notify_service_health(self):
+        now_ms=int(time.time()*1000)
+        with self.lock:workers=dict(self.workers)
+        for owner,worker in workers.items():
+            try:rows=self.manager.list(self.commerce.actor_for(owner))
+            except Exception:continue
+            for row in rows:
+                client=row.get('client') or {};telegram_id=int(client.get('tgId') or 0)
+                client_id=str(row.get('email') or client.get('email') or '')
+                if not telegram_id or not client_id:continue
+                expiry=int(client.get('expiryTime') or 0);total=int(client.get('totalGB') or 0)
+                used=int(row.get('used_bytes') or 0);remaining=max(0,total-used) if total else 0
+                events=[]
+                if expiry:
+                    left=expiry-now_ms
+                    if left<=0:events.append(('expired:'+str(expiry),'⛔ سرویس شما منقضی شده است.'))
+                    elif left<=24*3600*1000:events.append(('expiry24:'+str(expiry),'⌛ کمتر از ۲۴ ساعت تا انقضای سرویس باقی مانده.'))
+                    elif left<=72*3600*1000:events.append(('expiry72:'+str(expiry),'⌛ کمتر از ۳ روز تا انقضای سرویس باقی مانده.'))
+                if total:
+                    ratio=remaining/max(1,total);cycle=f"{total}:{expiry}"
+                    if ratio<=0.05:events.append(('volume5:'+cycle,'📉 حجم سرویس شما تقریباً تمام شده است.'))
+                    elif ratio<=0.20:events.append(('volume20:'+cycle,'📉 کمتر از ۲۰٪ حجم سرویس باقی مانده است.'))
+                for event_key,title in events:
+                    if self._notification_sent(owner,telegram_id,client_id,event_key):continue
+                    text=(f"◆ DARK SERVICE ALERT\n{title}\n"
+                          f"سرویس: {client_id}\n"
+                          f"باقی‌مانده: {'نامحدود' if not total else BotWorker.bytes(remaining)}")
+                    try:
+                        worker.api.send(telegram_id,text,{'inline_keyboard':[[
+                            {'text':'📦 سرویس‌های من','callback_data':'svcmy'},
+                            {'text':'🔄 تمدید','callback_data':'svcmy'}
+                        ]]})
+                    except Exception:continue
+                    self._mark_notification(owner,telegram_id,client_id,event_key)
 
     def notify_activations(self,items:list[dict[str,Any]]):
         for item in items:
