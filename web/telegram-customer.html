@@ -5,12 +5,27 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
 <title>DARK Customer</title>
-<script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+<script>
+window.__darkTelegramSdkLoaded=false;
+window.__darkTelegramSdkError=false;
+</script>
+<script src="https://telegram.org/js/telegram-web-app.js?63"
+        onload="window.__darkTelegramSdkLoaded=true"
+        onerror="window.__darkTelegramSdkError=true"></script>
 <script src="./vendor-qr.js"></script>
 <link rel="stylesheet" href="./telegram-customer.css">
 </head>
 <body>
-<div id="app"><div class="cu-loading">DARK XRAY · Customer</div></div>
+<div id="app">
+  <div class="cu-boot">
+    <div class="cu-boot-grid"></div>
+    <div class="cu-boot-orb"><span>DX</span></div>
+    <b>DARK XRAY</b>
+    <small>SECURE CUSTOMER TERMINAL</small>
+    <div class="cu-boot-line"><i></i></div>
+    <em>INITIALIZING MARKET...</em>
+  </div>
+</div>
 <script src="./telegram-customer.js" defer></script>
 </body>
 </html>

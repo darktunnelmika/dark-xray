@@ -1,7 +1,7 @@
 (()=>{'use strict';
 const tg=window.Telegram?.WebApp,app=document.getElementById('app');
 const qs=new URLSearchParams(location.search),owner=qs.get('owner')||'',marker='/assets/telegram-customer.html',idx=location.pathname.lastIndexOf(marker),BASE=idx>=0?location.pathname.slice(0,idx):'';
-let data=null,tab='home';
+let data=null,tab='shop';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>Number(v||0).toLocaleString('fa-IR')+' تومان';
 const bytes=n=>{n=Number(n||0);if(!n)return '0 B';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i>1?n.toFixed(n>=10?1:2):Math.round(n))+' '+u[i]};
@@ -21,7 +21,7 @@ const states={
 };
 function state(v){const x=states[v]||[v,''];return '<span class="cu-order-state"><i class="cu-dot '+x[1]+'"></i><small>'+esc(x[0])+'</small></span>'}
 function nav(){return '<nav class="cu-nav">'+[['home','⌂','خانه'],['shop','🛍','خرید'],['services','📦','سرویس‌ها'],['wallet','💰','کیف پول'],['support','🎫','پشتیبانی']].map(x=>'<button data-tab="'+x[0]+'" class="'+(tab===x[0]?'active':'')+'"><b>'+x[1]+'</b>'+x[2]+'</button>').join('')+'</nav>'}
-function header(){return '<header class="cu-head"><div><h1>DARK XRAY</h1><small>'+esc(data?.identity?.first_name||data?.identity?.username||'Customer')+'</small></div><span class="cu-wallet">'+money(data?.wallet?.balance_minor||0)+'</span></header>'}
+function header(){return '<header class="cu-head"><div class="cu-brand"><span class="cu-brand-mark">DX</span><div><small>DARK NETWORK / CUSTOMER NODE</small><h1>DARK XRAY</h1><em>'+esc(data?.identity?.first_name||data?.identity?.username||'Customer')+'</em></div></div><span class="cu-wallet"><small>WALLET</small>'+money(data?.wallet?.balance_minor||0)+'</span></header>'}
 function orderRows(limit=5){const rows=data.orders||[];return rows.length?'<div class="cu-list">'+rows.slice(0,limit).map(o=>'<button class="cu-row cu-btn" data-order="'+esc(o.id)+'"><div><b>'+esc(o.product_name||o.product_id)+'</b><small>'+money(o.amount_minor)+' · '+new Date(o.created_at*1000).toLocaleString('fa-IR')+'</small></div>'+state(o.status)+'</button>').join('')+'</div>':'<div class="cu-empty">هنوز سفارشی ثبت نشده است.</div>'}
 function serviceSummary(s){const pct=s.unlimited?0:Math.min(100,Math.round((s.used_bytes/Math.max(1,s.total_bytes))*100));return '<button class="cu-row cu-btn" data-service="'+encodeURIComponent(s.id)+'"><div><b>'+esc(s.name)+'</b><small>'+esc(s.id)+'</small><div class="cu-progress"><i style="width:'+pct+'%"></i></div><em>'+(s.unlimited?'نامحدود':bytes(s.remaining_bytes)+' باقی‌مانده')+' · '+date(s.expiry_ms)+'</em></div><span class="cu-pill '+(!s.blocked&&s.enabled?'ok':'warn')+'">'+(!s.blocked&&s.enabled?'فعال':'محدود')+'</span></button>'}
 function home(){
@@ -37,7 +37,7 @@ function home(){
 }
 function shop(){
  const rows=data.products||[];
- return '<section><div class="cu-card"><h2>🛍 خرید اشتراک</h2><small>پلن را انتخاب کن؛ جزئیات فنی از قبل توسط فروشنده تنظیم شده است.</small></div>'+
+ return '<section><div class="cu-shop-hero"><div><span>SECURE ACCESS MARKET</span><h2>خرید اشتراک</h2><p>پلن مناسب را انتخاب کن؛ تحویل سرویس و لینک اتصال از همین محیط انجام می‌شود.</p></div><i>ONLINE</i></div>'+
  (rows.length?rows.map(p=>'<div class="cu-card"><h2>'+esc(p.name)+'</h2><small>'+esc(p.description||p.category||'')+'</small><div class="cu-price-grid">'+(p.prices||[]).filter(x=>x.active).map(x=>'<button class="cu-price cu-btn" data-buy-product="'+esc(p.id)+'" data-buy-price="'+esc(x.id)+'"><b>'+esc(x.label)+'</b><small>'+money(x.price_minor)+' · '+x.duration_days+' روز</small><small>'+(x.volume_bytes?bytes(x.volume_bytes):'نامحدود')+' · IP '+x.ip_limit+'</small></button>').join('')+'</div></div>').join(''):'<div class="cu-card cu-empty">فعلاً پلنی برای فروش منتشر نشده است.</div>')+
  '<div class="cu-card"><h2>📜 وضعیت سفارش‌ها</h2>'+orderRows(20)+'</div></section>';
 }
@@ -133,6 +133,20 @@ function bind(){
  const top=document.getElementById('topup-form');if(top)top.onsubmit=async e=>{e.preventDefault();try{const r=await api('/api/telegram-customer/topups','POST',{amount_minor:Number(new FormData(top).get('amount'))}),p=r.payment||{};app.innerHTML='<main class="cu-shell"><button class="cu-btn cu-back" id="back">← برگشت</button><div class="cu-card"><h2>💰 شارژ کیف پول</h2><div class="cu-row"><div><small>مبلغ</small><b>'+money(r.topup.amount_minor)+'</b></div></div><p>شماره کارت</p><div class="cu-secret">'+esc(p.card_number||'—')+'</div><p>به نام: '+esc(p.card_holder||'—')+' · '+esc(p.bank_name||'')+'</p><div class="cu-notice">'+esc(p.instructions||'بعد از پرداخت، رسید را از ربات تلگرام ارسال کن.')+'</div><button class="cu-btn primary wide" id="open-bot" style="margin-top:10px">ارسال رسید در ربات</button></div></main>';document.getElementById('back').onclick=async()=>{await reload();tab='wallet';render()};document.getElementById('open-bot').onclick=()=>{if(p.bot_url)tg?.openTelegramLink?tg.openTelegramLink(p.bot_url):location.href=p.bot_url}}catch(ex){showError(ex)}};
  const tf=document.getElementById('ticket-form');if(tf)tf.onsubmit=async e=>{e.preventDefault();try{const fd=new FormData(tf);await api('/api/telegram-customer/tickets','POST',{subject:String(fd.get('subject')),message:String(fd.get('message'))});await reload();tab='support';render()}catch(ex){showError(ex)}};
 }
-async function boot(){try{if(!tg||!tg.initData)throw Error('فروشگاه باید از داخل ربات Telegram باز شود.');if(!owner)throw Error('شناسه فروشگاه مشخص نیست.');tg.ready();tg.expand();await reload()}catch(e){app.innerHTML='<div class="cu-error">⛔ '+esc(e.message)+'</div>'}}
+async function boot(){
+ try{
+  if(!app)throw Error('محل نمایش Mini App پیدا نشد.');
+  if(window.__darkTelegramSdkError||!tg)throw Error('اتصال به Telegram Mini App برقرار نشد. ربات را ببند و دوباره از دکمه فروشگاه باز کن.');
+  if(!tg.initData)throw Error('فروشگاه باید از داخل دکمه Mini App همین ربات باز شود.');
+  if(!owner)throw Error('شناسه فروشگاه مشخص نیست.');
+  tg.ready();tg.expand();
+  await reload();
+ }catch(e){
+  const message=e?.message||String(e)||'خطای ناشناخته Mini App';
+  if(app)app.innerHTML='<div class="cu-error"><b>⛔ فروشگاه باز نشد</b><br><br>'+esc(message)+'<br><br><button class="cu-btn" onclick="location.reload()">تلاش دوباره</button></div>';
+ }
+}
+window.addEventListener('error',e=>{if(app&&!app.querySelector('.cu-shell'))app.innerHTML='<div class="cu-error"><b>⛔ خطای Mini App</b><br><br>'+esc(e.message||'JavaScript error')+'</div>'});
+window.addEventListener('unhandledrejection',e=>{if(app&&!app.querySelector('.cu-shell'))app.innerHTML='<div class="cu-error"><b>⛔ خطای ارتباط فروشگاه</b><br><br>'+esc(e.reason?.message||e.reason||'Request failed')+'</div>'});
 boot();
 })();
