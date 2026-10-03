@@ -133,6 +133,20 @@ function bind(){
  const top=document.getElementById('topup-form');if(top)top.onsubmit=async e=>{e.preventDefault();try{const r=await api('/api/telegram-customer/topups','POST',{amount_minor:Number(new FormData(top).get('amount'))}),p=r.payment||{};app.innerHTML='<main class="cu-shell"><button class="cu-btn cu-back" id="back">← برگشت</button><div class="cu-card"><h2>💰 شارژ کیف پول</h2><div class="cu-row"><div><small>مبلغ</small><b>'+money(r.topup.amount_minor)+'</b></div></div><p>شماره کارت</p><div class="cu-secret">'+esc(p.card_number||'—')+'</div><p>به نام: '+esc(p.card_holder||'—')+' · '+esc(p.bank_name||'')+'</p><div class="cu-notice">'+esc(p.instructions||'بعد از پرداخت، رسید را از ربات تلگرام ارسال کن.')+'</div><button class="cu-btn primary wide" id="open-bot" style="margin-top:10px">ارسال رسید در ربات</button></div></main>';document.getElementById('back').onclick=async()=>{await reload();tab='wallet';render()};document.getElementById('open-bot').onclick=()=>{if(p.bot_url)tg?.openTelegramLink?tg.openTelegramLink(p.bot_url):location.href=p.bot_url}}catch(ex){showError(ex)}};
  const tf=document.getElementById('ticket-form');if(tf)tf.onsubmit=async e=>{e.preventDefault();try{const fd=new FormData(tf);await api('/api/telegram-customer/tickets','POST',{subject:String(fd.get('subject')),message:String(fd.get('message'))});await reload();tab='support';render()}catch(ex){showError(ex)}};
 }
-async function boot(){try{if(!tg||!tg.initData)throw Error('فروشگاه باید از داخل ربات Telegram باز شود.');if(!owner)throw Error('شناسه فروشگاه مشخص نیست.');tg.ready();tg.expand();await reload()}catch(e){app.innerHTML='<div class="cu-error">⛔ '+esc(e.message)+'</div>'}}
+async function boot(){
+ try{
+  if(!app)throw Error('محل نمایش Mini App پیدا نشد.');
+  if(window.__darkTelegramSdkError||!tg)throw Error('اتصال به Telegram Mini App برقرار نشد. ربات را ببند و دوباره از دکمه فروشگاه باز کن.');
+  if(!tg.initData)throw Error('فروشگاه باید از داخل دکمه Mini App همین ربات باز شود.');
+  if(!owner)throw Error('شناسه فروشگاه مشخص نیست.');
+  tg.ready();tg.expand();
+  await reload();
+ }catch(e){
+  const message=e?.message||String(e)||'خطای ناشناخته Mini App';
+  if(app)app.innerHTML='<div class="cu-error"><b>⛔ فروشگاه باز نشد</b><br><br>'+esc(message)+'<br><br><button class="cu-btn" onclick="location.reload()">تلاش دوباره</button></div>';
+ }
+}
+window.addEventListener('error',e=>{if(app&&!app.querySelector('.cu-shell'))app.innerHTML='<div class="cu-error"><b>⛔ خطای Mini App</b><br><br>'+esc(e.message||'JavaScript error')+'</div>'});
+window.addEventListener('unhandledrejection',e=>{if(app&&!app.querySelector('.cu-shell'))app.innerHTML='<div class="cu-error"><b>⛔ خطای ارتباط فروشگاه</b><br><br>'+esc(e.reason?.message||e.reason||'Request failed')+'</div>'});
 boot();
 })();
