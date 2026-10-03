@@ -923,7 +923,7 @@ def test_customer_receipt_goes_directly_to_admin_pv_not_forum(env):
     assert media[0]['reply_markup']['inline_keyboard'][0][0]['callback_data'].startswith('utopok:')
     assert forum_calls==[]
     with store.lock:
-        row=store.db.execute('SELECT status,receipt_ref FROM customer_wallet_topups WHERE id=?',(top['id'],)).fetchone()
+        row=store.db.execute('SELECT status,receipt_ref FROM customer_topups WHERE id=?',(top['id'],)).fetchone()
     assert row['status']=='review' and row['receipt_ref']=='telegram:photo:receipt-photo'
 
 
@@ -943,8 +943,8 @@ def test_bot_settings_exposes_owner_scoped_customer_miniapp_setup(env):
         owner.mini_app_setup(owner_admin)
         text=owner_sent[-1][1];markup=owner_sent[-1][2]
         assert 'فعال‌سازی Customer Mini App' in text
-        assert 'owner=dark' in text and 'https://' in text
-        assert 'BotFather' in text
+        assert 'owner=dark' in text
+        assert 'URL مخصوص این ربات' in text and 'BotFather' in text
         assert 'owner=dark' in markup['inline_keyboard'][0][0]['web_app']['url']
     finally:
         owner.api.close()
