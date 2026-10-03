@@ -79,3 +79,11 @@ test('Bot V6 Stage 4 keeps CRM owner scoped',()=>{
   assert.match(runtime,/WHERE owner=\? AND telegram_id=\?/);
   assert.match(runtime,/WHERE o\.owner=\? AND o\.buyer_telegram_id=\?/);
 });
+
+test('Bot V6 Stage 5 connects purchase, first-connect, alerts and renewal lifecycle',()=>{
+  for(const token of ['DARK SERVICE READY','WAITING FIRST CONNECTION','DARK SERVICE ACTIVATED','FIRST CONNECTION VERIFIED','DARK RENEW COMPLETE'])
+    assert.ok(runtime.includes(token)||customer.includes(token),token);
+  assert.match(runtime,/usvclink:/);
+  assert.match(runtime,/usvcrenew:/);
+  assert.match(runtime,/DARK SERVICE ALERT/);
+});
