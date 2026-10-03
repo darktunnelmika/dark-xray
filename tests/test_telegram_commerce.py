@@ -1,4 +1,5 @@
 import json
+import time
 from fastapi.testclient import TestClient
 
 from server import make_app
@@ -538,6 +539,37 @@ def test_admin_v3_keyboard_exposes_store_manager(env):
         assert '🛠 مدیریت فروشگاه' in text
         worker.admin_dashboard(992105)
     finally:
+        worker.api.close()
+
+
+def test_bot_v6_action_center_and_service_alert_dedupe(env):
+    store,_,_,_,c=env
+    create_inbound(c)
+    now_ms=int(time.time()*1000)
+    create(c,email='notify-v6',extra={
+        'tgId':994001,'totalGB':10*1024**3,
+        'expiryTime':now_ms+48*3600*1000,
+    })
+    worker,sent=_bot_worker(c,992107)
+    runtime=c.app.state.telegram_runtime
+    previous=runtime.workers.get('dark')
+    runtime.workers['dark']=worker
+    try:
+        worker.admin_dashboard(992107)
+        assert any('DARK CONTROL / BOT V6' in text and 'ACTION CENTER' in text for _,text,_ in sent)
+        runtime.notify_service_health()
+        alerts=[x for x in sent if x[0]==994001 and 'DARK SERVICE ALERT' in x[1]]
+        assert len(alerts)==1 and '۳ روز' in alerts[0][1]
+        runtime.notify_service_health()
+        alerts=[x for x in sent if x[0]==994001 and 'DARK SERVICE ALERT' in x[1]]
+        assert len(alerts)==1
+        with store.lock:
+            count=store.db.execute("""SELECT COUNT(*) FROM telegram_customer_notifications
+              WHERE owner='dark' AND telegram_id=994001 AND client_id='notify-v6'""").fetchone()[0]
+        assert count==1
+    finally:
+        if previous is None:runtime.workers.pop('dark',None)
+        else:runtime.workers['dark']=previous
         worker.api.close()
 
 
