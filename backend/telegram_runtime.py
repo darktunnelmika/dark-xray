@@ -142,15 +142,15 @@ class BotWorker(CustomerBotFeatures):
 
     def main_keyboard(self,admin:bool)->dict:
         ops=getattr(self.runtime,'ops',None)
-        customer_app={'text':'📱 فروشگاه','web_app':{'url':ops.customer_mini_app_url(self.owner)}} if ops else '📱 فروشگاه'
+        customer_app={'text':'◈ DARK Mini App','web_app':{'url':ops.customer_mini_app_url(self.owner)}} if ops else '◈ DARK Mini App'
         rows=[
-            ['🛍 خرید اشتراک','🔄 تمدید سرویس'],
-            ['💰 کیف پول + شارژ','📦 سرویس‌های من'],
-            ['👥 زیرمجموعه‌گیری','🎫 پشتیبانی'],
-            [customer_app],
+            ['⚡ خرید سرویس','📦 سرویس‌های من'],
+            ['🔄 تمدید سرویس','💳 کیف پول'],
+            ['🎫 پشتیبانی','🎁 دعوت دوستان'],
         ]
         if self.owner_role()=='owner':
-            rows.insert(3,['🏪 خرید پنل نمایندگی'])
+            rows.append(['🏪 پنل نمایندگی'])
+        rows.append([customer_app])
         if admin:
             rows=[
                 ['🏠 داشبورد','👥 کاربران'],
@@ -178,8 +178,34 @@ class BotWorker(CustomerBotFeatures):
         if admin and not forum.get('configured'):
             self.api.send(chat_id,'مرحله اول: انجمن گزارش DARK را انتخاب کن. ربات باید Admin انجمن باشد و مجوز مدیریت Topicها را داشته باشد.',
                           self.runtime.forum.request_keyboard());return
-        role='مدیریت + فروش' if admin else 'فروشگاه'
-        self.api.send(chat_id,f'DARK XRAY BOT\nحالت: {role}\nیکی از گزینه‌ها را انتخاب کن.',self.main_keyboard(admin))
+        if not admin:
+            try:
+                wallet=self.runtime.customer.wallet(self.owner,user_id)
+                services=self._customer_services(user_id)
+                active=sum(1 for x in services if not (x.get('block_reasons') or []))
+                with self.runtime.store.lock:
+                    pending=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM commerce_orders
+                      WHERE owner=? AND buyer_telegram_id=? AND status IN ('pending','awaiting_payment','payment_review')""",
+                      (self.owner,int(user_id))).fetchone()[0])
+                text=(f"⚡ DARK XRAY / CUSTOMER TERMINAL\n"
+                      f"● ONLINE · SECURE ACCESS\n\n"
+                      f"💳 کیف پول: {amount(wallet['balance_minor'],wallet['currency'])}\n"
+                      f"📡 سرویس‌ها: {active} فعال از {len(services)}\n"
+                      f"🧾 سفارش در انتظار: {pending}\n\n"
+                      "دسترسی موردنظر را انتخاب کن.")
+            except Exception:
+                text="⚡ DARK XRAY / CUSTOMER TERMINAL\n● ONLINE\n\nدسترسی موردنظر را انتخاب کن."
+            self.api.send(chat_id,text,self.main_keyboard(False));return
+        products=self.runtime.commerce.product_rows(self.owner)
+        active_products=sum(1 for x in products if x.get('active') and x.get('visible'))
+        with self.runtime.store.lock:
+            pending_orders=int(self.runtime.store.db.execute(
+                "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND status='pending'",(self.owner,)).fetchone()[0])
+        self.api.send(chat_id,
+            f"⚡ DARK CONTROL / OWNER TERMINAL\n● BOT ONLINE\n\n"
+            f"🛒 محصولات فعال: {active_products}\n🧾 سفارش Pending: {pending_orders}\n"
+            "مدیریت DARK XRAY آماده است.",
+            self.main_keyboard(True))
 
     def maybe_forum_prompt(self,force:bool=False):
         forum=self.runtime.forum.status(self.owner)
@@ -252,14 +278,14 @@ class BotWorker(CustomerBotFeatures):
             if len(parts)==2 and parts[1].startswith('ref_'):
                 self.runtime.customer.register_referral(self.owner,user_id,parts[1][4:])
             self.send_home(chat_id,user_id);return
-        if low=='/shop' or text=='🛍 خرید اشتراک':self.shop(chat_id);return
+        if low=='/shop' or text in ('🛍 خرید اشتراک','⚡ خرید سرویس'):self.shop(chat_id);return
         if text=='🔄 تمدید سرویس':self.customer_renew_services(chat_id,user_id);return
-        if text=='💰 کیف پول + شارژ':self.customer_wallet_menu(chat_id,user_id);return
+        if text in ('💰 کیف پول + شارژ','💳 کیف پول'):self.customer_wallet_menu(chat_id,user_id);return
         if low=='/services' or text=='📦 سرویس‌های من':self.services(chat_id,user_id);return
-        if text=='👥 زیرمجموعه‌گیری':self.customer_referral_menu(chat_id,user_id);return
-        if text=='🏪 خرید پنل نمایندگی' and self.owner_role()=='owner':
+        if text in ('👥 زیرمجموعه‌گیری','🎁 دعوت دوستان'):self.customer_referral_menu(chat_id,user_id);return
+        if text in ('🏪 خرید پنل نمایندگی','🏪 پنل نمایندگی') and self.owner_role()=='owner':
             self.customer_representative_marketplace(chat_id,user_id);return
-        if text=='📱 فروشگاه' and not self.is_admin(user_id):
+        if text in ('📱 فروشگاه','◈ DARK Mini App') and not self.is_admin(user_id):
             ops=getattr(self.runtime,'ops',None)
             if ops:self.api.send(chat_id,'📱 فروشگاه DARK',{'inline_keyboard':[[{'text':'🚀 بازکردن فروشگاه','web_app':{'url':ops.customer_mini_app_url(self.owner)}}]]})
             else:self.api.send(chat_id,'Mini App فروشگاه در دسترس نیست.')
@@ -376,6 +402,17 @@ class BotWorker(CustomerBotFeatures):
             self.start_simple_plan_create(chat_id,user_id);return
         if data=='stlist' and self.is_admin(user_id):
             self.admin_store_products(chat_id);return
+        if data=='stshoppreview' and self.is_admin(user_id):
+            self.customer_shop(chat_id);return
+        if data=='stadvanced' and self.is_admin(user_id):
+            self.start_product_create(chat_id,user_id);return
+        if data.startswith('stsname:') and self.is_admin(user_id):
+            self.simple_plan_choose_name(chat_id,user_id,data.split(':',1)[1]);return
+        if data.startswith('stscat:') and self.is_admin(user_id):
+            self.simple_plan_choose_category(chat_id,user_id,data.split(':',1)[1]);return
+        if data=='stscatcustom' and self.is_admin(user_id):
+            if self.sessions.get(user_id)!='store_simple_category_wait':raise PolicyError('Simple plan wizard is not waiting for category')
+            self.sessions[user_id]='store_simple_category';self.api.send(chat_id,'نام دسته را بفرست؛ مثال: Family / Premium / Night.');return
         if data.startswith('stprod:') and self.is_admin(user_id):
             self.admin_product_detail(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('ststype:') and self.is_admin(user_id):
@@ -645,12 +682,20 @@ class BotWorker(CustomerBotFeatures):
         active=sum(1 for p in products if p['active'] and p['visible'])
         variants=sum(len(p.get('prices') or []) for p in products)
         cats=sorted({str(p.get('category') or 'General') for p in products})
+        with self.runtime.store.lock:
+            sold=int(self.runtime.store.db.execute(
+                "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND (status='paid' OR status LIKE 'provisioned%')",
+                (self.owner,)).fetchone()[0])
         self.api.send(chat_id,
-            f"🛠 STORE MANAGER V3\nمحصولات: {len(products)} · قابل فروش: {active}\n"
-            f"Price Variant: {variants}\nدسته‌ها: {', '.join(cats) if cats else '—'}",
+            f"⚡ DARK STORE / V6\n"
+            f"محصولات: {len(products)} · منتشرشده: {active} · Variant: {variants}\n"
+            f"فروش ثبت‌شده: {sold}\nدسته‌ها: {', '.join(cats) if cats else '—'}\n\n"
+            "ساخت سریع برای فروش روزمره است؛ تنظیمات پیشرفته جدا نگه داشته شده.",
             {'inline_keyboard':[
-                [{'text':'➕ ساخت پلن فروش','callback_data':'stnew'},
-                 {'text':'📦 پلن‌های فروش','callback_data':'stlist'}]
+                [{'text':'⚡ ساخت سریع محصول','callback_data':'stnew'},
+                 {'text':'📦 محصولات','callback_data':'stlist'}],
+                [{'text':'👁 پیش‌نمایش فروشگاه','callback_data':'stshoppreview'}],
+                [{'text':'⚙️ ساخت پیشرفته','callback_data':'stadvanced'}]
             ]})
 
     def admin_store_products(self,chat_id:int):
@@ -750,14 +795,49 @@ class BotWorker(CustomerBotFeatures):
 
     def start_simple_plan_create(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_name';self.session_data[user_id]={}
-        self.api.send(chat_id,'➕ نام پلن فروش را بفرست.\nمثال: Turbo 50GB\nبرای لغو: /cancel')
+        self.api.send(chat_id,
+            '⚡ ساخت سریع محصول · مرحله 1/8\nنام محصول را بفرست یا یکی از برندهای آماده را انتخاب کن.\nبرای لغو: /cancel',
+            {'inline_keyboard':[
+                [{'text':'⚡ مولتی توربو','callback_data':'stsname:multiturbo'},
+                 {'text':'🔥 DARK BOOST','callback_data':'stsname:darkboost'}],
+                [{'text':'💎 XRAY PRIME','callback_data':'stsname:xrayprime'},
+                 {'text':'🛡 DARK CORE','callback_data':'stsname:darkcore'}]
+            ]})
+
+    def _simple_plan_ask_category(self,chat_id:int,user_id:int):
+        self.sessions[user_id]='store_simple_category_wait'
+        self.api.send(chat_id,'مرحله 2/8 · دسته محصول را انتخاب کن:',{'inline_keyboard':[
+            [{'text':'🟢 اقتصادی','callback_data':'stscat:economy'},
+             {'text':'⚡ Turbo','callback_data':'stscat:turbo'}],
+            [{'text':'🌍 Multi','callback_data':'stscat:multi'},
+             {'text':'💎 VIP','callback_data':'stscat:vip'}],
+            [{'text':'🎮 Gaming','callback_data':'stscat:gaming'},
+             {'text':'✍️ سفارشی','callback_data':'stscatcustom'}]
+        ]})
+
+    def simple_plan_choose_name(self,chat_id:int,user_id:int,key:str):
+        if self.sessions.get(user_id)!='store_simple_name':raise PolicyError('Simple plan wizard is not waiting for name')
+        names={'multiturbo':'⚡ مولتی توربو','darkboost':'🔥 DARK BOOST',
+               'xrayprime':'💎 XRAY PRIME','darkcore':'🛡 DARK CORE'}
+        if key not in names:raise PolicyError('Invalid simple plan name preset')
+        self.session_data[user_id]['name']=names[key];self._simple_plan_ask_category(chat_id,user_id)
+
+    def simple_plan_choose_category(self,chat_id:int,user_id:int,key:str):
+        if self.sessions.get(user_id)!='store_simple_category_wait':raise PolicyError('Simple plan wizard is not waiting for category')
+        categories={'economy':'اقتصادی','turbo':'Turbo','multi':'Multi','vip':'VIP','gaming':'Gaming'}
+        if key not in categories:raise PolicyError('Invalid simple plan category')
+        self.session_data[user_id]['category']=categories[key]
+        self.sessions[user_id]='store_simple_type_wait'
+        self.api.send(chat_id,'مرحله 3/8 · نوع پلن را انتخاب کن:',{'inline_keyboard':[[
+            {'text':'📦 حجمی','callback_data':'ststype:volume'},
+            {'text':'♾ نامحدود','callback_data':'ststype:unlimited'}]]})
 
     def simple_plan_choose_type(self,chat_id:int,user_id:int,kind:str):
         if self.sessions.get(user_id)!='store_simple_type_wait':raise PolicyError('Simple plan wizard is not waiting for type')
         if kind not in ('volume','unlimited'):raise PolicyError('Invalid simple plan type')
         self.session_data[user_id]['plan_type']=kind
         self.sessions[user_id]='store_simple_price'
-        self.api.send(chat_id,'💵 قیمت پلن را به تومان بفرست؛ فقط عدد.')
+        self.api.send(chat_id,'مرحله 4/8 · قیمت پلن را به تومان بفرست؛ فقط عدد.')
 
     def simple_plan_choose_months(self,chat_id:int,user_id:int,months:int):
         if self.sessions.get(user_id)!='store_simple_duration_wait':raise PolicyError('Simple plan wizard is not waiting for duration')
@@ -766,10 +846,10 @@ class BotWorker(CustomerBotFeatures):
         if data.get('plan_type')=='unlimited':
             data['volume_gb']=0;self.simple_plan_ask_ip(chat_id,user_id);return
         self.sessions[user_id]='store_simple_volume_wait'
-        self.api.send(chat_id,'📦 حجم را انتخاب کن:',{'inline_keyboard':[
-            [{'text':'30 GB','callback_data':'stsvol:30'},{'text':'50 GB','callback_data':'stsvol:50'}],
-            [{'text':'100 GB','callback_data':'stsvol:100'},{'text':'200 GB','callback_data':'stsvol:200'}],
-            [{'text':'500 GB','callback_data':'stsvol:500'},{'text':'✍️ سفارشی','callback_data':'stsvolcustom'}]
+        self.api.send(chat_id,'مرحله 6/8 · حجم را انتخاب کن:',{'inline_keyboard':[
+            [{'text':'10 GB','callback_data':'stsvol:10'},{'text':'20 GB','callback_data':'stsvol:20'},{'text':'30 GB','callback_data':'stsvol:30'}],
+            [{'text':'50 GB','callback_data':'stsvol:50'},{'text':'100 GB','callback_data':'stsvol:100'},{'text':'200 GB','callback_data':'stsvol:200'}],
+            [{'text':'✍️ سفارشی','callback_data':'stsvolcustom'}]
         ]})
 
     def simple_plan_choose_volume(self,chat_id:int,user_id:int,volume:int):
@@ -779,7 +859,7 @@ class BotWorker(CustomerBotFeatures):
 
     def simple_plan_ask_ip(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_ip_wait'
-        self.api.send(chat_id,'🌐 محدودیت IP را انتخاب کن:',{'inline_keyboard':[[
+        self.api.send(chat_id,'مرحله 7/8 · محدودیت IP را انتخاب کن:',{'inline_keyboard':[[
             {'text':'1','callback_data':'stsip:1'},{'text':'2','callback_data':'stsip:2'},
             {'text':'3','callback_data':'stsip:3'},{'text':'4','callback_data':'stsip:4'},
             {'text':'5','callback_data':'stsip:5'}],
@@ -801,7 +881,7 @@ class BotWorker(CustomerBotFeatures):
             mark='✅' if x['id'] in selected else '⬜'
             kb.append([{'text':f"{mark} {x['name']} · :{x['port']}"[:62],'callback_data':'stsinb:'+str(x['id'])}])
         kb.append([{'text':'✅ پایان انتخاب لوکیشن','callback_data':'stsinbdone'}])
-        self.api.send(chat_id,'🌍 لوکیشن‌های این پلن را انتخاب کن:',{'inline_keyboard':kb})
+        self.api.send(chat_id,'مرحله 8/8 · لوکیشن‌های این پلن را انتخاب کن:',{'inline_keyboard':kb})
 
     def simple_plan_toggle_inbound(self,chat_id:int,user_id:int,inbound_id:int):
         if self.sessions.get(user_id)!='store_simple_inbounds':raise PolicyError('Simple plan wizard is not selecting inbounds')
@@ -821,16 +901,20 @@ class BotWorker(CustomerBotFeatures):
         locations=' · '.join(catalog.get(i,{}).get('name',str(i)) for i in ids)
         quota='نامحدود' if data.get('plan_type')=='unlimited' else str(data.get('volume_gb'))+' GB'
         self.api.send(chat_id,
-            f"👁 پیش‌نمایش پلن\n{data['name']}\n{quota} · {data['duration_days']} روز · IP {data['ip_limit']}\n"
+            f"✦ پیش‌نمایش نهایی\n{data['name']}\nدسته: {data.get('category') or 'General'}\n"
+            f"{quota} · {data['duration_days']} روز · IP {data['ip_limit']}\n"
             f"قیمت: {amount(data['price_minor'],'IRT')}\nلوکیشن‌ها: {locations}\n"
-            "فعال‌سازی: اولین اتصال · تحویل: Subscription + Portal · QR روشن · HWID خاموش",
+            "⏱ شروع زمان: اولین اتصال واقعی\n🔗 تحویل: Subscription + Portal · QR روشن · HWID خاموش",
             {'inline_keyboard':[[{'text':'✅ انتشار پلن','callback_data':'stspublish'},
                                  {'text':'❌ لغو','callback_data':'stscancel'}]]})
 
     def publish_simple_plan(self,chat_id:int,user_id:int):
         if self.sessions.get(user_id)!='store_simple_review':raise PolicyError('Simple plan wizard is not ready to publish')
         data=dict(self.session_data[user_id])
-        payload={'name':data['name'],'plan_type':data['plan_type'],'price_minor':int(data['price_minor']),
+        quota='نامحدود' if data['plan_type']=='unlimited' else str(int(data.get('volume_gb') or 0))+' GB'
+        payload={'name':data['name'],'category':data.get('category') or 'General',
+                 'description':f"DARK XRAY · {quota} · {int(data['duration_days'])} روز · IP {int(data['ip_limit'])}",
+                 'plan_type':data['plan_type'],'price_minor':int(data['price_minor']),
                  'duration_days':int(data['duration_days']),'volume_gb':int(data.get('volume_gb') or 0),
                  'ip_limit':int(data['ip_limit']),'inbound_ids':[int(x) for x in data['inbound_ids']],
                  'activation_mode':'first_connection','delivery_mode':'subscription','hwid_limit':0,
@@ -853,8 +937,11 @@ class BotWorker(CustomerBotFeatures):
         value=text.strip()
         if state=='store_simple_name':
             if not 1<=len(value)<=128:self.api.send(chat_id,'نام پلن نامعتبر است.');return
-            data['name']=value;self.sessions[user_id]='store_simple_type_wait'
-            self.api.send(chat_id,'نوع پلن را انتخاب کن:',{'inline_keyboard':[[
+            data['name']=value;self._simple_plan_ask_category(chat_id,user_id);return
+        if state=='store_simple_category':
+            if not 1<=len(value)<=64:self.api.send(chat_id,'دسته‌بندی نامعتبر است.');return
+            data['category']=value;self.sessions[user_id]='store_simple_type_wait'
+            self.api.send(chat_id,'مرحله 3/7 · نوع پلن را انتخاب کن:',{'inline_keyboard':[[
                 {'text':'📦 حجمی','callback_data':'ststype:volume'},
                 {'text':'♾ نامحدود','callback_data':'ststype:unlimited'}]]});return
         if state=='store_simple_price':
@@ -862,7 +949,7 @@ class BotWorker(CustomerBotFeatures):
             except ValueError:self.api.send(chat_id,'قیمت باید عدد صحیح باشد.');return
             if not 0<=n<=10**12:self.api.send(chat_id,'قیمت خارج از محدوده است.');return
             data['price_minor']=n;self.sessions[user_id]='store_simple_duration_wait'
-            self.api.send(chat_id,'مدت پلن را انتخاب کن:',{'inline_keyboard':[
+            self.api.send(chat_id,'مرحله 5/8 · مدت پلن را انتخاب کن:',{'inline_keyboard':[
                 [{'text':'1 ماه','callback_data':'stsmonth:1'},{'text':'2 ماه','callback_data':'stsmonth:2'},
                  {'text':'3 ماه','callback_data':'stsmonth:3'}],
                 [{'text':'6 ماه','callback_data':'stsmonth:6'},{'text':'12 ماه','callback_data':'stsmonth:12'}],
@@ -874,7 +961,7 @@ class BotWorker(CustomerBotFeatures):
             if not 1<=n<=3650:self.api.send(chat_id,'روز باید بین ۱ تا ۳۶۵۰ باشد.');return
             data['duration_days']=n
             if data.get('plan_type')=='unlimited':data['volume_gb']=0;self.simple_plan_ask_ip(chat_id,user_id);return
-            self.sessions[user_id]='store_simple_volume_wait';self.api.send(chat_id,'📦 حجم را انتخاب کن:',{'inline_keyboard':[[{'text':'30 GB','callback_data':'stsvol:30'},{'text':'50 GB','callback_data':'stsvol:50'}],[{'text':'100 GB','callback_data':'stsvol:100'},{'text':'200 GB','callback_data':'stsvol:200'}],[{'text':'500 GB','callback_data':'stsvol:500'},{'text':'✍️ سفارشی','callback_data':'stsvolcustom'}]]});return
+            self.sessions[user_id]='store_simple_volume_wait';self.api.send(chat_id,'مرحله 5/7 · حجم را انتخاب کن:',{'inline_keyboard':[[{'text':'10 GB','callback_data':'stsvol:10'},{'text':'20 GB','callback_data':'stsvol:20'},{'text':'30 GB','callback_data':'stsvol:30'}],[{'text':'50 GB','callback_data':'stsvol:50'},{'text':'100 GB','callback_data':'stsvol:100'},{'text':'200 GB','callback_data':'stsvol:200'}],[{'text':'✍️ سفارشی','callback_data':'stsvolcustom'}]]});return
         if state=='store_simple_ip':
             try:n=int(value)
             except ValueError:self.api.send(chat_id,'IP باید عدد صحیح باشد.');return

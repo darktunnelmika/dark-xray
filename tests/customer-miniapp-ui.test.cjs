@@ -23,6 +23,15 @@ test('Customer Mini App is wired to Telegram signed initData and customer-only A
  assert.doesNotMatch(js,/\/api\/telegram\/operations\//);
 });
 
+test('Customer Mini App supports signed Bot Profile / Main Mini App launch without auth bypass',()=>{
+ assert.match(js,/function launchInitData\(\)/);
+ assert.match(js,/tgWebAppData/);
+ assert.match(js,/waitForTelegramLaunch/);
+ assert.match(js,/Mini App را از پروفایل یا منوی همین ربات/);
+ assert.doesNotMatch(js,/فروشگاه باید از داخل دکمه Mini App همین ربات باز شود/);
+ assert.match(js,/X-Telegram-Init-Data':launchInitData\(\)/);
+});
+
 test('Customer Mini App covers purchase services wallet support and representative purchase without referral UI',()=>{
  for(const token of ['خرید اشتراک','سرویس‌های من','کیف پول','پشتیبانی','پنل نمایندگی'])
    assert.ok(js.includes(token)||html.includes(token),token);

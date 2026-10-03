@@ -574,10 +574,10 @@ def test_owner_customer_menu_adds_representative_marketplace(env):
     try:
         labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
         assert labels==[
-            '🛍 خرید اشتراک','🔄 تمدید سرویس',
-            '💰 کیف پول + شارژ','📦 سرویس‌های من',
-            '👥 زیرمجموعه‌گیری','🎫 پشتیبانی',
-            '🏪 خرید پنل نمایندگی','📱 فروشگاه',
+            '⚡ خرید سرویس','📦 سرویس‌های من',
+            '🔄 تمدید سرویس','💳 کیف پول',
+            '🎫 پشتیبانی','🎁 دعوت دوستان',
+            '🏪 پنل نمایندگی','◈ DARK Mini App',
         ]
     finally:
         worker.api.close()
@@ -786,9 +786,9 @@ def test_representative_panel_has_independent_bot_customer_wallet_store_and_supp
             assert '➕ ساخت نماینده' not in admin_labels
             customer_labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
             assert customer_labels==[
-                '🛍 خرید اشتراک','🔄 تمدید سرویس',
-                '💰 کیف پول + شارژ','📦 سرویس‌های من',
-                '👥 زیرمجموعه‌گیری','🎫 پشتیبانی','📱 فروشگاه',
+                '⚡ خرید سرویس','📦 سرویس‌های من',
+                '🔄 تمدید سرویس','💳 کیف پول',
+                '🎫 پشتیبانی','🎁 دعوت دوستان','◈ DARK Mini App',
             ]
         finally:
             worker.api.close()
@@ -853,6 +853,7 @@ def test_representative_bot_simple_plan_wizard_uses_only_allowed_inbounds(env):
         try:
             worker.start_simple_plan_create(991001,991001)
             worker.handle_store_text(991001,991001,'Rep Turbo')
+            worker.simple_plan_choose_category(991001,991001,'turbo')
             worker.simple_plan_choose_type(991001,991001,'volume')
             worker.handle_store_text(991001,991001,'350000')
             worker.simple_plan_choose_months(991001,991001,3)
@@ -872,7 +873,7 @@ def test_representative_bot_simple_plan_wizard_uses_only_allowed_inbounds(env):
     assert price['ip_limit']==2 and price['hwid_limit']==0
     assert json.loads(price['inbound_ids'])==[inbound_id]
     assert price['activation_mode']=='first_connection' and price['delivery_mode']=='subscription'
-    assert any('پیش‌نمایش پلن' in text for text,_ in sent)
+    assert any('پیش‌نمایش نهایی' in text for text,_ in sent)
     assert any('پلن فروش منتشر شد' in text for text,_ in sent)
 
 
