@@ -706,6 +706,39 @@ def test_bot_v6_lifecycle_purchase_first_connect_and_renewal(env):
         worker.api.close()
 
 
+def test_bot_v6_support_center_quick_reply_and_customer_360(env):
+    store,_,_,_,c=env
+    create_inbound(c)
+    create(c,email='support-v6',extra={'tgId':997001,'totalGB':4*1024**3})
+    center=c.app.state.telegram_runtime.customer
+    ticket=center.create_ticket('dark',997001,'supportv6','Connection issue')
+    center.add_ticket_message('dark',ticket['id'],'customer',997001,text='Please check my connection')
+    worker,sent=_bot_worker(c,992112)
+    try:
+        worker.admin_support(992112)
+        assert any('DARK SUPPORT CENTER' in text for _,text,_ in sent)
+        row_id=int(ticket['row_id'])
+        worker.admin_support_detail(992112,row_id)
+        detail=[x for x in sent if 'SUPPORT TICKET' in x[1]][-1]
+        buttons=[b for row in (detail[2] or {}).get('inline_keyboard',[]) for b in row]
+        assert any(str(b.get('callback_data','')).startswith('asupquick:') for b in buttons)
+        assert any(str(b.get('callback_data','')).startswith('asupcrm:') for b in buttons)
+        worker.admin_support_quick(992112,992112,row_id,'checking')
+        customer_msgs=[x for x in sent if x[0]==997001 and 'DARK SUPPORT' in x[1]]
+        assert customer_msgs and 'در حال بررسی' in customer_msgs[-1][1]
+        assert center.ticket(ticket['id'],'dark')['status']=='answered'
+        worker.admin_support_customer(992112,997001)
+        assert any('CUSTOMER 360' in text and 'support-v6' in text for _,text,_ in sent)
+        worker.admin_support_quick(992112,992112,row_id,'resolved')
+        assert center.ticket(ticket['id'],'dark')['status']=='closed'
+        with store.lock:
+            audit=store.db.execute("""SELECT 1 FROM live_audit WHERE action='telegram.support_quick'
+              AND target=? ORDER BY id DESC LIMIT 1""",(ticket['id'],)).fetchone()
+        assert audit
+    finally:
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
