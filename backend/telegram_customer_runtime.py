@@ -378,10 +378,39 @@ class CustomerBotFeatures:
         for t in rows[:15]:
             icon='🟢' if t['status']=='open' else ('🔵' if t['status']=='answered' else '⚫')
             kb.append([{'text':f"{icon} {t['subject']}"[:62],'callback_data':'supt:'+str(t['row_id'])}])
-        kb.append([{'text':'⌂ منوی اصلی','callback_data':'uhome'}])
+        kb.append([{'text':'🔔 اعلان‌های من','callback_data':'nprefs'},
+                   {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         self.api.send(chat_id,f"◇ DARK SUPPORT\n● {sum(1 for x in rows if x['status']!='closed')} گفت‌وگوی باز\n"
                       "تیکت جدید بساز یا گفت‌وگوی قبلی را ادامه بده.",
                       {'inline_keyboard':kb})
+
+    def customer_notification_preferences(self,chat_id:int,user_id:int):
+        p=self.runtime.notification_preferences(self.owner,user_id)
+        service='● روشن' if p['service_alerts_enabled'] else '○ خاموش'
+        marketing='● روشن' if p['marketing_enabled'] else '○ خاموش'
+        self.api.send(chat_id,
+            f"🔔 DARK NOTIFICATION CONTROL\n\n"
+            f"هشدارهای سرویس: {service}\n"
+            f"کم‌حجم، نزدیک انقضا و انقضا\n\n"
+            f"کمپین‌های فروش و پیشنهادها: {marketing}\n"
+            f"Growth / Retention Campaigns\n\n"
+            "پیام‌های ضروری خرید، پرداخت، اولین اتصال و پشتیبانی همیشه ارسال می‌شوند.",
+            {'inline_keyboard':[
+                [{'text':('خاموش‌کردن هشدار سرویس' if p['service_alerts_enabled'] else 'روشن‌کردن هشدار سرویس'),
+                  'callback_data':'nptoggle:service'}],
+                [{'text':('عدم دریافت پیام‌های فروش' if p['marketing_enabled'] else 'دریافت پیام‌های فروش'),
+                  'callback_data':'nptoggle:marketing'}],
+                [{'text':'‹ پشتیبانی','callback_data':'suplist'}]
+            ]})
+
+    def toggle_customer_notification(self,chat_id:int,user_id:int,key:str):
+        field={'service':'service_alerts_enabled','marketing':'marketing_enabled'}.get(key)
+        if not field:raise PolicyError('Unknown notification preference')
+        current=self.runtime.notification_preferences(self.owner,user_id)
+        updated=self.runtime.set_notification_preference(self.owner,user_id,field,not bool(current[field]))
+        self.runtime.manager.audit(self.actor(),self.owner,'telegram.notification_preference',str(user_id),
+                                   f"{field}={int(updated[field])}")
+        self.customer_notification_preferences(chat_id,user_id)
 
     def customer_ticket_detail(self,chat_id:int,user_id:int,row_id:int):
         t=self.runtime.customer.ticket_by_rowid(self.owner,row_id)
@@ -482,6 +511,10 @@ class CustomerBotFeatures:
             self.send_home(chat_id,user_id);return True
         if data=='svcmy':
             self.customer_services(chat_id,user_id);return True
+        if data=='nprefs':
+            self.customer_notification_preferences(chat_id,user_id);return True
+        if data.startswith('nptoggle:'):
+            self.toggle_customer_notification(chat_id,user_id,data.split(':',1)[1]);return True
         if data.startswith('rmplan:'):
             self.customer_representative_plan_detail(chat_id,user_id,int(data.split(':',1)[1]),False);return True
         if data.startswith('rmbuy:'):
