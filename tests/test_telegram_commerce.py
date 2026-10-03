@@ -665,6 +665,47 @@ def test_bot_v6_customer_crm_filters_360_and_direct_message(env):
         worker.api.close()
 
 
+def test_bot_v6_lifecycle_purchase_first_connect_and_renewal(env):
+    store,_,manager,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(
+        inbound_id,price_id='life-v6',price_minor=100000,duration_days=10,
+        volume_bytes=6*1024**3,activation_mode='first_connection')).status_code==200
+    center=c.app.state.telegram_runtime.customer
+    _credit_wallet(center,'dark',996001,500000,'seed-life')
+    order=center.commerce.create_order('dark',996001,'lifeuser','turbo','life-v6')
+    bought=center.pay_purchase('dark',order['id'])
+    assert bought['activation_pending'] is True
+    worker,sent=_bot_worker(c,992111)
+    runtime=c.app.state.telegram_runtime
+    previous=runtime.workers.get('dark')
+    runtime.workers['dark']=worker
+    try:
+        worker.send_delivery(996001,bought)
+        ready=[x for x in sent if x[0]==996001 and 'DARK SERVICE READY' in x[1]]
+        assert len(ready)==1 and 'WAITING FIRST CONNECTION' in ready[0][1]
+        buttons=[b for row in (ready[0][2] or {}).get('inline_keyboard',[]) for b in row]
+        assert any(str(b.get('callback_data','')).startswith('usvclink:') for b in buttons)
+        client_id=bought['client_id']
+        store.record_usage('life-v6-usage-1',client_id,100,200)
+        activated=center.commerce.activate_first_connections(manager)
+        assert activated and activated[0]['client_id']==client_id
+        runtime.notify_activations(activated)
+        active=[x for x in sent if x[0]==996001 and 'DARK SERVICE ACTIVATED' in x[1]]
+        assert len(active)==1 and 'FIRST CONNECTION VERIFIED' in active[0][1]
+        buttons=[b for row in (active[0][2] or {}).get('inline_keyboard',[]) for b in row]
+        assert any(str(b.get('callback_data','')).startswith('usvcrenew:') for b in buttons)
+        renewal=center.create_renewal_order('dark',996001,'lifeuser',client_id,'life-v6')
+        assert worker.handle_customer_callback('urpay:'+renewal['id'],996001,996001,{'id':996001,'username':'lifeuser'})
+        done=[x for x in sent if x[0]==996001 and 'DARK RENEW COMPLETE' in x[1]]
+        assert len(done)==1 and client_id in done[0][1]
+    finally:
+        if previous is None:runtime.workers.pop('dark',None)
+        else:runtime.workers['dark']=previous
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
