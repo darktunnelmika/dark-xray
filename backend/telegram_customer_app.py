@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
@@ -267,6 +268,15 @@ def install_customer_miniapp(app,runtime,writable):
     def auth(owner:str,init_data:str):
         try:return api.identity(owner,init_data)
         except PolicyError as ex:raise HTTPException(403,str(ex))
+
+    @app.get('/api/telegram-customer/launch')
+    def launch(owner:str):
+        row=runtime.commerce.bot_row(owner) or {}
+        username=str(row.get('bot_username') or '').strip().lstrip('@')
+        if not row.get('enabled') or not username:
+            raise HTTPException(404,'Customer bot launch is unavailable')
+        return {'bot_username':username,
+                'startapp_url':f"https://t.me/{username}?startapp={quote(str(owner),safe='')}"}
 
     @app.get('/api/telegram-customer/bootstrap')
     def bootstrap(owner:str,x_telegram_init_data:str=Header(default='',alias='X-Telegram-Init-Data')):
