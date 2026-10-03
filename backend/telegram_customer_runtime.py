@@ -176,9 +176,86 @@ class CustomerBotFeatures:
               f"شناسه: {email}\nمصرف: {usage}\nباقی‌مانده: {left}\nانقضا: {expiry_text}{activation}")
         buttons=[[{'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(row_id)}]]
         if renewal:buttons[0].append({'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(row_id)})
+        buttons.append([{'text':'🩺 بررسی هوشمند سرویس','callback_data':'usvcdiag:'+str(row_id)}])
         buttons.append([{'text':'⚡ خرید سرویس جدید','callback_data':'shopback'},
                         {'text':'⌂ منوی اصلی','callback_data':'uhome'}])
         self.api.send(chat_id,text,{'inline_keyboard':buttons})
+
+    def _service_doctor_snapshot(self,user_id:int,row_id:int)->dict[str,Any]:
+        email,detail=self._customer_client_row(user_id,row_id);client=detail.get('client') or {}
+        now_ms=int(time.time()*1000);expiry=int(client.get('expiryTime') or 0)
+        total=int(client.get('totalGB') or 0);used=int(detail.get('used_bytes') or 0)
+        remaining=max(0,total-used) if total else 0;reasons=list(detail.get('block_reasons') or [])
+        inbounds=[int(x) for x in (detail.get('inboundIds') or [])]
+        origin=self.runtime.customer.latest_service_order(self.owner,user_id,email)
+        waiting=bool(origin and str(origin.get('status') or '')=='provisioned_waiting_activation')
+        if waiting:
+            state='READY · WAITING FIRST CONNECTION'
+            verdict='سرویس آماده است و زمان آن هنوز شروع نشده. یک اتصال واقعی کافی است تا دوره سرویس فعال شود.'
+            action='connect'
+        elif 'expired' in reasons or (expiry and expiry<=now_ms):
+            state='ACTION REQUIRED · EXPIRED';verdict='زمان سرویس تمام شده است. برای ادامه اتصال، سرویس را تمدید کن.';action='renew'
+        elif 'client_quota' in reasons or (total and used>=total):
+            state='ACTION REQUIRED · VOLUME FINISHED';verdict='حجم سرویس تمام شده است. برای ادامه، تمدید یا سرویس جدید تهیه کن.';action='renew'
+        elif 'global_ip_quota' in reasons:
+            state='ACTION REQUIRED · IP LIMIT';verdict='محدودیت IP سرویس فعال شده است. اتصال‌های قبلی را ببند و دوباره تست کن.';action='support'
+        elif 'global_device_quota' in reasons:
+            state='ACTION REQUIRED · DEVICE LIMIT';verdict='محدودیت دستگاه/HWID فعال شده است. دستگاه‌های اضافی را قطع و دوباره تست کن.';action='support'
+        elif any(x in reasons for x in ('client_manual','owner_manual','owner_account_disabled','engine_manual_or_external_disable')):
+            state='NEEDS SUPPORT · ADMIN POLICY';verdict='این سرویس نیاز به بررسی مدیریت دارد.';action='support'
+        elif not inbounds:
+            state='NEEDS SUPPORT · NO DESTINATION';verdict='برای این سرویس مقصد فعالی ثبت نشده و نیاز به بررسی پشتیبانی دارد.';action='support'
+        elif client.get('enable') is False:
+            state='NEEDS SUPPORT · DISABLED';verdict='سرویس غیرفعال است و نیاز به بررسی پشتیبانی دارد.';action='support'
+        else:
+            state='READY';verdict='از نظر وضعیت حساب، حجم، زمان و مقصد سرویس مشکلی دیده نشد.';action='connect'
+        expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+        last=float(detail.get('activity_at') or 0)
+        last_text='هنوز اتصال ثبت نشده' if last<=0 else time.strftime('%Y-%m-%d %H:%M',time.localtime(last))
+        usage='نامحدود' if not total else f"{self.bytes(used)} / {self.bytes(total)}"
+        remaining_text='نامحدود' if not total else self.bytes(remaining)
+        return {'email':email,'row_id':int(row_id),'state':state,'verdict':verdict,'action':action,
+                'usage':usage,'remaining':remaining_text,'expiry':expiry_text,'inbound_count':len(inbounds),
+                'last_activity':last_text,'presence':str(detail.get('presence_state') or 'offline'),
+                'waiting':waiting,'reasons':reasons}
+
+    def customer_service_doctor(self,chat_id:int,user_id:int,row_id:int):
+        d=self._service_doctor_snapshot(user_id,row_id)
+        icon='●' if d['state']=='READY' or d['state'].startswith('READY ·') else '○'
+        text=(f"◆ DARK SERVICE DOCTOR\n{icon} {d['state']}\n\n"
+              f"سرویس: {d['email']}\n"
+              f"نتیجه: {d['verdict']}\n\n"
+              f"مصرف: {d['usage']}\nباقی‌مانده: {d['remaining']}\n"
+              f"انقضا: {d['expiry']}\nمقصدهای فعال: {d['inbound_count']}\n"
+              f"آخرین فعالیت: {d['last_activity']} · {d['presence']}")
+        kb=[[{'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(row_id)},
+             {'text':'🔄 تمدید','callback_data':'usvcrenew:'+str(row_id)}],
+            [{'text':'🛟 هنوز مشکل دارم','callback_data':'usvchelp:'+str(row_id)}],
+            [{'text':'‹ وضعیت سرویس','callback_data':'usvc:'+str(row_id)}]]
+        self.api.send(chat_id,text,{'inline_keyboard':kb})
+
+    def customer_service_help(self,chat_id:int,user_id:int,row_id:int,username:str):
+        d=self._service_doctor_snapshot(user_id,row_id)
+        subject=('Service Doctor · '+d['email'])[:128]
+        with self.runtime.store.lock:
+            existing=self.runtime.store.db.execute("""SELECT rowid AS row_id,* FROM customer_support_tickets
+              WHERE owner=? AND telegram_id=? AND subject=? AND status<>'closed'
+              ORDER BY updated_at DESC LIMIT 1""",(self.owner,int(user_id),subject)).fetchone()
+        if existing:
+            self.api.send(chat_id,'🎫 برای این سرویس یک تیکت باز وجود دارد؛ همان گفت‌وگو را ادامه بده.',
+                          {'inline_keyboard':[[{'text':'بازکردن تیکت','callback_data':'supt:'+str(existing['row_id'])}]]});return
+        ticket=self.runtime.customer.create_ticket(self.owner,user_id,username,subject)
+        snapshot=(f"Service Doctor Snapshot\n"
+                  f"Service: {d['email']}\nState: {d['state']}\n"
+                  f"Usage: {d['usage']}\nRemaining: {d['remaining']}\nExpiry: {d['expiry']}\n"
+                  f"Inbounds: {d['inbound_count']}\nLast activity: {d['last_activity']}\n"
+                  f"Presence: {d['presence']}\nResult: {d['verdict']}")
+        self.runtime.customer.add_ticket_message(self.owner,ticket['id'],'customer',user_id,text=snapshot)
+        self.notify_admin(f"🩺 Smart Ticket\n{d['email']}\nکاربر: {user_id}\n{d['state']}",
+                          {'inline_keyboard':[[{'text':'باز کردن تیکت','callback_data':'asupt:'+str(ticket['row_id'])}]]})
+        self.api.send(chat_id,'✅ تیکت هوشمند با Snapshot همین سرویس برای پشتیبانی ساخته شد.',
+                      {'inline_keyboard':[[{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(ticket['row_id'])},
+                                           {'text':'📦 سرویس من','callback_data':'usvc:'+str(row_id)}]]})
 
     def customer_connection(self,chat_id:int,user_id:int,row_id:int):
         email,detail=self._customer_client_row(user_id,row_id)
@@ -504,6 +581,10 @@ class CustomerBotFeatures:
             self.customer_service_detail(chat_id,user_id,int(data.split(':',1)[1]));return True
         if data.startswith('usvclink:'):
             self.customer_connection(chat_id,user_id,int(data.split(':',1)[1]));return True
+        if data.startswith('usvcdiag:'):
+            self.customer_service_doctor(chat_id,user_id,int(data.split(':',1)[1]));return True
+        if data.startswith('usvchelp:'):
+            self.customer_service_help(chat_id,user_id,int(data.split(':',1)[1]),str(sender.get('username') or ''));return True
         if data.startswith('usvcrenew:'):
             self.customer_renew_options(chat_id,user_id,int(data.split(':',1)[1]));return True
         if data.startswith('urnp:'):
