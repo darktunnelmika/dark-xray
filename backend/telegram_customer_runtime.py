@@ -322,26 +322,83 @@ class CustomerBotFeatures:
         self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb} if kb else None)
 
     def admin_support(self,chat_id:int):
-        rows=self.runtime.customer.open_tickets(self.owner,30)
-        if not rows:self.api.send(chat_id,'🎫 تیکت بازی وجود ندارد.');return
+        rows=self.runtime.customer.open_tickets(self.owner,50)
+        with self.runtime.store.lock:
+            answered=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM customer_support_tickets
+              WHERE owner=? AND status='answered'""",(self.owner,)).fetchone()[0])
+            opened=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM customer_support_tickets
+              WHERE owner=? AND status='open'""",(self.owner,)).fetchone()[0])
+        if not rows:
+            self.api.send(chat_id,'◇ DARK SUPPORT CENTER\n● تیکت بازی وجود ندارد.');return
         kb=[]
-        for t in rows:
-            kb.append([{'text':f"🎫 {t['subject']} · {t['telegram_id']}"[:62],
+        for t in rows[:30]:
+            icon='🟠' if t['status']=='open' else '🔵'
+            age=max(0,int((time.time()-float(t.get('updated_at') or 0))/60))
+            kb.append([{'text':f"{icon} {t['subject']} · {age}m"[:62],
                         'callback_data':'asupt:'+str(t['row_id'])}])
-        self.api.send(chat_id,'🎫 پشتیبانی مشتریان',{'inline_keyboard':kb})
+        self.api.send(chat_id,
+            f"◇ DARK SUPPORT CENTER\n🟠 منتظر پاسخ: {opened} · 🔵 پاسخ‌داده‌شده: {answered}",
+            {'inline_keyboard':kb})
 
     def admin_support_detail(self,chat_id:int,row_id:int):
         t=self.runtime.customer.ticket_by_rowid(self.owner,row_id)
         messages=self.runtime.customer.ticket_messages(self.owner,t['id'],20)
-        lines=[f"🎫 {t['subject']}\nکاربر: {t['telegram_id']} @{t['username'] or '—'}\nوضعیت: {t['status']}"]
+        lines=[f"◇ SUPPORT TICKET\n{t['subject']}\nکاربر: {t['telegram_id']} @{t['username'] or '—'}\nوضعیت: {t['status']}"]
         for m in messages:
-            who='مشتری' if m['sender_type']=='customer' else 'ادمین'
+            who='مشتری' if m['sender_type']=='customer' else 'پشتیبانی'
             lines.append(f"\n{who}: {(m['text'] or '['+m['file_kind']+']')[:700]}")
         kb=[]
         if t['status']!='closed':
-            kb=[[{'text':'✍️ پاسخ','callback_data':'asupreply:'+str(row_id)},
-                 {'text':'✅ بستن','callback_data':'asupclose:'+str(row_id)}]]
-        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb} if kb else None)
+            kb=[
+                [{'text':'✍️ پاسخ دستی','callback_data':'asupreply:'+str(row_id)},
+                 {'text':'👤 Customer 360','callback_data':'asupcrm:'+str(row_id)}],
+                [{'text':'🟡 در حال بررسی','callback_data':'asupquick:'+str(row_id)+':checking'},
+                 {'text':'🔄 ساب را آپدیت کن','callback_data':'asupquick:'+str(row_id)+':update'}],
+                [{'text':'📱 برنامه را بازنشانی کن','callback_data':'asupquick:'+str(row_id)+':restart'},
+                 {'text':'✅ حل شد + بستن','callback_data':'asupquick:'+str(row_id)+':resolved'}],
+                [{'text':'✅ فقط بستن','callback_data':'asupclose:'+str(row_id)}]
+            ]
+        else:
+            kb=[[{'text':'👤 Customer 360','callback_data':'asupcrm:'+str(row_id)}]]
+        self.api.send(chat_id,'\n'.join(lines),{'inline_keyboard':kb})
+
+    def admin_support_customer(self,chat_id:int,telegram_id:int):
+        rows=[r for r in self.runtime.manager.list(self.actor())
+              if r.get('owner')==self.owner and int((r.get('client') or {}).get('tgId') or 0)==int(telegram_id)]
+        if not rows:
+            self.api.send(chat_id,'این Telegram ID هنوز سرویس متصل در این پنل ندارد.');return
+        if len(rows)==1:
+            with self.runtime.store.lock:
+                row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",
+                                                  (self.owner,rows[0]['email'])).fetchone()
+            if row:self.client_detail(chat_id,int(row['rowid']));return
+        kb=[]
+        with self.runtime.store.lock:
+            for r in rows[:20]:
+                row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",
+                                                  (self.owner,r['email'])).fetchone()
+                if row:kb.append([{'text':r['email'][:62],'callback_data':'cl:'+str(row['rowid'])}])
+        self.api.send(chat_id,f"👤 CUSTOMER 360\nTelegram: {telegram_id}\nیک سرویس را انتخاب کن:",{'inline_keyboard':kb})
+
+    def admin_support_quick(self,chat_id:int,user_id:int,row_id:int,key:str):
+        templates={
+            'checking':'🟡 درخواست شما در حال بررسی است. نتیجه از همین تیکت اعلام می‌شود.',
+            'update':'🔄 لطفاً Subscription را در برنامه بروزرسانی کن و دوباره اتصال را تست کن.',
+            'restart':'📱 لطفاً برنامه را کامل ببند، دوباره باز کن، Subscription را بروزرسانی و مجدد تست کن.',
+            'resolved':'✅ مشکل از سمت پشتیبانی بررسی و برطرف شد. اگر دوباره تکرار شد یک تیکت جدید باز کن.'
+        }
+        if key not in templates:raise PolicyError('Unknown support quick reply')
+        t=self.runtime.customer.ticket_by_rowid(self.owner,row_id);message=templates[key]
+        self.runtime.customer.add_ticket_message(self.owner,t['id'],'admin',user_id,text=message)
+        if key=='resolved':self.runtime.customer.close_ticket(self.owner,t['id'])
+        self.runtime.manager.audit(self.actor(),self.owner,'telegram.support_quick',t['id'],key)
+        markup={'inline_keyboard':[[
+            {'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(row_id)},
+            {'text':'📦 سرویس‌های من','callback_data':'svcmy'}
+        ]]}
+        self.api.send(int(t['telegram_id']),f"◇ DARK SUPPORT\n{t['subject']}\n\n{message}",markup)
+        self.api.send(chat_id,'✅ پاسخ سریع ارسال شد'+(' و تیکت بسته شد.' if key=='resolved' else '.'))
+        self.admin_support_detail(chat_id,row_id)
 
     def handle_customer_callback(self,data:str,chat_id:int,user_id:int,sender:dict[str,Any])->bool:
         if data=='uhome':
@@ -503,6 +560,11 @@ class CustomerBotFeatures:
             self.runtime.customer.close_ticket(self.owner,t['id']);self.api.send(chat_id,'✅ تیکت بسته شد.');return True
         if data.startswith('asupt:') and self.is_admin(user_id):
             self.admin_support_detail(chat_id,int(data.split(':',1)[1]));return True
+        if data.startswith('asupcrm:') and self.is_admin(user_id):
+            t=self.runtime.customer.ticket_by_rowid(self.owner,int(data.split(':',1)[1]))
+            self.admin_support_customer(chat_id,int(t['telegram_id']));return True
+        if data.startswith('asupquick:') and self.is_admin(user_id):
+            _,row,key=data.split(':',2);self.admin_support_quick(chat_id,user_id,int(row),key);return True
         if data.startswith('asupreply:') and self.is_admin(user_id):
             row_id=int(data.split(':',1)[1]);t=self.runtime.customer.ticket_by_rowid(self.owner,row_id)
             self.sessions[user_id]='admin_support_reply';self.session_data[user_id]={'ticket_id':t['id']}
@@ -541,7 +603,9 @@ class CustomerBotFeatures:
             self.runtime.customer.add_ticket_message(self.owner,ticket_id,'admin',user_id,text=value)
             ticket=self.runtime.customer.ticket(ticket_id,self.owner)
             self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
-            self.api.send(int(ticket['telegram_id']),f"🎫 پاسخ پشتیبانی\n{ticket['subject']}\n\n{value}")
+            self.api.send(int(ticket['telegram_id']),f"◇ DARK SUPPORT\n{ticket['subject']}\n\n{value}",
+                          {'inline_keyboard':[[{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(ticket['row_id'])},
+                                               {'text':'📦 سرویس‌های من','callback_data':'svcmy'}]]})
             self.api.send(chat_id,'✅ پاسخ ارسال شد.');return
         if state=='customer_admin_referral_reward' and self.is_admin(user_id):
             try:reward=int(value.replace(',',''))
