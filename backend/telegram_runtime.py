@@ -403,6 +403,17 @@ class BotWorker(CustomerBotFeatures):
             self.start_simple_plan_create(chat_id,user_id);return
         if data=='stlist' and self.is_admin(user_id):
             self.admin_store_products(chat_id);return
+        if data=='stshoppreview' and self.is_admin(user_id):
+            self.customer_shop(chat_id);return
+        if data=='stadvanced' and self.is_admin(user_id):
+            self.start_product_create(chat_id,user_id);return
+        if data.startswith('stsname:') and self.is_admin(user_id):
+            self.simple_plan_choose_name(chat_id,user_id,data.split(':',1)[1]);return
+        if data.startswith('stscat:') and self.is_admin(user_id):
+            self.simple_plan_choose_category(chat_id,user_id,data.split(':',1)[1]);return
+        if data=='stscatcustom' and self.is_admin(user_id):
+            if self.sessions.get(user_id)!='store_simple_category_wait':raise PolicyError('Simple plan wizard is not waiting for category')
+            self.sessions[user_id]='store_simple_category';self.api.send(chat_id,'نام دسته را بفرست؛ مثال: Family / Premium / Night.');return
         if data.startswith('stprod:') and self.is_admin(user_id):
             self.admin_product_detail(chat_id,int(data.split(':',1)[1]));return
         if data.startswith('ststype:') and self.is_admin(user_id):
