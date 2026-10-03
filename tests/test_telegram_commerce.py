@@ -893,3 +893,35 @@ def test_simple_store_v6_rejects_manual_values_outside_safe_ranges(env):
     for key,value in [('duration_days',0),('duration_days',3651),('volume_gb',1000001),('ip_limit',0),('ip_limit',1001)]:
         body=dict(base);body[key]=value
         assert c.post('/api/commerce/simple-plans',json=body).status_code in (400,422)
+
+def test_customer_receipt_goes_directly_to_admin_pv_not_forum(env):
+    store,_,_,_,client=env
+    token='123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    admin_id=993001
+    user_id=993002
+    assert client.put('/api/telegram/settings',json={
+        'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
+    center=client.app.state.telegram_runtime.customer
+    center.ensure_user('dark',user_id,'receipt-user')
+    top=center.create_topup('dark',user_id,'receipt-user',250000)
+    worker=BotWorker(client.app.state.telegram_runtime,'dark',token,'receipt-pv-test')
+    calls=[];fallback=[]
+    worker.api.call=lambda method,payload=None: calls.append((method,payload or {})) or {'message_id':1}
+    worker.api.send=lambda chat_id,text,reply_markup=None: fallback.append((chat_id,text,reply_markup))
+    forum_calls=[]
+    worker.runtime.forum.report_media=lambda *args,**kwargs: forum_calls.append((args,kwargs)) or True
+    try:
+        handled=worker.handle_customer_media(user_id,user_id,{'photo':[{'file_id':'small'},{'file_id':'receipt-photo'}]})
+    finally:
+        worker.api.close()
+    assert handled is True
+    media=[payload for method,payload in calls if method=='sendPhoto']
+    assert len(media)==1
+    assert media[0]['chat_id']==admin_id
+    assert media[0]['photo']=='receipt-photo'
+    assert 'رسید شارژ کیف پول' in media[0]['caption']
+    assert media[0]['reply_markup']['inline_keyboard'][0][0]['callback_data'].startswith('utopok:')
+    assert forum_calls==[]
+    with store.lock:
+        row=store.db.execute('SELECT status,receipt_ref FROM customer_wallet_topups WHERE id=?',(top['id'],)).fetchone()
+    assert row['status']=='review' and row['receipt_ref']=='telegram:photo:receipt-photo'
