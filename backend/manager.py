@@ -243,7 +243,7 @@ class Manager:
                 if row and row[0] and float(row[0])>best[0]:best=(float(row[0]),'device')
         return self._presence_row(*best)
 
-    def _activity_map(self) -> dict[str,dict]:
+    def _activity_map(self,emails:list[str]|None=None) -> dict[str,dict]:
         # Presence means recent verified application traffic/activity, not merely
         # an enabled account. It intentionally exposes no source IP.
         try:self.engine.read_ip_log()
@@ -256,8 +256,15 @@ class Manager:
             old=latest.get(str(email))
             if old is None or value>old[0]:latest[str(email)]=(value,source)
         with self.store.lock:
-            for email,at in self.store.db.execute('SELECT client_id,MAX(observed_at) FROM traffic_ledger GROUP BY client_id'):
-                keep(email,at,'traffic')
+            if emails is None:
+                for email,at in self.store.db.execute('SELECT client_id,MAX(observed_at) FROM traffic_ledger GROUP BY client_id'):
+                    keep(email,at,'traffic')
+            else:
+                # Seek the last event for each requested client. Grouping the
+                # entire immutable ledger blocks every bot sharing this lock.
+                for email in dict.fromkeys(emails):
+                    row=self.store.db.execute('SELECT MAX(observed_at) FROM traffic_ledger WHERE client_id=?',(email,)).fetchone()
+                    if row and row[0]:keep(email,row[0],'traffic')
             if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone():
                 for email,at in self.store.db.execute('SELECT client_id,MAX(last_seen) FROM observations GROUP BY client_id'):
                     keep(email,at,'access')
@@ -593,9 +600,11 @@ class Manager:
             return {'client':desired,'inboundIds':json.loads(meta['inbounds']),'owner':row['owner']}
 
     def details_many(self,actor:Actor,emails:list[str],*,credentials:bool=True)->dict[str,dict]:
-        activity=self._activity_map()
+        if not emails:return {}
+        activity=self._activity_map(emails)
+        plane=self._data_plane_state()
         fallback={'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}
-        return {email:self.detail(actor,email,credentials=credentials,activity=activity.get(email) or fallback)
+        return {email:self.detail(actor,email,credentials=credentials,activity=activity.get(email) or fallback,data_plane_state=plane)
                 for email in emails}
 
     def action(self,actor: Actor,email: str,action: str) -> dict:
@@ -619,7 +628,10 @@ class Manager:
         if not r:raise PolicyError('Managed metadata missing')
         return dict(r)
 
-    def detail(self,actor: Actor,email: str,*,credentials: bool=True,activity:dict|None=None) -> dict:
+    def _data_plane_state(self)->str:
+        return 'running' if self.engine.running and not self.engine.runtime_state()['dirty'] else 'staged'
+
+    def detail(self,actor: Actor,email: str,*,credentials: bool=True,activity:dict|None=None,data_plane_state:str|None=None) -> dict:
         row=self.own_row(actor,email)
         meta=self.meta(email);engine=self.snapshot.get(email,{})
         desired=json.loads(meta['desired'])
@@ -636,13 +648,16 @@ class Manager:
                 'last_seen_at':activity['activity_at'],'activity_at':activity['activity_at'],
                 'presence_state':activity['presence_state'],'presence_age_seconds':activity['presence_age_seconds'],
                 'presence_source':activity['presence_source'],'manager_seen_at':self.last_poll,
-                'data_plane_state':'running' if self.engine.running and not self.engine.runtime_state()['dirty'] else 'staged',
+                'data_plane_state':self._data_plane_state() if data_plane_state is None else data_plane_state,
                 'subscription_url':self.engine.config.public_origin+self.engine.section('subscription').get('path','/sub')+'/'+meta['public_token']
                      if credentials and actor.can('clients','credentials',row['owner']) else None}
 
     def list(self,actor: Actor) -> list[dict]:
-        activity=self._activity_map()
-        return [self.detail(actor,r['id'],credentials=False,activity=activity.get(r['id']) or {'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'}) for r in self.store.list_clients(actor)]
+        rows=self.store.list_clients(actor)
+        if not rows:return []
+        activity=self._activity_map([r['id'] for r in rows])
+        plane=self._data_plane_state()
+        return [self.detail(actor,r['id'],credentials=False,activity=activity.get(r['id']) or {'activity_at':0,'presence_state':'offline','presence_age_seconds':None,'presence_source':'none'},data_plane_state=plane) for r in rows]
 
     def _charge_snapshot(self,meta: dict,record: dict):
         email=meta['email'];up,down=CoreEngine.counters(record)

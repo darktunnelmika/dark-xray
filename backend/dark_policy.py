@@ -232,6 +232,7 @@ class Store:
           period INTEGER NOT NULL, up_bytes INTEGER NOT NULL, down_bytes INTEGER NOT NULL,
           observed_at REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS ledger_owner_period ON traffic_ledger(owner,period);
+        CREATE INDEX IF NOT EXISTS ledger_client_activity ON traffic_ledger(client_id,observed_at);
         CREATE TABLE IF NOT EXISTS resource_credit_ledger(
           event_id TEXT PRIMARY KEY, owner TEXT NOT NULL,
           volume_bytes INTEGER NOT NULL DEFAULT 0,
