@@ -509,6 +509,14 @@ class BotWorker(CustomerBotFeatures):
             self.price_inbounds_done(chat_id,user_id);return
         if data.startswith('stprimary:') and self.is_admin(user_id):
             self.price_choose_primary(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='repback' and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representatives(chat_id);return
+        if data.startswith('repctl:') and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representative_detail(chat_id,data.split(':',1)[1]);return
+        if data.startswith('repclients:') and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representative_clients(chat_id,data.split(':',1)[1]);return
+        if data.startswith('repclient:') and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.representative_client_detail(chat_id,int(data.split(':',1)[1]));return
         if data=='bcmenu' and self.is_admin(user_id):
             self.admin_broadcast_menu(chat_id);return
         if data=='bcstatus' and self.is_admin(user_id):
