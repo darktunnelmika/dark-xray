@@ -1816,14 +1816,86 @@ class BotWorker(CustomerBotFeatures):
 
     def representatives(self,chat_id:int):
         with self.runtime.store.lock:
-            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT a.id,a.disabled,p.name,o.volume_credit_bytes,o.unlimited_credit
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT a.id,a.disabled,p.name,o.volume_credit_bytes,
+              o.unlimited_credit,o.max_clients,COALESCE(t.enabled,0) bot_enabled,COALESCE(t.bot_username,'') bot_username
               FROM api_admins a JOIN owner_profiles p ON p.id=a.id JOIN owners o ON o.id=a.id
+              LEFT JOIN telegram_bots t ON t.owner=a.id
               WHERE a.role='reseller' ORDER BY p.name,a.id""")]
         if not rows:self.api.send(chat_id,'هنوز نماینده‌ای ساخته نشده است.');return
-        lines=['🤝 نمایندگان']
-        for r in rows[:30]:
-            lines.append(f"• {r['name']} ({r['id']}) · {self.bytes(r['volume_credit_bytes'])} · Unlimited {r['unlimited_credit']} · {'غیرفعال' if r['disabled'] else 'فعال'}")
-        self.api.send(chat_id,'\n'.join(lines))
+        kb=[]
+        for r in rows[:40]:
+            with self.runtime.store.lock:
+                clients=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM clients WHERE owner=?",(r['id'],)).fetchone()[0])
+            state='●' if not r['disabled'] else '○'
+            bot='🤖' if r['bot_enabled'] else '—'
+            label=f"{state} {r['name']} · {clients}/{r['max_clients'] or '∞'} · {bot}"
+            kb.append([{'text':label[:62],'callback_data':'repctl:'+r['id']}])
+        self.api.send(chat_id,f"◆ DARK REPRESENTATIVES\n{len(rows)} نماینده ثبت‌شده",{'inline_keyboard':kb})
+
+    def representative_detail(self,chat_id:int,rid:str):
+        if self.owner_role()!='owner':raise PolicyError('Owner admin required')
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute("""SELECT a.id,a.disabled,p.name,p.allowed,p.prefix,p.max_client_ips,p.max_client_hwid,
+              o.max_clients,o.volume_credit_bytes,o.unlimited_credit
+              FROM api_admins a JOIN owner_profiles p ON p.id=a.id JOIN owners o ON o.id=a.id
+              WHERE a.id=? AND a.role='reseller'""",(rid,)).fetchone()
+        if not row:raise PolicyError('Representative not found')
+        profile=dict(row)
+        try:allowed=json.loads(profile.get('allowed') or '[]')
+        except Exception:allowed=[]
+        stats=self.runtime.store.owner_stats(self.actor(),rid)
+        bot=self.runtime.commerce.bot_row(rid) or {}
+        products=self.runtime.commerce.product_rows(rid)
+        active_products=sum(1 for x in products if x.get('active') and x.get('visible'))
+        rem=stats.get('volume_credit_remaining_bytes')
+        rem_text='—' if rem is None else self.bytes(int(rem))
+        unlimited=stats.get('unlimited_credit_remaining')
+        bot_state='● آنلاین/فعال' if bot.get('enabled') else ('○ تنظیم‌شده ولی خاموش' if bot.get('configured') else '— تنظیم نشده')
+        text=(f"◆ REP CONTROL\n{profile['name']} · {rid}\n"
+              f"وضعیت حساب: {'○ غیرفعال' if profile['disabled'] else '● فعال'}\n"
+              f"👥 Client: {stats['client_count']}/{profile['max_clients'] or '∞'}\n"
+              f"📦 اعتبار حجمی باقی‌مانده: {rem_text}\n"
+              f"♾ Unlimited باقی‌مانده: {unlimited if unlimited is not None else '—'}\n"
+              f"🌍 Inbound مجاز: {len(allowed)}\n"
+              f"🛡 سقف IP/HWID: {profile['max_client_ips']}/{profile['max_client_hwid']}\n"
+              f"🛒 محصولات فعال: {active_products}\n"
+              f"🤖 Bot: {bot_state}"
+              +(f" · @{bot.get('bot_username')}" if bot.get('bot_username') else ''))
+        self.api.send(chat_id,text,{'inline_keyboard':[
+            [{'text':'👥 مشتری‌های نماینده','callback_data':'repclients:'+rid}],
+            [{'text':'‹ نمایندگان','callback_data':'repback'}]
+        ]})
+
+    def representative_clients(self,chat_id:int,rid:str):
+        if self.owner_role()!='owner':raise PolicyError('Owner admin required')
+        with self.runtime.store.lock:
+            rows=[dict(r) for r in self.runtime.store.db.execute("""SELECT c.rowid,c.id,c.used_bytes,c.quota_bytes,c.expires_at
+              FROM clients c WHERE c.owner=? ORDER BY c.rowid DESC LIMIT 30""",(rid,))]
+        if not rows:
+            self.api.send(chat_id,'این نماینده هنوز Client ندارد.',
+                          {'inline_keyboard':[[{'text':'‹ نماینده','callback_data':'repctl:'+rid}]]});return
+        kb=[]
+        for r in rows:
+            state='●' if not int(r.get('expires_at') or 0) or int(r['expires_at'])>int(time.time()*1000) else '○'
+            kb.append([{'text':f"{state} {r['id']}"[:62],'callback_data':'repclient:'+str(r['rowid'])}])
+        kb.append([{'text':'‹ نماینده','callback_data':'repctl:'+rid}])
+        self.api.send(chat_id,f"👥 مشتری‌های {rid}\n{len(rows)} Client آخر",{'inline_keyboard':kb})
+
+    def representative_client_detail(self,chat_id:int,row_id:int):
+        if self.owner_role()!='owner':raise PolicyError('Owner admin required')
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute("SELECT id,owner FROM clients WHERE rowid=?",(int(row_id),)).fetchone()
+        if not row or row['owner']==self.owner:raise PolicyError('Representative client not found')
+        detail=self.runtime.manager.detail(self.actor(),str(row['id']),credentials=False)
+        c=detail.get('client') or {};quota=int(c.get('totalGB') or 0);used=int(detail.get('used_bytes') or 0)
+        expiry=int(c.get('expiryTime') or 0)
+        expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+        self.api.send(chat_id,
+            f"👤 REP CLIENT\n{row['id']}\nنماینده: {row['owner']}\n"
+            f"وضعیت: {'● فعال' if not detail.get('block_reasons') else '○ محدود'}\n"
+            f"مصرف: {self.bytes(used)} / {self.bytes(quota) if quota else 'نامحدود'}\n"
+            f"انقضا: {expiry_text}",
+            {'inline_keyboard':[[{'text':'‹ مشتری‌های نماینده','callback_data':'repclients:'+str(row['owner'])}]]})
 
     def create_representative_from_text(self,chat_id:int,user_id:int,text:str):
         if not self.is_admin(user_id) or self.owner_role()!='owner':
