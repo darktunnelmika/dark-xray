@@ -1708,8 +1708,8 @@ class BotWorker(CustomerBotFeatures):
                       f"Referral reward: {amount(customer['referral_reward_minor'],'IRT')}\n"
                       "Mini App URL برای همین Bot/Owner به‌صورت خودکار ساخته می‌شود.",
                       {'inline_keyboard':[
-                          [{'text':'🩺 سلامت و Repair ربات','callback_data':'bothealth'}],
                           [{'text':'📱 فعال‌سازی Mini App','callback_data':'miniappsetup'}],
+                          [{'text':'🩺 سلامت و Repair ربات','callback_data':'bothealth'}],
                           [{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}]
                       ]})
 
