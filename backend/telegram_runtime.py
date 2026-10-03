@@ -1514,15 +1514,43 @@ class BotWorker(CustomerBotFeatures):
         if not row or row['owner']!=self.owner:raise PolicyError('Client not found in this bot scope')
         return str(row['id'])
 
-    def admin_clients(self,chat_id:int):
-        rows=self.runtime.manager.list(self.actor())[-12:]
-        if not rows:self.api.send(chat_id,'کاربری وجود ندارد.');return
-        buttons=[]
+    def _crm_clients(self,view:str='recent')->list[dict[str,Any]]:
+        if view not in ('recent','active','online','expiring','blocked'):raise PolicyError('Unknown customer view')
+        now_ms=int(time.time()*1000)
+        rows=[r for r in self.runtime.manager.list(self.actor()) if r.get('owner')==self.owner]
+        rows.sort(key=lambda x:float(x.get('created_at') or 0),reverse=True)
+        if view=='recent':return rows
+        out=[]
+        for r in rows:
+            c=r.get('client') or {};expiry=int(c.get('expiryTime') or 0)
+            enabled=c.get('enable') is not False and not r.get('block_reasons') and (not expiry or expiry>now_ms)
+            if view=='active' and enabled:out.append(r)
+            elif view=='online' and enabled and r.get('presence_state')=='online':out.append(r)
+            elif view=='expiring' and expiry and now_ms<expiry<=now_ms+72*3600*1000:out.append(r)
+            elif view=='blocked' and not enabled:out.append(r)
+        return out
+
+    def admin_clients(self,chat_id:int,view:str='recent'):
+        rows=self._crm_clients(view)
+        all_rows=self._crm_clients('recent')
+        if not all_rows:self.api.send(chat_id,'👥 هنوز مشتری‌ای وجود ندارد.');return
+        buttons=[
+            [{'text':'جدیدترین','callback_data':'cuslist:recent'},{'text':'● فعال','callback_data':'cuslist:active'}],
+            [{'text':'🟢 آنلاین','callback_data':'cuslist:online'},{'text':'⌛ نزدیک انقضا','callback_data':'cuslist:expiring'}],
+            [{'text':'○ محدود/خاموش','callback_data':'cuslist:blocked'}]
+        ]
         with self.runtime.store.lock:
-            for r in reversed(rows):
+            for r in rows[:20]:
                 dbrow=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE id=? AND owner=?",(r['email'],self.owner)).fetchone()
-                if dbrow:buttons.append([{'text':r['email'],'callback_data':'cl:'+str(dbrow['rowid'])}])
-        self.api.send(chat_id,'👥 آخرین کاربران\nبرای جستجوی مستقیم: /user USERNAME',{'inline_keyboard':buttons})
+                if not dbrow:continue
+                if r.get('block_reasons'):(state:='○')
+                elif r.get('presence_state')=='online':state='🟢'
+                else:state='●'
+                buttons.append([{'text':f"{state} {r['email']}"[:62],'callback_data':'cl:'+str(dbrow['rowid'])}])
+        self.api.send(chat_id,
+            f"👥 DARK CUSTOMER CRM / {view.upper()}\n{len(rows)} نتیجه از {len(all_rows)} مشتری\n"
+            "جستجوی مستقیم: /user USERNAME",
+            {'inline_keyboard':buttons})
 
     def admin_user_search(self,chat_id:int,email:str):
         try:
@@ -1539,23 +1567,43 @@ class BotWorker(CustomerBotFeatures):
         expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
         activity=float(detail.get('activity_at') or 0)
         activity_text='—' if activity<=0 else time.strftime('%Y-%m-%d %H:%M',time.localtime(activity))
-        inbounds=detail.get('inboundIds') or []
-        quota=int(c.get('totalGB') or 0)
-        text=(f"👤 {email}\n"
-              f"وضعیت: {'فعال ✅' if enabled and not detail.get('block_reasons') else 'محدود/خاموش ⛔'}\n"
+        inbounds=detail.get('inboundIds') or [];quota=int(c.get('totalGB') or 0);tgid=int(c.get('tgId') or 0)
+        wallet=orders=open_tickets=service_count=0;username=''
+        if tgid:
+            with self.runtime.store.lock:
+                w=self.runtime.store.db.execute("SELECT balance_minor FROM customer_wallets WHERE owner=? AND telegram_id=?",(self.owner,tgid)).fetchone()
+                wallet=int(w['balance_minor']) if w else 0
+                orders=int(self.runtime.store.db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND buyer_telegram_id=?",(self.owner,tgid)).fetchone()[0])
+                open_tickets=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM customer_support_tickets
+                  WHERE owner=? AND telegram_id=? AND status<>'closed'""",(self.owner,tgid)).fetchone()[0])
+                o=self.runtime.store.db.execute("""SELECT buyer_username FROM commerce_orders
+                  WHERE owner=? AND buyer_telegram_id=? ORDER BY created_at DESC LIMIT 1""",(self.owner,tgid)).fetchone()
+                username=str(o['buyer_username'] or '') if o else ''
+            service_count=sum(1 for r in self._crm_clients('recent') if int((r.get('client') or {}).get('tgId') or 0)==tgid)
+        text=(f"◆ CUSTOMER 360\n{email}\n"
+              f"وضعیت: {'● فعال' if enabled and not detail.get('block_reasons') else '○ محدود/خاموش'}\n"
               f"مصرف: {self.bytes(int(detail.get('used_bytes') or 0))} / {self.bytes(quota) if quota else 'نامحدود'}\n"
-              f"انقضا: {expiry_text}\nIP Limit: {int(c.get('limitIp') or 0)} · HWID: {int(c.get('limitHwid') or 0)}\n"
-              f"Telegram: {c.get('tgId') or '—'}\nInboundها: {', '.join(map(str,inbounds)) or '—'}\n"
+              f"انقضا: {expiry_text}\nIP/HWID: {int(c.get('limitIp') or 0)}/{int(c.get('limitHwid') or 0)}\n"
+              f"Telegram: {tgid or '—'}"+(f" @{username}" if username else '')+f"\n"
+              f"Wallet: {amount(wallet,'IRT')} · سرویس‌ها: {service_count}\n"
+              f"Orders: {orders} · تیکت باز: {open_tickets}\n"
+              f"Inbounds: {', '.join(map(str,inbounds)) or '—'}\n"
               f"آخرین فعالیت: {activity_text} · {detail.get('presence_source') or '—'}")
-        kb=[[{'text':'⛔ غیرفعال' if enabled else '✅ فعال','callback_data':('cloff:' if enabled else 'clon:')+str(row_id)},
-             {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}],
-            [{'text':'🗓 تمدید','callback_data':'clrenew:'+str(row_id)},
-             {'text':'➕ حجم','callback_data':'clvol:'+str(row_id)}],
-            [{'text':'🌐 IP Limit','callback_data':'clip:'+str(row_id)},
-             {'text':'🧬 HWID','callback_data':'clhw:'+str(row_id)}],
-            [{'text':'🌍 لوکیشن/Inbound','callback_data':'clinb:'+str(row_id)},
-             {'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}],
-            [{'text':'🗑 حذف سرویس','callback_data':'cldel:'+str(row_id)}]]
+        kb=[]
+        if tgid:
+            kb += [[{'text':'📨 پیام مستقیم','callback_data':'clmsg:'+str(row_id)}],
+                   [{'text':'🧾 سفارش‌های مشتری','callback_data':'cusorders:'+str(tgid)},
+                    {'text':'🎫 تیکت‌های مشتری','callback_data':'custickets:'+str(tgid)}]]
+        kb += [[{'text':'⛔ غیرفعال' if enabled else '✅ فعال','callback_data':('cloff:' if enabled else 'clon:')+str(row_id)},
+                {'text':'♻️ ریست ترافیک','callback_data':'clreset:'+str(row_id)}],
+               [{'text':'🗓 تمدید','callback_data':'clrenew:'+str(row_id)},
+                {'text':'➕ حجم','callback_data':'clvol:'+str(row_id)}],
+               [{'text':'🌐 IP Limit','callback_data':'clip:'+str(row_id)},
+                {'text':'🧬 HWID','callback_data':'clhw:'+str(row_id)}],
+               [{'text':'🌍 لوکیشن/Inbound','callback_data':'clinb:'+str(row_id)},
+                {'text':'🔗 تحویل سرویس','callback_data':'cllink:'+str(row_id)}],
+               [{'text':'🗑 حذف سرویس','callback_data':'cldel:'+str(row_id)},
+                {'text':'‹ مشتری‌ها','callback_data':'cuslist:recent'}]]
         self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def client_delivery(self,chat_id:int,row_id:int):
