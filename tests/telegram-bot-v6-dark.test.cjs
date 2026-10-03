@@ -94,3 +94,17 @@ test('Bot V6 Stage 6 exposes Support Center V2 quick replies and CRM bridge',()=
   assert.match(customer,/حل شد \+ بستن/);
   assert.match(customer,/Subscription را در برنامه بروزرسانی کن/);
 });
+
+test('Bot V6 Stage 7 exposes Growth Center and explicit retention campaigns',()=>{
+  for(const token of ['DARK GROWTH CENTER','SALES + RETENTION','RETENTION POOLS','growtpl:pending','growtpl:expired','growtpl:expiring','growtpl:low','GROWTH CAMPAIGN PREVIEW'])
+    assert.ok(runtime.includes(token),token);
+  assert.match(runtime,/📈 رشد و فروش/);
+  assert.match(runtime,/broadcast_review/);
+  assert.match(runtime,/قرار دادن در صف/);
+});
+
+test('Bot V6 Stage 7 retention segments stay owner scoped and never auto-charge',()=>{
+  assert.match(runtime,/FROM commerce_orders WHERE owner=\? AND created_at<=\?/);
+  assert.match(runtime,/row\.get\('owner'\)!=self\.owner:continue/);
+  assert.doesNotMatch(runtime.slice(runtime.indexOf('def growth_campaign_preview'),runtime.indexOf('def _broadcast_targets')),/pay_purchase\(|pay_renewal\(|_debit_tx/);
+});
