@@ -108,3 +108,19 @@ test('Bot V6 Stage 7 retention segments stay owner scoped and never auto-charge'
   assert.match(runtime,/row\.get\('owner'\)!=self\.owner:continue/);
   assert.doesNotMatch(runtime.slice(runtime.indexOf('def growth_campaign_preview'),runtime.indexOf('def _broadcast_targets')),/pay_purchase\(|pay_renewal\(|_debit_tx/);
 });
+
+test('Bot V6 Stage 8 exposes self-service Service Doctor and smart support ticket',()=>{
+  for(const token of ['DARK SERVICE DOCTOR','usvcdiag:','usvchelp:','Service Doctor Snapshot','Smart Ticket','بررسی هوشمند سرویس'])
+    assert.ok(customer.includes(token),token);
+  assert.match(customer,/WAITING FIRST CONNECTION/);
+  assert.match(customer,/ACTION REQUIRED · EXPIRED/);
+  assert.match(customer,/ACTION REQUIRED · VOLUME FINISHED/);
+});
+
+test('Bot V6 Stage 8 doctor stays account scoped and does not probe tunnels',()=>{
+  const start=customer.indexOf('def _service_doctor_snapshot');
+  const end=customer.indexOf('def customer_connection',start);
+  const block=customer.slice(start,end);
+  assert.match(block,/_customer_client_row/);
+  assert.doesNotMatch(block,/\/api\/nodes|tunnel|restart|probe/);
+});

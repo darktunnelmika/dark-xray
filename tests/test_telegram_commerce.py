@@ -778,6 +778,50 @@ def test_bot_v6_growth_center_retention_campaign_requires_explicit_queue(env):
         worker.api.close()
 
 
+def test_bot_v6_service_doctor_and_smart_ticket_dedup(env):
+    store,_,_,_,c=env
+    create_inbound(c)
+    now_ms=int(time.time()*1000)
+    create(c,email='doctor-v6',extra={
+        'tgId':998101,'totalGB':5*1024**3,'expiryTime':now_ms+5*86400*1000,
+    })
+    create(c,email='doctor-expired-v6',extra={
+        'tgId':998102,'totalGB':5*1024**3,'expiryTime':now_ms-3600*1000,
+    })
+    worker,sent=_bot_worker(c,992114)
+    try:
+        with store.lock:
+            row_id=int(store.db.execute("SELECT rowid FROM clients WHERE owner='dark' AND id='doctor-v6'").fetchone()[0])
+            expired_row=int(store.db.execute("SELECT rowid FROM clients WHERE owner='dark' AND id='doctor-expired-v6'").fetchone()[0])
+        worker.customer_service_doctor(998101,998101,row_id)
+        doctor=[x for x in sent if x[0]==998101 and 'DARK SERVICE DOCTOR' in x[1]][-1]
+        assert '● READY' in doctor[1] and 'doctor-v6' in doctor[1]
+        buttons=[b for row in (doctor[2] or {}).get('inline_keyboard',[]) for b in row]
+        assert any(str(b.get('callback_data','')).startswith('usvchelp:') for b in buttons)
+
+        worker.customer_service_help(998101,998101,row_id,'doctoruser')
+        tickets=worker.runtime.customer.tickets_for_customer('dark',998101)
+        assert len(tickets)==1 and tickets[0]['subject'].startswith('Service Doctor')
+        messages=worker.runtime.customer.ticket_messages('dark',tickets[0]['id'])
+        assert len(messages)==1 and 'Service Doctor Snapshot' in messages[0]['text']
+        worker.customer_service_help(998101,998101,row_id,'doctoruser')
+        assert len(worker.runtime.customer.tickets_for_customer('dark',998101))==1
+        assert any(x[0]==998101 and 'تیکت باز وجود دارد' in x[1] for x in sent)
+
+        worker.customer_service_doctor(998102,998102,expired_row)
+        expired=[x for x in sent if x[0]==998102 and 'DARK SERVICE DOCTOR' in x[1]][-1]
+        assert 'ACTION REQUIRED · EXPIRED' in expired[1]
+
+        denied=False
+        try:
+            worker.customer_service_doctor(998102,998102,row_id)
+        except Exception:
+            denied=True
+        assert denied
+    finally:
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
