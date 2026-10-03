@@ -192,7 +192,7 @@ def test_customer_bot_marketplace_is_only_on_primary_owner_bot(env):
                            '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','owner-menu')
     try:
         labels=[x['text'] for row in owner_worker.main_keyboard(False)['keyboard'] for x in row]
-        assert '🏪 خرید پنل نمایندگی' in labels
+        assert '🏪 پنل نمایندگی' in labels
     finally:owner_worker.api.close()
 
     assert c.put('/api/owners/repmenu',json={
@@ -210,7 +210,7 @@ def test_customer_bot_marketplace_is_only_on_primary_owner_bot(env):
                             '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','rep-menu')
         try:
             labels=[x['text'] for row in repworker.main_keyboard(False)['keyboard'] for x in row]
-            assert '🏪 خرید پنل نمایندگی' not in labels
+            assert '🏪 پنل نمایندگی' not in labels
         finally:repworker.api.close()
 
 

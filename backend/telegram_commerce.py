@@ -494,7 +494,7 @@ class TelegramCommerce:
             db.execute("UPDATE commerce_orders SET status='paid',payment_ref=?,updated_at=? WHERE id=?",
                        (reference[:256],now,order_id))
             db.execute("""UPDATE commerce_payments SET status='paid',external_ref=?,updated_at=?
-              WHERE id=(SELECT id FROM commerce_payments WHERE order_id=? ORDER BY created_at DESC LIMIT 1)""",
+              WHERE status<>'paid' AND id=(SELECT id FROM commerce_payments WHERE order_id=? ORDER BY created_at DESC LIMIT 1)""",
               (reference[:1024],now,order_id))
         result={'id':order_id,'status':'paid','provisioned':False}
         try:

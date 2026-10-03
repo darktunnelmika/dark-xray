@@ -270,9 +270,9 @@ def test_forum_audit_router_scopes_and_routes_events(env):
     with store.lock:
         topics={r['kind']:r['thread_id'] for r in store.db.execute(
             "SELECT kind,thread_id FROM telegram_forum_topics WHERE owner='dark'")}
-    assert any(x['message_thread_id']==topics['payments'] and 'commerce.payment_confirm' in x['text'] for x in routed)
-    assert any(x['message_thread_id']==topics['backups'] and 'backup.full' in x['text'] for x in routed)
-    assert any(x['message_thread_id']==topics['services'] and 'client.create' in x['text'] for x in routed)
+    assert any(x['message_thread_id']==topics['payments'] and 'پرداخت سفارش تأیید شد' in x['text'] for x in routed)
+    assert any(x['message_thread_id']==topics['backups'] and 'بکاپ کامل ساخته شد' in x['text'] for x in routed)
+    assert any(x['message_thread_id']==topics['services'] and 'سرویس جدید ساخته شد' in x['text'] for x in routed)
 
 
 def test_daily_forum_summary_uses_completed_day_and_topic(env):
@@ -296,7 +296,8 @@ def test_daily_forum_summary_uses_completed_day_and_topic(env):
             "SELECT thread_id FROM telegram_forum_topics WHERE owner='dark' AND kind='daily'").fetchone()['thread_id']
     messages=[p for m,p in api.calls if m=='sendMessage' and p.get('message_thread_id')==daily]
     assert messages and 'سفارش‌ها: 1' in messages[-1]['text']
-    assert '3000000 IRT' in messages[-1]['text'].replace(',','')
+    assert 'فروش قطعی: 0 تومان' in messages[-1]['text']
+    assert 'مبلغ سفارش‌های پرداخت‌نشدهٔ این روز: 3,000,000 تومان' in messages[-1]['text']
 
 def test_manual_payment_wizard_is_managed_inside_admin_bot(env):
     store,_,_,_,c=env
@@ -415,6 +416,7 @@ def _bot_worker(c,admin_id=992001):
     worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'v3-test')
     sent=[]
     worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
+    worker.api.send_photo_bytes=lambda chat_id,data,caption='',reply_markup=None: sent.append((chat_id,caption,reply_markup))
     return worker,sent
 
 
@@ -685,7 +687,7 @@ def test_bot_v6_lifecycle_purchase_first_connect_and_renewal(env):
     try:
         worker.send_delivery(996001,bought)
         ready=[x for x in sent if x[0]==996001 and 'DARK SERVICE READY' in x[1]]
-        assert len(ready)==1 and 'WAITING FIRST CONNECTION' in ready[0][1]
+        assert len(ready)==1 and 'منتظر اولین اتصال' in ready[0][1]
         buttons=[b for row in (ready[0][2] or {}).get('inline_keyboard',[]) for b in row]
         assert any(str(b.get('callback_data','')).startswith('usvclink:') for b in buttons)
         client_id=bought['client_id']
@@ -694,7 +696,7 @@ def test_bot_v6_lifecycle_purchase_first_connect_and_renewal(env):
         assert activated and activated[0]['client_id']==client_id
         runtime.notify_activations(activated)
         active=[x for x in sent if x[0]==996001 and 'DARK SERVICE ACTIVATED' in x[1]]
-        assert len(active)==1 and 'FIRST CONNECTION VERIFIED' in active[0][1]
+        assert len(active)==1 and 'اولین اتصال تأیید شد' in active[0][1]
         buttons=[b for row in (active[0][2] or {}).get('inline_keyboard',[]) for b in row]
         assert any(str(b.get('callback_data','')).startswith('usvcrenew:') for b in buttons)
         renewal=center.create_renewal_order('dark',996001,'lifeuser',client_id,'life-v6')

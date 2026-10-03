@@ -1,14 +1,12 @@
 from __future__ import annotations
 import time
+from io import BytesIO
 from typing import Any
 
-from dark_policy import PolicyError
+import segno
 
-def money(value:int,currency:str='IRT')->str:
-    code=str(currency or '').upper()
-    if code=='IRT':return f"{int(value):,} تومان"
-    if code=='IRR':return f"{int(value):,} ریال"
-    return f"{int(value):,} {code}"
+from dark_policy import PolicyError
+from telegram_presentation import money,date_time
 
 class CustomerBotFeatures:
     @staticmethod
@@ -29,8 +27,9 @@ class CustomerBotFeatures:
         volume=int(price.get('volume_bytes') or 0)
         quota='∞' if not volume else (str(max(1,round(volume/(1024**3))))+'GB')
         days=int(price.get('duration_days') or 0)
-        ip=int(price.get('ip_limit') or 1)
-        return f"{quota} · {days}D · IP{ip} · {money(int(price.get('price_minor') or 0),str(price.get('currency') or 'IRT'))}"
+        ip=int(price.get('ip_limit',1))
+        users='کاربر نامحدود' if ip==0 else f'حداکثر {ip} IP'
+        return f"{quota} · {days} روز · {users} · {money(int(price.get('price_minor') or 0),str(price.get('currency') or 'IRT'))}"
 
     def customer_shop(self,chat_id:int):
         rows=self._public_store_rows()
@@ -83,10 +82,10 @@ class CustomerBotFeatures:
             f"◉ DARK WALLET\n● READY\n\nموجودی: {money(wallet['balance_minor'],wallet['currency'])}\n"
             f"رسید در انتظار بررسی: {pending}\n\nمبلغ شارژ را انتخاب کن:",
             {'inline_keyboard':[
-                [{'text':'100K','callback_data':'wtop:100000'},
-                 {'text':'200K','callback_data':'wtop:200000'},
-                 {'text':'500K','callback_data':'wtop:500000'}],
-                [{'text':'1M','callback_data':'wtop:1000000'},
+                [{'text':'۱۰۰ هزار تومان','callback_data':'wtop:100000'},
+                 {'text':'۲۰۰ هزار تومان','callback_data':'wtop:200000'},
+                 {'text':'۵۰۰ هزار تومان','callback_data':'wtop:500000'}],
+                [{'text':'۱ میلیون تومان','callback_data':'wtop:1000000'},
                  {'text':'✍️ مبلغ دلخواه','callback_data':'wcustom'}],
                 [{'text':'📜 تاریخچه تراکنش','callback_data':'whist'},
                  {'text':'⚡ خرید سرویس','callback_data':'shopback'}],
@@ -159,7 +158,8 @@ class CustomerBotFeatures:
         quota=int(c.get('totalGB') or 0);used=int(detail.get('used_bytes') or 0)
         left='نامحدود' if quota==0 else self.bytes(max(0,quota-used))
         expiry=int(c.get('expiryTime') or 0)
-        expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+        tz=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
+        expiry_text='بدون انقضا' if not expiry else date_time(expiry/1000,tz)
         origin=self.runtime.customer.latest_service_order(self.owner,user_id,email)
         product_name='سرویس DARK';renewal=False
         if origin:
@@ -209,9 +209,10 @@ class CustomerBotFeatures:
             state='NEEDS SUPPORT · DISABLED';verdict='سرویس غیرفعال است و نیاز به بررسی پشتیبانی دارد.';action='support'
         else:
             state='READY';verdict='از نظر وضعیت حساب، حجم، زمان و مقصد سرویس مشکلی دیده نشد.';action='connect'
-        expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+        tz=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
+        expiry_text='بدون انقضا' if not expiry else date_time(expiry/1000,tz)
         last=float(detail.get('activity_at') or 0)
-        last_text='هنوز اتصال ثبت نشده' if last<=0 else time.strftime('%Y-%m-%d %H:%M',time.localtime(last))
+        last_text='هنوز اتصال ثبت نشده' if last<=0 else date_time(last,tz)
         usage='نامحدود' if not total else f"{self.bytes(used)} / {self.bytes(total)}"
         remaining_text='نامحدود' if not total else self.bytes(remaining)
         return {'email':email,'row_id':int(row_id),'state':state,'verdict':verdict,'action':action,
@@ -270,13 +271,56 @@ class CustomerBotFeatures:
         origin=self.runtime.customer.latest_service_order(self.owner,user_id,email)
         if origin:
             delivery=self.runtime.commerce.delivery_payload(origin['id'],self.runtime.manager)
-            if delivery.get('subscription_url'):self.api.send(chat_id,'🔗 Subscription\n'+str(delivery['subscription_url']))
-            if delivery.get('main_config'):self.api.send(chat_id,'⚡ Main Config\n'+str(delivery['main_config']))
-            portal=delivery.get('portal_url')
-            if portal and portal!=delivery.get('subscription_url'):self.api.send(chat_id,'🌐 Portal\n'+str(portal))
-            if any(delivery.get(x) for x in ('subscription_url','main_config','portal_url')):return
-        sub=str(detail.get('subscription_url') or '')
-        self.api.send(chat_id,'🔗 Subscription\n'+sub if sub else 'لینک اتصال برای این سرویس موجود نیست.')
+        else:delivery={'subscription_url':str(detail.get('subscription_url') or ''),'show_qr':True}
+        self.send_connection_card(chat_id,email,detail,delivery,origin)
+
+    def send_connection_card(self,chat_id:int,email:str,detail:dict,delivery:dict,order:dict|None=None):
+        client=detail.get('client') or {};order=order or {}
+        with self.runtime.store.lock:
+            row=self.runtime.store.db.execute('SELECT rowid FROM clients WHERE owner=? AND id=?',(self.owner,email)).fetchone()
+            product=self.runtime.store.db.execute('SELECT name FROM commerce_products WHERE owner=? AND id=?',
+                (self.owner,order.get('product_id',''))).fetchone()
+        title=str(product['name'] if product else client.get('remark') or 'سرویس DARK XRAY')[:80]
+        total=int(client.get('totalGB',order.get('volume_bytes',0)) or 0);used=int(detail.get('used_bytes') or 0)
+        waiting=order.get('status')=='provisioned_waiting_activation'
+        tz=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
+        expiry=int(client.get('expiryTime') or 0)
+        lines=['◆ DARK XRAY | اطلاعات اتصال',f'📦 {title}',f'شناسه سرویس: {email[:100]}',
+               'حجم: '+(self.bytes(total) if total else 'نامحدود'),
+               'حجم باقی‌مانده: '+(self.bytes(max(0,total-used)) if total else 'نامحدود')]
+        if order.get('duration_days'):lines.append(f"⏳ مدت: {int(order['duration_days'])} روز")
+        ip=int(client.get('limitIp',order.get('ip_limit',0)) or 0)
+        lines.append('👥 '+('کاربر نامحدود' if ip==0 else f'حداکثر {ip} IP هم‌زمان'))
+        if 'amount_minor' in order:lines.append('💳 مبلغ خرید: '+money(order['amount_minor'],order['currency']))
+        lines.append('وضعیت: '+('آماده؛ منتظر اولین اتصال' if waiting else 'فعال' if not detail.get('block_reasons') else 'نیازمند بررسی'))
+        if waiting:lines.append('⏱ زمان سرویس با اولین اتصال واقعی شروع می‌شود؛ شروع و انقضا را همین ربات اعلام می‌کند.')
+        else:lines.append('📅 انقضا: '+(date_time(expiry/1000,tz) if expiry else 'بدون انقضا'))
+        sub=str(delivery.get('subscription_url') or '')
+        config=str(delivery.get('main_config') or '')
+        portal=str(delivery.get('portal_url') or '')
+        payload=sub or config or portal
+        if not payload:
+            self.api.send(chat_id,'لینک اتصال برای این سرویس موجود نیست.');return
+        label='لینک ساب' if sub else 'کانفیگ اصلی' if config else 'صفحه اشتراک'
+        lines+=['',f'🔗 {label}',payload if len(payload)<=256 else 'اطلاعات اتصال در پیام بعدی ارسال می‌شود.',
+                '', '📲 لینک را کپی و در بخش افزودن اشتراک برنامه وارد کن؛ یا QR را اسکن کن.',
+                'بعد از افزودن، اشتراک را به‌روز کن و یک سرور را انتخاب کن.']
+        text='\n'.join(lines);kb=[]
+        if len(payload)<=256:kb.append([{'text':'📋 کپی '+label,'copy_text':{'text':payload}}])
+        if portal and delivery.get('show_portal',True):kb.append([{'text':'🌐 بازکردن صفحه اشتراک','url':portal}])
+        if row:kb.append([{'text':'📦 وضعیت و مصرف','callback_data':'usvc:'+str(row['rowid'])}])
+        markup={'inline_keyboard':kb} if kb else None
+        if delivery.get('show_qr',True):
+            try:
+                image=BytesIO();segno.make(payload,micro=False,error='m').save(image,kind='png',scale=8,border=4)
+                caption=text if len(text.encode('utf-16-le'))//2<=1000 else '◆ DARK XRAY | QR اتصال\n'+title
+                self.api.send_photo_bytes(chat_id,image.getvalue(),caption,markup)
+                if caption!=text:self.api.send(chat_id,text,markup)
+            except Exception:
+                self.api.send(chat_id,text+'\n\nارسال QR کامل نشد؛ لینک بالا قابل استفاده است. دوباره «دریافت اتصال» را بزن.',markup)
+        else:self.api.send(chat_id,text,markup)
+        if len(payload)>256:self.api.send(chat_id,f'🔗 {label}\n'+payload)
+        if config and config!=payload:self.api.send(chat_id,'⚡ کانفیگ اصلی\n'+config)
 
     def customer_renew_services(self,chat_id:int,user_id:int):
         rows=self._customer_services(user_id)
