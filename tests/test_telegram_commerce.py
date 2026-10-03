@@ -887,6 +887,44 @@ def test_bot_v6_notification_preferences_gate_marketing_and_service_alerts(env):
         worker.api.close()
 
 
+def test_bot_v6_health_and_surface_repair_reapply_safe_telegram_contract(env):
+    store,_,_,_,c=env
+    worker,sent=_bot_worker(c,992116)
+    calls=[]
+    def fake_call(method,payload=None):
+        calls.append((method,payload or {}))
+        if method=='getMe':return {'id':4242,'username':'dark_health_bot'}
+        if method=='getWebhookInfo':return {'url':'https://legacy.example/webhook'}
+        if method=='getChatMenuButton':return {'type':'web_app','text':'فروشگاه'}
+        return True
+    worker.api.call=fake_call
+    try:
+        worker.bot_health(992116)
+        health=[x for x in sent if 'DARK BOT HEALTH' in x[1]][-1]
+        assert '@dark_health_bot' in health[1]
+        assert 'Webhook: ○ webhook set' in health[1]
+        assert 'Menu: ● فروشگاه' in health[1]
+        assert 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' not in health[1]
+
+        worker.repair_telegram_surface(992116,992116)
+        methods=[x[0] for x in calls]
+        assert 'deleteWebhook' in methods
+        assert 'setMyCommands' in methods
+        assert 'setChatMenuButton' in methods
+        menu=[p for m,p in calls if m=='setChatMenuButton'][-1]
+        assert menu['menu_button']['text']=='فروشگاه'
+        assert menu['menu_button']['type']=='web_app'
+        with store.lock:
+            row=store.db.execute("SELECT bot_username,last_error,last_seen FROM telegram_bots WHERE owner='dark'").fetchone()
+            audit=store.db.execute("""SELECT 1 FROM live_audit WHERE action='telegram.bot_surface_repair'
+              ORDER BY id DESC LIMIT 1""").fetchone()
+        assert row['bot_username']=='dark_health_bot' and row['last_error']=='' and row['last_seen']>0
+        assert audit
+        assert any('Telegram Surface Repair انجام شد' in text for _,text,_ in sent)
+    finally:
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
