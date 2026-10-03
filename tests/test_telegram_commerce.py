@@ -739,6 +739,44 @@ def test_bot_v6_support_center_quick_reply_and_customer_360(env):
         worker.api.close()
 
 
+def test_bot_v6_growth_center_retention_campaign_requires_explicit_queue(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/commerce/products',json=product_payload()).status_code==200
+    assert c.put('/api/commerce/products/turbo/prices',json=price_payload(
+        inbound_id,price_id='growth-plan',price_minor=150000,volume_bytes=5*1024**3)).status_code==200
+    pending=c.app.state.telegram_commerce.create_order('dark',998001,'growthpending','turbo','growth-plan')
+    with store.transaction() as db:
+        db.execute("UPDATE commerce_orders SET created_at=? WHERE id=?",(time.time()-4000,pending['id']))
+    now_ms=int(time.time()*1000)
+    create(c,email='growth-expired',extra={
+        'tgId':998002,'totalGB':5*1024**3,'expiryTime':now_ms-24*3600*1000,
+    })
+    worker,sent=_bot_worker(c,992113)
+    try:
+        worker.admin_growth_center(992113)
+        center=[x for x in sent if 'DARK GROWTH CENTER' in x[1]][-1]
+        assert 'پرداخت‌نشده >۳۰m: 1' in center[1]
+        assert 'منقضی ۷ روز اخیر: 1' in center[1]
+        assert worker._broadcast_targets('pending')==[998001]
+        assert worker._broadcast_targets('expired')==[998002]
+        worker.growth_campaign_preview(992113,992113,'pending')
+        assert worker.sessions[992113]=='broadcast_review'
+        with store.lock:
+            before=store.db.execute("SELECT COUNT(*) FROM telegram_broadcasts WHERE owner='dark'").fetchone()[0]
+        assert before==0
+        worker.queue_broadcast(992113,992113)
+        with store.lock:
+            job=store.db.execute("""SELECT id,segment,total,status FROM telegram_broadcasts
+              WHERE owner='dark' ORDER BY created_at DESC LIMIT 1""").fetchone()
+            recipients=[r[0] for r in store.db.execute(
+                "SELECT telegram_id FROM telegram_broadcast_recipients WHERE broadcast_id=?",(job['id'],))]
+        assert tuple(job)[1:]==('pending',1,'queued')
+        assert recipients==[998001]
+    finally:
+        worker.api.close()
+
+
 def test_store_manager_v3_archives_product_with_order_history(env):
     store,_,_,_,c=env
     inbound_id=create_inbound(c)
