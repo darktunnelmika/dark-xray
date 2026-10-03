@@ -466,9 +466,23 @@ class CustomerBotFeatures:
             order_id=data.split(':',1)[1]
             try:
                 result=self.runtime.customer.pay_renewal(self.owner,order_id)
+                client_id=str(result['client_id'])
                 self.runtime.manager.audit(self.actor(),self.owner,'commerce.wallet_renewal',order_id,
-                                           f"telegram={user_id}; client={result['client_id']}")
-                self.api.send(chat_id,'✅ سرویس با موفقیت تمدید و دوره مصرف آن ریست شد.')
+                                           f"telegram={user_id}; client={client_id}")
+                detail=result.get('client') or self.runtime.manager.detail(self.actor(),client_id,credentials=True)
+                expiry=int((detail.get('client') or {}).get('expiryTime') or 0)
+                expiry_text='بدون انقضا' if not expiry else time.strftime('%Y-%m-%d %H:%M',time.localtime(expiry/1000))
+                with self.runtime.store.lock:
+                    row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(self.owner,client_id)).fetchone()
+                kb=[]
+                if row:
+                    rid=int(row['rowid'])
+                    kb.append([{'text':'📦 وضعیت سرویس','callback_data':'usvc:'+str(rid)},
+                               {'text':'🔗 دریافت اتصال','callback_data':'usvclink:'+str(rid)}])
+                self.api.send(chat_id,
+                    f"◆ DARK RENEW COMPLETE\n✅ سرویس با موفقیت تمدید شد و دوره مصرف ریست شد.\n"
+                    f"سرویس: {client_id}\nانقضای جدید: {expiry_text}",
+                    {'inline_keyboard':kb} if kb else None)
             except Exception as ex:self.api.send(chat_id,'تمدید انجام نشد: '+str(ex)[:700])
             return True
         if data=='uref':self.customer_referral_menu(chat_id,user_id);return True
