@@ -142,3 +142,20 @@ test('Bot V6 Stage 9 keeps essential messaging separate from optional alerts and
   assert.match(runtime,/\'kind\':\'operational\'/);
   assert.match(customer,/پیام‌های ضروری خرید، پرداخت، اولین اتصال و پشتیبانی همیشه ارسال می‌شوند/);
 });
+
+test('Bot V6 Stage 10 exposes Bot Health and Telegram Surface Recovery Center',()=>{
+  for(const token of ['DARK BOT HEALTH','configure_telegram_surface','bothealth','botrepair','botrepairok','telegram.bot_surface_repair','Repair Telegram Surface'])
+    assert.ok(runtime.includes(token),token);
+  assert.match(runtime,/getWebhookInfo/);
+  assert.match(runtime,/setMyCommands/);
+  assert.match(runtime,/setChatMenuButton/);
+  assert.match(runtime,/getChatMenuButton/);
+});
+
+test('Bot V6 Stage 10 startup and manual repair share one Telegram surface contract',()=>{
+  const run=runtime.slice(runtime.indexOf('def run(self):'),runtime.indexOf('def bot_config',runtime.indexOf('def run(self):')));
+  assert.match(run,/configure_telegram_surface/);
+  const repair=runtime.slice(runtime.indexOf('def repair_telegram_surface'),runtime.indexOf('def admin_settings'));
+  assert.match(repair,/configure_telegram_surface/);
+  assert.match(repair,/self\.runtime\.wake\(\)/);
+});
