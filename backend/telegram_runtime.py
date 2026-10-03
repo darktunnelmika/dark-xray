@@ -509,6 +509,17 @@ class BotWorker(CustomerBotFeatures):
             self.price_inbounds_done(chat_id,user_id);return
         if data.startswith('stprimary:') and self.is_admin(user_id):
             self.price_choose_primary(chat_id,user_id,int(data.split(':',1)[1]));return
+        if data=='bcmenu' and self.is_admin(user_id):
+            self.admin_broadcast_menu(chat_id);return
+        if data=='bcstatus' and self.is_admin(user_id):
+            self.admin_broadcast_status(chat_id);return
+        if data.startswith('bcseg:') and self.is_admin(user_id):
+            self.start_broadcast(chat_id,user_id,data.split(':',1)[1]);return
+        if data=='bcsend' and self.is_admin(user_id):
+            self.queue_broadcast(chat_id,user_id);return
+        if data=='bccancel' and self.is_admin(user_id):
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'اعلان لغو شد.');self.admin_broadcast_menu(chat_id);return
         if data=='ops_action' and self.is_admin(user_id):
             self.admin_action_center(chat_id);return
         if data=='ops_attention' and self.is_admin(user_id):
