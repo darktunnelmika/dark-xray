@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from dark_policy import PolicyError
+from telegram_presentation import money,date_time,ORDER_STATES
+from telegram_reporting import ORDERS_CTE,sales_summary
 
 FORUM_REQUEST_ID=730001
 TOPICS={
@@ -229,6 +231,8 @@ class TelegramForumCenter:
         a=str(action or '').lower()
         if a.startswith('backup.'):return 'backups'
         if a.startswith('auth.') or a.startswith('telegram.'):return 'security'
+        if a.startswith('wallet.'):return 'payments'
+        if a=='commerce.first_connection_activate':return 'services'
         if a.startswith('commerce.payment'):return 'payments'
         if a.startswith('commerce.') or a.startswith('representative.'):return 'sales'
         if a.startswith('client.'):return 'services'
@@ -244,20 +248,7 @@ class TelegramForumCenter:
             forum=self.store.db.execute('SELECT last_daily_key FROM telegram_forums WHERE owner=? AND enabled=1 AND COALESCE(rebind_required,0)=0',(owner,)).fetchone()
         if not forum or str(forum['last_daily_key'] or '')==current_key:return False
         day=now.date()-timedelta(days=1)
-        start=datetime.combine(day,dt_time.min,tzinfo=tz).timestamp()
-        end=datetime.combine(now.date(),dt_time.min,tzinfo=tz).timestamp()
-        where='created_at>=? AND created_at<?';args:list[Any]=[start,end]
-        if role!='owner':where+=' AND owner=?';args.append(owner)
-        with self.store.lock:
-            rows=[dict(r) for r in self.store.db.execute(
-                f"SELECT currency,COUNT(*) orders,COALESCE(SUM(amount_minor),0) amount FROM commerce_orders WHERE {where} GROUP BY currency ORDER BY currency",tuple(args))]
-            status=[dict(r) for r in self.store.db.execute(
-                f"SELECT status,COUNT(*) count FROM commerce_orders WHERE {where} GROUP BY status ORDER BY status",tuple(args))]
-        total=sum(int(x['orders']) for x in rows)
-        money=' · '.join(f"{x['amount']:,} {x['currency']}" for x in rows) or '0'
-        states=' · '.join(f"{x['status']}: {x['count']}" for x in status) or 'بدون سفارش'
-        text=(f"📊 گزارش روزانه DARK · {day.isoformat()}\n"
-              f"سفارش‌ها: {total}\nمبلغ ثبت‌شده: {money}\nوضعیت‌ها: {states}")
+        text=self.daily_summary_text(owner,day,timezone_name)
         sent=self.report(api,owner,'daily',text)
         if sent:
             with self.store.transaction() as db:
@@ -265,7 +256,79 @@ class TelegramForumCenter:
                            (current_key,time.time(),owner))
         return sent
 
-    def poll_audits(self,api,owner:str,role:str,limit:int=40)->int:
+    def daily_summary_text(self,owner:str,day,timezone_name:str='UTC')->str:
+        try:tz=ZoneInfo(str(timezone_name or 'UTC'))
+        except Exception:tz=ZoneInfo('UTC')
+        start=datetime.combine(day,dt_time.min,tzinfo=tz).timestamp()
+        end=datetime.combine(day+timedelta(days=1),dt_time.min,tzinfo=tz).timestamp()
+        with self.store.lock:
+            db=self.store.db
+            sales=sales_summary(db,owner,start,end)
+            status=[dict(r) for r in db.execute(ORDERS_CTE+"""SELECT status,COUNT(*) count FROM orders
+              WHERE owner=? AND created_at>=? AND created_at<? GROUP BY status ORDER BY status""",(owner,start,end))]
+            unpaid=[dict(r) for r in db.execute(ORDERS_CTE+"""SELECT currency,SUM(amount_minor) amount FROM orders
+              WHERE owner=? AND created_at>=? AND created_at<?
+              AND status IN ('pending','awaiting_payment','payment_review','payment_rejected')
+              GROUP BY currency ORDER BY currency""",(owner,start,end))]
+            topups=[dict(r) for r in db.execute("""SELECT currency,SUM(delta_minor) amount FROM customer_wallet_ledger
+              WHERE owner=? AND kind='topup' AND delta_minor>0 AND created_at>=? AND created_at<?
+              GROUP BY currency ORDER BY currency""",(owner,start,end))]
+        totals=lambda rows:' · '.join(money(r['amount'],r['currency']) for r in rows) or money(0)
+        revenue=totals([{'currency':c,'amount':v} for c,v in sales['amounts'].items()])
+        lines=[f'📊 DARK | گزارش روزانه',f'فروشگاه: {owner}',f'تاریخ: {day.isoformat()} ({tz})','',
+               f"🧾 سفارش‌ها: {sum(r['count'] for r in status)}",
+               f"✅ پرداخت‌های موفق این روز: {sales['count']}",f'💰 فروش قطعی: {revenue}',
+               f'⏳ مبلغ سفارش‌های پرداخت‌نشدهٔ این روز: {totals(unpaid)}',
+               f'💳 شارژ کیف پول این روز: {totals(topups)}',
+               'شارژ کیف پول و سفارش پرداخت‌نشده در فروش قطعی حساب نمی‌شوند.','',
+               '📦 وضعیت سفارش‌های ایجادشده در این روز:']
+        lines.extend(f"• {ORDER_STATES.get(r['status'],'نیازمند بررسی')}: {r['count']}" for r in status)
+        if not status:lines.append('بدون سفارش جدید')
+        return '\n'.join(lines)
+
+    def audit_text(self,row:dict,timezone_name:str='UTC')->str:
+        action=str(row.get('action') or '');owner=str(row.get('owner') or '')
+        target=str(row.get('target') or '');actor=str(row.get('actor') or '')
+        titles={
+            'auth.login':'🔐 ورود به پنل','auth.logout':'🔐 خروج از پنل',
+            'client.create':'📦 سرویس جدید ساخته شد','client.update':'📝 مشخصات سرویس تغییر کرد',
+            'client.delete':'🗑 سرویس حذف شد','commerce.payment_confirm':'✅ پرداخت سفارش تأیید شد',
+            'commerce.wallet_purchase':'💰 خرید موفق از کیف پول','commerce.wallet_renewal':'🔄 تمدید موفق از کیف پول',
+            'commerce.order_create':'🧾 سفارش جدید ثبت شد','commerce.order_provision':'📦 سرویس سفارش تحویل شد',
+            'commerce.payment_start':'💳 پرداخت سفارش آغاز شد','wallet.topup_approve':'✅ شارژ کیف پول تأیید شد',
+            'wallet.topup_reject':'⛔ رسید شارژ رد شد','backup.full':'💾 بکاپ کامل ساخته شد',
+            'backup.telegram_sent':'💾 بکاپ در تلگرام تحویل شد','representative.bot_create':'🤝 نماینده جدید ساخته شد',
+            'telegram.forum_setup':'📊 مرکز گزارش متصل شد','telegram.forum_repair':'📊 مرکز گزارش بررسی و ترمیم شد',
+            'telegram.bot_surface_repair':'🤖 تنظیمات و منوی ربات ترمیم شد',
+        }
+        family={'telegram':'🤖 تنظیمات یا عملیات ربات','commerce':'🛍 عملیات فروشگاه',
+                'auth':'🔐 رویداد امنیت حساب','client':'📦 عملیات سرویس','wallet':'💳 عملیات کیف پول',
+                'representative':'🤝 عملیات نماینده','node':'🌍 عملیات نود','system':'🖥 عملیات سیستم','backup':'💾 عملیات بکاپ'}
+        title=titles.get(action,family.get(action.split('.')[0],'🖥 عملیات پنل'))
+        lines=[title,f"شماره رویداد: #{row['id']}",f'مدیر: {actor}',f'پنل: {owner}']
+        if action.startswith('client.'):lines.append('سرویس: '+target)
+        elif action.startswith('auth.'):lines.append('حساب: '+target)
+        elif target:lines.append('شناسه: '+target)
+        with self.store.lock:
+            order=self.store.db.execute("""SELECT o.*,p.name product_name FROM commerce_orders o
+              LEFT JOIN commerce_products p ON p.owner=o.owner AND p.id=o.product_id
+              WHERE o.owner=? AND o.id=?""",(owner,target)).fetchone()
+            topup=self.store.db.execute('SELECT * FROM customer_topups WHERE owner=? AND id=?',(owner,target)).fetchone() if action.startswith('wallet.') else None
+        if order:
+            lines+=['پلن: '+str(order['product_name'] or order['product_id']),
+                    'مبلغ سفارش: '+money(order['amount_minor'],order['currency']),
+                    'مشتری: '+(('@'+order['buyer_username']+' · ') if order['buyer_username'] else '')+str(order['buyer_telegram_id']),
+                    'وضعیت: '+ORDER_STATES.get(order['status'],'نیازمند بررسی')]
+        if topup:lines+=['مبلغ شارژ: '+money(topup['amount_minor'],topup['currency']),'مشتری: '+str(topup['telegram_id'])]
+        if action=='client.create':lines.append('سرویس در پنل ثبت شد؛ اطلاعات اتصال از بخش سرویس‌ها در دسترس است.')
+        if action=='client.update':
+            names={'expiryTime':'زمان انقضا','totalGB':'سقف حجم','enable':'وضعیت فعال بودن','limitIp':'تعداد IP','limitHwid':'تعداد دستگاه'}
+            changed=[names[k] for k in str(row.get('detail') or '').split(',') if k in names]
+            if changed:lines.append('تغییر: '+'، '.join(changed))
+        if row.get('at'):lines.append('زمان: '+date_time(row['at'],timezone_name))
+        return '\n'.join(lines)
+
+    def poll_audits(self,api,owner:str,role:str,limit:int=40,timezone_name:str='UTC')->int:
         with self.store.lock:
             forum=self.store.db.execute('SELECT last_audit_id FROM telegram_forums WHERE owner=? AND enabled=1 AND COALESCE(rebind_required,0)=0',(owner,)).fetchone()
             if not forum:return 0
@@ -279,11 +342,11 @@ class TelegramForumCenter:
         sent=0
         for row in rows:
             kind=self.audit_kind(row.get('action',''))
-            text=(f"#{row['id']} · {row.get('action','')}\n"
-                  f"Actor: {row.get('actor','')}\nOwner: {row.get('owner','')}\n"
-                  f"Target: {row.get('target','')}\n{row.get('detail','')}")
-            self.report(api,owner,kind,text);cursor=max(cursor,int(row['id']));sent+=1
-        if sent:
+            # Activation is already delivered with the customer's complete activation message.
+            if row.get('action')!='commerce.first_connection_activate':
+                self.report(api,owner,kind,self.audit_text(row,timezone_name));sent+=1
+            cursor=max(cursor,int(row['id']))
+            # Commit each completed delivery, so a later network failure cannot replay it.
             with self.store.transaction() as db:
                 db.execute('UPDATE telegram_forums SET last_audit_id=?,updated_at=? WHERE owner=?',
                            (cursor,time.time(),owner))

@@ -14,14 +14,12 @@ from telegram_forum import TelegramForumCenter
 from telegram_customer import CustomerCenter
 from telegram_customer_runtime import CustomerBotFeatures
 from representative_marketplace import RepresentativeMarketplace
+from telegram_presentation import money,date_time
+from telegram_reporting import SALES_CTE
 
 API_ROOT='https://api.telegram.org'
 
-def amount(value:int,currency:str)->str:
-    code=str(currency or '').upper()
-    if code=='IRT':return f"{int(value):,} تومان"
-    if code=='IRR':return f"{int(value):,} ریال"
-    return f"{int(value):,} {code}"
+amount=money
 
 class TelegramAPI:
     def __init__(self,token:str):
@@ -32,7 +30,13 @@ class TelegramAPI:
         self.client.close()
 
     def call(self,method:str,payload:dict[str,Any]|None=None)->Any:
-        r=self.client.post(f"{API_ROOT}/bot{self.token}/{method}",json=payload or {})
+        # Retry only read methods: retrying an uncertain send can duplicate a message/payment notice.
+        attempts=2 if method in ('getUpdates','getMe','getWebhookInfo','getChat','getChatMenuButton') else 1
+        for attempt in range(attempts):
+            try:
+                r=self.client.post(f"{API_ROOT}/bot{self.token}/{method}",json=payload or {});break
+            except (httpx.RemoteProtocolError,httpx.ConnectError):
+                if attempt+1==attempts:raise
         try:data=r.json()
         except Exception as ex:raise RuntimeError(f'Telegram returned HTTP {r.status_code}') from ex
         if not data.get('ok'):raise RuntimeError(str(data.get('description') or f'Telegram API {r.status_code}'))
@@ -53,11 +57,22 @@ class TelegramAPI:
         if not doc.get('ok'):raise RuntimeError(str(doc.get('description') or f'Telegram API {r.status_code}'))
         return doc.get('result')
 
+    def send_photo_bytes(self,chat_id:int,data:bytes,caption:str='',reply_markup:dict|None=None)->Any:
+        fields={'chat_id':str(int(chat_id)),'caption':caption}
+        if reply_markup is not None:fields['reply_markup']=json.dumps(reply_markup,ensure_ascii=False)
+        r=self.client.post(f"{API_ROOT}/bot{self.token}/sendPhoto",data=fields,
+                           files={'photo':('dark-subscription.png',data,'image/png')})
+        try:doc=r.json()
+        except Exception as ex:raise RuntimeError(f'Telegram returned HTTP {r.status_code}') from ex
+        if not doc.get('ok'):raise RuntimeError(str(doc.get('description') or f'Telegram API {r.status_code}'))
+        return doc.get('result')
+
 class BotWorker(CustomerBotFeatures):
     def __init__(self,runtime,owner:str,token:str,token_mark:str):
         self.runtime=runtime;self.owner=owner;self.token=token;self.token_mark=token_mark
         self.stop_event=threading.Event();self.thread=None;self.api=TelegramAPI(token)
         self.sessions:dict[int,str]={};self.session_data:dict[int,dict[str,str]]={};self.bot_id=0
+        self.network_failed_at:float|None=None;self.network_notice_at:float|None=None
 
     def start(self):
         self.thread=threading.Thread(target=self.run,name='dark-telegram-'+self.owner,daemon=True)
@@ -70,6 +85,29 @@ class BotWorker(CustomerBotFeatures):
 
     def status(self,state:str,error:str=''):
         self.runtime.set_status(self.owner,state,error)
+
+    def network_failed(self):
+        now=time.monotonic()
+        if self.network_failed_at is None:self.network_failed_at=now
+        self.status('reconnecting','در حال تلاش مجدد برای اتصال به تلگرام')
+        if now-self.network_failed_at>=60 and (self.network_notice_at is None or now-self.network_notice_at>=300):
+            try:
+                if self.runtime.forum.report(self.api,self.owner,'errors',
+                    '⚠️ ارتباط ربات با تلگرام ناپایدار است.\nتلاش برای اتصال مجدد ادامه دارد؛ سفارش‌ها و پرداخت‌ها در پنل محفوظ‌اند.'):
+                    self.network_notice_at=now
+            except Exception:pass
+
+    def network_recovered(self):
+        if self.network_failed_at is None:return
+        if self.network_notice_at is not None:
+            try:self.runtime.forum.report(self.api,self.owner,'errors','✅ ارتباط ربات با تلگرام برقرار شد.')
+            except Exception:pass
+        self.network_failed_at=None;self.network_notice_at=None
+
+    def report_tick(self):
+        tz=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
+        self.runtime.forum.poll_audits(self.api,self.owner,self.owner_role(),timezone_name=tz)
+        self.runtime.forum.maybe_daily_summary(self.api,self.owner,self.owner_role(),tz)
 
     def configure_telegram_surface(self)->dict[str,Any]:
         me=self.api.call('getMe');self.bot_id=int(me.get('id') or 0)
@@ -114,11 +152,10 @@ class BotWorker(CustomerBotFeatures):
                 offset=int(row.get('update_offset') or 0)
                 updates=self.api.call('getUpdates',{'offset':offset,'timeout':25,'limit':50,
                     'allowed_updates':['message','callback_query']}) or []
+                self.network_recovered()
                 if not updates:
-                    self.runtime.touch(self.owner)
-                    self.runtime.forum.poll_audits(self.api,self.owner,self.owner_role())
-                    timezone_name=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
-                    self.runtime.forum.maybe_daily_summary(self.api,self.owner,self.owner_role(),timezone_name)
+                    self.runtime.touch(self.owner);self.status('online')
+                    self.report_tick()
                     continue
                 for update in updates:
                     uid=int(update.get('update_id') or 0)
@@ -131,16 +168,18 @@ class BotWorker(CustomerBotFeatures):
                             with self.runtime.store.transaction() as db:
                                 db.execute("UPDATE telegram_bots SET update_offset=?,last_seen=? WHERE owner=?",
                                            (uid+1,time.time(),self.owner))
-                self.runtime.forum.poll_audits(self.api,self.owner,self.owner_role())
-                timezone_name=str(self.runtime.manager.engine.section('panel').get('timezone','UTC'))
-                self.runtime.forum.maybe_daily_summary(self.api,self.owner,self.owner_role(),timezone_name)
+                self.report_tick()
                 self.status('online')
             except httpx.ReadTimeout:
                 self.runtime.touch(self.owner);self.status('online')
                 continue
+            except httpx.TransportError:
+                self.network_failed()
+                if self.stop_event.wait(3):break
             except Exception as ex:
                 msg=str(ex);self.runtime.persist_error(self.owner,msg);self.status('error',msg)
-                try:self.runtime.forum.report(self.api,self.owner,'errors','🚨 Telegram runtime error\n'+msg[:1200])
+                try:self.runtime.forum.report(self.api,self.owner,'errors',
+                    '🚨 پردازش ربات نیازمند بررسی است.\nجزئیات در بخش وضعیت ربات و گزارش‌های پنل ثبت شد.')
                 except Exception:pass
                 if self.stop_event.wait(3):break
         self.status('stopped')
@@ -307,6 +346,8 @@ class BotWorker(CustomerBotFeatures):
             self.handle_crm_text(chat_id,user_id,text);return
         if session=='new_rep':
             self.create_representative_from_text(chat_id,user_id,text);return
+        if session.startswith('rep_new_'):
+            self.handle_representative_step(chat_id,user_id,text);return
         if low.startswith('/start') or low=='start':
             parts=text.split(None,1)
             self.runtime.customer.ensure_referral_profile(self.owner,user_id)
@@ -345,8 +386,8 @@ class BotWorker(CustomerBotFeatures):
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representatives(chat_id);return
         if text=='➕ ساخت نماینده' and self.is_admin(user_id) and self.owner_role()=='owner':
-            self.sessions[user_id]='new_rep'
-            self.api.send(chat_id,'اطلاعات نماینده را در یک خط بفرست:\nشناسه | رمز عبور | حجم GB | تعداد سرویس نامحدود\nمثال:\nseller1 | StrongPass88 | 500 | 20')
+            self.sessions[user_id]='rep_new_id';self.session_data[user_id]={}
+            self.api.send(chat_id,'🤝 ساخت نماینده · مرحله ۱ از ۴\nشناسه ورود نماینده را بفرست؛ مثال: seller1\nبرای لغو /cancel را بزن.')
             return
         if low.startswith('/user ') and self.is_admin(user_id):
             self.admin_user_search(chat_id,text.split(None,1)[1].strip());return
@@ -381,7 +422,7 @@ class BotWorker(CustomerBotFeatures):
         activation_pending=bool(result.get('activation_pending'))
         with self.runtime.store.lock:
             row=self.runtime.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(self.owner,client_id)).fetchone() if client_id else None
-        state='READY · WAITING FIRST CONNECTION' if activation_pending else 'ACTIVE'
+        state='آماده؛ منتظر اولین اتصال' if activation_pending else 'فعال'
         text=(f"◆ DARK SERVICE READY\n● {state}\n\n"
               f"سرویس: {client_id or '—'}\n"
               +("⏱ زمان سرویس هنوز شروع نشده؛ با اولین اتصال واقعی فعال می‌شود.\n"
@@ -396,13 +437,12 @@ class BotWorker(CustomerBotFeatures):
         kb.append([{'text':'◈ فروشگاه','callback_data':'shopback'}])
         self.api.send(chat_id,text,{'inline_keyboard':kb})
         delivery=result.get('delivery') or {}
-        if delivery.get('subscription_url'):
-            self.api.send(chat_id,'🔗 Subscription\n'+str(delivery['subscription_url']))
-        if delivery.get('main_config'):
-            self.api.send(chat_id,'⚡ کانفیگ اصلی\n'+str(delivery['main_config']))
-        portal=delivery.get('portal_url')
-        if portal and portal!=delivery.get('subscription_url'):
-            self.api.send(chat_id,'🌐 Portal\n'+str(portal))
+        if client_id and any(delivery.get(k) for k in ('subscription_url','main_config','portal_url')):
+            with self.runtime.store.lock:
+                order=self.runtime.store.db.execute('SELECT * FROM commerce_orders WHERE owner=? AND client_id=? ORDER BY created_at DESC LIMIT 1',
+                                                   (self.owner,client_id)).fetchone()
+            detail=result.get('client') or self.runtime.manager.detail(self.actor(),client_id,credentials=True)
+            self.send_connection_card(chat_id,client_id,detail,delivery,dict(order) if order else None)
 
     def handle_callback(self,q:dict[str,Any]):
         data=str(q.get('data') or '');sender=q.get('from') or {};user_id=int(sender['id'])
@@ -769,7 +809,7 @@ class BotWorker(CustomerBotFeatures):
               f"💰 امروز: {amount(d['revenue_today'],d['currency'])} · {d['paid_today']}/{d['orders_today']} سفارش\n"
               f"📈 ۷ روز: {amount(d['revenue_7d'],d['currency'])} · Conversion {d['conversion_7d']}%\n"
               f"◈ محصول فعال: {d['published_plans']} · خریدار: {d['customers']}\n"
-              f"◉ Wallet Liability: {amount(d['wallet_liability'],d['currency'])}\n\n"
+              f"◉ موجودی کیف پول مشتریان: {amount(d['wallet_liability'],d['currency'])}\n\n"
               f"⚠️ نیازمند اقدام: {sum(a.values())}\n"
               f"پرداخت {a['payments']} · پشتیبانی {a['support']} · خطای سفارش {a['failed']}\n"
               f"اولین اتصال {a['waiting']} · نزدیک انقضا {a['expiring']} · کم‌حجم {a['low']}")
@@ -1408,24 +1448,17 @@ class BotWorker(CustomerBotFeatures):
 
     def _growth_metrics(self)->dict[str,Any]:
         now=time.time();day=now-86400;week=now-7*86400;month=now-30*86400
-        success=('paid','provisioned_waiting_activation','provisioned','renewed')
-        marks=','.join('?' for _ in success)
         with self.runtime.store.lock:
             db=self.runtime.store.db
-            revenue_30=int(db.execute(f"""SELECT COALESCE(SUM(amount_minor),0) FROM commerce_orders
-              WHERE owner=? AND updated_at>=? AND status IN ({marks})""",(self.owner,month,*success)).fetchone()[0])
-            success_30=int(db.execute(f"""SELECT COUNT(*) FROM commerce_orders
-              WHERE owner=? AND updated_at>=? AND status IN ({marks})""",(self.owner,month,*success)).fetchone()[0])
-            buyers_30=int(db.execute(f"""SELECT COUNT(DISTINCT buyer_telegram_id) FROM commerce_orders
-              WHERE owner=? AND updated_at>=? AND status IN ({marks})""",(self.owner,month,*success)).fetchone()[0])
-            repeat_30=int(db.execute(f"""SELECT COUNT(*) FROM (
-              SELECT buyer_telegram_id FROM commerce_orders WHERE owner=? AND updated_at>=?
-              AND status IN ({marks}) GROUP BY buyer_telegram_id HAVING COUNT(*)>=2)""",
-              (self.owner,month,*success)).fetchone()[0])
-            renew_30=int(db.execute("""SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND updated_at>=?
-              AND order_type='renewal' AND status='renewed'""",(self.owner,month)).fetchone()[0])
+            history=SALES_CTE+"SELECT * FROM sales WHERE owner=? AND currency='IRT' AND paid_at>=? AND paid_at<?"
+            args=(self.owner,month,now+0.001)
+            stats=db.execute('SELECT COALESCE(SUM(amount_minor),0) revenue,COUNT(*) sales,COUNT(DISTINCT buyer_telegram_id) buyers,'
+                             "COALESCE(SUM(order_type='renewal'),0) renewals FROM ("+history+')',args).fetchone()
+            revenue_30=int(stats['revenue']);success_30=int(stats['sales']);buyers_30=int(stats['buyers']);renew_30=int(stats['renewals'])
+            repeat_30=int(db.execute('SELECT COUNT(*) FROM (SELECT buyer_telegram_id FROM ('+history+
+                ') GROUP BY buyer_telegram_id HAVING COUNT(*)>=2)',args).fetchone()[0])
             pending_value=int(db.execute("""SELECT COALESCE(SUM(amount_minor),0) FROM commerce_orders
-              WHERE owner=? AND created_at<=? AND status IN ('pending','awaiting_payment','payment_review')""",
+              WHERE owner=? AND currency='IRT' AND created_at<=? AND status IN ('pending','awaiting_payment','payment_review')""",
               (self.owner,now-1800)).fetchone()[0])
         ops=getattr(self.runtime,'ops',None);d=ops.dashboard(self.owner) if ops else {}
         segments={s:len(self._broadcast_targets(s,marketing=True)) for s in ('pending','expired','expiring','low')}
@@ -2259,6 +2292,39 @@ class BotWorker(CustomerBotFeatures):
             f"انقضا: {expiry_text}",
             {'inline_keyboard':[[{'text':'‹ مشتری‌های نماینده','callback_data':'repclients:'+str(row['owner'])}]]})
 
+    def handle_representative_step(self,chat_id:int,user_id:int,text:str):
+        if not self.is_admin(user_id) or self.owner_role()!='owner':
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None);raise PolicyError('Owner admin required')
+        state=self.sessions.get(user_id);data=self.session_data.setdefault(user_id,{})
+        if state=='rep_new_id':
+            if not NAME_RE.fullmatch(text):self.api.send(chat_id,'شناسه فقط می‌تواند شامل حروف لاتین، عدد، خط تیره و زیرخط باشد.');return
+            with self.runtime.store.lock:
+                exists=self.runtime.store.db.execute('SELECT 1 FROM api_admins WHERE id=?',(text,)).fetchone()
+            if exists:self.api.send(chat_id,'این شناسه وجود دارد؛ شناسه دیگری بفرست.');return
+            data['id']=text;self.sessions[user_id]='rep_new_password'
+            self.api.send(chat_id,'🔐 مرحله ۲ از ۴\nرمز ورود با حداقل ۸ کاراکتر بفرست؛ یا برای ساخت رمز تصادفی بنویس: خودکار');return
+        if state=='rep_new_password':
+            password=secrets.token_urlsafe(18) if text=='خودکار' else text
+            if len(password)<8 or '|' in password:self.api.send(chat_id,'رمز باید حداقل ۸ کاراکتر داشته باشد و شامل | نباشد.');return
+            data['password']=password;self.sessions[user_id]='rep_new_volume'
+            self.api.send(chat_id,'📦 مرحله ۳ از ۴\nاعتبار حجمی نماینده را به گیگابایت بفرست؛ مثال: ۵۰۰\nاین اعتبار حجم است، مبلغ پول نیست.');return
+        if state in ('rep_new_volume','rep_new_unlimited'):
+            try:value=int(text)
+            except ValueError:self.api.send(chat_id,'یک عدد صحیح صفر یا بیشتر بفرست.');return
+            if not 0<=value<=1_000_000:self.api.send(chat_id,'عدد باید بین صفر و ۱٬۰۰۰٬۰۰۰ باشد.');return
+            if state=='rep_new_volume':
+                data['volume']=str(value);self.sessions[user_id]='rep_new_unlimited'
+                self.api.send(chat_id,'♾ مرحله ۴ از ۴\nتعداد اعتبار سرویس نامحدود را بفرست؛ مثال: ۲۰\nبرای نداشتن این اعتبار، صفر بفرست.');return
+            data['unlimited']=str(value);self.sessions[user_id]='rep_new_confirm'
+            self.api.send(chat_id,f"🤝 بررسی اطلاعات نماینده\nشناسه: {data['id']}\nاعتبار حجمی: {data['volume']} گیگابایت\nاعتبار سرویس نامحدود: {value}\n\nبرای ساخت بنویس: تأیید\nبرای لغو /cancel را بزن.");return
+        if state=='rep_new_confirm':
+            if text not in ('تأیید','تایید'):self.api.send(chat_id,'برای ساخت «تأیید» و برای لغو /cancel را بفرست.');return
+            payload=' | '.join(data[k] for k in ('id','password','volume','unlimited'))
+            self.create_representative_from_text(chat_id,user_id,payload)
+            if user_id not in self.sessions:
+                self.api.send(chat_id,'🔐 رمز ورود نماینده: '+data['password'])
+                self.session_data.pop(user_id,None)
+
     def create_representative_from_text(self,chat_id:int,user_id:int,text:str):
         if not self.is_admin(user_id) or self.owner_role()!='owner':
             self.sessions.pop(user_id,None);raise PolicyError('Owner admin required')
@@ -2487,11 +2553,12 @@ class TelegramBotRuntime:
             owner=str(item['owner'])
             with self.lock:worker=self.workers.get(owner)
             if not worker:continue
-            expires=time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(float(item['expires_at'])))
+            tz=str(self.manager.engine.section('panel').get('timezone','UTC'))
+            expires=date_time(float(item['expires_at']),tz)
             client_id=str(item['client_id'])
             with self.store.lock:
                 row=self.store.db.execute("SELECT rowid FROM clients WHERE owner=? AND id=?",(owner,client_id)).fetchone()
-            text=(f"◆ DARK SERVICE ACTIVATED\n● FIRST CONNECTION VERIFIED\n\n"
+            text=(f"◆ DARK SERVICE ACTIVATED\n✅ اولین اتصال تأیید شد\n\n"
                   f"اولین اتصال واقعی ثبت شد؛ زمان سرویس از همین لحظه شروع شد.\n"
                   f"سرویس: {client_id}\nانقضا: {expires}")
             kb=[]

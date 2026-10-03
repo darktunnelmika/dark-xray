@@ -1,4 +1,7 @@
 from __future__ import annotations
+from datetime import datetime,time as dt_time
+from telegram_presentation import timezone
+from telegram_reporting import SALES_CTE,ORDERS_CTE,sales_summary
 import hashlib
 import hmac
 import json
@@ -143,29 +146,29 @@ class TelegramOperations:
         return time.mktime((local.tm_year,local.tm_mon,local.tm_mday,0,0,0,local.tm_wday,local.tm_yday,local.tm_isdst))
 
     def dashboard(self,owner:str)->dict[str,Any]:
-        now=time.time();today=self._midnight(now);week=now-7*86400;month=now-30*86400
-        success=self.SUCCESS_ORDER_STATES
-        marks=','.join('?' for _ in success)
+        now=time.time();week=now-7*86400;month=now-30*86400
+        tz=timezone(self.manager.engine.section('panel').get('timezone','UTC'))
+        today=datetime.combine(datetime.fromtimestamp(now,tz).date(),dt_time.min,tzinfo=tz).timestamp()
         with self.store.lock:
             db=self.store.db
-            orders_today=int(db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND created_at>=?",(owner,today)).fetchone()[0])
-            paid_today=int(db.execute(f"SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND updated_at>=? AND status IN ({marks})",(owner,today,*success)).fetchone()[0])
-            revenue_today=int(db.execute(f"SELECT COALESCE(SUM(amount_minor),0) FROM commerce_orders WHERE owner=? AND updated_at>=? AND status IN ({marks})",(owner,today,*success)).fetchone()[0])
-            orders_week=int(db.execute("SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND created_at>=?",(owner,week)).fetchone()[0])
-            paid_week=int(db.execute(f"SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND updated_at>=? AND status IN ({marks})",(owner,week,*success)).fetchone()[0])
-            revenue_week=int(db.execute(f"SELECT COALESCE(SUM(amount_minor),0) FROM commerce_orders WHERE owner=? AND updated_at>=? AND status IN ({marks})",(owner,week,*success)).fetchone()[0])
+            orders_today=int(db.execute(ORDERS_CTE+"SELECT COUNT(*) FROM orders WHERE owner=? AND created_at>=? AND created_at<?",(owner,today,now+0.001)).fetchone()[0])
+            day_sales=sales_summary(db,owner,today,now+0.001)
+            paid_today=day_sales['count'];revenue_today=day_sales['amounts'].get('IRT',0)
+            orders_week=int(db.execute(ORDERS_CTE+"SELECT COUNT(*) FROM orders WHERE owner=? AND created_at>=? AND created_at<?",(owner,week,now+0.001)).fetchone()[0])
+            week_sales=sales_summary(db,owner,week,now+0.001)
+            paid_week=week_sales['count'];revenue_week=week_sales['amounts'].get('IRT',0)
             pending_payments=int(db.execute("SELECT COUNT(*) FROM commerce_payments WHERE owner=? AND status='review'",(owner,)).fetchone()[0])
             pending_topups=int(db.execute("SELECT COUNT(*) FROM customer_topups WHERE owner=? AND status='review'",(owner,)).fetchone()[0])
             wallet_liability=int(db.execute("SELECT COALESCE(SUM(balance_minor),0) FROM customer_wallets WHERE owner=?",(owner,)).fetchone()[0])
             products=int(db.execute("SELECT COUNT(*) FROM commerce_products WHERE owner=? AND active=1 AND visible=1",(owner,)).fetchone()[0])
-            customers=int(db.execute(f"SELECT COUNT(DISTINCT buyer_telegram_id) FROM commerce_orders WHERE owner=? AND status IN ({marks})",(owner,*success)).fetchone()[0])
+            customers=int(db.execute(SALES_CTE+"SELECT COUNT(DISTINCT buyer_telegram_id) FROM sales WHERE owner=?",(owner,)).fetchone()[0])
             support_open=int(db.execute("SELECT COUNT(*) FROM customer_support_tickets WHERE owner=? AND status<>'closed'",(owner,)).fetchone()[0])
             support_urgent=int(db.execute("SELECT COUNT(*) FROM customer_support_tickets WHERE owner=? AND status<>'closed' AND priority='urgent'",(owner,)).fetchone()[0])
-            top=[dict(r) for r in db.execute(f"""SELECT p.id,p.name,COUNT(o.id) sales,COALESCE(SUM(o.amount_minor),0) revenue_minor
-              FROM commerce_products p LEFT JOIN commerce_orders o ON o.owner=p.owner AND o.product_id=p.id
-                AND o.updated_at>=? AND o.status IN ({marks})
+            top=[dict(r) for r in db.execute(SALES_CTE+"""SELECT p.id,p.name,COUNT(o.id) sales,COALESCE(SUM(o.amount_minor),0) revenue_minor
+              FROM commerce_products p LEFT JOIN sales o ON o.owner=p.owner AND o.product_id=p.id AND o.kind='service'
+                AND o.paid_at>=? AND o.paid_at<? AND o.currency='IRT'
               WHERE p.owner=? GROUP BY p.id,p.name ORDER BY revenue_minor DESC,sales DESC,p.name LIMIT 5""",
-              (month,*success,owner))]
+              (month,now+0.001,owner))]
             role=self.commerce.actor_for(owner).role
             reps=int(db.execute("SELECT COUNT(*) FROM api_admins WHERE role='reseller' AND disabled=0").fetchone()[0]) if role=='owner' else 0
         return {'owner':owner,'role':role,'orders_today':orders_today,'paid_today':paid_today,'revenue_today':revenue_today,
@@ -174,6 +177,7 @@ class TelegramOperations:
                 'pending_payments':pending_payments+pending_topups,'wallet_liability':wallet_liability,
                 'published_plans':products,'customers':customers,'support_open':support_open,
                 'support_urgent':support_urgent,'representatives':reps,'top_products':top,'currency':'IRT',
+                'revenue_today_by_currency':day_sales['amounts'],'revenue_7d_by_currency':week_sales['amounts'],
                 'mini_app_url':self.mini_app_url(owner)}
 
     def inbound_catalog(self,owner:str)->list[dict[str,Any]]:

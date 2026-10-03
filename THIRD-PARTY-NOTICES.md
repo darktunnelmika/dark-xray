@@ -65,3 +65,5 @@ Xray-core is a separately supplied upstream proxy engine. No Xray binary is bund
 ## Dependencies
 
 Python dependencies are listed in requirements.txt and requirements-dev.txt and are not bundled. No font files are bundled. The existing project LICENSE is retained.
+
+Telegram connection QR images are generated locally with Segno 1.6.6 (BSD license, https://github.com/heuer/segno). Subscription URLs are supplied directly to the local encoder; no external QR service is used.
