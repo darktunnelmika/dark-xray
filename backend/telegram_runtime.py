@@ -1592,16 +1592,19 @@ class BotWorker(CustomerBotFeatures):
         if not ops:self.admin_gateways(chat_id);return
         rows=ops.payment_rows(self.owner,20);crypto=ops.crypto_gateway(self.owner);manual=self.manual_gateway()
         pending=[x for x in rows if x.get('reviewable')]
-        text=(f"💳 PAYMENT CENTER\nنیازمند بررسی: {len(pending)}\n"
-              f"کارت دستی: {'فعال ✅' if manual and manual.get('enabled') else 'غیرفعال/تنظیم نشده'}\n"
-              f"Crypto: {'فعال ✅' if crypto.get('enabled') and crypto.get('configured') else 'غیرفعال/تنظیم نشده'}")
+        review_total=sum(int(x.get('amount_minor') or 0) for x in pending)
+        text=(f"◉ DARK PAYMENT CENTER\n"
+              f"نیازمند بررسی: {len(pending)} · {amount(review_total,'IRT')}\n"
+              f"کارت دستی: {'● فعال' if manual and manual.get('enabled') else '○ خاموش/تنظیم‌نشده'}\n"
+              f"Crypto: {'● فعال' if crypto.get('enabled') and crypto.get('configured') else '○ خاموش/تنظیم‌نشده'}")
         kb=[]
         for row in pending[:8]:
-            label=('سفارش' if row['kind']=='order' else 'شارژ کیف پول')+' · '+amount(row['amount_minor'],row['currency'])
+            label=('سفارش' if row['kind']=='order' else 'شارژ Wallet')+' · '+amount(row['amount_minor'],row['currency'])
             kb.append([{'text':'✅ '+label[:46],'callback_data':f"opspayok:{row['kind']}:{row['row_id']}"},
                        {'text':'❌ رد','callback_data':f"opspayno:{row['kind']}:{row['row_id']}"}])
         kb.append([{'text':'💳 تنظیم کارت دستی','callback_data':'paycfg'},
                    {'text':'📱 Payment Center','web_app':{'url':ops.mini_app_url(self.owner)}}])
+        kb.append([{'text':'‹ Action Center','callback_data':'ops_action'}])
         self.api.send(chat_id,text,{'inline_keyboard':kb})
 
     def admin_gateways(self,chat_id:int):
