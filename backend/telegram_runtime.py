@@ -1862,6 +1862,17 @@ class TelegramBotRuntime:
               owner TEXT NOT NULL,telegram_id INTEGER NOT NULL,client_id TEXT NOT NULL,
               event_key TEXT NOT NULL,sent_at REAL NOT NULL,
               PRIMARY KEY(owner,telegram_id,client_id,event_key))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS telegram_broadcasts(
+              id TEXT PRIMARY KEY,owner TEXT NOT NULL,created_by INTEGER NOT NULL,
+              segment TEXT NOT NULL,message TEXT NOT NULL,status TEXT NOT NULL,
+              total INTEGER NOT NULL DEFAULT 0,sent INTEGER NOT NULL DEFAULT 0,failed INTEGER NOT NULL DEFAULT 0,
+              created_at REAL NOT NULL,started_at REAL NOT NULL DEFAULT 0,completed_at REAL NOT NULL DEFAULT 0)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS telegram_broadcast_recipients(
+              broadcast_id TEXT NOT NULL,telegram_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
+              error TEXT NOT NULL DEFAULT '',updated_at REAL NOT NULL,
+              PRIMARY KEY(broadcast_id,telegram_id))""")
+            db.execute("CREATE INDEX IF NOT EXISTS telegram_broadcast_owner ON telegram_broadcasts(owner,created_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS telegram_broadcast_pending ON telegram_broadcast_recipients(broadcast_id,status)")
 
     def start(self):
         if self.thread and self.thread.is_alive():return
@@ -1884,6 +1895,7 @@ class TelegramBotRuntime:
                 self.sync_workers()
                 activated=self.commerce.activate_first_connections(self.manager)
                 self.notify_activations(activated)
+                self.process_broadcasts()
                 now=time.time()
                 if now-self.last_notification_scan>=300:
                     self.notify_service_health();self.last_notification_scan=now
@@ -1891,6 +1903,52 @@ class TelegramBotRuntime:
                 pass
             self.wake_event.wait(3);self.wake_event.clear()
         self.sync_workers(stop_all=True)
+
+    def process_broadcasts(self):
+        with self.lock:workers=dict(self.workers)
+        for owner,worker in workers.items():
+            with self.store.lock:
+                job=self.store.db.execute("""SELECT * FROM telegram_broadcasts
+                  WHERE owner=? AND status IN ('queued','running') ORDER BY created_at LIMIT 1""",(owner,)).fetchone()
+            if not job:continue
+            job=dict(job);bid=str(job['id']);now=time.time()
+            if job['status']=='queued':
+                with self.store.transaction() as db:
+                    db.execute("UPDATE telegram_broadcasts SET status='running',started_at=? WHERE id=? AND status='queued'",(now,bid))
+            with self.store.lock:
+                recipients=[dict(r) for r in self.store.db.execute("""SELECT telegram_id FROM telegram_broadcast_recipients
+                  WHERE broadcast_id=? AND status='pending' ORDER BY telegram_id LIMIT 15""",(bid,))]
+            for row in recipients:
+                tid=int(row['telegram_id'])
+                try:
+                    worker.api.send(tid,'◆ DARK NOTICE\n\n'+str(job['message']))
+                    state='sent';error=''
+                except Exception as ex:
+                    state='failed';error=str(ex)[:500]
+                with self.store.transaction() as db:
+                    db.execute("""UPDATE telegram_broadcast_recipients SET status=?,error=?,updated_at=?
+                      WHERE broadcast_id=? AND telegram_id=? AND status='pending'""",
+                      (state,error,time.time(),bid,tid))
+            with self.store.lock:
+                stats=self.store.db.execute("""SELECT
+                  SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END)
+                  FROM telegram_broadcast_recipients WHERE broadcast_id=?""",(bid,)).fetchone()
+            sent=int(stats[0] or 0);failed=int(stats[1] or 0);pending=int(stats[2] or 0)
+            completed=pending==0
+            with self.store.transaction() as db:
+                db.execute("""UPDATE telegram_broadcasts SET sent=?,failed=?,status=?,completed_at=?
+                  WHERE id=?""",(sent,failed,'completed' if completed else 'running',
+                                 time.time() if completed else 0,bid))
+            if completed:
+                try:
+                    admin=int(worker.bot_config()['admin_telegram_id'])
+                    worker.api.send(admin,f"✅ اعلان DARK تکمیل شد.\nID: {bid}\nارسال موفق: {sent}\nناموفق: {failed}")
+                except Exception:
+                    pass
+                try:self.manager.audit(self.commerce.actor_for(owner),owner,'telegram.broadcast_complete',bid,f"sent={sent}; failed={failed}")
+                except Exception:pass
 
     def _notification_sent(self,owner:str,telegram_id:int,client_id:str,event_key:str)->bool:
         with self.store.lock:
