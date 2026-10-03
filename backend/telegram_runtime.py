@@ -142,7 +142,6 @@ class BotWorker(CustomerBotFeatures):
 
     def main_keyboard(self,admin:bool)->dict:
         ops=getattr(self.runtime,'ops',None)
-        customer_app={'text':'📱 فروشگاه','web_app':{'url':ops.customer_mini_app_url(self.owner)}} if ops else '📱 فروشگاه'
         customer_app={'text':'◈ DARK Mini App','web_app':{'url':ops.customer_mini_app_url(self.owner)}} if ops else '◈ DARK Mini App'
         rows=[
             ['⚡ خرید سرویس','📦 سرویس‌های من'],
@@ -685,7 +684,7 @@ class BotWorker(CustomerBotFeatures):
         cats=sorted({str(p.get('category') or 'General') for p in products})
         with self.runtime.store.lock:
             sold=int(self.runtime.store.db.execute(
-                "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND status IN ('paid','approved','provisioned')",
+                "SELECT COUNT(*) FROM commerce_orders WHERE owner=? AND (status='paid' OR status LIKE 'provisioned%')",
                 (self.owner,)).fetchone()[0])
         self.api.send(chat_id,
             f"⚡ DARK STORE / V6\n"
@@ -797,7 +796,7 @@ class BotWorker(CustomerBotFeatures):
     def start_simple_plan_create(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_name';self.session_data[user_id]={}
         self.api.send(chat_id,
-            '⚡ ساخت سریع محصول · مرحله 1/7\nنام محصول را بفرست یا یکی از برندهای آماده را انتخاب کن.\nبرای لغو: /cancel',
+            '⚡ ساخت سریع محصول · مرحله 1/8\nنام محصول را بفرست یا یکی از برندهای آماده را انتخاب کن.\nبرای لغو: /cancel',
             {'inline_keyboard':[
                 [{'text':'⚡ مولتی توربو','callback_data':'stsname:multiturbo'},
                  {'text':'🔥 DARK BOOST','callback_data':'stsname:darkboost'}],
@@ -807,7 +806,7 @@ class BotWorker(CustomerBotFeatures):
 
     def _simple_plan_ask_category(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_category_wait'
-        self.api.send(chat_id,'مرحله 2/7 · دسته محصول را انتخاب کن:',{'inline_keyboard':[
+        self.api.send(chat_id,'مرحله 2/8 · دسته محصول را انتخاب کن:',{'inline_keyboard':[
             [{'text':'🟢 اقتصادی','callback_data':'stscat:economy'},
              {'text':'⚡ Turbo','callback_data':'stscat:turbo'}],
             [{'text':'🌍 Multi','callback_data':'stscat:multi'},
@@ -829,7 +828,7 @@ class BotWorker(CustomerBotFeatures):
         if key not in categories:raise PolicyError('Invalid simple plan category')
         self.session_data[user_id]['category']=categories[key]
         self.sessions[user_id]='store_simple_type_wait'
-        self.api.send(chat_id,'مرحله 3/7 · نوع پلن را انتخاب کن:',{'inline_keyboard':[[
+        self.api.send(chat_id,'مرحله 3/8 · نوع پلن را انتخاب کن:',{'inline_keyboard':[[
             {'text':'📦 حجمی','callback_data':'ststype:volume'},
             {'text':'♾ نامحدود','callback_data':'ststype:unlimited'}]]})
 
@@ -838,7 +837,7 @@ class BotWorker(CustomerBotFeatures):
         if kind not in ('volume','unlimited'):raise PolicyError('Invalid simple plan type')
         self.session_data[user_id]['plan_type']=kind
         self.sessions[user_id]='store_simple_price'
-        self.api.send(chat_id,'مرحله 4/7 · قیمت پلن را به تومان بفرست؛ فقط عدد.')
+        self.api.send(chat_id,'مرحله 4/8 · قیمت پلن را به تومان بفرست؛ فقط عدد.')
 
     def simple_plan_choose_months(self,chat_id:int,user_id:int,months:int):
         if self.sessions.get(user_id)!='store_simple_duration_wait':raise PolicyError('Simple plan wizard is not waiting for duration')
@@ -847,7 +846,7 @@ class BotWorker(CustomerBotFeatures):
         if data.get('plan_type')=='unlimited':
             data['volume_gb']=0;self.simple_plan_ask_ip(chat_id,user_id);return
         self.sessions[user_id]='store_simple_volume_wait'
-        self.api.send(chat_id,'مرحله 5/7 · حجم را انتخاب کن:',{'inline_keyboard':[
+        self.api.send(chat_id,'مرحله 6/8 · حجم را انتخاب کن:',{'inline_keyboard':[
             [{'text':'10 GB','callback_data':'stsvol:10'},{'text':'20 GB','callback_data':'stsvol:20'},{'text':'30 GB','callback_data':'stsvol:30'}],
             [{'text':'50 GB','callback_data':'stsvol:50'},{'text':'100 GB','callback_data':'stsvol:100'},{'text':'200 GB','callback_data':'stsvol:200'}],
             [{'text':'✍️ سفارشی','callback_data':'stsvolcustom'}]
@@ -860,7 +859,7 @@ class BotWorker(CustomerBotFeatures):
 
     def simple_plan_ask_ip(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_ip_wait'
-        self.api.send(chat_id,'مرحله 6/7 · محدودیت IP را انتخاب کن:',{'inline_keyboard':[[
+        self.api.send(chat_id,'مرحله 7/8 · محدودیت IP را انتخاب کن:',{'inline_keyboard':[[
             {'text':'1','callback_data':'stsip:1'},{'text':'2','callback_data':'stsip:2'},
             {'text':'3','callback_data':'stsip:3'},{'text':'4','callback_data':'stsip:4'},
             {'text':'5','callback_data':'stsip:5'}],
@@ -882,7 +881,7 @@ class BotWorker(CustomerBotFeatures):
             mark='✅' if x['id'] in selected else '⬜'
             kb.append([{'text':f"{mark} {x['name']} · :{x['port']}"[:62],'callback_data':'stsinb:'+str(x['id'])}])
         kb.append([{'text':'✅ پایان انتخاب لوکیشن','callback_data':'stsinbdone'}])
-        self.api.send(chat_id,'مرحله 7/7 · لوکیشن‌های این پلن را انتخاب کن:',{'inline_keyboard':kb})
+        self.api.send(chat_id,'مرحله 8/8 · لوکیشن‌های این پلن را انتخاب کن:',{'inline_keyboard':kb})
 
     def simple_plan_toggle_inbound(self,chat_id:int,user_id:int,inbound_id:int):
         if self.sessions.get(user_id)!='store_simple_inbounds':raise PolicyError('Simple plan wizard is not selecting inbounds')
@@ -950,7 +949,7 @@ class BotWorker(CustomerBotFeatures):
             except ValueError:self.api.send(chat_id,'قیمت باید عدد صحیح باشد.');return
             if not 0<=n<=10**12:self.api.send(chat_id,'قیمت خارج از محدوده است.');return
             data['price_minor']=n;self.sessions[user_id]='store_simple_duration_wait'
-            self.api.send(chat_id,'مدت پلن را انتخاب کن:',{'inline_keyboard':[
+            self.api.send(chat_id,'مرحله 5/8 · مدت پلن را انتخاب کن:',{'inline_keyboard':[
                 [{'text':'1 ماه','callback_data':'stsmonth:1'},{'text':'2 ماه','callback_data':'stsmonth:2'},
                  {'text':'3 ماه','callback_data':'stsmonth:3'}],
                 [{'text':'6 ماه','callback_data':'stsmonth:6'},{'text':'12 ماه','callback_data':'stsmonth:12'}],
