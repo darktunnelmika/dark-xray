@@ -11,15 +11,65 @@ def money(value:int,currency:str='IRT')->str:
     return f"{int(value):,} {code}"
 
 class CustomerBotFeatures:
-    def customer_shop(self,chat_id:int):
+    @staticmethod
+    def _store_category_icon(category:str)->str:
+        value=str(category or '').lower()
+        if 'turbo' in value:return '⚡'
+        if 'vip' in value or 'prime' in value:return '💎'
+        if 'game' in value:return '🎮'
+        if 'multi' in value:return '🌍'
+        if 'econom' in value or 'eco' in value:return '🟢'
+        return '◈'
+
+    def _public_store_rows(self)->list[dict[str,Any]]:
         products=self.runtime.commerce.product_rows(self.owner,public=True)
-        rows=[p for p in products if any(x.get('active') for x in p.get('prices') or [])]
-        if not rows:self.api.send(chat_id,'فعلاً اشتراک قابل خریدی وجود ندارد.');return
+        return [p for p in products if any(x.get('active') for x in p.get('prices') or [])]
+
+    def _price_brief(self,price:dict[str,Any])->str:
+        volume=int(price.get('volume_bytes') or 0)
+        quota='∞' if not volume else (str(max(1,round(volume/(1024**3))))+'GB')
+        days=int(price.get('duration_days') or 0)
+        ip=int(price.get('ip_limit') or 1)
+        return f"{quota} · {days}D · IP{ip} · {money(int(price.get('price_minor') or 0),str(price.get('currency') or 'IRT'))}"
+
+    def customer_shop(self,chat_id:int):
+        rows=self._public_store_rows()
+        if not rows:self.api.send(chat_id,'◈ DARK MARKET\nفعلاً پلن قابل خریدی منتشر نشده است.');return
+        groups:dict[str,list[dict[str,Any]]]={}
+        for p in rows:groups.setdefault(str(p.get('category') or 'General'),[]).append(p)
+        if len(groups)==1:
+            self.customer_shop_category(chat_id,int(rows[0]['row_id']));return
+        buttons=[]
+        for category,items in sorted(groups.items(),key=lambda x:x[0].lower()):
+            icon=self._store_category_icon(category)
+            buttons.append([{'text':f"{icon} {category} · {len(items)} پلن"[:62],
+                             'callback_data':'shopcat:'+str(items[0]['row_id'])}])
+        buttons.append([{'text':'✦ نمایش همه محصولات','callback_data':'shopall'}])
+        self.api.send(chat_id,
+            f"⚡ DARK XRAY / SECURE MARKET\n{len(rows)} محصول در {len(groups)} دسته آماده خرید است.\n"
+            "دسته موردنظر را انتخاب کن:",
+            {'inline_keyboard':buttons})
+
+    def customer_shop_category(self,chat_id:int,anchor_row:int|None=None):
+        rows=self._public_store_rows()
+        category=''
+        if anchor_row is not None:
+            anchor=self.product_by_rowid(int(anchor_row));category=str(anchor.get('category') or 'General')
+            rows=[p for p in rows if str(p.get('category') or 'General')==category]
+        if not rows:self.customer_shop(chat_id);return
         buttons=[]
         for p in rows[:40]:
-            category=str(p.get('category') or 'General')
-            buttons.append([{'text':f"🛍 {p['name']} · {category}"[:62],'callback_data':'p:'+str(p['row_id'])}])
-        self.api.send(chat_id,'🛍 خرید اشتراک\nمحصول را انتخاب کن:',{'inline_keyboard':buttons})
+            active=[x for x in p.get('prices') or [] if x.get('active')]
+            if not active:continue
+            cheapest=min(active,key=lambda x:int(x.get('price_minor') or 0))
+            icon=self._store_category_icon(str(p.get('category') or 'General'))
+            buttons.append([{'text':f"{icon} {p['name']} · از {money(cheapest['price_minor'],cheapest['currency'])}"[:62],
+                             'callback_data':'p:'+str(p['row_id'])}])
+        if anchor_row is not None:buttons.append([{'text':'‹ دسته‌بندی‌ها','callback_data':'shopback'}])
+        title=('همه محصولات' if anchor_row is None else category)
+        self.api.send(chat_id,
+            f"◈ DARK MARKET / {title}\nپلن را باز کن تا جزئیات و گزینه‌های خرید را ببینی.",
+            {'inline_keyboard':buttons})
 
     def customer_wallet_menu(self,chat_id:int,user_id:int):
         wallet=self.runtime.customer.wallet(self.owner,user_id)
@@ -285,13 +335,42 @@ class CustomerBotFeatures:
             self.customer_representative_checkout(chat_id,user_id,str(sender.get('username') or ''),int(data.split(':',1)[1]),'renewal');return True
         if data.startswith('rmpay:'):
             self.customer_representative_pay(chat_id,user_id,data.split(':',1)[1]);return True
+        if data=='shopback':
+            self.customer_shop(chat_id);return True
+        if data=='shopall':
+            self.customer_shop_category(chat_id,None);return True
+        if data.startswith('shopcat:'):
+            self.customer_shop_category(chat_id,int(data.split(':',1)[1]));return True
         if data.startswith('p:'):
             p=self.product_by_rowid(int(data.split(':',1)[1]))
-            prices=[x for x in self.runtime.commerce.product_rows(self.owner,public=True) if x['id']==p['id']][0]['prices']
-            buttons=[[{'text':f"{x['label']} · {money(x['price_minor'],x['currency'])}",
-                       'callback_data':'b:'+str(x['row_id'])}] for x in prices if x['active']]
-            self.api.send(chat_id,f"{p['name']}\n{p['description']}\nپلن را انتخاب کن:",{'inline_keyboard':buttons});return True
+            row=next(x for x in self.runtime.commerce.product_rows(self.owner,public=True) if x['id']==p['id'])
+            prices=[x for x in row['prices'] if x.get('active')]
+            icon=self._store_category_icon(str(p.get('category') or 'General'))
+            lines=[f"{icon} {p['name']}",str(p.get('description') or 'اتصال امن DARK XRAY'),
+                   f"دسته: {p.get('category') or 'General'}",'']
+            buttons=[]
+            for x in prices:
+                lines.append('• '+self._price_brief(x))
+                buttons.append([{'text':self._price_brief(x)[:62],'callback_data':'b:'+str(x['row_id'])}])
+            buttons.append([{'text':'‹ بازگشت به فروشگاه','callback_data':'shopback'}])
+            self.api.send(chat_id,'\n'.join(lines)+'\n\nیک پلن را برای بررسی نهایی انتخاب کن:',
+                          {'inline_keyboard':buttons});return True
         if data.startswith('b:'):
+            price=self.price_by_rowid(int(data.split(':',1)[1]))
+            with self.runtime.store.lock:
+                product=self.runtime.store.db.execute(
+                    "SELECT rowid AS row_id,* FROM commerce_products WHERE owner=? AND id=?",
+                    (self.owner,price['product_id'])).fetchone()
+            wallet=self.runtime.customer.wallet(self.owner,user_id)
+            activation='شروع زمان از اولین اتصال واقعی' if price.get('activation_mode')=='first_connection' else 'شروع زمان بلافاصله بعد از خرید'
+            self.api.send(chat_id,
+                f"✦ تأیید خرید\n{product['name']}\n{self._price_brief(price)}\n"
+                f"{activation}\n\nموجودی کیف پول: {money(wallet['balance_minor'],wallet['currency'])}",
+                {'inline_keyboard':[
+                    [{'text':'✅ تأیید و ساخت سفارش','callback_data':'buy:'+str(price['row_id'])}],
+                    [{'text':'‹ بازگشت به محصول','callback_data':'p:'+str(product['row_id'])}]
+                ]});return True
+        if data.startswith('buy:'):
             price=self.price_by_rowid(int(data.split(':',1)[1]))
             with self.runtime.store.lock:
                 product=self.runtime.store.db.execute("SELECT * FROM commerce_products WHERE owner=? AND id=?",
@@ -301,11 +380,14 @@ class CustomerBotFeatures:
             wallet=self.runtime.customer.wallet(self.owner,user_id)
             enough=int(wallet['balance_minor'])>=int(order['amount_minor'])
             kb=[]
-            if enough:kb.append([{'text':'✅ پرداخت از کیف پول','callback_data':'uwpay:'+order['id']}])
-            kb.append([{'text':'💰 شارژ کیف پول','callback_data':'wmenu'}])
-            self.api.send(chat_id,f"سفارش: {order['id']}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
-                          f"موجودی کیف پول: {money(wallet['balance_minor'])}",
-                          {'inline_keyboard':kb});return True
+            if enough:kb.append([{'text':'⚡ پرداخت از کیف پول','callback_data':'uwpay:'+order['id']}])
+            else:kb.append([{'text':'💳 شارژ کیف پول','callback_data':'wmenu'}])
+            kb.append([{'text':'◈ بازگشت به فروشگاه','callback_data':'shopback'}])
+            state='آماده پرداخت' if enough else 'موجودی کیف پول کافی نیست'
+            self.api.send(chat_id,
+                f"🧾 سفارش ساخته شد\n{product['name']}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
+                f"موجودی: {money(wallet['balance_minor'],wallet['currency'])}\nوضعیت: {state}",
+                {'inline_keyboard':kb});return True
         if data.startswith('g:'):
             self.api.send(chat_id,'پرداخت مستقیم غیرفعال است. برای خرید، ابتدا کیف پول را شارژ کن.');return True
         if data.startswith('uwpay:'):
