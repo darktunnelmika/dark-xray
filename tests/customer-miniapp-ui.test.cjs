@@ -42,8 +42,9 @@ test('Customer Mini App recovers missing signed profile launch through official 
 });
 
 test('customer bot no longer launches auth-required Mini App from reply keyboard web_app',()=>{
- assert.match(runtime,/customer_app='◈ DARK Mini App'/);
+ assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
  assert.match(runtime,/setChatMenuButton/);
+ assert.match(runtime,/'text':'فروشگاه'/);
  assert.match(runtime,/تست WebApp امن/);
  assert.match(runtime,/Main Mini App/);
 });
@@ -73,8 +74,10 @@ test('Customer Mini App is mobile first and uses persistent five-tab navigation'
  assert.match(css,/\.cu-form input,.cu-form select,.cu-form textarea/);
 });
 
-test('customer bot keyboard exposes WebApp launcher for owner and representative bots',()=>{
+test('customer bot uses Telegram menu button for Store without duplicate reply-keyboard Mini App',()=>{
  assert.match(runtime,/customer_mini_app_url/);
- assert.match(runtime,/'📱 فروشگاه'/);
+ assert.match(runtime,/setChatMenuButton/);
+ assert.match(runtime,/'text':'فروشگاه'/);
  assert.match(runtime,/web_app/);
+ assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
 });
