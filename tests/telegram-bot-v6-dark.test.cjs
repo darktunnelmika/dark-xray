@@ -44,3 +44,14 @@ test('customer account surfaces share the DARK V6 language',()=>{
     assert.ok(customer.includes(token),token);
   assert.match(customer,/شروع زمان: با اولین اتصال واقعی/);
 });
+
+test('Bot V6 Stage 2 exposes owner Action Center and filtered order operations',()=>{
+  for(const token of ['DARK ACTION CENTER','ops_action','ops_attention','ordlist:pending','ordlist:waiting','ordlist:failed','DARK SERVICE WATCH'])
+    assert.ok(runtime.includes(token),token);
+});
+
+test('Bot V6 Stage 2 keeps deduplicated service health notifications',()=>{
+  for(const token of ['telegram_customer_notifications','notify_service_health','expiry24:','expiry72:','volume20:','volume5:','DARK SERVICE ALERT'])
+    assert.ok(runtime.includes(token),token);
+  assert.match(runtime,/last_notification_scan>=300/);
+});

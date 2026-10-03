@@ -346,6 +346,8 @@ class CustomerBotFeatures:
     def handle_customer_callback(self,data:str,chat_id:int,user_id:int,sender:dict[str,Any])->bool:
         if data=='uhome':
             self.send_home(chat_id,user_id);return True
+        if data=='svcmy':
+            self.customer_services(chat_id,user_id);return True
         if data.startswith('rmplan:'):
             self.customer_representative_plan_detail(chat_id,user_id,int(data.split(':',1)[1]),False);return True
         if data.startswith('rmbuy:'):
