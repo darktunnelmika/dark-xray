@@ -9,7 +9,7 @@ SPEC.loader.exec_module(checks)
 
 
 def green():
-    return [{'name': 'gate-' + str(i), 'status': 'completed', 'conclusion': 'success'} for i in range(28)]
+    return [{'name': 'gate-' + str(i), 'status': 'completed', 'conclusion': 'success'} for i in range(30)]
 
 
 def test_publish_requires_complete_green_set_and_ignores_its_own_running_job():

@@ -7,7 +7,7 @@ import subprocess
 import time
 
 
-def validate_checks(checks, minimum=28):
+def validate_checks(checks, minimum=30):
     relevant = [c for c in checks if c['name'] != 'publish']
     if len(relevant) < minimum:
         return False
