@@ -1,0 +1,92 @@
+name: DARK XRAY Stable Release
+
+on:
+  workflow_run:
+    workflows: [Source checks and isolated tests]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dark-xray-stable-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      checks: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable main candidate and complete check set
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          version="$(cat VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 tools/stable_release_checks.py --sha "$CANDIDATE_SHA" --repository "$GITHUB_REPOSITORY"
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build twice and verify exact artifact
+        if: steps.candidate.outputs.publish == 'true'
+        env:
+          CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          for build in one two; do
+            python3 tools/release_snapshot.py --commit "$CANDIDATE_SHA" \
+              --accepted-runtime-commit "$CANDIDATE_SHA" \
+              --accepted-runtime-stage stable-ci-and-installation-acceptance \
+              --output "$RUNNER_TEMP/release-$build" --json-only > "$RUNNER_TEMP/release-$build.json"
+          done
+          cmp "$RUNNER_TEMP/release-one/SHA256SUMS.release" "$RUNNER_TEMP/release-two/SHA256SUMS.release"
+          mkdir "$RUNNER_TEMP/release-verify"
+          tar -xzf "$RUNNER_TEMP"/release-one/*.tar.gz -C "$RUNNER_TEMP/release-verify"
+          python3 "$RUNNER_TEMP"/release-verify/*/release-install.py verify
+          (cd "$RUNNER_TEMP/release-one" && sha256sum -c SHA256SUMS.release)
+      - name: Retain verified release artifacts
+        if: steps.candidate.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dark-xray-${{ steps.candidate.outputs.version }}
+          path: ${{ runner.temp }}/release-one/*
+          if-no-files-found: error
+      - name: Publish immutable stable release
+        if: steps.candidate.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            test "$(git rev-parse "$tag^{}")" = "$CANDIDATE_SHA"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo 'Release already exists; keeping its assets immutable.'
+            exit 0
+          fi
+          gh release create "$tag" "$RUNNER_TEMP"/release-one/* \
+            --target "$CANDIDATE_SHA" --title "DARK XRAY $tag" \
+            --notes-file "docs/releases/$RELEASE_VERSION.fa.md" --latest

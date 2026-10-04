@@ -1,11 +1,11 @@
-# راهنمای DARK XRAY 0.9.0 RC7
+# راهنمای DARK XRAY 0.10.0
 
-برچسب فعلی: **`0.9.0-rc7`**
+نسخهٔ سورس: **`0.10.0`** — [یادداشت انتشار](docs/releases/0.10.0.fa.md)
 
 DARK XRAY یک پنل مستقل مدیریت Xray است. دیتابیس، API، احراز هویت، نماینده‌ها، Ledger، UI، Subscription، Node management و کنترل Xray متعلق به خود DARK هستند و برای Runtime به Sanayi/3x-ui وابسته نیستند.
 
 > [!CAUTION]
-> این نسخه همچنان **Release Candidate** است و Stable/Production Ready اعلام نشده؛ اما Stage 4 روی VPS مستقل PASS شده است: reboot واقعی، HTTPS/HSTS، دو Node واقعی، Down → Recovery، source-IP تأییدشده، public ACME staging rehearsal و سه اجرای 1000 Client / 12 worker. برای Stable هنوز fresh install از exact release artifact روی image/provider نهایی، production certificate issue/renewal، exact artifact rollback rehearsal و مرزهای کامل enforcement چندنودی باز هستند.
+> پذیرش نصب، بازیابی و آپدیت در [گزارش rc58](docs/release-readiness-rc58.fa.md) ثبت شده است. آمادگی شبکه، TLS و Guard باید روی میزبان مقصد بررسی شود. تأیید دیداری QR روی گوشی هنوز ثبت نشده است.
 
 ## محدودهٔ نسخهٔ نخست نودها
 
@@ -269,23 +269,4 @@ Stage 4 روی سورس دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS
 - Let's Encrypt public staging HTTP-01 renewal rehearsal با deploy-hook restart، بدون جایگزینی certificate production؛
 - سه اجرای مستقل 1000 Client / concurrency 12 با SQLite `quick_check=ok` و 100/100 PATCH.
 
-موارد باز برای **Stable / Production Ready**:
-
-1. Fresh install از exact release artifact روی image/provider نهایی.
-2. issue و renewal واقعی production certificate روی DNS/provider نهایی.
-3. IP Guard / global multi-node enforcement کامل روی topology نهایی، مخصوصاً رفتار نود آفلاین و packet-level enforcement محلی.
-4. capacity/SLA sizing روی پلن نهایی فراتر از workload پذیرش Stage 4.
-5. انتشار tag/GitHub Release نهایی برای snapshot ثابت؛ هر تغییر بعدی نیازمند artifact rehearsal مجدد است.
-
-Stage 5 exact-artifact rehearsal روی `c196207881bdb38e5a40e5f2d0e265061c24dce7` شامل checksumهای تازه، build reproducible، fresh install، update و automatic rollback PASS شده است. نام نسخه **`0.9.0-rc7`** حفظ می‌شود و وضعیت آن **Stage-5 artifact-rehearsed RC** است، نه Stable.
-
-## منابع وضعیت
-
-- `README.md` — معرفی سریع فارسی
-- `README.en.md` — معرفی انگلیسی
-- `STATUS.fa.md` — وضعیت مهندسی فعلی
-- `docs/VALIDATION.md` — تفکیک evidence و claim
-- `PUBLISH-STATUS.json` — وضعیت machine-readable انتشار
-- `SECURITY.md` — گزارش امنیتی و disclosure
-
-Credential واقعی، private key، certificate، database، secret.key یا log بدون سانسور را داخل مخزن یا Issue منتشر نکن.
+وضعیت فعلی نسخهٔ سورس 0.10.0 در [یادداشت انتشار](docs/releases/0.10.0.fa.md) و [پذیرش نصب و بازیابی rc58](docs/release-readiness-rc58.fa.md) آمده است. مدارک Stage 4/5 بالا تاریخی و مربوط به کامیت‌های 0.9.0 هستند. DNS/TLS، کیفیت WAN، ظرفیت و Guard روی میزبان مقصد جدا بررسی می‌شوند.
