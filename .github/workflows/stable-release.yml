@@ -44,6 +44,11 @@ jobs:
             echo 'publish=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo 'Existing release retained; bump VERSION to publish another snapshot.'
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           python3 tools/stable_release_checks.py --sha "$CANDIDATE_SHA" --repository "$GITHUB_REPOSITORY"
           echo 'publish=true' >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -87,6 +92,7 @@ jobs:
             echo 'Release already exists; keeping its assets immutable.'
             exit 0
           fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$CANDIDATE_SHA"
           gh release create "$tag" "$RUNNER_TEMP"/release-one/* \
             --target "$CANDIDATE_SHA" --title "DARK XRAY $tag" \
             --notes-file "docs/releases/$RELEASE_VERSION.fa.md" --latest
