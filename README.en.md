@@ -4,10 +4,10 @@
 
 Independent Xray control panel with a cyber-dark web interface, first-class inbound/client management, one primary owner, unified representatives, accounting, subscriptions, nodes and direct Xray-core control.
 
-**VPS test candidate:** `0.9.0-rc7`
+**Source version:** `0.10.0` — [release notes](docs/releases/0.10.0.fa.md)
 
 > [!CAUTION]
-> DARK XRAY remains a **Release Candidate**, not a Stable/Production Ready declaration. Stage 4 has now passed on an independent VPS with the exact candidate source: real reboot, HTTPS/HSTS, two real Nodes, observed Down → Recovery, fresh verified source-IP evidence, public Let's Encrypt staging renewal rehearsal, and three 1000-client / 12-worker load runs. Stable promotion still requires a fresh exact-artifact install on the final image/provider, production certificate issue/renewal, exact release-artifact update/rollback rehearsal, and the remaining global multi-node enforcement boundaries.
+> Installation/recovery acceptance is recorded in [rc58 evidence](docs/release-readiness-rc58.fa.md). Check network, TLS and enforcement readiness on the target host; a source release is not a provider SLA. Phone visual QR acceptance remains unrecorded.
 
 ## Architecture
 
@@ -165,15 +165,7 @@ A server that predates the root update broker needs one final online-installer S
 
 Stage 4 passed on exact candidate `94ae50548f105bea7e79b40a28f7f5ae3704056d`. Stage 5 also passed the exact release-artifact rehearsal on commit `c196207881bdb38e5a40e5f2d0e265061c24dce7`: reproducible archives, exact-source verification, disposable fresh install, successful update and controlled automatic rollback. See [Stage 5 release preparation](docs/stage5-release-preparation.md).
 
-The remaining **Stable / Production Ready** gates are:
-
-- fresh install from the **exact release artifact** on the final target image/provider;
-- real **production-certificate** issuance and renewal on the final DNS/provider path; Stage 4 proved public Let's Encrypt staging HTTP-01 and the deploy-hook restart without replacing the production certificate;
-- complete IP Guard / global multi-node enforcement semantics on the final topology, especially unreachable-node behavior and host-local packet enforcement;
-- provider-plan capacity/SLA sizing beyond the Stage 4 correctness workload; three 1000-client / concurrency-12 runs prove acceptance behavior, not an unlimited SLA;
-- publish the final tag/GitHub Release only for this fixed snapshot; any later source change invalidates the artifact rehearsal.
-
-`0.9.0-rc7` is therefore a **Stage-5 artifact-rehearsed Release Candidate**, not Stable.
+Current installation and recovery evidence is in [rc58 acceptance](docs/release-readiness-rc58.fa.md). Validate DNS/TLS, WAN capacity and Guard on each target host. Stage 4/5 records above are historical evidence for their exact 0.9.0 snapshots. See [0.10.0 notes](docs/releases/0.10.0.fa.md) for the current source release.
 
 ## Documentation
 

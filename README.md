@@ -11,10 +11,10 @@
 
 پنل مستقل مدیریت Xray با رابط Cyber/Dark، مدیریت Inbound و Client، مالک اصلی واحد، نمایندگان، Ledger، Subscription، Nodes و کنترل مستقیم Xray-core.
 
-**نسخه آزمایشی برای تست VPS:** `0.9.0-rc7`
+**نسخهٔ سورس:** `0.10.0` — [یادداشت انتشار](docs/releases/0.10.0.fa.md)
 
 > [!CAUTION]
-> DARK XRAY همچنان **Release Candidate** است و Production Ready/Stable اعلام نشده؛ اما Stage 4 روی VPS مستقل با همان سورس کاندید PASS شده است: reboot واقعی، HTTPS/HSTS، دو Node واقعی، Down → Recovery، source-IP تأییدشده، Let's Encrypt public staging renewal rehearsal و سه اجرای 1000-client / 12-worker. موارد باز برای Stable شامل fresh install روی image/provider نهایی، issue/renewal production certificate، exact release-artifact update/rollback و مرزهای کامل enforcement چندنودی است.
+> پذیرش نصب، بازیابی و آپدیت در [گزارش rc58](docs/release-readiness-rc58.fa.md) ثبت شده است. آمادگی شبکه، TLS و Guard باید روی میزبان مقصد بررسی شود. تأیید دیداری QR روی گوشی هنوز ثبت نشده است.
 
 ## وضعیت فعلی
 
@@ -170,19 +170,9 @@ sudo darkxray node-wan-gate --watch-seconds 180 --expect-outage NODE_ID
 - IP Guard فقط وقتی باید enforce شود که تطابق IP مشاهده‌شده در Xray و source packet روی همان host تأیید شده باشد.
 - **Global Multi-node Guard** IPهای مشاهده‌شدهٔ معتبر را تجمیع و سیاست HWID اعلامیِ ثبت‌شده در Hub را ارزیابی می‌کند؛ Agent سبک از هر اتصال VLESS شناسهٔ دستگاه فیزیکی دریافت نمی‌کند. محدودیت مشتری پس از اعمال روی نود مؤثر می‌شود؛ نودِ دور از دسترس می‌تواند در انتظار بماند. nftables همچنان host-local است؛ [مرزهای نسخهٔ نخست](docs/node-v1-scope.md#persian).
 
-## هنوز چه چیزهایی برای Production باقی است؟
+## آمادگی میزبان مقصد
 
-Stage 4 روی کاندید دقیق `94ae50548f105bea7e79b40a28f7f5ae3704056d` PASS شده است. Stage 5 نیز exact release artifact روی commit `c196207881bdb38e5a40e5f2d0e265061c24dce7` را با build reproducible، fresh install، successful update و rollback کنترل‌شده PASS کرده است. جزئیات: [Stage 5 release preparation](docs/stage5-release-preparation.md).
-
-مواردی که هنوز برای **Stable / Production Ready** باز می‌مانند:
-
-- Fresh install با **exact release artifact** روی image/provider نهایی مقصد.
-- صدور و renewal واقعی **production certificate** روی DNS/provider نهایی؛ Stage 4 فقط public Let's Encrypt staging + HTTP-01 + deploy-hook restart را ثابت کرد و certificate production را جایگزین نکرد.
-- IP Guard و global multi-node enforcement کامل روی topology نهایی، مخصوصاً semantics نود آفلاین و packet-level enforcement که همچنان host-local است.
-- capacity/SLA sizing روی پلن واقعی مقصد فراتر از workload پذیرش Stage 4؛ سه اجرای 1000 client / concurrency 12 correctness و contention را ثابت کردند، نه SLA نامحدود.
-- انتشار tag/GitHub Release نهایی فقط برای همین snapshot ثابت؛ هر تغییر بعدی artifact rehearsal را باطل می‌کند.
-
-بنابراین `0.9.0-rc7` اکنون **Stage-5 artifact-rehearsed Release Candidate** است، نه Stable.
+[پذیرش نصب و بازیابی rc58](docs/release-readiness-rc58.fa.md) و [یادداشت 0.10.0](docs/releases/0.10.0.fa.md) وضعیت فعلی را توضیح می‌دهند. DNS/TLS عمومی، کیفیت مسیر اینترنت، ظرفیت و سیاست Guard روی هر میزبان مقصد جدا بررسی می‌شوند. مدارک Stage 4/5 مربوط به 0.9.0 تاریخچهٔ پذیرش آن snapshot هستند.
 
 ### یک‌بار Bootstrap برای نصب‌های RC6 و قدیمی‌تر
 
