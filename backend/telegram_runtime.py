@@ -1131,18 +1131,29 @@ class BotWorker(CustomerBotFeatures):
         if not 1<=int(volume)<=1_000_000:raise PolicyError('Invalid simple plan volume')
         self.session_data[user_id]['volume_gb']=int(volume);self.simple_plan_ask_ip(chat_id,user_id)
 
+    def _simple_plan_unlimited_ip_allowed(self,user_id:int)->bool:
+        data=self.session_data.get(user_id) or {}
+        if data.get('plan_type')=='volume':return True
+        try:return int(self.runtime.manager.profile(self.owner).get('max_client_ips') or 0)==0
+        except Exception:return self.owner_role()=='owner'
+
     def simple_plan_ask_ip(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_ip_wait'
-        self.api.send(chat_id,'مرحله 7/8 · محدودیت IP را انتخاب کن:',{'inline_keyboard':[
-            [{'text':'♾ نامحدود','callback_data':'stsip:0'}],
+        rows=[]
+        if self._simple_plan_unlimited_ip_allowed(user_id):
+            rows.append([{'text':'♾ نامحدود','callback_data':'stsip:0'}])
+        rows += [
             [{'text':'1','callback_data':'stsip:1'},{'text':'2','callback_data':'stsip:2'},
              {'text':'3','callback_data':'stsip:3'},{'text':'4','callback_data':'stsip:4'},
              {'text':'5','callback_data':'stsip:5'}],
-            [{'text':'✍️ سفارشی','callback_data':'stsipcustom'}]]})
+            [{'text':'✍️ سفارشی','callback_data':'stsipcustom'}]]
+        self.api.send(chat_id,'مرحله 7/8 · محدودیت IP را انتخاب کن:',{'inline_keyboard':rows})
 
     def simple_plan_choose_ip(self,chat_id:int,user_id:int,limit:int):
         if self.sessions.get(user_id)!='store_simple_ip_wait':raise PolicyError('Simple plan wizard is not waiting for IP limit')
         if int(limit) not in (0,1,2,3,4,5):raise PolicyError('Invalid simple plan IP limit')
+        if int(limit)==0 and not self._simple_plan_unlimited_ip_allowed(user_id):
+            raise PolicyError('Unlimited IP is available for volumetric plans; this unlimited-traffic plan is capped by Owner policy')
         self.session_data[user_id]['ip_limit']=int(limit)
         self.session_data[user_id]['selected_inbounds']=[]
         self.sessions[user_id]='store_simple_inbounds';self.show_simple_plan_inbounds(chat_id,user_id)
@@ -1239,6 +1250,8 @@ class BotWorker(CustomerBotFeatures):
             try:n=int(value)
             except ValueError:self.api.send(chat_id,'IP باید عدد صحیح باشد.');return
             if not 0<=n<=1000:self.api.send(chat_id,'IP باید بین ۰ تا ۱۰۰۰ باشد. صفر = نامحدود');return
+            if n==0 and not self._simple_plan_unlimited_ip_allowed(user_id):
+                self.api.send(chat_id,'IP نامحدود برای پلن حجمی مجاز است؛ این پلن نامحدود طبق سیاست Owner سقف IP دارد.');return
             data['ip_limit']=n;data['selected_inbounds']=[];self.sessions[user_id]='store_simple_inbounds';self.show_simple_plan_inbounds(chat_id,user_id);return
         if state=='store_simple_volume':
             try:n=int(value)
