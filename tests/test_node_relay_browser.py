@@ -38,6 +38,7 @@ def test_owner_saves_disabled_exit_then_enables_and_disables(relay_env, pairing_
         page.locator('#login-form [name=username]').fill('dark')
         page.locator('#login-form [name=password]').fill('Test!OnlyPassword123')
         page.locator('#login-form button[type=submit]').click()
+        if lang == 'fa': page.locator('.mobile-menu').click()
         page.locator('.nav-btn[data-page=nodes]').click()
         page.locator('[data-act=nv2edit][data-id=nl]').first.click()
         page.locator('[data-act=nv2exit][data-id=nl]').click()

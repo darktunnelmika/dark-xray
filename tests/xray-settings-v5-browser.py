@@ -63,7 +63,10 @@ with tempfile.TemporaryDirectory(prefix='dark-xray-v5-browser-') as td:
    page.locator('#dialog-form [name="confirmed"]').wait_for();assert not applies
    assert store.db.execute('SELECT COUNT(*) FROM warp_profiles').fetchone()[0]==0
    checks.append('manual selection opens preview without applying')
-   page.locator('#dialog-form [name="confirmed"]').check();page.locator('#dialog-form button[type="submit"]').click()
+   page.locator('#dialog-form [name="confirmed"]').check()
+   with page.expect_response(lambda r:r.url.endswith('/api/traffic-matrix/warp/endpoint') and r.request.method=='POST') as applied_response:
+    page.locator('#dialog-form button[type="submit"]').click()
+   assert applied_response.value.status==200
    page.locator('[data-act="x5warpscan"]').wait_for();assert engine.warp_profile('hub')['settings']['peers'][0]['endpoint']==chosen
    assert len(applies)>=1;warp_apply_count=len(applies);checks.append('confirmed Apply stores exactly selected per-server endpoint')
    page.locator('[data-act="x5warpscan"]').click();page.locator('[data-warp-auto-best]').wait_for();page.locator('[data-warp-auto-best]').check()
