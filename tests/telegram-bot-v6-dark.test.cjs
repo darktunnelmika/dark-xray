@@ -183,6 +183,6 @@ test('Bot V7 keeps representative admin menus compact and owner-only backup guar
 });
 
 test('Bot V7 simple plan wizard exposes unlimited IP without removing numeric choices',()=>{
-  for(const token of ["'callback_data':'stsip:0'","'callback_data':'stsip:1'","'callback_data':'stsip:5'","0 = unlimited"])
+  for(const token of ["'callback_data':'stsip:0'","'callback_data':'stsip:1'","'callback_data':'stsip:5'","صفر = نامحدود"])
     assert.ok(runtime.includes(token),token);
 });
