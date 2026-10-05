@@ -22,8 +22,10 @@ def test_owner_saves_disabled_exit_then_enables_and_disables(relay_env, pairing_
     engine.config.public_origin = origin; engine.config.secure_cookie = False
     engine.config.panel_path = '/control'
     app = make_app(manager, auth, background=False)
-    monkeypatch.setattr(app.state.nodes, 'sync_desired_state', lambda *a: {'desired_state_applied': True, 'queued': False})
-    monkeypatch.setattr(app.state.nodes, 'desired_state', lambda *a, **k: {'revision': 1, 'pending': False})
+    def acknowledged(node_id, desired):
+        app.state.nodes.mark_desired_state(node_id, desired['revision'], desired['hash'])
+        return {'desired_state_applied': True, 'queued': False}
+    monkeypatch.setattr(app.state.nodes, 'sync_desired_state', acknowledged)
     monkeypatch.setattr(app.state.nodes, 'outbound_probe', lambda *a, **k: {'probe': {
         'success': True, 'delayMs': 31, 'egress': {'ip': '203.0.113.6'}}})
     server = uvicorn.Server(uvicorn.Config(app, log_level='error', access_log=False, ws='none'))
