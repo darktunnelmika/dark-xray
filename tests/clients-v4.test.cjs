@@ -196,3 +196,33 @@ test('Client mobile UI raises form type size and makes long delivery links wrap'
   assert.match(css,/\.cv4-field input,.cv4-field select,.cv4-field textarea\{font-size:16px;min-height:44px\}/);
   assert.match(css,/\.cv4d-linkline code,.cv4d-config>code\{white-space:normal;[^}]*overflow-wrap:anywhere/);
 });
+
+test('Client detail exposes deletion only with owner-scoped permission',async()=>{
+ const ctx=context();let html='';ctx.dialog=(title,body)=>{html=body};
+ ctx.api=async()=>({owner:'seller',client:{},email:'seller-client'});
+ ctx.can=(key,owner)=>key==='clients.delete'&&owner==='seller';
+ await ctx.runAction('cv4detail',{dataset:{id:'seller-client'}});
+ assert.match(html,/data-act="cv4delete"/);
+ ctx.can=()=>false;
+ await ctx.runAction('cv4detail',{dataset:{id:'seller-client'}});
+ assert.doesNotMatch(html,/data-act="cv4delete"/);
+});
+
+test('Client delete requires confirmation, sends correct identity and refreshes after success',async()=>{
+ const ctx=context(),calls=[];let closed=0,refreshed=0;
+ ctx.state.selected.add('seller-client');ctx.closeDialog=()=>closed++;ctx.refresh=async()=>refreshed++;
+ ctx.api=async(...args)=>{calls.push(args);return {state:'deleted'}};
+ ctx.confirm=()=>false;await ctx.runAction('cv4delete',{dataset:{id:'seller-client'}});
+ assert.equal(calls.length,0);assert.equal(closed,0);
+ ctx.confirm=()=>true;await ctx.runAction('cv4delete',{dataset:{id:'seller-client'}});
+ assert.equal(calls[0][0],'/api/clients/seller-client/action');assert.equal(calls[0][1],'POST');
+ assert.equal(calls[0][2].action,'delete');assert.equal(closed,1);assert.equal(refreshed,1);
+ assert.equal(ctx.state.selected.has('seller-client'),false);
+});
+
+test('Failed deletion keeps client detail and selection available for retry',async()=>{
+ const ctx=context();let closed=0;ctx.state.selected.add('seller-client');ctx.closeDialog=()=>closed++;
+ ctx.api=async()=>{throw Error('Deletion denied')};
+ await assert.rejects(ctx.runAction('cv4delete',{dataset:{id:'seller-client'}}),/Deletion denied/);
+ assert.equal(closed,0);assert.equal(ctx.state.selected.has('seller-client'),true);
+});

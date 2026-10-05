@@ -157,3 +157,38 @@ def test_support_contact_migrates_existing_settings_without_losing_values(env):
     settings=customer.settings('dark')
     assert settings['support_url']=='' and settings['referral_reward_minor']==50000
     assert customer.set_support_contact('dark','@Owner_support')['support_url']=='https://t.me/Owner_support'
+
+def test_representative_deletes_own_clients_from_panel_and_bot_with_full_quota(representative):
+    from dark_policy import Actor
+    store,owner,seller,inbound=representative;runtime=seller.app.state.telegram_runtime
+    configure_bot(seller,700001)
+    with store.transaction() as db:db.execute("UPDATE owners SET volume_credit_bytes=? WHERE id='seller'",(10*1024**3,))
+    for email in ('dark-delete-panel','dark-delete-bot'):
+        r=seller.post('/api/clients',json={'owner':'seller','client':{'email':email,'totalGB':5*1024**3},'inboundIds':[inbound]})
+        assert r.status_code==202,r.text
+    with store.transaction() as db:db.execute("UPDATE core_clients SET up=123 WHERE email='dark-delete-panel'")
+    r=seller.post('/api/clients/dark-delete-panel/action',json={'action':'delete'})
+    assert r.status_code==202,r.text
+    assert r.json()['state']=='deleted'
+    assert seller.get('/api/clients/dark-delete-panel').status_code==400
+    worker=BotWorker(runtime,'seller',BOT_TOKEN,'delete-regression');sent=[]
+    worker.api.send=lambda chat,text,reply_markup=None:sent.append((text,reply_markup))
+    worker.api.call=lambda *args,**kwargs:True
+    with store.lock:
+        row=store.db.execute("SELECT rowid FROM clients WHERE id='dark-delete-bot'").fetchone()[0]
+    try:
+        worker.handle_callback({'id':'q1','from':{'id':700001},'message':{'chat':{'id':700001}},'data':'cldel:'+str(row)})
+        assert store.db.execute("SELECT 1 FROM clients WHERE id='dark-delete-bot'").fetchone()
+        assert any(b.get('callback_data')=='cldely:'+str(row) for rs in sent[-1][1]['inline_keyboard'] for b in rs)
+        worker.handle_callback({'id':'q2','from':{'id':700001},'message':{'chat':{'id':700001}},'data':'cldely:'+str(row)})
+        assert not store.db.execute("SELECT 1 FROM clients WHERE id='dark-delete-bot'").fetchone()
+        stats=store.owner_stats(worker.actor(),'seller')
+        assert stats['volume_credit_remaining_bytes']==10*1024**3
+        assert stats['used_bytes']==123
+        assert store.db.execute("SELECT COUNT(*) FROM managed_clients WHERE state='deleted' AND email IN ('dark-delete-panel','dark-delete-bot')").fetchone()[0]==2
+        foreign=owner.post('/api/clients',json={'owner':'dark','client':{'email':'dark-other-owner','totalGB':1024**3},'inboundIds':[inbound]})
+        assert foreign.status_code==202,foreign.text
+        assert seller.post('/api/clients/dark-other-owner/action',json={'action':'delete'}).status_code==403
+        with store.lock:other_row=store.db.execute("SELECT rowid FROM clients WHERE id='dark-other-owner'").fetchone()[0]
+        with pytest.raises(PolicyError):worker.client_action(700001,other_row,'delete')
+    finally:worker.api.close()

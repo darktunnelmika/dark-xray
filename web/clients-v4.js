@@ -168,7 +168,7 @@ clientForm=clientFormV4;
 
 async function detail(id){
  const r=await api('/api/clients/'+enc(id)),c=r.client||{},ins=inboundNames(r),used=Number(r.used_bytes||0),total=Number(c.totalGB||0),expiry=c.expiryTime>0?new Date(c.expiryTime).toLocaleString():L('Unlimited','نامحدود');
- dialog(L('Client command','فرمان کاربر')+' · '+id,`<div class="cv4-detail"><header><span class="cv4-avatar big">${e(id.slice(0,1).toUpperCase())}</span><div><small>${e(r.owner)} · ${e(c.group||L('Ungrouped','بدون گروه'))}</small><h2>${e(id)}</h2></div>${signal(r)}</header><div class="cv4-detail-grid"><section><span>${L('USAGE','مصرف')}</span><b>${bytes(used)} / ${total?bytes(total):L('Unlimited','نامحدود')}</b>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</section><section><span>${L('EXPIRY','انقضا')}</span><b>${e(expiry)}</b><small>${statusOf(r)==='active'?L('Service active','سرویس فعال'):statusOf(r)==='blocked'?L('Service limited','سرویس محدود'):L('Service disabled','سرویس قطع')}</small></section><section class="wide"><span>${L('SERVICE','سرویس')}</span><div class="cv4-tags">${ins.map(x=>`<i>${e(x)}</i>`).join('')}</div></section></div><footer>${can('clients.credentials',r.owner)?button(L('Delivery / QR','تحویل / QR'),'cv4delivery','link',`data-id="${e(id)}"`,true):''}${can('clients.edit',r.owner)?button(L('Edit','ویرایش'),'cv4edit','edit',`data-id="${e(id)}"`):''}</footer></div>`);document.querySelector('#overlay .dialog')?.classList.add('cv4-detail-dialog');
+ dialog(L('Client command','فرمان کاربر')+' · '+id,`<div class="cv4-detail"><header><span class="cv4-avatar big">${e(id.slice(0,1).toUpperCase())}</span><div><small>${e(r.owner)} · ${e(c.group||L('Ungrouped','بدون گروه'))}</small><h2>${e(id)}</h2></div>${signal(r)}</header><div class="cv4-detail-grid"><section><span>${L('USAGE','مصرف')}</span><b>${bytes(used)} / ${total?bytes(total):L('Unlimited','نامحدود')}</b>${total?`<div class="cv4-meter"><i style="width:${pct(used,total)}%"></i></div>`:''}</section><section><span>${L('EXPIRY','انقضا')}</span><b>${e(expiry)}</b><small>${statusOf(r)==='active'?L('Service active','سرویس فعال'):statusOf(r)==='blocked'?L('Service limited','سرویس محدود'):L('Service disabled','سرویس قطع')}</small></section><section class="wide"><span>${L('SERVICE','سرویس')}</span><div class="cv4-tags">${ins.map(x=>`<i>${e(x)}</i>`).join('')}</div></section></div><footer>${can('clients.credentials',r.owner)?button(L('Delivery / QR','تحویل / QR'),'cv4delivery','link',`data-id="${e(id)}"`,true):''}${can('clients.edit',r.owner)?button(L('Edit','ویرایش'),'cv4edit','edit',`data-id="${e(id)}"`):''}${can('clients.delete',r.owner)?button(L('Delete client','حذف کاربر'),'cv4delete','trash',`data-id="${e(id)}"`):''}</footer></div>`);document.querySelector('#overlay .dialog')?.classList.add('cv4-detail-dialog');
 }
 
 function deliverySubUrl(base,format){
@@ -279,6 +279,11 @@ runAction=async function(act,el){
  if(act==='cv4quick'){state.cv4.page=1;if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
  if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',page:1});state.selected.clear();return renderPage();}
  if(act==='cv4page'){state.cv4.page=Math.max(1,Number(el.dataset.page||1));return renderPage();}
+ if(act==='cv4delete'){
+  if(!confirm(L('Delete this client? Traffic history is preserved.','این کاربر حذف شود؟ تاریخچه مصرف حفظ می‌شود.')+'\n'+id))return;
+  const result=await api('/api/clients/'+enc(id)+'/action','POST',{action:'delete'});
+  closeDialog();state.selected.delete(id);toast(result.state==='deleted'?L('Client deleted.','کاربر حذف شد.'):L('Delete request submitted: ','درخواست حذف ثبت شد: ')+result.state);return refresh();
+ }
  if(act==='cv4detail')return detail(id);
  if(act==='cv4delivery')return deliveryV4(id);
  if(act==='cv4dcopy')return copyDelivery(deliveryPayload(el.dataset.kind,Number(el.dataset.index||0)));
