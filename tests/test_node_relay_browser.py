@@ -51,10 +51,10 @@ def test_owner_saves_disabled_exit_then_enables_and_disables(relay_env, pairing_
         row = app.state.node_relays.get('nl', 1)
         assert not row['enabled'] and row['phase'] == 'disabled'
         enable.click()
-        expect(page.locator('#dialog-form')).to_contain_text('فعال' if lang == 'fa' else 'Enabled')
+        expect(page.locator('#dialog-form .xv2-item p')).to_have_text('فعال' if lang == 'fa' else 'Enabled')
         assert app.state.node_relays.get('nl', 1)['enabled'] == 1
         page.locator('[data-act=nv2exittoggle][data-enabled=false]').click()
-        expect(page.locator('#dialog-form')).to_contain_text('خاموش' if lang == 'fa' else 'Disabled')
+        expect(page.locator('#dialog-form .xv2-item p')).to_have_text('خاموش' if lang == 'fa' else 'Disabled')
         assert app.state.node_relays.get('nl', 1)['phase'] == 'disabled'
         assert not errors
     finally:
