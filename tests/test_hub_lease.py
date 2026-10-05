@@ -6,10 +6,12 @@ All databases and child processes are disposable, never installed services.
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import shutil
 import socket
 import time
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -214,6 +216,64 @@ def test_guard_does_not_feed_past_os_watchdog_safety_margin(tmp_path):
         f.clock[0]=135;f.app.state.lease_guard.tick();assert watcher.notify.call_count==1
         f.clock[0]=161;f.app.state.lease_guard.tick()
         assert not f.engine.running and watcher.notify.call_count==2
+
+
+def test_busy_engine_keeps_only_original_metered_authority(tmp_path):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine));grant(f)
+        guard=f.app.state.lease_guard;watcher=guard.watchdog
+        watcher.seconds=30;watcher.notify=Mock()
+        entered=threading.Event();release=threading.Event()
+        def busy():
+            with f.engine.lock:entered.set();release.wait(3)
+        thread=threading.Thread(target=busy);thread.start()
+        try:
+            assert entered.wait(1)
+            guard.tick()
+            assert watcher.notify.call_count==1 and f.engine.running
+            assert guard.last_error=='engine_busy_with_valid_lease'
+            f.clock[0]=135;guard.tick()
+            f.clock[0]=161;guard.tick()
+            assert watcher.notify.call_count==1
+            assert guard.last_error=='engine_busy_without_safe_lease'
+            assert f.runtime.hub_lease.deadline==160
+        finally:release.set();thread.join(2)
+        guard.tick();assert not f.engine.running
+
+
+def test_transient_statistics_delay_does_not_revoke_valid_grant(tmp_path):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine));grant(f)
+        pid=f.engine.process.pid;guard=f.app.state.lease_guard
+        guard.watchdog.seconds=30;guard.watchdog.notify=Mock()
+        f.engine.last_stats=time.monotonic()-20;f.engine.stats_error='temporary statistics timeout'
+        guard.tick()
+        assert guard.watchdog.notify.call_count==1 and f.engine.process.pid==pid
+        assert f.runtime.hub_lease.deadline==160
+        response=f.api.post('/node/api/v1/accounting/lease',json=ack(f.runtime.hub_lease,
+            f.runtime.status(),f.runtime.command_status()['revision']))
+        assert response.status_code==409
+        f.clock[0]=161;guard.tick();assert not f.engine.running
+
+
+def test_healthy_lease_renewal_does_not_reapply_running_core(tmp_path,monkeypatch):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine));grant(f)
+        pid=f.engine.process.pid;command=Mock(side_effect=AssertionError('unnecessary core apply'))
+        monkeypatch.setattr(f.engine,'command',command)
+        grant(f)
+        command.assert_not_called();assert f.engine.process.pid==pid
+
+
+def test_quota_metadata_only_revision_reuses_exact_running_validation(tmp_path,monkeypatch):
+    with guarded_agent(tmp_path/'node') as f:
+        body=payload(f.engine);post_state(f.api,body);grant(f)
+        pid=f.engine.process.pid;body=copy.deepcopy(body)
+        raw=body['assignments'][0]['clients'][0]['client']
+        raw['totalGB']=int(raw.get('totalGB',0))+1024*1024
+        monkeypatch.setattr(CoreEngine,'validate',Mock(side_effect=AssertionError('duplicate validation process')))
+        post_state(f.api,body,revision=2)
+        assert f.engine.process.pid==pid and f.runtime.status()['appliedRevision']==2
 
 
 def test_hub_failure_or_ignored_identity_never_renews():

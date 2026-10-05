@@ -35,10 +35,10 @@ def eventually(predicate,timeout=2):
 def test_slow_node_does_not_delay_healthy_node_lease(tmp_path,monkeypatch):
     with registry_fixture(tmp_path,monkeypatch) as r:
         entered=threading.Event();release=threading.Event();grants=[]
-        def probe(node_id,**kw):
+        def traffic(node_id):
             if node_id=='a-slow':entered.set();assert release.wait(3)
-            return {}
-        monkeypatch.setattr(r,'probe',probe)
+            return {'charged_bytes':0}
+        monkeypatch.setattr(r,'sync_traffic',traffic)
         def renew(node_id,traffic):grants.append(node_id);return {'remaining_seconds':59}
         r.start(interval=.02,initial_delay=0,lease_callback=renew)
         try:
@@ -51,10 +51,10 @@ def test_slow_node_does_not_delay_healthy_node_lease(tmp_path,monkeypatch):
 def test_multiple_blocked_nodes_do_not_form_a_fleet_barrier(tmp_path,monkeypatch):
     with registry_fixture(tmp_path,monkeypatch,('a-slow','b-slow','z-fast')) as r:
         release=threading.Event();entered=[];grants=[]
-        def probe(node_id,**kw):
+        def traffic(node_id):
             if node_id!='z-fast':entered.append(node_id);assert release.wait(3)
-            return {}
-        monkeypatch.setattr(r,'probe',probe)
+            return {'charged_bytes':0}
+        monkeypatch.setattr(r,'sync_traffic',traffic)
         r.start(interval=.02,initial_delay=0,lease_callback=lambda n,t:grants.append(n))
         try:
             eventually(lambda:len(entered)==2 and grants.count('z-fast')>=3)
@@ -98,8 +98,8 @@ def test_policy_failure_withholds_grant_but_worker_recovers(tmp_path,monkeypatch
 def test_close_during_network_wait_never_grants_after_return(tmp_path,monkeypatch):
     with registry_fixture(tmp_path,monkeypatch,('n',)) as r:
         entered=threading.Event();release=threading.Event();closed=threading.Event();grants=[]
-        def probe(*a,**kw):entered.set();assert release.wait(3);return {}
-        monkeypatch.setattr(r,'probe',probe)
+        def traffic(*a,**kw):entered.set();assert release.wait(3);return {'charged_bytes':0}
+        monkeypatch.setattr(r,'sync_traffic',traffic)
         r.start(interval=.02,initial_delay=0,lease_callback=lambda n,t:grants.append(n))
         assert entered.wait(1)
         closer=threading.Thread(target=lambda:(r.close(),closed.set()));closer.start()
@@ -114,8 +114,8 @@ def test_close_during_network_wait_never_grants_after_return(tmp_path,monkeypatc
 def test_disabling_node_cancels_inflight_cycle_before_lease(tmp_path,monkeypatch):
     with registry_fixture(tmp_path,monkeypatch,('n',)) as r:
         entered=threading.Event();release=threading.Event();grants=[]
-        def probe(*a,**kw):entered.set();assert release.wait(3);return {}
-        monkeypatch.setattr(r,'probe',probe)
+        def traffic(*a,**kw):entered.set();assert release.wait(3);return {'charged_bytes':0}
+        monkeypatch.setattr(r,'sync_traffic',traffic)
         r.start(interval=.02,initial_delay=0,lease_callback=lambda n,t:grants.append(n))
         try:
             assert entered.wait(1)
@@ -145,7 +145,39 @@ def test_lease_is_after_durable_traffic_policy_and_post_apply(tmp_path,monkeypat
         r.start(interval=60,initial_delay=0,sync_provider=lambda n:[],
                 traffic_callback=lambda n,t:order.append('policy'),lease_callback=renew)
         assert done.wait(1);r.close()
-        assert order==['probe','traffic','policy','apply','traffic','policy','lease']
+        # close() can cancel optional probing after the grant signal arrives.
+        assert order[:6]==['traffic','policy','apply','traffic','policy','lease']
+        assert order[6:] in ([],['probe'])
+
+
+def test_slow_optional_probe_receives_grant_before_wait_and_is_throttled(tmp_path,monkeypatch):
+    with registry_fixture(tmp_path,monkeypatch,('n',)) as r:
+        entered=threading.Event();release=threading.Event();grants=[];probes=[]
+        def probe(*a,**kw):
+            probes.append(1);entered.set();assert release.wait(3)
+            raise PolicyError('injected telemetry outage')
+        monkeypatch.setattr(r,'probe',probe)
+        r.start(interval=.02,initial_delay=0,lease_callback=lambda n,t:grants.append(n))
+        try:
+            assert entered.wait(1) and grants==['n']
+            release.set();eventually(lambda:len(grants)>=4)
+            assert len(probes)==1
+            monitor=r.list()[0]['monitor']
+            assert monitor['probe_error']=='injected telemetry outage' and not monitor['last_error']
+        finally:release.set()
+
+
+def test_security_read_is_once_and_after_metered_grant(tmp_path,monkeypatch):
+    with registry_fixture(tmp_path,monkeypatch,('n',)) as r:
+        order=[];done=threading.Event()
+        monkeypatch.setattr(r,'sync_traffic',lambda n:order.append('traffic') or {'charged_bytes':0})
+        monkeypatch.setattr(r,'sync_mirrors',lambda *a:order.append('apply'))
+        monkeypatch.setattr(r,'sync_security',lambda n:order.append('security') or {})
+        def secured(n,t):order.append('security_policy');done.set()
+        r.start(interval=60,initial_delay=0,sync_provider=lambda n:[],
+                lease_callback=lambda n,t:order.append('lease'),security_callback=secured)
+        assert done.wait(1);r.close()
+        assert order==['traffic','apply','traffic','lease','security','security_policy']
 
 
 @pytest.mark.parametrize('interval,delay',[(0,0),(-1,0),(float('inf'),0),(float('nan'),0),(1,-1),(1,float('inf'))])

@@ -35,12 +35,35 @@ seeds zero baselines for absent new mirrors, preventing loss of their first byte
 ## Independent process protection
 
 A dedicated Node safety loop supervises expiry and provides systemd keepalives
-only while accounting is fresh, the engine lock is available and sufficient lease
-time remains (or the customer process is already stopped). The production unit
+while a durably acknowledged Hub lease has sufficient time remaining (or the
+customer process is already stopped). Starting with 0.10.1-rc3, validation or a
+temporary statistics delay cannot revoke an already-issued grant. The safety
+loop checks that grant independently of the engine lock; it never extends its
+deadline and stops feeding before remaining time reaches the OS watchdog budget
+plus two seconds. A frozen engine therefore still cannot serve beyond the grant.
+The production unit
 uses WatchdogSec=30, WatchdogSignal=SIGKILL, TimeoutAbortSec=1 and
 KillMode=control-group. Child Xray processes do not inherit the notification socket.
 This does not depend on the HTTP route or an unconditional keepalive thread.
 Normal shutdown retains its existing 60-second budget for final traffic snapshots.
+
+The Hub's five-second per-node cycle prioritizes strict checkpoint, durable import,
+quota/configuration reconciliation and lease acknowledgement before telemetry.
+Security observations are read once per cycle after the grant; resulting blocks
+are included in the next cycle's reconciliation. Health probes are limited to
+once per 15 seconds, including failed attempts, and report their own error without
+undoing the accounting result. This reduces repeated work; it does not make a
+slow optional request fully independent of the following cycle. Exact executable
+configurations matching the currently running validated hash reuse validation;
+changed executable configurations still pass Xray validation. An unchanged
+executable hash also updates the desired revision and metadata without stopping
+the live process; strict pre-update counters and the live cumulative baseline
+are preserved. No grant duration,
+quota semantics, tunnel service or systemd kill policy is relaxed.
+
+Xray remains an owned child of the Agent in this release. A genuinely failed
+Agent or an administrative Agent restart still terminates its owned Xray cgroup;
+separate process supervision needs its own durable accounting/recovery design.
 No host firewall rules or unrelated services are modified by this feature.
 
 The required-enforcement latch is persisted, but a grant is never persisted.
