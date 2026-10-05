@@ -379,11 +379,11 @@ def test_admin_v2_keyboard_exposes_daily_management_centers(env):
         'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
     worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'admin-v2-test')
     try:
-        text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
+        labels=[x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row]
         for label in ('🏠 داشبورد','👥 کاربران','🛒 فروش','🎫 پشتیبانی','🤝 نمایندگان','📊 گزارش‌ها','📣 اعلان‌ها','⚙️ مدیریت'):
-            assert label in text
+            assert label in labels
         for hidden in ('📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی','📈 رشد و فروش','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات'):
-            assert hidden not in text
+            assert hidden not in labels
     finally:
         worker.api.close()
 
