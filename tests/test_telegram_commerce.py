@@ -1467,3 +1467,35 @@ def test_guided_checkout_can_narrow_multi_server_plan_to_selected_inbound(env):
         row=store.db.execute("SELECT inbound_ids,primary_inbound_id FROM commerce_orders WHERE id=?",(order['id'],)).fetchone()
     assert json.loads(row['inbound_ids'])==[second]
     assert row['primary_inbound_id']==second
+
+
+def test_representative_bot_can_delete_unused_store_plan(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/sellerdelete',json={
+        'name':'Seller Delete','allowed':[inbound_id],'volume_credit_bytes':100*1024**3,
+        'unlimited_credit':1,'max_clients':20,'prefix':'sd_','max_client_ips':5,'max_client_hwid':0
+    }).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'sellerdelete','password':'SellerDelete88','role':'reseller'}).status_code==200
+    token,p=auth.login('sellerdelete','SellerDelete88','','127.0.0.8',3600,'delete-plan-test')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        plan=seller.post('/api/commerce/simple-plans',json={
+            'name':'Disposable Plan','plan_type':'volume','price_minor':120000,
+            'duration_days':30,'volume_gb':20,'ip_limit':0,'inbound_ids':[inbound_id],
+            'published':True,
+        })
+        assert plan.status_code==201,plan.text
+        doc=plan.json()
+        worker=BotWorker(seller.app.state.telegram_runtime,'sellerdelete',
+                         '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','delete-plan')
+        sent=[];worker.api.send=lambda chat_id,text,reply_markup=None:sent.append((text,reply_markup))
+        try:
+            worker.delete_or_archive_product(700001,int(doc['row_id']))
+        finally:
+            worker.api.close()
+        assert seller.get('/api/commerce/products').json()==[]
+        assert any('کامل حذف شد' in text for text,_ in sent)
+        with store.lock:
+            assert store.db.execute("SELECT COUNT(*) FROM commerce_products WHERE owner='sellerdelete'").fetchone()[0]==0
