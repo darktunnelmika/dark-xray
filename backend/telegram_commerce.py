@@ -219,6 +219,16 @@ class TelegramCommerce:
                            'bot_username':'','last_error':'','last_seen':0}
         return {k:row[k] for k in ('owner','enabled','configured','admin_telegram_id','bot_username','last_error','last_seen','updated_at')}
 
+    def unlimited_plan_allowed(self, owner: str) -> bool:
+        with self.store.lock:
+            if self.actor_for(owner).role != 'reseller':return True
+            row=self.store.db.execute('SELECT unlimited_credit FROM owners WHERE id=?',(owner,)).fetchone()
+            return bool(row and int(row['unlimited_credit'])>0)
+
+    def require_plan_credit(self, owner: str, volume_bytes: int):
+        if int(volume_bytes)==0 and not self.unlimited_plan_allowed(owner):
+            raise PolicyError('سهمیه سرویس نامحدود ندارید؛ از مدیر اصلی سهمیه بگیرید یا پلن حجمی بسازید.')
+
     def product_rows(self, owner: str, public: bool=False) -> list[dict[str,Any]]:
         where="owner=?"+(" AND active=1 AND visible=1" if public else "")
         with self.store.lock:
@@ -235,6 +245,9 @@ class TelegramCommerce:
             x['active']=bool(x['active']);x['visible']=bool(x['visible'])
             x['renewal_enabled']=bool(x.get('renewal_enabled',1));x['add_volume_enabled']=bool(x.get('add_volume_enabled',1))
             x['prices']=by.get(x['id'],[])
+        if public and not self.unlimited_plan_allowed(owner):
+            for x in products:x['prices']=[p for p in x['prices'] if int(p['volume_bytes'])>0]
+            products=[x for x in products if x['kind']!='unlimited' and any(p['active'] for p in x['prices'])]
         return products
 
     def gateway_rows(self, owner: str, *, enabled_only: bool=False) -> list[dict[str,Any]]:
@@ -288,6 +301,7 @@ class TelegramCommerce:
         product_id=_id('p');price_id=_id('v')
         label=('Unlimited' if plan_type=='unlimited' else f'{volume_gb} GB')+f' / {duration_days}D'
         with self.store.transaction() as db:
+            self.require_plan_credit(owner,volume_bytes)
             db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
               renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -315,6 +329,7 @@ class TelegramCommerce:
               JOIN commerce_products p ON p.owner=cp.owner AND p.id=cp.product_id
               WHERE cp.owner=? AND cp.product_id=? AND cp.id=?""",(owner,product_id,price_id)).fetchone()
             if not price:raise PolicyError('Product price not found')
+            self.require_plan_credit(owner,int(price['volume_bytes']))
             if not price['active'] or not price['product_active'] or not price['product_visible']:
                 raise PolicyError('Product is not available')
             sale_limit=int(price['sale_limit_per_user'] or 0)
@@ -355,6 +370,7 @@ class TelegramCommerce:
         with self.store.transaction() as db:
             order=db.execute("SELECT * FROM commerce_orders WHERE id=? AND owner=?",(order_id,owner)).fetchone()
             if not order:raise PolicyError('Order not found')
+            self.require_plan_credit(owner,int(order['volume_bytes']))
             if order['status'] not in ('pending','awaiting_payment','payment_rejected'):
                 raise PolicyError('Order cannot enter payment from current state')
             gw=db.execute("SELECT * FROM commerce_gateways WHERE owner=? AND id=? AND enabled=1",(owner,gateway_id)).fetchone()
@@ -585,6 +601,7 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
         if not NAME_RE.fullmatch(body.id):raise HTTPException(400,'Invalid product ID')
         now=time.time()
         with store.transaction() as db:
+            if body.kind=='unlimited':commerce.require_plan_credit(oid,0)
             db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
               renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET name=excluded.name,
@@ -612,6 +629,7 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
         if primary and primary not in body.inbound_ids:raise HTTPException(400,'Primary inbound must be selected in this price')
         ip_limit=body.resolved_ip_limit();now=time.time()
         with store.transaction() as db:
+            commerce.require_plan_credit(oid,body.volume_bytes)
             db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
               volume_bytes,unlimited_units,device_limit,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode,
               primary_inbound_id,show_qr,show_portal,active,created_at,updated_at)

@@ -164,7 +164,7 @@ class CustomerMiniApp:
         if role=='owner':
             rep['available']=True;rep['subscription']=self.market.subscription(owner,tid)
             rep['plans']=self.market.plan_rows(owner,public=True,renewal=bool(rep['subscription']))
-        return {'identity':identity,'wallet':wallet,'ledger':self.customer.ledger(owner,tid,30),
+        return {'support_url':self.customer.settings(owner)['support_url'],'identity':identity,'wallet':wallet,'ledger':self.customer.ledger(owner,tid,30),
                 'products':products,'orders':self.orders(owner,tid,60),'services':self.services(owner,tid),
                 'payments':self.payment_methods(owner,tid),'tickets':tickets,
                 'referral':stats|{'url':referral_url},'representative':rep,'bot_url':self.bot_url(owner)}

@@ -83,7 +83,7 @@ function wallet(){
 }
 function support(){
  const rows=data.tickets||[];
- return '<section><div class="cu-card"><h2>پشتیبانی</h2><form id="ticket-form" class="cu-form"><label>موضوع<input name="subject" maxlength="128" required></label><label>پیام<textarea name="message" rows="4" maxlength="4000" required></textarea></label><button class="cu-btn primary">ارسال تیکت</button></form></div>'+
+ return '<section><div class="cu-card"><h2>پشتیبانی</h2>'+(data.support_url?'<a class="cu-btn" href="'+esc(data.support_url)+'" target="_blank" rel="noopener noreferrer">💬 پیوی پشتیبانی</a>':'')+'<form id="ticket-form" class="cu-form"><label>موضوع<input name="subject" maxlength="128" required></label><label>پیام<textarea name="message" rows="4" maxlength="4000" required></textarea></label><button class="cu-btn primary">ارسال تیکت</button></form></div>'+
  '<div class="cu-card"><h2>تیکت‌های من</h2><div class="cu-list">'+(rows.length?rows.map(t=>'<button class="cu-row cu-btn" data-ticket="'+t.row_id+'"><div><b>'+esc(t.subject)+'</b><small>'+esc(t.status)+' · '+new Date(t.updated_at*1000).toLocaleString('fa-IR')+'</small></div><span>›</span></button>').join(''):'<div class="cu-empty">تیکتی نداری.</div>')+'</div></div></section>';
 }
 function render(){if(!data)return;app.innerHTML='<main class="cu-shell">'+header()+nav()+(tab==='home'?home():tab==='shop'?shop():tab==='services'?services():tab==='wallet'?wallet():support())+'</main>';bind()}

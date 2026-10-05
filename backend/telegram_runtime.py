@@ -1049,19 +1049,24 @@ class BotWorker(CustomerBotFeatures):
         if key not in names:raise PolicyError('Invalid simple plan name preset')
         self.session_data[user_id]['name']=names[key];self._simple_plan_ask_category(chat_id,user_id)
 
+    def plan_type_buttons(self,prefix:str):
+        buttons=[{'text':'📦 حجمی','callback_data':prefix+':volume'}]
+        if self.runtime.commerce.unlimited_plan_allowed(self.owner):
+            buttons.append({'text':'♾ نامحدود','callback_data':prefix+':unlimited'})
+        return buttons
+
     def simple_plan_choose_category(self,chat_id:int,user_id:int,key:str):
         if self.sessions.get(user_id)!='store_simple_category_wait':raise PolicyError('Simple plan wizard is not waiting for category')
         categories={'economy':'اقتصادی','turbo':'Turbo','multi':'Multi','vip':'VIP','gaming':'Gaming'}
         if key not in categories:raise PolicyError('Invalid simple plan category')
         self.session_data[user_id]['category']=categories[key]
         self.sessions[user_id]='store_simple_type_wait'
-        self.api.send(chat_id,'مرحله 3/8 · نوع پلن را انتخاب کن:',{'inline_keyboard':[[
-            {'text':'📦 حجمی','callback_data':'ststype:volume'},
-            {'text':'♾ نامحدود','callback_data':'ststype:unlimited'}]]})
+        self.api.send(chat_id,'مرحله 3/8 · نوع پلن را انتخاب کن:',{'inline_keyboard':[self.plan_type_buttons('ststype')]})
 
     def simple_plan_choose_type(self,chat_id:int,user_id:int,kind:str):
         if self.sessions.get(user_id)!='store_simple_type_wait':raise PolicyError('Simple plan wizard is not waiting for type')
         if kind not in ('volume','unlimited'):raise PolicyError('Invalid simple plan type')
+        if kind=='unlimited':self.runtime.commerce.require_plan_credit(self.owner,0)
         self.session_data[user_id]['plan_type']=kind
         self.sessions[user_id]='store_simple_price'
         self.api.send(chat_id,'مرحله 4/8 · قیمت پلن را به تومان بفرست؛ فقط عدد.')
@@ -1168,9 +1173,7 @@ class BotWorker(CustomerBotFeatures):
         if state=='store_simple_category':
             if not 1<=len(value)<=64:self.api.send(chat_id,'دسته‌بندی نامعتبر است.');return
             data['category']=value;self.sessions[user_id]='store_simple_type_wait'
-            self.api.send(chat_id,'مرحله 3/7 · نوع پلن را انتخاب کن:',{'inline_keyboard':[[
-                {'text':'📦 حجمی','callback_data':'ststype:volume'},
-                {'text':'♾ نامحدود','callback_data':'ststype:unlimited'}]]});return
+            self.api.send(chat_id,'مرحله 3/7 · نوع پلن را انتخاب کن:',{'inline_keyboard':[self.plan_type_buttons('ststype')]});return
         if state=='store_simple_price':
             try:n=int(value.replace(',',''))
             except ValueError:self.api.send(chat_id,'قیمت باید عدد صحیح باشد.');return
@@ -1209,9 +1212,7 @@ class BotWorker(CustomerBotFeatures):
             data['category']=value
             if state=='store_product_category':
                 self.sessions[user_id]='store_product_type_wait'
-                self.api.send(chat_id,'نوع محصول را انتخاب کن:',{'inline_keyboard':[[
-                    {'text':'📦 حجمی','callback_data':'sttype:volume'},
-                    {'text':'♾ نامحدود','callback_data':'sttype:unlimited'}],[
+                self.api.send(chat_id,'نوع محصول را انتخاب کن:',{'inline_keyboard':[self.plan_type_buttons('sttype'),[
                     {'text':'🌍 Multi-location','callback_data':'sttype:multi_location'},
                     {'text':'🎮 Gaming','callback_data':'sttype:gaming'}]]});return
             self.sessions[user_id]='store_edit_description'
@@ -1228,6 +1229,7 @@ class BotWorker(CustomerBotFeatures):
             if state=='store_product_limit':
                 product_id='p_'+secrets.token_hex(5)
                 with self.runtime.store.transaction() as db:
+                    if data['kind']=='unlimited':self.runtime.commerce.require_plan_credit(self.owner,0)
                     db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
                       renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1251,6 +1253,7 @@ class BotWorker(CustomerBotFeatures):
     def store_choose_type(self,chat_id:int,user_id:int,kind:str):
         if self.sessions.get(user_id)!='store_product_type_wait':raise PolicyError('Product wizard is not waiting for type')
         if kind not in ('volume','unlimited','multi_location','gaming'):raise PolicyError('Invalid product type')
+        if kind=='unlimited':self.runtime.commerce.require_plan_credit(self.owner,0)
         self.session_data[user_id]['kind']=kind;self.sessions[user_id]='store_product_description'
         self.api.send(chat_id,'توضیح محصول را بفرست؛ برای خالی گذاشتن - بفرست.')
 
@@ -1258,14 +1261,20 @@ class BotWorker(CustomerBotFeatures):
         if field not in ('active','visible','renewal_enabled','add_volume_enabled'):raise PolicyError('Invalid product toggle')
         p=self.admin_product_row(row_id);value=0 if bool(p.get(field)) else 1
         with self.runtime.store.transaction() as db:
+            if value and field in ('active','visible'):
+                if p['kind']=='unlimited':self.runtime.commerce.require_plan_credit(self.owner,0)
+                for price in db.execute('SELECT volume_bytes FROM commerce_prices WHERE owner=? AND product_id=?',(self.owner,p['id'])):
+                    self.runtime.commerce.require_plan_credit(self.owner,int(price['volume_bytes']))
             db.execute(f"UPDATE commerce_products SET {field}=?,updated_at=? WHERE rowid=? AND owner=?",
                        (value,time.time(),row_id,self.owner))
         self.runtime.manager.audit(self.actor(),self.owner,'commerce.product_bot_toggle',p['id'],field+'='+str(value))
         self.admin_product_detail(chat_id,row_id)
 
     def clone_product(self,chat_id:int,row_id:int):
-        p=self.admin_product_row(row_id);new_id='p_'+secrets.token_hex(5);now=time.time()
+        p=self.admin_product_row(row_id)
+        new_id='p_'+secrets.token_hex(5);now=time.time()
         with self.runtime.store.transaction() as db:
+            if p['kind']=='unlimited':self.runtime.commerce.require_plan_credit(self.owner,0)
             db.execute("""INSERT INTO commerce_products(id,owner,name,description,category,kind,sale_limit_per_user,
               renewal_enabled,add_volume_enabled,active,visible,created_at,updated_at)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1274,6 +1283,7 @@ class BotWorker(CustomerBotFeatures):
                0,0,now,now))
             prices=[dict(r) for r in db.execute("SELECT * FROM commerce_prices WHERE owner=? AND product_id=?",(self.owner,p['id']))]
             for price in prices:
+                self.runtime.commerce.require_plan_credit(self.owner,int(price['volume_bytes']))
                 new_price='v_'+secrets.token_hex(5)
                 db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
                   volume_bytes,unlimited_units,device_limit,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode,
@@ -1400,6 +1410,7 @@ class BotWorker(CustomerBotFeatures):
     def save_price_wizard(self,chat_id:int,user_id:int):
         data=self.session_data[user_id];price_id='v_'+secrets.token_hex(5);now=time.time()
         with self.runtime.store.transaction() as db:
+            self.runtime.commerce.require_plan_credit(self.owner,int(data['volume_bytes']))
             db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
               volume_bytes,unlimited_units,device_limit,ip_limit,hwid_limit,inbound_ids,activation_mode,delivery_mode,
               primary_inbound_id,show_qr,show_portal,active,created_at,updated_at)
@@ -1431,6 +1442,7 @@ class BotWorker(CustomerBotFeatures):
     def toggle_price(self,chat_id:int,row_id:int):
         p=self.admin_price_row(row_id);value=0 if p['active'] else 1
         with self.runtime.store.transaction() as db:
+            if value:self.runtime.commerce.require_plan_credit(self.owner,int(p['volume_bytes']))
             db.execute("UPDATE commerce_prices SET active=?,updated_at=? WHERE rowid=? AND owner=?",
                        (value,time.time(),row_id,self.owner))
         self.runtime.manager.audit(self.actor(),self.owner,'commerce.price_bot_toggle',p['id'],'active='+str(value))
@@ -1767,6 +1779,7 @@ class BotWorker(CustomerBotFeatures):
                       {'inline_keyboard':[
                           [{'text':'📱 فعال‌سازی Mini App','callback_data':'miniappsetup'}],
                           [{'text':'🩺 سلامت و Repair ربات','callback_data':'bothealth'}],
+                          [{'text':'💬 تنظیم پیوی پشتیبانی','callback_data':'supportcontact'}],
                           [{'text':'👥 تنظیم پاداش زیرمجموعه','callback_data':'refreward'}],
                           [{'text':'⌂ داشبورد ربات','callback_data':'ahome'}]
                       ]})
