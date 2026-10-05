@@ -75,7 +75,7 @@ def test_exit_ack_before_source_and_failed_exit_not_enabled(relay_env, monkeypat
     monkeypatch.setattr(nodes, 'sync_desired_state', sync)
     result = c.post('/api/nodes/nl/exits/1', json={'enabled': True})
     assert result.status_code == 200, result.text
-    assert [(n, enabled) for n, _, enabled in calls] == [('de', 0), ('nl', 1)]
+    assert [(n, enabled) for n, _, enabled in calls] == [('nl', 0), ('de', 0), ('nl', 1)]
     assert result.json()['phase'] == 'enabled'
     assert c.post('/api/nodes/nl/exits/1', json={'enabled': False}).status_code == 200
     monkeypatch.setattr(nodes, 'sync_desired_state', lambda *a: {'desired_state_applied': False, 'queued': True})
@@ -191,8 +191,12 @@ def test_reseller_cannot_read_or_mutate_exits(relay_env, monkeypatch):
 def test_source_ack_loss_is_retryable_without_changing_credentials(relay_env):
     _, _, relay = relay_env; configured(relay_env)
     before = relay.get('nl', 1)['credential_enc']
+    source_calls = 0
     def sync(node):
-        if node == 'nl': raise PolicyError('Injected lost source reply')
+        nonlocal source_calls
+        if node == 'nl':
+            source_calls += 1
+            if source_calls > 1: raise PolicyError('Injected lost source reply')
         return {'desired_state_applied': True}
     with pytest.raises(PolicyError, match='lost source'):
         relay.toggle('nl', 1, True, sync)
@@ -200,6 +204,27 @@ def test_source_ack_loss_is_retryable_without_changing_credentials(relay_env):
     relay.toggle('nl', 1, True, lambda node: {'desired_state_applied': True})
     assert relay.get('nl', 1)['phase'] == 'enabled'
     assert relay.get('nl', 1)['credential_enc'] == before
+
+
+def test_legacy_source_cannot_publish_enabled_intent(relay_env):
+    _, _, relay = relay_env; configured(relay_env)
+    def sync(node):
+        assert node == 'nl'
+        raise PolicyError('Node HTTP 404')
+    with pytest.raises(PolicyError, match='404'): relay.toggle('nl', 1, True, sync)
+    assert relay.get('nl', 1)['enabled'] == 0
+    assert relay.get('nl', 1)['phase'] == 'disabled'
+
+
+def test_monitor_does_not_fall_back_to_mirrors_for_relay_payload(relay_env, monkeypatch):
+    env, nodes, relay = relay_env; configured(relay_env)
+    relay.toggle('nl', 1, True, lambda node: {'desired_state_applied': True})
+    state = env[-1].get('/api/nodes/nl/desired').json()
+    def reject(*a, **kw): raise PolicyError('Node HTTP 404')
+    monkeypatch.setattr(nodes, '_request', reject)
+    monkeypatch.setattr(nodes, 'sync_mirrors', lambda *a: pytest.fail('Mirror fallback would bypass the selected exit'))
+    with pytest.raises(PolicyError, match='404'):
+        nodes._sync_desired_state_locked('nl', state, legacy_bundles=state['payload']['assignments'])
 
 
 def test_active_references_protected_through_upsert_and_deployment_api(relay_env):

@@ -134,6 +134,11 @@ class NodeRelay:
             if enabled:
                 if row['phase'] == 'disabling': raise PolicyError('Finish synchronizing disable before enabling')
                 self.validate(row)
+                # Confirm full-state support on ingress while it is still off.
+                # A legacy mirror-only source must never see enabled intent.
+                preflight = synchronize(source)
+                if not preflight.get('desired_state_applied') or preflight.get('queued'):
+                    raise PolicyError('Source has not acknowledged full configuration; route was not enabled')
                 # Exit must ACK its credential and direct rule before any source
                 # monitor or lease renewal can see an enabled route.
                 result = synchronize(row['exit_node'])
@@ -146,11 +151,13 @@ class NodeRelay:
             self._state(source, inbound, enabled, 'enabled' if enabled else 'disabled')
             return self.public(self.get(source, inbound))
 
-    def check_node_change(self, node_id, *, enabled=True, inbound_ids=None, deleting=False):
+    def check_node_change(self, node_id, *, enabled=True, inbound_ids=None, deleting=False, origin=None):
         for row in self.rows():
             if not row['enabled'] and row['phase'] == 'disabled': continue
             for key, ibkey in (('source_node', 'source_inbound'), ('exit_node', 'exit_inbound')):
-                if row[key] == node_id and (deleting or not enabled or (inbound_ids is not None and row[ibkey] not in inbound_ids)):
+                if row[key] != node_id: continue
+                moving = origin is not None and self.nodes.get(node_id)['origin'] != origin.rstrip('/')
+                if deleting or not enabled or moving or (inbound_ids is not None and row[ibkey] not in inbound_ids):
                     raise PolicyError('Disable and synchronize node exit routes before removing their node or inbound')
 
     def enrich_bundles(self, node_id, bundles):

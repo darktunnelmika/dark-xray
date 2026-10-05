@@ -1583,7 +1583,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         writable()
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
-        node_relays.check_node_change(body.id,enabled=body.enabled,inbound_ids=body.inboundIds)
+        node_relays.check_node_change(body.id,enabled=body.enabled,inbound_ids=body.inboundIds,origin=body.origin)
         result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
         manager.audit(p.actor,p.actor.id,'node.create',body.id)
@@ -1607,7 +1607,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             manager.audit(p.actor,p.actor.id,'node.credential.rotate',node_id,'phase='+result['phase'])
             return result
         if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
-        node_relays.check_node_change(node_id,enabled=body.enabled,inbound_ids=body.inboundIds)
+        node_relays.check_node_change(node_id,enabled=body.enabled,inbound_ids=body.inboundIds,origin=body.origin)
         token=nodes.get(node_id,secret=True)['token']
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)

@@ -1625,7 +1625,9 @@ class NodeRegistry:
         try:
             doc,ms=(_requester or self._request)(node_id,'/node/api/v1/state/apply','POST',body,30.0)
         except PolicyError as ex:
-            if legacy_bundles is not None and str(ex).startswith('Node HTTP 404'):
+            relay_required=any(str(o.get('tag') or '').startswith('dark-relay-')
+                               for o in state['payload'].get('sections',{}).get('outbounds',[]) if isinstance(o,dict))
+            if legacy_bundles is not None and not relay_required and str(ex).startswith('Node HTTP 404'):
                 legacy=self.sync_mirrors(node_id,legacy_bundles)
                 # Legacy full-panel nodes cannot truthfully acknowledge sections
                 # that only the lightweight Node Agent can own.
