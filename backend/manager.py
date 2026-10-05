@@ -114,11 +114,11 @@ class Manager:
                 if not set(allowed)<=known: raise PolicyError('Assigned inbound does not exist')
             # Restriction changes may not strand already-owned clients silently.
             with self.store.lock:
-                rows=self.store.db.execute("SELECT m.inbounds,m.desired,c.limit_ip,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'",(owner,)).fetchall()
+                rows=self.store.db.execute("SELECT m.inbounds,m.desired,c.limit_ip,c.quota_bytes,c.id FROM managed_clients m JOIN clients c ON c.id=m.email WHERE c.owner=? AND m.state!='deleted'",(owner,)).fetchall()
             if any(not set(json.loads(r['inbounds']))<=set(allowed) for r in rows):
                 raise PolicyError('Detach or transfer affected clients before removing their inbound access')
-            if max_client_ips and any(r['limit_ip']==0 or r['limit_ip']>max_client_ips for r in rows):
-                raise PolicyError('Reduce existing client IP limits before lowering the reseller max-client-IP policy')
+            if max_client_ips and any((r['limit_ip']==0 and int(r['quota_bytes'] or 0)==0) or r['limit_ip']>max_client_ips for r in rows):
+                raise PolicyError('Reduce existing unlimited-service client IP limits before lowering the reseller max-client-IP policy')
             if max_client_hwid:
                 for row in rows:
                     try:limit=int(json.loads(row['desired']).get('limitHwid',0) or 0)
@@ -343,7 +343,12 @@ class Manager:
                     'expiryTime':0,'enable':True,'tgId':0,'group':'','comment':'','reset':0,
                     'resetTraffic':'never','resetTrafficDay':0,'resetCount':0}.items():data.setdefault(k,v)
         ip_ceiling=int(profile.get('max_client_ips') or 0);hwid_ceiling=int(profile.get('max_client_hwid') or 0)
-        if ip_ceiling and (data['limitIp']==0 or data['limitIp']>ip_ceiling):raise PolicyError('Requested IP limit exceeds the reseller policy')
+        # Volumetric services may explicitly use unlimited IP (0): their hard resource
+        # boundary is traffic quota. Unlimited-traffic services still respect the
+        # representative IP ceiling when the Owner configured one.
+        if ip_ceiling and data['limitIp']>ip_ceiling:raise PolicyError('Requested IP limit exceeds the reseller policy')
+        if ip_ceiling and data['limitIp']==0 and int(data.get('totalGB') or 0)==0:
+            raise PolicyError('Unlimited IP is only available to volumetric services under this reseller policy')
         if hwid_ceiling and (data['limitHwid']==0 or data['limitHwid']>hwid_ceiling):raise PolicyError('Requested HWID limit exceeds the reseller policy')
         try:self.store.register_client(actor,email,owner,data['limitIp'],data['totalGB'])
         except sqlite3.IntegrityError as ex:raise PolicyError('Identity is already reserved') from ex
