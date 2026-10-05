@@ -81,7 +81,7 @@ test('Bot V6 Stage 4 keeps CRM owner scoped',()=>{
 });
 
 test('Bot V6 Stage 5 connects purchase, first-connect, alerts and renewal lifecycle',()=>{
-  for(const token of ['DARK SERVICE READY','WAITING FIRST CONNECTION','DARK SERVICE ACTIVATED','FIRST CONNECTION VERIFIED','DARK RENEW COMPLETE'])
+  for(const token of ['DARK SERVICE READY','WAITING FIRST CONNECTION','DARK SERVICE ACTIVATED','✅ اولین اتصال تأیید شد','DARK RENEW COMPLETE'])
     assert.ok(runtime.includes(token)||customer.includes(token),token);
   assert.match(runtime,/usvclink:/);
   assert.match(runtime,/usvcrenew:/);
