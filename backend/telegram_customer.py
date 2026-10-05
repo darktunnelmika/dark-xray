@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+import re
+from urllib.parse import urlsplit
 import secrets
 import time
 from typing import Any
@@ -56,6 +58,9 @@ class CustomerCenter:
               referral_reward_minor INTEGER NOT NULL DEFAULT 0,
               support_enabled INTEGER NOT NULL DEFAULT 1,updated_at REAL NOT NULL);
             """)
+            settings_columns={r[1] for r in store.db.execute('PRAGMA table_info(telegram_customer_settings)')}
+            if 'support_url' not in settings_columns:
+                store.db.execute("ALTER TABLE telegram_customer_settings ADD COLUMN support_url TEXT NOT NULL DEFAULT ''")
             columns={r[1] for r in store.db.execute('PRAGMA table_info(commerce_orders)')}
             if 'order_type' not in columns:
                 store.db.execute("ALTER TABLE commerce_orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'purchase'")
@@ -73,6 +78,28 @@ class CustomerCenter:
                            (owner,CURRENCY,0,1,now))
                 row=db.execute('SELECT * FROM telegram_customer_settings WHERE owner=?',(owner,)).fetchone()
         out=dict(row);out['support_enabled']=bool(out['support_enabled']);return out
+
+    def set_support_contact(self,owner:str,value:str)->dict[str,Any]:
+        value=str(value or '').strip()
+        if value in ('','-'):url=''
+        else:
+            if value.startswith('@'):username=value[1:]
+            elif '/' not in value and ':' not in value:username=value
+            else:
+                if value.startswith(('t.me/','telegram.me/')):value='https://'+value
+                parsed=urlsplit(value)
+                if (parsed.scheme!='https' or parsed.netloc.lower() not in ('t.me','telegram.me')
+                    or parsed.query or parsed.fragment):
+                    raise PolicyError('پیوی را به شکل @username یا https://t.me/username بفرستید.')
+                username=parsed.path.removeprefix('/')
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,31}',username):
+                raise PolicyError('شناسه پیوی تلگرام معتبر نیست.')
+            url='https://t.me/'+username
+        self.settings(owner)
+        with self.store.transaction() as db:
+            db.execute('UPDATE telegram_customer_settings SET support_url=?,updated_at=? WHERE owner=?',
+                       (url,time.time(),owner))
+        return self.settings(owner)
 
     def set_referral_reward(self,owner:str,amount_minor:int)->dict[str,Any]:
         amount=int(amount_minor)
@@ -206,6 +233,7 @@ class CustomerCenter:
             if not current:raise PolicyError('Order not found')
             if current['status'] not in ('pending','awaiting_payment','payment_rejected','paid'):
                 raise PolicyError('Order cannot be paid from current state')
+            self.commerce.require_plan_credit(owner,int(current['volume_bytes']))
             self._debit_tx(db,owner,int(current['buyer_telegram_id']),int(current['amount_minor']),'purchase',reference,order_id)
             now=time.time()
             payment=db.execute("SELECT id FROM commerce_payments WHERE order_id=? AND owner=? AND gateway_id='wallet' ORDER BY created_at DESC LIMIT 1",
@@ -235,6 +263,7 @@ class CustomerCenter:
             prices=[dict(r) for r in self.store.db.execute("""SELECT rowid AS row_id,* FROM commerce_prices
               WHERE owner=? AND product_id=? AND active=1 ORDER BY price_minor,id""",(owner,origin['product_id']))]
         if not product or not product['renewal_enabled']:raise PolicyError('Renewal is disabled for this product')
+        if not self.commerce.unlimited_plan_allowed(owner):prices=[p for p in prices if int(p['volume_bytes'])>0]
         return {'origin':origin,'product':dict(product),'prices':prices}
 
     def create_renewal_order(self,owner:str,telegram_id:int,username:str,client_id:str,price_id:str)->dict[str,Any]:
@@ -252,6 +281,7 @@ class CustomerCenter:
         target_expiry=max(int(time.time()*1000),current_expiry)+max(1,int(price['duration_days']))*86400*1000
         now=time.time();order_id=_id('ord');inbounds=json.loads(price['inbound_ids'])
         with self.store.transaction() as db:
+            self.commerce.require_plan_credit(owner,int(price['volume_bytes']))
             db.execute("""INSERT INTO commerce_orders(id,owner,buyer_telegram_id,buyer_username,product_id,price_id,
               amount_minor,currency,status,created_at,updated_at,volume_bytes,duration_days,ip_limit,hwid_limit,
               inbound_ids,activation_mode,delivery_mode,primary_inbound_id,show_qr,show_portal,order_type,target_client_id,
@@ -276,6 +306,7 @@ class CustomerCenter:
             if not current:raise PolicyError('Renewal order not found')
             if current['status']=='renewed':return {'id':order_id,'status':'renewed','client_id':target,'wallet_paid':True}
             if current['status'] not in ('pending','paid'):raise PolicyError('Renewal cannot be paid from current state')
+            self.commerce.require_plan_credit(owner,int(current['volume_bytes']))
             self._debit_tx(db,owner,int(current['buyer_telegram_id']),int(current['amount_minor']),'renewal',reference,order_id)
             now=time.time()
             if not db.execute("SELECT 1 FROM commerce_payments WHERE order_id=? AND owner=? AND gateway_id='wallet'",(order_id,owner)).fetchone():

@@ -44,3 +44,14 @@ test('Support Center exposes quick reply management without leaking bot secrets'
  assert.doesNotMatch(commerce,/token_enc/);
  assert.doesNotMatch(commerce,/c\.webhook_secret|crypto\.webhook_secret/);
 });
+
+ test('Representative support contact is editable in panel and signed admin Mini App',()=>{
+  const panel=fs.readFileSync('web/telegram-commerce.js','utf8');
+  const mini=fs.readFileSync('web/telegram-miniapp.js','utf8');
+  assert.ok(panel.includes('tgsupportcontact'));
+  assert.ok(panel.includes('/api/telegram/operations/support-contact'));
+  assert.ok(mini.includes('support-contact-form'));
+  assert.ok(mini.includes('/api/telegram-miniapp/support-contact'));
+  assert.ok(panel.includes('unlimited_plan_allowed'));
+  assert.ok(mini.includes('unlimited_plan_allowed'));
+});

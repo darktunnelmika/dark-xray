@@ -26,6 +26,9 @@ class PaymentAction(Model):
     action: Literal['approve','reject']
 
 
+class SupportContact(Model):
+    support_url: str = Field(default='',max_length=500)
+
 class SupportReply(Model):
     text: str = Field(min_length=1, max_length=4000)
 
@@ -177,7 +180,7 @@ class TelegramOperations:
               (month,now+0.001,owner))]
             role=self.commerce.actor_for(owner).role
             reps=int(db.execute("SELECT COUNT(*) FROM api_admins WHERE role='reseller' AND disabled=0").fetchone()[0]) if role=='owner' else 0
-        return {'owner':owner,'role':role,'orders_today':orders_today,'paid_today':paid_today,'revenue_today':revenue_today,
+        return {'unlimited_plan_allowed':self.commerce.unlimited_plan_allowed(owner),'owner':owner,'role':role,'orders_today':orders_today,'paid_today':paid_today,'revenue_today':revenue_today,
                 'orders_7d':orders_week,'paid_7d':paid_week,'revenue_7d':revenue_week,
                 'conversion_7d':round((converted_week/orders_week*100.0) if orders_week else 0.0,1),
                 'pending_payments':pending_payments+pending_topups,'wallet_liability':wallet_liability,
@@ -442,6 +445,7 @@ class TelegramOperations:
         return {'auth':auth,'dashboard':self.dashboard(owner),'plans':self.commerce.product_rows(owner),
                 'inbounds':self.inbound_catalog(owner),'payments':self.payment_rows(owner,80),
                 'support':self.support_rows(owner,80),'quick_replies':self.quick_replies(owner),
+                'support_url':self.runtime.customer.settings(owner)['support_url'],
                 'crypto':self.crypto_gateway(owner)}
 
 
@@ -469,7 +473,20 @@ def install_telegram_ops(app,runtime,current,writable,audit):
 
     @app.get('/api/telegram/operations/support')
     def operations_support(p=Depends(current)):
-        return {'tickets':ops.support_rows(panel_owner(p)),'quick_replies':ops.quick_replies(panel_owner(p))}
+        owner=panel_owner(p)
+        return {'tickets':ops.support_rows(owner),'quick_replies':ops.quick_replies(owner),
+                'support_url':runtime.customer.settings(owner)['support_url']}
+
+    @app.put('/api/telegram/operations/support-contact')
+    def operations_support_contact(body:SupportContact,p=Depends(current)):
+        writable();owner=panel_owner(p)
+        result=runtime.customer.set_support_contact(owner,body.support_url)
+        audit(p.actor,owner,'telegram.support_contact',owner,'panel');return result
+
+    @app.put('/api/telegram-miniapp/support-contact')
+    def mini_support_contact(owner:str,body:SupportContact,x_telegram_init_data:str=Header(default='',alias='X-Telegram-Init-Data')):
+        writable();mini_owner(owner,x_telegram_init_data)
+        return runtime.customer.set_support_contact(owner,body.support_url)
 
     @app.get('/api/telegram/operations/support/{row_id}')
     def operations_support_detail(row_id:int,p=Depends(current)):

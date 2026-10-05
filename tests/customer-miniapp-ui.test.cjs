@@ -81,3 +81,10 @@ test('customer bot uses Telegram menu button for Store without duplicate reply-k
  assert.match(runtime,/web_app/);
  assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
 });
+
+ test('Customer support exposes the shop Telegram contact with safe link rendering',()=>{
+  const source=fs.readFileSync('web/telegram-customer.js','utf8');
+  assert.ok(source.includes('esc(data.support_url)'));
+  assert.ok(source.includes('پیوی پشتیبانی'));
+  assert.ok(source.includes('rel="noopener noreferrer"'));
+});

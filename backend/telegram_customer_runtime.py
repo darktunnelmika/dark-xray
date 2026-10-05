@@ -441,6 +441,8 @@ class CustomerBotFeatures:
     def customer_support_menu(self,chat_id:int,user_id:int):
         rows=self.runtime.customer.tickets_for_customer(self.owner,user_id,20)
         kb=[[{'text':'➕ تیکت جدید','callback_data':'supnew'}]]
+        contact=self.runtime.customer.settings(self.owner)['support_url']
+        if contact:kb.insert(0,[{'text':'💬 پیوی پشتیبانی','url':contact}])
         for t in rows[:15]:
             icon='🟢' if t['status']=='open' else ('🔵' if t['status']=='answered' else '⚫')
             kb.append([{'text':f"{icon} {t['subject']}"[:62],'callback_data':'supt:'+str(t['row_id'])}])
@@ -503,9 +505,8 @@ class CustomerBotFeatures:
               WHERE owner=? AND status='answered'""",(self.owner,)).fetchone()[0])
             opened=int(self.runtime.store.db.execute("""SELECT COUNT(*) FROM customer_support_tickets
               WHERE owner=? AND status='open'""",(self.owner,)).fetchone()[0])
-        if not rows:
-            self.api.send(chat_id,'◇ DARK SUPPORT CENTER\n● تیکت بازی وجود ندارد.');return
-        kb=[]
+        contact=self.runtime.customer.settings(self.owner)['support_url']
+        kb=[[{'text':'💬 تنظیم پیوی پشتیبانی','callback_data':'supportcontact'}]]
         for t in rows[:30]:
             icon='🟠' if t['status']=='open' else '🔵'
             age=max(0,int((time.time()-float(t.get('updated_at') or 0))/60))
@@ -513,7 +514,7 @@ class CustomerBotFeatures:
                         'callback_data':'asupt:'+str(t['row_id'])}])
         kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,
-            f"◇ DARK SUPPORT CENTER\n🟠 منتظر پاسخ: {opened} · 🔵 پاسخ‌داده‌شده: {answered}",
+            f"◇ DARK SUPPORT CENTER\n🟠 منتظر پاسخ: {opened} · 🔵 پاسخ‌داده‌شده: {answered}\nپیوی: {contact or 'تنظیم نشده'}",
             {'inline_keyboard':kb})
 
     def admin_support_detail(self,chat_id:int,row_id:int):
@@ -762,6 +763,9 @@ class CustomerBotFeatures:
             self.runtime.customer.close_ticket(self.owner,t['id'])
             self.api.send(int(t['telegram_id']),'✅ تیکت شما توسط پشتیبانی بسته شد.')
             self.api.send(chat_id,'تیکت بسته شد.');return True
+        if data=='supportcontact' and self.is_admin(user_id):
+            self.sessions[user_id]='customer_admin_support_contact';self.session_data[user_id]={}
+            self.api.send(chat_id,'پیوی پشتیبانی همین ربات را بفرست: @username یا https://t.me/username\nبرای حذف - بفرست.');return True
         if data=='refreward' and self.is_admin(user_id):
             self.sessions[user_id]='customer_admin_referral_reward';self.session_data[user_id]={}
             self.api.send(chat_id,'پاداش اولین خرید موفق هر زیرمجموعه را به تومان بفرست. صفر = بدون پاداش.');return True
@@ -795,6 +799,10 @@ class CustomerBotFeatures:
                           {'inline_keyboard':[[{'text':'🎫 بازکردن تیکت','callback_data':'supt:'+str(ticket['row_id'])},
                                                {'text':'📦 سرویس‌های من','callback_data':'svcmy'}]]})
             self.api.send(chat_id,'✅ پاسخ ارسال شد.');return
+        if state=='customer_admin_support_contact' and self.is_admin(user_id):
+            settings=self.runtime.customer.set_support_contact(self.owner,value)
+            self.sessions.pop(user_id,None);self.session_data.pop(user_id,None)
+            self.api.send(chat_id,'✅ پیوی پشتیبانی: '+(settings['support_url'] or 'حذف شد'));return
         if state=='customer_admin_referral_reward' and self.is_admin(user_id):
             try:reward=int(value.replace(',',''))
             except ValueError:self.api.send(chat_id,'مبلغ باید عدد صحیح باشد.');return
