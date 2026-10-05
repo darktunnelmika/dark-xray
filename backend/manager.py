@@ -118,7 +118,7 @@ class Manager:
             if any(not set(json.loads(r['inbounds']))<=set(allowed) for r in rows):
                 raise PolicyError('Detach or transfer affected clients before removing their inbound access')
             if max_client_ips and any((r['limit_ip']==0 and int(r['quota_bytes'] or 0)==0) or r['limit_ip']>max_client_ips for r in rows):
-                raise PolicyError('Reduce existing unlimited-service client IP limits before lowering the reseller max-client-IP policy')
+                raise PolicyError('Reduce existing client IP limits before lowering the reseller max-client-IP policy')
             if max_client_hwid:
                 for row in rows:
                     try:limit=int(json.loads(row['desired']).get('limitHwid',0) or 0)
