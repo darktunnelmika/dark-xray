@@ -129,6 +129,7 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     try:
         owner_text=' '.join(x['text'] for row in owner_worker.main_keyboard(True)['keyboard'] for x in row)
         assert '➕ ساخت نماینده' in owner_text and '🤝 نمایندگان' in owner_text
+        assert '💾 بکاپ' in owner_text
     finally:
         owner_worker.api.close()
     assert c.put('/api/owners/seller',json={
@@ -142,6 +143,7 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     try:
         seller_text=' '.join(x['text'] for row in seller_worker.main_keyboard(True)['keyboard'] for x in row)
         assert '➕ ساخت نماینده' not in seller_text and '🤝 نمایندگان' not in seller_text
+        assert '💾 بکاپ' not in seller_text
         assert '👥 کاربران' in seller_text
     finally:
         seller_worker.api.close()

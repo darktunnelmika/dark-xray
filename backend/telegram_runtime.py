@@ -216,9 +216,11 @@ class BotWorker(CustomerBotFeatures):
                 ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
                 ['📈 رشد و فروش','🎫 پشتیبانی'],
                 ['📣 اعلان‌ها','📱 Mini App'],
-                ['⚙️ تنظیمات ربات','💾 بکاپ'],
+                ['⚙️ تنظیمات ربات'],
             ]
-            if self.owner_role()=='owner':rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
+            if self.owner_role()=='owner':
+                rows[-1].append('💾 بکاپ')
+                rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
             rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
         def button(x):return x if isinstance(x,dict) else {'text':x}
         return {'keyboard':[[button(x) for x in row] for row in rows],
@@ -1674,6 +1676,9 @@ class BotWorker(CustomerBotFeatures):
                       {'inline_keyboard':kb})
 
     def admin_backup(self,chat_id:int):
+        if self.owner_role()!='owner':
+            self.api.send(chat_id,'بکاپ پنل اصلی فقط در اختیار مالک پنل است.',self.main_keyboard(True))
+            return
         with self.runtime.store.lock:
             row=self.runtime.store.db.execute("""SELECT at,action,detail FROM live_audit
               WHERE action IN ('backup.full','backup.telegram_sent') ORDER BY id DESC LIMIT 1""").fetchone()
