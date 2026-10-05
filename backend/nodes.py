@@ -1319,6 +1319,7 @@ class NodeRegistry:
         # A lease renewer cannot inherit the legacy 60s telemetry interval.
         # Each node owns its cadence; no fleet-wide barrier or queued duplicates.
         cadence=min(float(interval),5.0) if lease_callback is not None else float(interval)
+        accounting_first=lease_callback is not None
         stop=self.stop;stop.clear();workers={}
         logger=logging.getLogger(__name__)
         class Cancelled(Exception):pass
@@ -1353,11 +1354,12 @@ class NodeRegistry:
                         # Preserve pending/offline desired-state visibility.
                         try:step('desired',desired_provider,node_id)
                         except (PolicyError,OSError,ValueError):pass
-                    step('probe',self.probe,node_id,timeout=5.0)
+                    if not accounting_first:
+                        step('probe',self.probe,node_id,timeout=5.0)
                     traffic=step('traffic',self.sync_traffic,node_id)
                     if traffic_callback is not None and traffic.get('charged_bytes'):
                         step('policy',traffic_callback,node_id,traffic)
-                    security()
+                    if not accounting_first:security()
                     if desired_provider is not None:
                         bundles=step('bundles',sync_provider,node_id) if sync_provider is not None else None
                         state=step('desired',desired_provider,node_id)
@@ -1369,11 +1371,23 @@ class NodeRegistry:
                         traffic=step('post_traffic',self.sync_traffic,node_id)
                         if traffic_callback is not None and traffic.get('charged_bytes'):
                             step('post_policy',traffic_callback,node_id,traffic)
-                        security()
+                        if not accounting_first:security()
                     if lease_callback is not None:
                         lease=step('lease',lease_callback,node_id,traffic)
                         record(last_lease_at=time.time(),lease_remaining_seconds=(lease or {}).get('remaining_seconds'))
                     step('control',self.deliver_pending_control,node_id)
+                    if accounting_first:
+                        # Meter/import/apply/grant before optional health and
+                        # security reads. Probe failure cannot undo a valid grant.
+                        security()
+                        with self._monitor_lock:
+                            last_probe=self._monitor_state.get(node_id,{}).get('last_probe_at',0)
+                        if time.time()-last_probe>=15:
+                            try:
+                                step('probe',self.probe,node_id,timeout=5.0)
+                                record(last_probe_at=time.time(),probe_error='')
+                            except (PolicyError,OSError,ValueError) as exc:
+                                record(probe_error=str(exc)[:400],last_probe_at=time.time())
                 record(stage='complete',last_success_at=time.time(),last_error='',consecutive_failures=0)
             except Cancelled:
                 record(stage='cancelled')

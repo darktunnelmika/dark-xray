@@ -5,6 +5,8 @@ import socket
 import socketserver
 import struct
 import threading
+import time
+from unittest.mock import Mock
 
 from node_runtime import LeaseGuard
 from node_agent import EngineLoop
@@ -32,6 +34,61 @@ class Echo(socketserver.BaseRequestHandler):
         try:
             while data:=self.request.recv(4096):self.request.sendall(data)
         except OSError:pass
+
+
+def test_real_busy_engine_preserves_open_sessions_and_accounting(real_fleet):
+    """Owned fixture-only CPU work holds the engine lock; no installed service."""
+    f=real_fleet;clocks=arm(f);node=f.agents[0]
+    before=usage(f);pids=[n.engine.process.pid for n in f.agents]
+    entered=threading.Event();release=threading.Event()
+    def busy_validation():
+        with node.engine.lock:
+            entered.set()
+            while not release.wait(.005):
+                # Bounded CPU work models validation sharing the engine lock.
+                sum(i*i for i in range(10000))
+    thread=threading.Thread(target=busy_validation)
+    with existing_connections(f) as sockets:
+        thread.start();guard=LeaseGuard(node.runtime)
+        guard.watchdog.seconds=30;guard.watchdog.notify=Mock()
+        try:
+            assert entered.wait(2)
+            node.engine.last_stats=time.monotonic()-20
+            for _ in range(5):
+                guard.tick()
+                for s in sockets:
+                    s.sendall(b'BUSY-BUT-ALIVE');assert exact(s,14)==b'BUSY-BUT-ALIVE'
+            assert guard.watchdog.notify.call_count==5
+            assert [n.engine.process.pid for n in f.agents]==pids
+            assert node.runtime.hub_lease.deadline==160
+        finally:release.set();thread.join(3)
+    for n in f.agents:assert grant(f,n)['valid']
+    after=usage(f)
+    assert after[0]>before[0] and after[0]==after[2]
+    assert after[0]==sum(up+down for _,up,down in after[1])
+    for n in f.agents:grant(f,n)
+    assert usage(f)==after,'busy-engine recovery billed cumulative counters twice'
+    assert [n.engine.process.pid for n in f.agents]==pids
+    f.evidence.update(busy_engine_sessions_preserved=True,charged_bytes=after[0])
+
+
+def test_real_quota_metadata_revision_preserves_open_sessions(real_fleet):
+    f=real_fleet;arm(f);pids=[n.engine.process.pid for n in f.agents]
+    with existing_connections(f) as sockets:
+        f.api('/api/clients/'+EMAIL,{'client':{'totalGB':1024*1024*1024}},'PATCH')
+        for node in f.agents:
+            f.api('/api/nodes/'+node.id+'/sync',{})
+            assert grant(f,node)['valid']
+        assert [n.engine.process.pid for n in f.agents]==pids
+        for s in sockets:
+            s.sendall(b'METADATA-ONLY');assert exact(s,13)==b'METADATA-ONLY'
+    for node in f.agents:grant(f,node)
+    total,rows,ledger=usage(f)
+    assert total>0 and total==ledger==sum(up+down for _,up,down in rows)
+    before=usage(f)
+    for node in f.agents:grant(f,node)
+    assert usage(f)==before
+    f.evidence.update(metadata_revision_sessions_preserved=True)
 
 
 @contextlib.contextmanager

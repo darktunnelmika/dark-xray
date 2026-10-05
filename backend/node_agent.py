@@ -460,7 +460,9 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
             if engine.stats_error:raise PolicyError('Node traffic checkpoint is unhealthy')
             result=runtime.hub_lease.renew(body,runtime.status(),runtime.command_status()['revision'])
             runtime.reconcile_control()
-            if runtime.control_status()['effective_running']:engine.command('start')
+            if runtime.control_status()['effective_running'] and (not engine.running or
+                    engine.config_hash(engine.build_config()) != engine.applied_hash):
+                engine.command('start')
             return {'lease':result,'engine':engine.runtime_state()}
         except (PolicyError,CoreError) as exc:raise HTTPException(409,str(exc))
 

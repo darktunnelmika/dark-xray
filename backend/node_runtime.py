@@ -362,6 +362,11 @@ class NodeRuntime:
                     inbound.pop('id',None);inbound.pop('applied',None)
                     validated_inbound=self._rewrite_managed_refs(inbound,managed_map)
                     saved=stage_engine.save_inbound(validated_inbound);local_id=int(saved['id'])
+                    # Match installed source IDs, including generated tunnel tags.
+                    if local_id!=source:
+                        with stage_store.transaction() as db:
+                            db.execute('UPDATE core_inbounds SET id=? WHERE id=?',(source,local_id))
+                        local_id=source
                     clients=[]
                     for entry in item['clients']:
                         if not isinstance(entry,dict) or set(entry)!={'sourceEmail','client'}:
@@ -394,8 +399,23 @@ class NodeRuntime:
                                     int(bool(policy.get('globalIpBlocked'))),int(bool(policy.get('globalDeviceBlocked')))))
                 for name in STATE_SECTIONS:
                     stage_engine.save_section(name,copy.deepcopy(payload['sections'][name]))
-                validated=stage_engine.validate()
-                return {'assignments':normalized,'policies':policies,'validated':validated}
+                candidate=stage_engine.build_config()
+                paths={str(stage_engine.runtime/'access.log'):str(self.engine.runtime/'access.log'),
+                       str(stage_engine.runtime/'error.log'):str(self.engine.runtime/'error.log')}
+                paths.update({value:str(self.engine.runtime.parent/'managed-tls'/(key[10:]+'.pem'))
+                              for key,value in managed_map.items()})
+                def installed_paths(value):
+                    if isinstance(value,dict):return {k:installed_paths(v) for k,v in value.items()}
+                    if isinstance(value,list):return [installed_paths(v) for v in value]
+                    return paths.get(value,value) if isinstance(value,str) else value
+                runtime_hash=stage_engine.config_hash(installed_paths(candidate))
+                # Quota/accounting metadata may change without changing Xray's
+                # executable configuration. Reuse ONLY an exact running hash,
+                # never an unchecked payload or an unapplied generation.
+                if self.engine.running and runtime_hash==self.engine.applied_hash:
+                    validated={'validated':True,'hash':runtime_hash,'applied':False,'reused':True}
+                else:validated=stage_engine.validate(candidate)
+                return {'assignments':normalized,'policies':policies,'validated':validated,'runtime_hash':runtime_hash}
             finally:
                 stage_engine.close();stage_store.close()
 
@@ -497,7 +517,16 @@ class NodeRuntime:
             # Stop/flush the OLD generation before replacing its rows. The
             # final counters belong to that generation, not to newly inserted
             # zero-valued client rows.
-            self.engine.command('stop')
+            with self.store.lock:
+                old_identities={str(r[0]) for r in self.store.db.execute('SELECT email FROM core_clients')}
+            new_identities={mirror for item in model['assignments'] for _,mirror,_ in item['clients']}
+            keep_running=(effective_running and was_running and
+                          model['runtime_hash']==self.engine.applied_hash and old_identities==new_identities)
+            if keep_running:
+                # Same executable config: snapshot cumulative counters without
+                # resetting their live baseline or dropping existing sessions.
+                self.engine.collect_stats(force=True,strict=True)
+            else:self.engine.command('stop')
             snap=self._snapshot()
             with self.store.lock:
                 counters={str(r['email']):(int(r['up']),int(r['down']))
@@ -787,28 +816,30 @@ class LeaseGuard:
         self.thread = None
         self.watchdog = SystemdWatchdog()
         self.last_error = ''
-        self.seen_pid, self.pid_seen_at = None, 0.0
 
     def tick(self):
-        # A stuck engine lock MUST NOT feed systemd's watchdog.
+        lease = self.runtime.hub_lease
+        # The Hub grant already acknowledges a durable, metered checkpoint and
+        # current policy. Local validation/statistics work may hold engine.lock
+        # for seconds; it must not revoke that still-valid authority. Keep the
+        # OS deadline fenced by the ORIGINAL grant, even if Python/engine stalls.
+        enough = (not lease.required or
+                  lease.status()['remaining_seconds'] > self.watchdog.seconds + 2)
+        authorized = lease.allowed and enough
+        if authorized:
+            try:self.watchdog.notify()
+            except Exception as exc:
+                self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
+                return
         if not self.engine.lock.acquire(timeout=.1):
+            self.last_error = ('engine_busy_with_valid_lease' if authorized
+                               else 'engine_busy_without_safe_lease')
             return
         try:
-            lease = self.runtime.hub_lease
             if lease.required and not lease.allowed:
                 self.runtime.pause_expired_lease()
             running = self.engine.running
-            pid = self.engine.process.pid if running else None
-            now = time.monotonic()
-            if pid != self.seen_pid:
-                self.seen_pid, self.pid_seen_at = pid, now
-            fresh = (not running or (not self.engine.stats_error and
-                     ((self.engine.last_stats > 0 and now - self.engine.last_stats < 15) or
-                      (self.engine.last_stats == 0 and now - self.pid_seen_at < 10))))
-            # Stop feeding BEFORE the remaining lease is shorter than the OS
-            # watchdog. A frozen Python process cannot extend the 60-second grant.
-            enough = (not lease.required or lease.status()['remaining_seconds'] > self.watchdog.seconds + 2)
-            if not running or (lease.allowed and enough and fresh):
+            if not running and not authorized:
                 self.watchdog.notify()
             self.last_error = ''
         except Exception as exc:
