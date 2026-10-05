@@ -24,6 +24,45 @@ def unlimited_spec(inbound):
     return {'name':'Unlimited','plan_type':'unlimited','price_minor':100000,
             'duration_days':30,'ip_limit':1,'inbound_ids':[inbound],'published':True}
 
+def test_representative_backup_access_is_denied_and_stale_keyboard_refreshed(representative):
+    store,owner,seller,_=representative
+    configure_bot(seller,700001)
+    worker=BotWorker(seller.app.state.telegram_runtime,'seller',BOT_TOKEN,'backup-test')
+    sent=[];queries=[]
+    worker.api.send=lambda chat,text,reply_markup=None:sent.append((text,reply_markup))
+    store.db.set_trace_callback(queries.append)
+    try:
+        worker.handle({'message':{'chat':{'id':700001,'type':'private'},
+                                 'from':{'id':700001},'text':'💾 بکاپ'}})
+        worker.admin_backup(700001)
+        assert len(sent)==2
+        for text,markup in sent:
+            assert 'فقط در اختیار مالک' in text
+            assert 'DARK Full Backup' not in text
+            assert markup==worker.main_keyboard(True)
+            assert all(button['text']!='💾 بکاپ' for row in markup['keyboard'] for button in row)
+        assert not any('SELECT at,action,detail FROM live_audit' in query for query in queries)
+    finally:
+        store.db.set_trace_callback(None)
+        worker.api.close()
+    for path in ('/api/backup/status','/api/backup'):
+        assert seller.get(path).status_code==403
+    assert seller.post('/api/backup/full',json={'passphrase':'BackupTestPassphrase88'}).status_code==403
+    assert owner.get('/api/backup/status').status_code==200
+
+def test_owner_bot_retains_backup_status(representative):
+    _,owner,_,_=representative
+    configure_bot(owner,700002)
+    worker=BotWorker(owner.app.state.telegram_runtime,'dark',BOT_TOKEN,'owner-backup-test')
+    sent=[]
+    worker.api.send=lambda chat,text,reply_markup=None:sent.append(text)
+    try:
+        worker.handle({'message':{'chat':{'id':700002,'type':'private'},
+                                 'from':{'id':700002},'text':'💾 بکاپ'}})
+        assert len(sent)==1 and 'DARK Full Backup' in sent[0]
+    finally:
+        worker.api.close()
+
 def test_unlimited_catalog_requires_assigned_credit_on_all_api_paths(representative):
     store,owner,seller,inbound=representative
     runtime=seller.app.state.telegram_runtime
