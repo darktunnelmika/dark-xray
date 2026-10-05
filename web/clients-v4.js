@@ -30,7 +30,7 @@ function addCalendarMonths(months){
 function representativeIpOptions(owner,current,editing){
  const cap=Number(ownerProfile(owner).max_client_ips||0),max=Math.max(1,Math.min(5,cap||5)),items=[];
  if(editing&&(Number(current)<0||Number(current)>max||(Number(current)===0&&cap>0)))items.push(['keep',L('Keep current','بدون تغییر')+' · '+(Number(current)||'∞')]);
- if(cap===0)items.push(['0','♾ '+L('Unlimited IP','IP نامحدود')]);
+ items.push(['0','♾ '+L('Unlimited IP','IP نامحدود')]);
  for(let i=1;i<=max;i++)items.push([String(i),i+' IP']);
  return items;
 }
@@ -159,7 +159,10 @@ async function clientFormV4(email=null,inbound=null){
  function sync(){
    const pm=form.querySelector('[name=planMode]:checked')?.value||'unlimited';
    form.querySelector('[data-cv4-quota]')?.classList.toggle('hidden',pm!=='limited');
-   if(!representative){const em=form.querySelector('[name=expiryMode]:checked')?.value||'unlimited';form.querySelector('[data-cv4-days]')?.classList.toggle('hidden',em!=='days');form.querySelector('[data-cv4-date]')?.classList.toggle('hidden',em!=='date');}
+   if(representative){
+     const ipSelect=form.querySelector('[name=limitIpPreset]'),zero=ipSelect?.querySelector('option[value="0"]'),cap=Number(ownerProfile(form.elements.owner.value).max_client_ips||0);
+     if(zero){zero.disabled=pm!=='limited'&&cap>0;if(zero.disabled&&ipSelect.value==='0')ipSelect.value='1';}
+   }else{const em=form.querySelector('[name=expiryMode]:checked')?.value||'unlimited';form.querySelector('[data-cv4-days]')?.classList.toggle('hidden',em!=='days');form.querySelector('[data-cv4-date]')?.classList.toggle('hidden',em!=='date');}
    const selected=[...form.querySelectorAll('input[name=inbound]:checked')].map(x=>Number(x.value)),ok=flowCompatible(selected),flow=form.querySelector('[data-cv4-flow]'),note=form.querySelector('[data-cv4-flow-note]');
    if(flow){flow.classList.toggle('disabled',!ok);flow.querySelector('select').disabled=!ok;if(!ok)flow.querySelector('select').value='';}if(note)note.textContent=ok?L('Available for selected VLESS TCP/RAW TLS/REALITY inbounds.','برای اینباندهای VLESS TCP/RAW TLS/REALITY انتخاب‌شده فعال است.'):L('Hidden for gRPC/XHTTP/other incompatible transports.','برای gRPC/XHTTP و انتقال ناسازگار غیرفعال است.');
    form.querySelectorAll('.cv4-inbound-picker label').forEach(l=>l.classList.toggle('checked',!!l.querySelector('input:checked')));
