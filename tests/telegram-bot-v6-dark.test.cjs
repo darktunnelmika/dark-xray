@@ -169,17 +169,19 @@ test('Bot V6 Final Closeout standardizes owner and customer navigation',()=>{
   assert.match(customer,/‹ پشتیبانی/);
 });
 
-test('Bot V6 Final Closeout preserves compact primary menus',()=>{
+test('Bot V7 Final Closeout preserves compact categorized primary menus',()=>{
   assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
-  assert.match(runtime,/\['📈 رشد و فروش','🎫 پشتیبانی'\]/);
+  assert.match(runtime,/\['🛒 فروش','🎫 پشتیبانی'\]/);
+  assert.match(runtime,/\['📊 گزارش‌ها','⚙️ مدیریت'\]/);
   assert.match(runtime,/'text':'فروشگاه'/);
 });
 
 
 test('Bot V7 keeps representative admin menus compact and owner-only backup guarded',()=>{
-  for(const token of ['🛒 فروش','⚙️ مدیریت','admin_sales_menu','admin_management_menu'])
+  for(const token of ['🛒 فروش','⚙️ مدیریت','admin_sales_menu','admin_management_menu','بکاپ پنل اصلی فقط در اختیار مالک پنل است.'])
     assert.ok(runtime.includes(token),token);
-  assert.match(runtime,/text=='💾 بکاپ'.*owner_role\(\)=='owner'/);
+  const backup=runtime.slice(runtime.indexOf('def admin_backup'),runtime.indexOf('def ',runtime.indexOf('def admin_backup')+4));
+  assert.match(backup,/owner_role\(\)!=\'owner\'/);
 });
 
 test('Bot V7 simple plan wizard exposes unlimited IP without removing numeric choices',()=>{
