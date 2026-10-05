@@ -97,6 +97,9 @@ class NodeRelay:
         if row['source_node'] == row['exit_node']: raise PolicyError('Source and exit must be different nodes')
         self._inbound(row['source_node'], row['source_inbound'])
         self.destination(row)
+        for node in (row['source_node'], row['exit_node']):
+            if any(str(o.get('tag', '')).startswith('dark-relay-') for o in self.engine.runtime_outbounds('node:' + node)):
+                raise PolicyError('The dark-relay- outbound namespace is reserved; rename the existing outbound first')
         edges = {}
         for r in self.rows():
             if (r['source_node'], r['source_inbound']) == (row['source_node'], row['source_inbound']): continue
@@ -185,7 +188,28 @@ class NodeRelay:
         outbounds = sections['outbounds']; rules = sections['routing'].get('rules', [])
         if any(str(o.get('tag', '')).startswith('dark-relay-') for o in outbounds):
             raise PolicyError('The dark-relay- outbound namespace is reserved')
-        generated = []
+        ingress_rules = []; exit_rules = []
+        blocked = {o['tag'] for o in outbounds if o.get('protocol') == 'blackhole'}
+        def scoped_policies(match, tag, selected, inbound=None):
+            scoped = []
+            for original in rules:
+                rule = copy.deepcopy(original)
+                for key, values in match.items():
+                    common = [v for v in values if key not in rule or v in rule[key]]
+                    if not common: break
+                    rule[key] = common
+                else:
+                    # Matrix direct rules must not acquire a tunnel match when
+                    # Core expands ordinary inbound tags into shadow listeners.
+                    if (inbound is not None and str(original.get('ruleTag', '')).startswith('dark-matrix-')
+                            and rule.get('inboundTag') == [inbound['tag']]):
+                        rule['localPort'] = inbound['port']
+                    if original.get('outboundTag') not in blocked:
+                        rule.pop('balancerTag', None)
+                        rule['outboundTag'] = selected
+                    rule['ruleTag'] = tag + '-policy-' + str(len(scoped))
+                    scoped.append(rule)
+            return scoped
         for row in relevant:
             tag = self._tag(row)
             if row['exit_node'] == node_id:
@@ -193,7 +217,8 @@ class NodeRelay:
                 except PolicyError: continue
                 outbounds.append({'tag': tag + '-exit', 'protocol': 'freedom', 'settings': {}})
                 email = 'nm_' + hashlib.sha256((node_id + '\0' + row['identity']).encode()).hexdigest()[:24]
-                generated.append({'type': 'field', 'user': [email], 'outboundTag': tag + '-exit', 'ruleTag': tag + '-exit'})
+                exit_rules.extend(scoped_policies({'user': [email]}, tag + '-exit', tag + '-exit'))
+                exit_rules.append({'type': 'field', 'user': [email], 'outboundTag': tag + '-exit', 'ruleTag': tag + '-exit'})
             if row['source_node'] == node_id and row['enabled']:
                 try: inbound = self.engine.inbound(row['source_inbound'])
                 except CoreError: continue  # Deleted ingress has no traffic to route.
@@ -207,9 +232,15 @@ class NodeRelay:
                 except PolicyError:
                     outbound = {'tag': tag, 'protocol': 'blackhole', 'settings': {}}
                 outbounds.append(outbound)
-                generated.append({'type': 'field', 'inboundTag': [inbound['tag']], 'outboundTag': tag, 'ruleTag': tag})
-        # Preserve explicit deny rules, override WARP/matrix/custom exit choices.
-        blocked = {o['tag'] for o in outbounds if o.get('protocol') == 'blackhole'}
-        sections['routing']['rules'] = [r for r in rules if r.get('outboundTag') in blocked] + generated + [
-            r for r in rules if r.get('outboundTag') not in blocked]
+                ports = inbound.get('panelMeta', {}).get('tunnelPorts', {})
+                tags = [inbound['tag']]
+                port = ports.get('node:' + node_id)
+                if type(port) is int and 1 <= port <= 65535:
+                    tags.append('dark-tunnel-' + str(row['source_inbound']) + '-' + str(port))
+                ingress_rules.extend(scoped_policies({'inboundTag': tags}, tag, tag, inbound))
+                ingress_rules.append({'type': 'field', 'inboundTag': [inbound['tag']], 'outboundTag': tag, 'ruleTag': tag})
+        # Preserve allow/deny precedence, including exceptions before blocks.
+        # Bridge users terminate at this exit even if its customer inbound also
+        # has an independent route to a third node.
+        sections['routing']['rules'] = exit_rules + ingress_rules + rules
         return sections

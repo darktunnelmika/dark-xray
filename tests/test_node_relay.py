@@ -128,7 +128,8 @@ def test_compile_encrypted_routing_shadow_and_exit_direct(relay_env, tmp_path, m
             assert len(rule['inboundTag']) == 2  # Includes real tunnel shadow listener.
         else:
             bridge = exit_payload['assignments'][1]['clients'][0]
-            rule = next(r for r in rules if r.get('user') == [runtime.mirror_email(bridge['sourceEmail'])])
+            rule = next(r for r in rules if r.get('user') == [runtime.mirror_email(bridge['sourceEmail'])]
+                        and r.get('outboundTag', '').endswith('-exit'))
             assert next(o for o in config['outbounds'] if o['tag'] == rule['outboundTag'])['protocol'] == 'freedom'
             assert rule['outboundTag'] != 'warp'
         runtime_engine.close(); db.close()
@@ -225,6 +226,48 @@ def test_monitor_does_not_fall_back_to_mirrors_for_relay_payload(relay_env, monk
     monkeypatch.setattr(nodes, 'sync_mirrors', lambda *a: pytest.fail('Mirror fallback would bypass the selected exit'))
     with pytest.raises(PolicyError, match='404'):
         nodes._sync_desired_state_locked('nl', state, legacy_bundles=state['payload']['assignments'])
+
+
+def test_existing_allow_block_order_unchanged_for_other_customers(relay_env):
+    env, _, relay = relay_env; configured(relay_env)
+    rules = [
+        {'type': 'field', 'domain': ['domain:exception.example'], 'outboundTag': 'direct'},
+        {'type': 'field', 'domain': ['domain:example'], 'outboundTag': 'block'},
+        {'type': 'field', 'inboundTag': ['relay-exit'], 'port': '25', 'outboundTag': 'block'},
+        {'type': 'field', 'network': 'tcp,udp', 'outboundTag': 'direct'}]
+    env[1].save_section('routing', {'domainStrategy': 'AsIs', 'rules': rules})
+    # Even a saved-but-disabled route must not reorder destination customers.
+    exit_rules = desired(env[-1], 'de')['sections']['routing']['rules']
+    assert exit_rules[-len(rules):] == rules
+    assert all(r.get('user') for r in exit_rules[:-len(rules)])
+    relay.toggle('nl', 1, True, lambda node: {'desired_state_applied': True})
+    source_rules = desired(env[-1], 'nl')['sections']['routing']['rules']
+    assert source_rules[-len(rules):] == rules
+    assert source_rules[0]['domain'] == ['domain:exception.example']
+    assert source_rules[0]['outboundTag'].startswith('dark-relay-')
+    assert source_rules[1]['outboundTag'] == 'block'
+    assert all(set(r['inboundTag']) <= {'relay-ingress', 'dark-tunnel-1-24445'} for r in source_rules[:-len(rules)])
+    assert not any(r.get('port') == '25' for r in source_rules[:-len(rules)])
+
+
+def test_reserved_namespace_collision_rejected_before_persisting_route(relay_env):
+    env, _, relay = relay_env
+    env[1].save_section('outbounds', env[1].section('outbounds') + [
+        {'tag': 'dark-relay-custom', 'protocol': 'freedom', 'settings': {}}])
+    with pytest.raises(PolicyError, match='namespace is reserved'):
+        relay.configure('nl', 1, 'de', 2)
+    assert not relay.rows()
+
+
+def test_bridge_terminates_before_exit_nodes_own_customer_route(relay_env):
+    env, _, relay = relay_env; configured(relay_env)
+    relay.toggle('nl', 1, True, lambda node: {'desired_state_applied': True})
+    relay.configure('de', 2, 'am', 2)
+    relay.toggle('de', 2, True, lambda node: {'desired_state_applied': True})
+    rules = desired(env[-1], 'de')['sections']['routing']['rules']
+    exit_index = next(i for i,r in enumerate(rules) if r.get('user') and r['outboundTag'].endswith('-exit'))
+    source_index = next(i for i,r in enumerate(rules) if r.get('inboundTag') == ['relay-exit'])
+    assert exit_index < source_index
 
 
 def test_active_references_protected_through_upsert_and_deployment_api(relay_env):

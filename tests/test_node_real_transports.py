@@ -387,6 +387,11 @@ def test_selected_node_exit_real_relay_single_charge_failure_and_disable(transpo
     f.engine.save_inbound(ib,exit_node.iid)
     with f.store.transaction() as db:
         db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',('127.0.0.1',exit_node.id))
+    # An allow exception before a broad deny must work for relay customers and
+    # ordinary destination customers; only the chosen egress may change.
+    f.engine.save_section('routing',{'domainStrategy':'AsIs','rules':[
+        {'type':'field','port':str(f.target.server_port),'outboundTag':'direct'},
+        {'type':'field','network':'tcp','outboundTag':'block'}]})
     path=f'/api/nodes/{source.id}/exits/{source.iid}'
     saved=f.api(path,{'exitNodeId':exit_node.id,'exitInboundId':exit_node.iid},'PUT')
     assert saved['enabled'] is False
@@ -405,6 +410,10 @@ def test_selected_node_exit_real_relay_single_charge_failure_and_disable(transpo
     assert after_exit[exit_node.id]==before_exit[exit_node.id], 'Relay charged as destination customer'
     assert meter(f)==after, 'Relay counters charged twice'
     assert stable_identity(f)==identity
+    transfer(f.controls[1].port,f.target)
+    with target_server() as blocked_target:
+        transfer(f.clients[0].port,blocked_target,allowed=False)
+        transfer(f.controls[1].port,blocked_target,allowed=False)
     # A direct path to this same HTTP target works from ingress. Stopping the
     # selected exit must nevertheless make ingress fail, without fallback.
     exit_node.engine.command('stop')
@@ -422,7 +431,8 @@ def test_selected_node_exit_real_relay_single_charge_failure_and_disable(transpo
     transfer(f.controls[0].port,f.target)
     f.evidence.update(selected_exit_relay_transferred=True,bridge_traffic_not_customer_billed=True,
         no_direct_fallback_on_exit_failure=True,disable_restored_previous_routing=True,
-        customer_identity_preserved=True,relay_customer_disable_enforced=True)
+        customer_identity_preserved=True,relay_customer_disable_enforced=True,
+        allow_exception_before_deny_preserved=True,unselected_exit_customer_policy_preserved=True)
 
 
 @pytest.mark.parametrize('fault',['untrusted-ca','wrong-sni','wrong-path'])
