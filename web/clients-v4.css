@@ -119,6 +119,11 @@
 .cv4-generated-client b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cv4-generated-client button{display:inline-flex;align-items:center;gap:5px;min-height:34px;border:1px solid rgba(41,224,190,.18);background:rgba(35,210,181,.045);color:#93d8c8;border-radius:7px;padding:6px 9px;font-size:10px}
 .cv4-generated-client button svg{width:13px}.cv4-generated-client small{display:block;margin-top:5px;color:#5d7d7b;font-size:10px}
+.cv4-name-modes{display:grid!important;grid-template-columns:1fr 1fr;gap:6px}
+.cv4-name-modes button{justify-content:center}.cv4-name-modes button.active{border-color:rgba(41,224,190,.5);background:rgba(35,210,181,.12);color:#d8fff5}
+.cv4-manual-name{display:grid;gap:5px;margin-top:6px}.cv4-manual-name.hidden{display:none!important}
+.cv4-manual-name input{width:100%;min-height:38px;border:1px solid rgba(50,196,194,.18);background:#03090c;color:#d9efed;border-radius:7px;padding:8px 10px;outline:0}
+.cv4-manual-name input:focus{border-color:rgba(43,237,201,.42);box-shadow:0 0 0 2px rgba(43,237,201,.04)}
 .cv4-fast-plan{display:grid;grid-template-columns:1fr 1fr;gap:10px;grid-column:1/-1}
 .cv4-representative-editor .cv4-edit-section>header small{font-size:10px;line-height:1.55}
 .cv4d-actions .cv4d-copy-primary{background:linear-gradient(135deg,rgba(25,255,134,.15),rgba(25,201,141,.08));border-color:rgba(25,255,134,.32);color:#caffdf;font-weight:800}
