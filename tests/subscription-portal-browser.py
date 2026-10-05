@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json,shutil,tempfile,threading
+import json,shutil,tempfile,threading,time
 from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -16,6 +16,14 @@ def main():
         root=Path(td);shutil.copytree(ROOT/"web",root/"assets")
         page=(ROOT/"web/sub-portal.html").read_text(encoding="utf-8").replace("__SUB_DATA__",json.dumps(DATA,separators=(",",":")))
         (root/"index.html").write_text(page,encoding="utf-8")
+        states={
+            'active':DATA|{'expiry':int(time.time())+30*86400},
+            'pending':DATA|{'expiry':0,'activation_pending':True,'duration_days':30},
+            'expired':DATA|{'expiry':int(time.time())-86400},
+        }
+        for state,data in states.items():
+            state_page=(ROOT/'web/sub-portal.html').read_text().replace('__SUB_DATA__',json.dumps(data))
+            (root/(state+'.html')).write_text(state_page,encoding='utf-8')
         handler=lambda *a,**kw: Quiet(*a,directory=str(root),**kw)
         httpd=ThreadingHTTPServer(("127.0.0.1",0),handler);port=httpd.server_port
         thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()
@@ -58,6 +66,17 @@ def main():
                 shot=OUT/f"subscription-portal-{name}.png"
                 pg.screenshot(path=str(shot),full_page=True)
                 report.append({"platform":name,"cards":count,"overflow_px":overflow,"min_connect_height":min(heights),"external_requests":external})
+                for state in states:
+                    pg.goto(local_prefix+'/'+state+'.html',wait_until='networkidle')
+                    value=pg.locator('#expiry').inner_text();hint=pg.locator('#expiryHint').inner_text()
+                    if state=='pending':
+                        assert value=='30 DAYS' and 'FIRST CONNECTION' in hint,(name,state,value,hint)
+                    else:
+                        assert len(value)==10 and value[4]=='-' and value[7]=='-',(name,state,value)
+                        assert ('EXPIRED' if state=='expired' else 'DAYS LEFT') in hint,(name,state,hint)
+                        assert ':' in hint,(name,state,hint)
+                    assert pg.evaluate('document.documentElement.scrollWidth-window.innerWidth')<=1,(name,state)
+                    if name=='ios':pg.screenshot(path=str(OUT/f'subscription-expiry-{state}-ios.png'),full_page=True)
                 ctx.close()
             browser.close()
         httpd.shutdown()

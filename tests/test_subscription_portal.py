@@ -40,6 +40,19 @@ def test_browser_gets_secure_portal(portal_env):
     assert "portal-user" in r.text
     assert "/assets/sub-portal.css" in r.text and "/assets/sub-icons.js" in r.text
     assert "__SUB_DATA__" not in r.text
+    data=json.loads(r.text.split('window.__DARK_SUB__=',1)[1].split(';</script>',1)[0])
+    assert data['expiry']==0 and data['activation_pending'] is False
+    assert data['duration_days']==0
+
+def test_portal_preserves_exact_expiry(portal_env):
+    c,url=portal_env
+    expiry=1893456123456
+    assert c.patch('/api/clients/portal-user',json={'client':{'expiryTime':expiry}}).status_code==202
+    page=c.get(url+'?portal=1')
+    assert page.status_code==200
+    data=json.loads(page.text.split('window.__DARK_SUB__=',1)[1].split(';</script>',1)[0])
+    assert data['expiry']==expiry//1000
+    assert data['activation_pending'] is False
 
 @pytest.mark.parametrize("ua",[
     "V2Box/4.0","HAPP/3.0","Streisand/1.6","Hiddify/2.5","v2rayN/7.15",

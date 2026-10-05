@@ -230,11 +230,21 @@ def test_first_connection_activation_is_real_and_starts_expiry_after_activity(en
     assert result['delivery']['main_config']
     detail=c.get('/api/clients/'+result['client_id']).json()
     assert detail['client']['expiryTime']==0
+    def portal_data():
+        page=c.get(detail['subscription_url']+'?portal=1')
+        assert page.status_code==200,page.text
+        return json.loads(page.text.split('window.__DARK_SUB__=',1)[1].split(';</script>',1)[0])
+    pending=portal_data()
+    assert pending['expiry']==0 and pending['activation_pending'] is True
+    assert pending['duration_days']==30
     store.record_usage('first-connect-activity-0001',result['client_id'],10,20)
     activated=c.app.state.telegram_commerce.activate_first_connections(manager)
     assert activated and activated[0]['client_id']==result['client_id']
     detail=c.get('/api/clients/'+result['client_id']).json()
     assert detail['client']['expiryTime']>int(__import__('time').time()*1000)
+    active=portal_data()
+    assert active['activation_pending'] is False
+    assert active['expiry']==detail['client']['expiryTime']//1000
     with store.lock:
         row=store.db.execute("SELECT status,activation_started_at,activation_expires_at FROM commerce_orders WHERE id=?",
                              (order['id'],)).fetchone()

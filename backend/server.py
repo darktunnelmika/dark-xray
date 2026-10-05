@@ -2457,9 +2457,19 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             used=(int(core_row['up'])+int(core_row['down'])) if core_row else (int(row['last_up'])+int(row['last_down']))
             total=max(0,int(client.get('totalGB',0) or 0))
             expiry=max(0,int(client.get('expiryTime',0) or 0)//1000)
+            activation_pending=False;duration_days=0
+            if not expiry:
+                with store.lock:
+                    order=store.db.execute("""SELECT o.status,o.duration_days,o.activation_mode
+                      FROM commerce_orders o JOIN clients c ON c.id=o.client_id AND c.owner=o.owner
+                      WHERE o.client_id=? AND o.status IN ('provisioned','provisioned_waiting_activation')
+                      ORDER BY o.updated_at DESC,o.created_at DESC LIMIT 1""",(row['email'],)).fetchone()
+                if order and order['status']=='provisioned_waiting_activation' and order['activation_mode']=='first_connection':
+                    activation_pending=True;duration_days=max(1,int(order['duration_days']))
             public_url=config.public_origin.rstrip('/')+str(sub.get('path','/sub'))+'/'+public_token
             portal_data={'title':sub.get('profile_title','DARK XRAY'),'client':row['email'],'url':public_url,
                          'used':used,'total':total,'expiry':expiry,
+                         'activation_pending':activation_pending,'duration_days':duration_days,
                          'update_hours':int(sub.get('profile_update_interval_hours',6)),
                          'announce':sub.get('announce',''),'support_url':sub.get('support_url','')}
             safe=json.dumps(portal_data,ensure_ascii=False,separators=(',',':')).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
