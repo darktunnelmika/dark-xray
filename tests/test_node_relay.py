@@ -185,6 +185,9 @@ def test_reseller_cannot_read_or_mutate_exits(relay_env, monkeypatch):
     env, _, _ = relay_env; c = env[-1]
     auth = env[3]; original = auth.current
     monkeypatch.setattr(auth, 'current', lambda *a, **kw: replace(original(*a, **kw), actor=Actor('seller', 'reseller', {})))
+    assert c.get('/api/swap').status_code == 403
+    assert c.post('/api/nodes/nl/exits/1/probe').status_code == 403
+    assert c.delete('/api/nodes/nl/exits/1').status_code == 403
     assert c.get('/api/nodes/nl/exits').status_code == 403
     assert c.post('/api/nodes/nl/exits/1', json={'enabled': True}).status_code == 403
 
@@ -268,6 +271,68 @@ def test_bridge_terminates_before_exit_nodes_own_customer_route(relay_env):
     exit_index = next(i for i,r in enumerate(rules) if r.get('user') and r['outboundTag'].endswith('-exit'))
     source_index = next(i for i,r in enumerate(rules) if r.get('inboundTag') == ['relay-exit'])
     assert exit_index < source_index
+
+
+def test_swap_workspace_redacts_inbound_secrets_and_is_owner_only(relay_env):
+    state, _, relay = relay_env; configured(relay_env)
+    c=state[-1]; response=c.get('/api/swap')
+    assert response.status_code==200
+    assert len(response.json()['routes'])==1
+    assert 'privateKey' not in response.text and 'credential_enc' not in response.text
+    assert 'identity' not in response.text
+    c.post('/api/auth/logout')
+    assert c.get('/api/swap').status_code==401
+
+
+def test_swap_probe_does_not_enable_and_returns_only_sanitized_observation(relay_env, monkeypatch):
+    state,nodes,relay=relay_env; configured(relay_env)
+    called=[]
+    monkeypatch.setattr(nodes,'outbound_probe',lambda *a,**k: called.append(a) or {'probe':{
+        'success':True,'delayMs':23,'egress':{'ip':'203.0.113.5','country':'DE'},'credential':'never return'}})
+    with pytest.raises(PolicyError,match='Enable and synchronize'): relay.probe('nl',1)
+    assert not called and not relay.get('nl',1)['enabled']
+    relay.toggle('nl',1,True,lambda n:{'desired_state_applied':True})
+    monkeypatch.setattr(nodes,'desired_state',lambda *a,**k:{'revision':2,'pending':False})
+    result=state[-1].post('/api/nodes/nl/exits/1/probe')
+    assert result.status_code==200,result.text
+    assert result.json()['exitIp']=='203.0.113.5' and result.json()['productionTrafficMutation'] is False
+    assert 'credential' not in result.text
+    assert called==[('nl',relay._tag(relay.get('nl',1)))]
+    assert relay.last_probe('nl',1)['success'] is True
+    with pytest.raises(PolicyError,match='ten seconds'):relay.probe('nl',1)
+    relay.toggle('nl',1,False,lambda n:{'desired_state_applied':True})
+    relay.configure('nl',1,'am',2)
+    assert relay.last_probe('nl',1) is None
+
+
+def test_delete_requires_disabled_source_and_exit_removal_ack(relay_env):
+    state,_,relay=relay_env; configured(relay_env)
+    relay.toggle('nl',1,True,lambda n:{'desired_state_applied':True})
+    with pytest.raises(PolicyError,match='Disable and synchronize'):relay.delete('nl',1,lambda n:{})
+    relay.toggle('nl',1,False,lambda n:{'desired_state_applied':True})
+    before=relay.get('nl',1)
+    def missing_ack(n):
+        assert n=='de'
+        payload=desired(state[-1],n)
+        assert not any(c['sourceEmail']==before['identity'] for b in payload['assignments'] for c in b['clients'])
+        assert not any(o['tag'].startswith('dark-relay-') for o in payload['sections']['outbounds'])
+        return {'desired_state_applied':False}
+    with pytest.raises(PolicyError,match='removal pending'):relay.delete('nl',1,missing_ack)
+    assert relay.get('nl',1)['phase']=='deleting'
+    with pytest.raises(PolicyError,match='Finish deleting'):relay.toggle('nl',1,True,lambda n:{})
+    assert relay.delete('nl',1,lambda n:{'desired_state_applied':True})=={'deleted':True}
+    assert not relay.rows()
+
+
+def test_swap_probe_transport_error_is_stored_without_secret(relay_env,monkeypatch):
+    _,nodes,relay=relay_env;configured(relay_env)
+    relay.toggle('nl',1,True,lambda n:{'desired_state_applied':True})
+    monkeypatch.setattr(nodes,'desired_state',lambda *a,**k:{'revision':1,'pending':False})
+    def fail(*a,**k):raise RuntimeError('sensitive remote body')
+    monkeypatch.setattr(nodes,'outbound_probe',fail)
+    result=relay.probe('nl',1)
+    assert result['success'] is False and result['error']=='Node probe unavailable'
+    assert 'sensitive' not in json.dumps(result)
 
 
 def test_active_references_protected_through_upsert_and_deployment_api(relay_env):

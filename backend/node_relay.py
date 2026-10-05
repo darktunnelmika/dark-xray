@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import ipaddress
+import math
 import threading
 import time
 import uuid
@@ -31,6 +33,9 @@ class NodeRelay:
                 enabled INTEGER NOT NULL DEFAULT 0, phase TEXT NOT NULL DEFAULT 'disabled',
                 updated_at REAL NOT NULL,
                 PRIMARY KEY(source_node,source_inbound))''')
+            db.execute('''CREATE TABLE IF NOT EXISTS node_relay_probes (
+                source_node TEXT NOT NULL, source_inbound INTEGER NOT NULL,
+                body TEXT NOT NULL, PRIMARY KEY(source_node,source_inbound))''')
 
     def rows(self):
         with self.store.lock:
@@ -120,6 +125,7 @@ class NodeRelay:
             identity = old['identity'] if old else '_dark_relay.' + uuid.uuid4().hex
             credential = old['credential_enc'] if old else self.cipher.encrypt(str(uuid.uuid4()).encode()).decode()
             with self.store.transaction() as db:
+                db.execute('DELETE FROM node_relay_probes WHERE source_node=? AND source_inbound=?', (source, inbound))
                 db.execute('''INSERT INTO node_relays VALUES (?,?,?,?,?,?,0,'disabled',?)
                     ON CONFLICT(source_node,source_inbound) DO UPDATE SET
                     exit_node=excluded.exit_node,exit_inbound=excluded.exit_inbound,updated_at=excluded.updated_at''',
@@ -134,6 +140,7 @@ class NodeRelay:
     def toggle(self, source, inbound, enabled, synchronize):
         with self.lock:
             row = self.get(source, inbound)
+            if row['phase'] == 'deleting': raise PolicyError('Finish deleting this route before changing it')
             if enabled:
                 if row['phase'] == 'disabling': raise PolicyError('Finish synchronizing disable before enabling')
                 self.validate(row)
@@ -154,6 +161,56 @@ class NodeRelay:
             self._state(source, inbound, enabled, 'enabled' if enabled else 'disabled')
             return self.public(self.get(source, inbound))
 
+    def delete(self, source, inbound, synchronize):
+        with self.lock:
+            row = self.get(source, inbound)
+            if row['enabled'] or row['phase'] not in ('disabled', 'deleting'):
+                raise PolicyError('Disable and synchronize the source before deleting its route')
+            self._state(source, inbound, False, 'deleting')
+            result = synchronize(row['exit_node'])
+            if not result.get('desired_state_applied') or result.get('queued'):
+                raise PolicyError('Exit credential removal pending; retry delete to confirm')
+            with self.store.transaction() as db:
+                db.execute('DELETE FROM node_relay_probes WHERE source_node=? AND source_inbound=?', (source, inbound))
+                db.execute('DELETE FROM node_relays WHERE source_node=? AND source_inbound=?', (source, inbound))
+            return {'deleted': True}
+
+    def probe(self, source, inbound):
+        import json
+        with self.lock:
+            row = self.get(source, inbound)
+            if not row['enabled'] or row['phase'] != 'enabled':
+                raise PolicyError('Enable and synchronize the route before testing; testing never enables it automatically')
+            self.validate(row)
+            state = self.nodes.desired_state(source, include_payload=False)
+            if not state.get('revision') or state.get('pending'):
+                raise PolicyError('Source configuration is pending; synchronize before testing')
+            previous = self.last_probe(source, inbound)
+            if previous and time.time() - previous['checkedAt'] < 10:
+                raise PolicyError('Wait ten seconds before testing this route again')
+            try:
+                raw = self.nodes.outbound_probe(source, self._tag(row), attempts=2, timeout_seconds=5)['probe']
+                ip = str(raw.get('egress', {}).get('ip', ''))
+                try: ip = str(ipaddress.ip_address(ip))
+                except ValueError: ip = ''
+                delay = raw.get('delayMs')
+                delay = delay if type(delay) in (float, int) and math.isfinite(delay) and delay >= 0 else None
+                result = {'success': raw.get('success') is True, 'exitIp': ip, 'delayMs': delay,
+                          'error': '' if raw.get('success') is True else 'Encrypted exit probe failed'}
+            except Exception:
+                result = {'success': False, 'exitIp': '', 'delayMs': None, 'error': 'Node probe unavailable'}
+            result.update(checkedAt=time.time(), productionTrafficMutation=False,
+                          scope='source-to-exit; does not test the Iran tunnel')
+            with self.store.transaction() as db:
+                db.execute('INSERT OR REPLACE INTO node_relay_probes VALUES (?,?,?)', (source, inbound, json.dumps(result)))
+            return result
+
+    def last_probe(self, source, inbound):
+        import json
+        with self.store.lock:
+            row = self.store.db.execute('SELECT body FROM node_relay_probes WHERE source_node=? AND source_inbound=?', (source, inbound)).fetchone()
+        return json.loads(row[0]) if row else None
+
     def check_node_change(self, node_id, *, enabled=True, inbound_ids=None, deleting=False, origin=None):
         for row in self.rows():
             if not row['enabled'] and row['phase'] == 'disabled': continue
@@ -166,6 +223,7 @@ class NodeRelay:
     def enrich_bundles(self, node_id, bundles):
         by_id = {b['sourceInboundId']: b for b in bundles}
         for row in self.rows():
+            if row['phase'] == 'deleting': continue
             if row['exit_node'] != node_id or row['exit_inbound'] not in by_id: continue
             # Only the exit receives a synthetic credential, never a managed
             # customer, quota allocation, subscription or commerce order.
@@ -212,7 +270,7 @@ class NodeRelay:
             return scoped
         for row in relevant:
             tag = self._tag(row)
-            if row['exit_node'] == node_id:
+            if row['exit_node'] == node_id and row['phase'] != 'deleting':
                 try: self.destination(row)
                 except PolicyError: continue
                 outbounds.append({'tag': tag + '-exit', 'protocol': 'freedom', 'settings': {}})
