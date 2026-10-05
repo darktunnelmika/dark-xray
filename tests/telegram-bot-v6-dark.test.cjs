@@ -9,8 +9,8 @@ test('Bot V6 customer terminal exposes live branded home and clean primary actio
   assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
 });
 
-test('Bot V6 shop is category driven and shows compact product economics',()=>{
-  for(const token of ['DARK XRAY / SECURE MARKET','shopcat:','shopall','_price_brief','از {money','بازگشت به فروشگاه'])
+test('Bot V7 shop is guided through category, duration, plan, server and invoice',()=>{
+  for(const token of ['DARK MARKET','shopcat:','shopdur:','shopinb:','مرحله ۱ از ۵','مرحله ۲ از ۵','مرحله ۳ از ۵','مرحله ۴ از ۵','مرحله ۵ از ۵','_price_brief','shopall'])
     assert.ok(customer.includes(token),token);
 });
 
@@ -173,4 +173,16 @@ test('Bot V6 Final Closeout preserves compact primary menus',()=>{
   assert.doesNotMatch(runtime,/customer_app='◈ DARK Mini App'/);
   assert.match(runtime,/\['📈 رشد و فروش','🎫 پشتیبانی'\]/);
   assert.match(runtime,/'text':'فروشگاه'/);
+});
+
+
+test('Bot V7 keeps representative admin menus compact and owner-only backup guarded',()=>{
+  for(const token of ['🛒 فروش','⚙️ مدیریت','admin_sales_menu','admin_management_menu'])
+    assert.ok(runtime.includes(token),token);
+  assert.match(runtime,/text=='💾 بکاپ'.*owner_role\(\)=='owner'/);
+});
+
+test('Bot V7 simple plan wizard exposes unlimited IP without removing numeric choices',()=>{
+  for(const token of ["'callback_data':'stsip:0'","'callback_data':'stsip:1'","'callback_data':'stsip:5'","0 = unlimited"])
+    assert.ok(runtime.includes(token),token);
 });
