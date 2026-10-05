@@ -44,6 +44,7 @@ from warp_cloudflare import WarpRegistrationError,register_cloudflare_warp,valid
 from warp_paths import warp_endpoint_candidates, warp_scan_results
 from traffic_matrix import POLICIES as MATRIX_POLICIES,ACCESS_PATHS as MATRIX_ACCESS_PATHS,policy_parts as matrix_policy_parts
 from nodes import NodeRegistry,token_digest
+from node_relay import NodeRelay
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -57,6 +58,11 @@ class UnbanIP(BaseModel):
     ip:str=Field(min_length=3,max_length=80)
 
 class Model(BaseModel): model_config=ConfigDict(extra='forbid',strict=True)
+class RelayBody(Model):
+    exitNodeId:str=Field(min_length=1,max_length=128)
+    exitInboundId:StrictInt=Field(ge=1)
+class RelayToggle(Model):
+    enabled:bool
 class Login(Model):
     username:str=Field(min_length=1,max_length=128)
     password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
@@ -266,6 +272,7 @@ class NodeTokenCreate(Model):
 
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
+    node_relays=NodeRelay(store,auth.cipher,nodes,engine)
     from licensing import LicenseClient
     license_client=LicenseClient(Path(store.path).resolve().parent if store.path!=':memory:' else Path('/tmp/dark-xray-test-license'))
     from node_replacement import NodeReplacement
@@ -1057,7 +1064,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 raw={k:client[k] for k in ('id','password','flow','encryption','security','enable') if k in client}
                 clients.append({'sourceEmail':client['email'],'client':raw})
             bundles.append({'sourceInboundId':source,'inbound':inbound,'clients':clients})
-        return bundles
+        return node_relays.enrich_bundles(node_id,bundles)
 
     def node_managed_files(bundles:list[dict])->list[dict]:
         files={};path_ids={}
@@ -1113,6 +1120,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         sections={name:engine.section(name) for name in ('outbounds','routing','dns','policy','observatory','ipguard')}
         sections['outbounds']=engine.runtime_outbounds('node:'+str(node_id))
         sections['routing']=engine.routing_for_scope('node:'+str(node_id),sections['routing'])
+        sections=node_relays.compile(node_id,sections)
         # Local and Node packet-source trust are separate boundaries. A Central
         # host behind Backhaul may have to remain Observe while direct-source
         # Nodes enforce through their own root-owned broker. Never send the
@@ -1544,11 +1552,38 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     from node_credentials import install_hub_credentials
     install_hub_credentials(app,nodes,owner,writable,manager.audit)
 
+    @app.get('/api/nodes/{node_id}/exits')
+    def remote_node_exits(node_id:str,p:Principal=Depends(owner)):
+        return node_relays.list(node_id)
+
+    @app.put('/api/nodes/{node_id}/exits/{inbound_id}')
+    def remote_node_exit_configure(node_id:str,inbound_id:int,body:RelayBody,p:Principal=Depends(owner)):
+        writable()
+        result=node_relays.configure(node_id,inbound_id,body.exitNodeId,body.exitInboundId)
+        manager.audit(p.actor,p.actor.id,'node.exit.configure',node_id,
+                      'inbound='+str(inbound_id)+'; exit='+body.exitNodeId+'; exit_inbound='+str(body.exitInboundId))
+        return result
+
+    @app.post('/api/nodes/{node_id}/exits/{inbound_id}')
+    def remote_node_exit_toggle(node_id:str,inbound_id:int,body:RelayToggle,p:Principal=Depends(owner)):
+        writable()
+        def synchronize(target):
+            # No legacy fallback: full routing/credential ACK is required.
+            # Traffic accounting remains on the existing monitor/lease path.
+            return nodes.sync_desired_state(target,ensure_node_desired_state(target))
+        result=node_relays.toggle(node_id,inbound_id,body.enabled,synchronize)
+        manager.audit(p.actor,p.actor.id,'node.exit.enable' if body.enabled else 'node.exit.disable',node_id,
+                      'inbound='+str(inbound_id))
+        return result
+
+    app.state.node_relays=node_relays
+
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
         writable()
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
+        node_relays.check_node_change(body.id,enabled=body.enabled,inbound_ids=body.inboundIds)
         result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
         manager.audit(p.actor,p.actor.id,'node.create',body.id)
@@ -1572,6 +1607,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             manager.audit(p.actor,p.actor.id,'node.credential.rotate',node_id,'phase='+result['phase'])
             return result
         if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
+        node_relays.check_node_change(node_id,enabled=body.enabled,inbound_ids=body.inboundIds)
         token=nodes.get(node_id,secret=True)['token']
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
@@ -1581,6 +1617,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.delete('/api/nodes/{node_id}')
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
         writable()
+        node_relays.check_node_change(node_id,deleting=True)
         refs=[h for h in engine.section('hosts') if h.get('runtime')=='node:'+node_id]
         if refs:raise HTTPException(409,'Move or delete Public Endpoints that use this Node before deleting it')
         result=nodes.delete(node_id)
@@ -1682,6 +1719,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         requested=list(dict.fromkeys(str(x) for x in body.nodeIds))
         if any(not NAME_RE.fullmatch(x) for x in requested) or not set(requested)<=known:
             raise HTTPException(400,'Unknown node deployment target')
+        for node in fleet:
+            remaining=[i for i in node['inboundIds'] if i!=inbound_id]
+            if node['id'] in requested:remaining.append(inbound_id)
+            node_relays.check_node_change(node['id'],inbound_ids=remaining)
         allowed_runtimes=({'local'} if body.local else set())|{'node:'+x for x in requested}
         tunnel_ports={}
         for runtime,port in body.tunnelPorts.items():

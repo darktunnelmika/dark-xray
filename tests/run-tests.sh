@@ -42,6 +42,7 @@ python -m pytest tests/test_node_pairing.py tests/test_pair_loss_regression.py -
 python -m pytest tests/test_node_pairing_cancellation.py -q --junitxml=qa/junit/node-pairing-cancellation.xml
 python -m pytest tests/test_node_pairing_cancellation_guards.py -q --junitxml=qa/junit/node-pairing-cancellation-guards.xml
 python -m pytest tests/test_nodes_v2.py -q --junitxml=qa/junit/nodes-v2.xml
+python -m pytest tests/test_node_relay.py -q --junitxml=qa/junit/node-relay.xml
 python -m pytest tests/test_node_agent_architecture.py -q --junitxml=qa/junit/node-agent-architecture.xml
 python -m pytest tests/test_traffic_matrix.py tests/test_traffic_matrix_api.py tests/test_traffic_engine_v4.py tests/test_warp_probe_limits.py -q --junitxml=qa/junit/xray-settings-v5.xml
 python -m pytest tests/test_preupdate_node_hardening.py -q --junitxml=qa/junit/preupdate-node-hardening.xml

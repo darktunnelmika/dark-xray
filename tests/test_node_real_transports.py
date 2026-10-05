@@ -375,6 +375,56 @@ def test_generated_transport_routes_accounts_rejects_wrong_user_and_disables_onl
         duplicate_counter_idempotent=True,unchanged_sync_preserved_pids=True,charged_bytes=before[0])
 
 
+@pytest.mark.parametrize('transport_fleet',[
+    Case('vless','grpc','reality'), Case('vless','tcp','reality','xtls-rprx-vision')
+],indirect=True,ids=lambda c:c.label)
+def test_selected_node_exit_real_relay_single_charge_failure_and_disable(transport_fleet):
+    f=transport_fleet;source,exit_node=f.agents
+    relay=f.http.app.state.node_relays
+    # Disposable listeners only. No resolver repair of a compiled outbound:
+    # the Hub's selected data address is the actual loopback test destination.
+    ib=f.engine.inbound(exit_node.iid);ib['listen']='0.0.0.0'
+    f.engine.save_inbound(ib,exit_node.iid)
+    with f.store.transaction() as db:
+        db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',('127.0.0.1',exit_node.id))
+    path=f'/api/nodes/{source.id}/exits/{source.iid}'
+    saved=f.api(path,{'exitNodeId':exit_node.id,'exitInboundId':exit_node.iid},'PUT')
+    assert saved['enabled'] is False
+    identity=stable_identity(f)
+    before=meter(f)
+    enabled=f.api(path,{'enabled':True})
+    assert enabled['phase']=='enabled'
+    transfer(f.clients[0].port,f.target)
+    after=meter(f);assert after[0]>before[0] and after[2]==after[0]
+    row=relay.get(source.id,source.iid)
+    snapshot,_=f.reg._request(exit_node.id,'/node/api/mirrors/traffic')
+    bridge=next(x for x in snapshot['items'] if x['sourceEmail']==row['identity'])
+    assert bridge['up']>0 and bridge['down']>0
+    before_exit=dict((n,up+down) for n,up,down in before[1])
+    after_exit=dict((n,up+down) for n,up,down in after[1])
+    assert after_exit[exit_node.id]==before_exit[exit_node.id], 'Relay charged as destination customer'
+    assert meter(f)==after, 'Relay counters charged twice'
+    assert stable_identity(f)==identity
+    # A direct path to this same HTTP target works from ingress. Stopping the
+    # selected exit must nevertheless make ingress fail, without fallback.
+    exit_node.engine.command('stop')
+    transfer(f.clients[0].port,f.target,allowed=False)
+    disabled=f.api(path,{'enabled':False})
+    assert disabled['phase']=='disabled'
+    transfer(f.clients[0].port,f.target)
+    # Restore exit for the normal fixture teardown and verify manual customer
+    # disable still blocks the relay ingress while control customer works.
+    exit_node.engine.command('start')
+    f.api(path,{'enabled':True})
+    f.api('/api/clients/'+EMAIL+'/action',{'action':'disable'})
+    f.api('/api/nodes/'+source.id+'/sync',{})
+    transfer(f.clients[0].port,f.target,allowed=False)
+    transfer(f.controls[0].port,f.target)
+    f.evidence.update(selected_exit_relay_transferred=True,bridge_traffic_not_customer_billed=True,
+        no_direct_fallback_on_exit_failure=True,disable_restored_previous_routing=True,
+        customer_identity_preserved=True,relay_customer_disable_enforced=True)
+
+
 @pytest.mark.parametrize('fault',['untrusted-ca','wrong-sni','wrong-path'])
 @pytest.mark.parametrize('transport_fleet',[Case('vless','ws','tls')],indirect=True,ids=lambda c:c.label)
 def test_tls_and_websocket_negative_controls(transport_fleet,fault):
