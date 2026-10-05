@@ -415,7 +415,10 @@ class BotWorker(CustomerBotFeatures):
         if text=='📈 رشد و فروش' and self.is_admin(user_id):self.admin_growth_center(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
         if text=='📣 اعلان‌ها' and self.is_admin(user_id):self.admin_broadcast_menu(chat_id);return
-        if text=='💾 بکاپ' and self.is_admin(user_id) and self.owner_role()=='owner':self.admin_backup(chat_id);return
+        if text=='💾 بکاپ' and self.is_admin(user_id):
+            if self.owner_role()=='owner':self.admin_backup(chat_id)
+            else:self.api.send(chat_id,'بکاپ پنل اصلی فقط در اختیار مالک پنل است.',self.main_keyboard(True))
+            return
         if text=='⚙️ تنظیمات ربات' and self.is_admin(user_id):self.admin_settings(chat_id);return
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representatives(chat_id);return
@@ -1730,6 +1733,9 @@ class BotWorker(CustomerBotFeatures):
                       {'inline_keyboard':kb})
 
     def admin_backup(self,chat_id:int):
+        if self.owner_role()!='owner':
+            self.api.send(chat_id,'بکاپ پنل اصلی فقط در اختیار مالک پنل است.',self.main_keyboard(True))
+            return
         with self.runtime.store.lock:
             row=self.runtime.store.db.execute("""SELECT at,action,detail FROM live_audit
               WHERE action IN ('backup.full','backup.telegram_sent') ORDER BY id DESC LIMIT 1""").fetchone()
