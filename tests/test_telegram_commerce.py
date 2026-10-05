@@ -6,7 +6,7 @@ from server import make_app
 from telegram_runtime import BotWorker
 from telegram_forum import FORUM_REQUEST_ID,TOPICS
 from test_standalone import env,create
-from test_representatives_v2 import create_inbound
+from test_representatives_v2 import create_inbound,inbound_payload
 
 def product_payload(product_id='turbo',**overrides):
     body={
@@ -128,8 +128,8 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     owner_worker=BotWorker(runtime,'dark',token,'mark-owner')
     try:
         owner_text=' '.join(x['text'] for row in owner_worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '➕ ساخت نماینده' in owner_text and '🤝 نمایندگان' in owner_text
-        assert '💾 بکاپ' in owner_text
+        assert '🤝 نمایندگان' in owner_text and '🛒 فروش' in owner_text and '⚙️ مدیریت' in owner_text
+        assert '💾 بکاپ' not in owner_text
     finally:
         owner_worker.api.close()
     assert c.put('/api/owners/seller',json={
@@ -142,9 +142,8 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     seller_worker=BotWorker(runtime,'seller',token,'mark-seller')
     try:
         seller_text=' '.join(x['text'] for row in seller_worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '➕ ساخت نماینده' not in seller_text and '🤝 نمایندگان' not in seller_text
-        assert '💾 بکاپ' not in seller_text
-        assert '👥 کاربران' in seller_text
+        assert '➕ ساخت نماینده' not in seller_text and '🤝 نمایندگان' not in seller_text and '💾 بکاپ' not in seller_text
+        assert '👥 کاربران' in seller_text and '🛒 فروش' in seller_text and '⚙️ مدیریت' in seller_text
     finally:
         seller_worker.api.close()
 
@@ -312,7 +311,10 @@ def test_manual_payment_wizard_is_managed_inside_admin_bot(env):
     worker.api.send=lambda chat_id,text,reply_markup=None: sent.append((chat_id,text,reply_markup))
     try:
         menu=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '💳 پرداخت دستی' in menu and '💳 درگاه‌ها' not in menu
+        assert '🛒 فروش' in menu and '💳 پرداخت دستی' not in menu and '💳 درگاه‌ها' not in menu
+        worker.admin_sales_menu(admin_id)
+        sales_callbacks=[b.get('callback_data') for row in sent[-1][2]['inline_keyboard'] for b in row]
+        assert 'ops_payments' in sales_callbacks
         worker.admin_gateways(admin_id)
         assert sent[-1][2]['inline_keyboard'][0][0]['callback_data']=='paycfg'
         worker.start_payment_setup(admin_id,admin_id)
@@ -377,11 +379,11 @@ def test_admin_v2_keyboard_exposes_daily_management_centers(env):
         'enabled':False,'bot_token':token,'admin_telegram_id':admin_id}).status_code==200
     worker=BotWorker(c.app.state.telegram_runtime,'dark',token,'admin-v2-test')
     try:
-        text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
-        for label in ('🏠 داشبورد','👥 کاربران','📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی',
-                      '📈 رشد و فروش','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات','🤝 نمایندگان'):
-            assert label in text
-        assert '📊 گزارش‌ها' not in text
+        labels=[x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row]
+        for label in ('🏠 داشبورد','👥 کاربران','🛒 فروش','🎫 پشتیبانی','🤝 نمایندگان','📊 گزارش‌ها','📣 اعلان‌ها','⚙️ مدیریت'):
+            assert label in labels
+        for hidden in ('📦 سرویس‌ها','🧾 سفارش‌ها','💳 پرداخت دستی','📈 رشد و فروش','📱 Mini App','💾 بکاپ','⚙️ تنظیمات ربات'):
+            assert hidden not in labels
     finally:
         worker.api.close()
 
@@ -538,10 +540,13 @@ def test_service_manager_v3_refuses_volume_add_to_unlimited(env):
 
 def test_admin_v3_keyboard_exposes_store_manager(env):
     _,_,_,_,c=env
-    worker,_=_bot_worker(c,992105)
+    worker,sent=_bot_worker(c,992105)
     try:
         text=' '.join(x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '🛠 مدیریت فروشگاه' in text
+        assert '🛒 فروش' in text and '🛠 مدیریت فروشگاه' not in text
+        worker.admin_sales_menu(992105)
+        callbacks=[b.get('callback_data') for row in sent[-1][2]['inline_keyboard'] for b in row]
+        assert 'sthome' in callbacks
         worker.admin_dashboard(992105)
     finally:
         worker.api.close()
@@ -969,8 +974,8 @@ def test_bot_v6_final_closeout_navigation_owner_rep_customer(env):
             assert 'uhome' in callbacks(markup)
 
         owner_labels=[x['text'] for row in worker.main_keyboard(True)['keyboard'] for x in row]
-        assert '📈 رشد و فروش' in owner_labels
-        assert '📊 گزارش‌ها' not in owner_labels
+        assert '🛒 فروش' in owner_labels and '📊 گزارش‌ها' in owner_labels and '⚙️ مدیریت' in owner_labels
+        assert '📈 رشد و فروش' not in owner_labels
         assert '◈ DARK Mini App' not in owner_labels
     finally:
         worker.api.close()
@@ -991,8 +996,8 @@ def test_bot_v6_final_closeout_navigation_owner_rep_customer(env):
         rep.api.send=lambda chat_id,text,reply_markup=None: rep_sent.append((chat_id,text,reply_markup))
         try:
             labels=[x['text'] for row in rep.main_keyboard(True)['keyboard'] for x in row]
-            assert '➕ ساخت نماینده' not in labels and '🤝 نمایندگان' not in labels
-            assert '📈 رشد و فروش' in labels
+            assert '➕ ساخت نماینده' not in labels and '🤝 نمایندگان' not in labels and '💾 بکاپ' not in labels
+            assert '🛒 فروش' in labels and '📊 گزارش‌ها' in labels and '⚙️ مدیریت' in labels
             rep.admin_store(998399)
             assert 'ahome' in callbacks(rep_sent[-1][2])
         finally:
@@ -1033,10 +1038,13 @@ def test_owner_customer_menu_adds_representative_marketplace(env):
         labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
         assert labels==[
             '⚡ خرید سرویس','📦 سرویس‌های من',
-            '🔄 تمدید سرویس','💳 کیف پول',
-            '🎫 پشتیبانی','🎁 دعوت دوستان',
-            '🏪 پنل نمایندگی',
+            '💳 کیف پول','🎫 پشتیبانی','☰ بیشتر',
         ]
+        sent=[]
+        worker.api.send=lambda chat_id,text,reply_markup=None:sent.append((text,reply_markup))
+        worker.customer_more_menu(993001,993001)
+        more=[b.get('callback_data') for row in sent[-1][1]['inline_keyboard'] for b in row]
+        assert 'rmmarket' in more and 'more_renew' in more
     finally:
         worker.api.close()
 
@@ -1245,8 +1253,7 @@ def test_representative_panel_has_independent_bot_customer_wallet_store_and_supp
             customer_labels=[x['text'] for row in worker.main_keyboard(False)['keyboard'] for x in row]
             assert customer_labels==[
                 '⚡ خرید سرویس','📦 سرویس‌های من',
-                '🔄 تمدید سرویس','💳 کیف پول',
-                '🎫 پشتیبانی','🎁 دعوت دوستان',
+                '💳 کیف پول','🎫 پشتیبانی','☰ بیشتر',
             ]
         finally:
             worker.api.close()
@@ -1349,7 +1356,7 @@ def test_simple_store_v6_accepts_manual_days_volume_and_ip(env):
 def test_simple_store_v6_rejects_manual_values_outside_safe_ranges(env):
     store,engine,manager,auth,c=env;inbound_id=create_inbound(c)
     base={'name':'BAD V6','plan_type':'volume','price_minor':1,'duration_days':30,'volume_gb':10,'ip_limit':1,'inbound_ids':[inbound_id]}
-    for key,value in [('duration_days',0),('duration_days',3651),('volume_gb',1000001),('ip_limit',0),('ip_limit',1001)]:
+    for key,value in [('duration_days',0),('duration_days',3651),('volume_gb',1000001),('ip_limit',-1),('ip_limit',1001)]:
         body=dict(base);body[key]=value
         assert c.post('/api/commerce/simple-plans',json=body).status_code in (400,422)
 
@@ -1429,3 +1436,75 @@ def test_bot_settings_exposes_owner_scoped_customer_miniapp_setup(env):
         assert 'owner=dark' not in url
     finally:
         seller.api.close()
+
+
+def test_simple_plan_supports_explicit_unlimited_ip_zero(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    r=c.post('/api/commerce/simple-plans',json={
+        'name':'Volume Unlimited IP','plan_type':'volume','price_minor':150000,
+        'duration_days':30,'volume_gb':25,'ip_limit':0,'inbound_ids':[inbound_id],
+        'published':True,
+    })
+    assert r.status_code==201,r.text
+    doc=r.json();price=doc['prices'][0]
+    assert price['ip_limit']==0 and price['device_limit']==0
+    runtime=c.app.state.telegram_runtime
+    order=runtime.commerce.create_order('dark',991001,'buyer',doc['id'],price['id'])
+    with store.lock:
+        row=store.db.execute("SELECT ip_limit FROM commerce_orders WHERE id=?",(order['id'],)).fetchone()
+    assert row['ip_limit']==0
+
+
+def test_guided_checkout_can_narrow_multi_server_plan_to_selected_inbound(env):
+    store,_,_,_,c=env
+    first=create_inbound(c)
+    second_payload=inbound_payload(25102);second_payload['tag']='rep-v2-second';second_payload['remark']='REP V2 SECOND'
+    second_response=c.post('/api/inbounds',json=second_payload)
+    assert second_response.status_code==200,second_response.text
+    second=second_response.json()['id']
+    r=c.post('/api/commerce/simple-plans',json={
+        'name':'Pick Server','plan_type':'volume','price_minor':200000,
+        'duration_days':60,'volume_gb':40,'ip_limit':2,'inbound_ids':[first,second],
+        'published':True,
+    })
+    assert r.status_code==201,r.text
+    doc=r.json();price=doc['prices'][0]
+    runtime=c.app.state.telegram_runtime
+    order=runtime.commerce.create_order('dark',991002,'buyer',doc['id'],price['id'],selected_inbound_id=second)
+    with store.lock:
+        row=store.db.execute("SELECT inbound_ids,primary_inbound_id FROM commerce_orders WHERE id=?",(order['id'],)).fetchone()
+    assert json.loads(row['inbound_ids'])==[second]
+    assert row['primary_inbound_id']==second
+
+
+def test_representative_bot_can_delete_unused_store_plan(env):
+    store,engine,manager,auth,c=env
+    inbound_id=create_inbound(c)
+    assert c.put('/api/owners/sellerdelete',json={
+        'name':'Seller Delete','allowed':[inbound_id],'volume_credit_bytes':100*1024**3,
+        'unlimited_credit':1,'max_clients':20
+    }).status_code==200
+    assert c.post('/api/admins',json={
+        'username':'sellerdelete','password':'SellerDelete88','role':'reseller'}).status_code==200
+    token,p=auth.login('sellerdelete','SellerDelete88','','127.0.0.8',3600,'delete-plan-test')
+    with TestClient(make_app(manager,auth,background=False),base_url=engine.config.public_origin) as seller:
+        seller.cookies.set('dark_session',token);seller.headers['X-Dark-CSRF']=p.csrf
+        plan=seller.post('/api/commerce/simple-plans',json={
+            'name':'Disposable Plan','plan_type':'volume','price_minor':120000,
+            'duration_days':30,'volume_gb':20,'ip_limit':0,'inbound_ids':[inbound_id],
+            'published':True,
+        })
+        assert plan.status_code==201,plan.text
+        doc=plan.json()
+        worker=BotWorker(seller.app.state.telegram_runtime,'sellerdelete',
+                         '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','delete-plan')
+        sent=[];worker.api.send=lambda chat_id,text,reply_markup=None:sent.append((text,reply_markup))
+        try:
+            worker.delete_or_archive_product(700001,int(doc['row_id']))
+        finally:
+            worker.api.close()
+        assert seller.get('/api/commerce/products').json()==[]
+        assert any('کامل حذف شد' in text for text,_ in sent)
+        with store.lock:
+            assert store.db.execute("SELECT COUNT(*) FROM commerce_products WHERE owner='sellerdelete'").fetchone()[0]==0

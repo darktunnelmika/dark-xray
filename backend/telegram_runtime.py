@@ -204,27 +204,54 @@ class BotWorker(CustomerBotFeatures):
         ops=getattr(self.runtime,'ops',None)
         rows=[
             ['⚡ خرید سرویس','📦 سرویس‌های من'],
-            ['🔄 تمدید سرویس','💳 کیف پول'],
-            ['🎫 پشتیبانی','🎁 دعوت دوستان'],
+            ['💳 کیف پول','🎫 پشتیبانی'],
+            ['☰ بیشتر'],
         ]
-        if self.owner_role()=='owner':
-            rows.append(['🏪 پنل نمایندگی'])
         if admin:
-            rows=[
-                ['🏠 داشبورد','👥 کاربران'],
-                ['📦 سرویس‌ها','🧾 سفارش‌ها'],
-                ['🛠 مدیریت فروشگاه','💳 پرداخت دستی'],
-                ['📈 رشد و فروش','🎫 پشتیبانی'],
-                ['📣 اعلان‌ها','📱 Mini App'],
-                ['⚙️ تنظیمات ربات'],
-            ]
-            if self.owner_role()=='owner':
-                rows[-1].append('💾 بکاپ')
-                rows += [['🤝 نمایندگان','➕ ساخت نماینده']]
-            rows += [['🛍 خرید اشتراک','📦 سرویس‌های من']]
+            if self.owner_role()=='reseller':
+                rows=[
+                    ['🏠 داشبورد','👥 کاربران'],
+                    ['🛒 فروش','🎫 پشتیبانی'],
+                    ['📊 گزارش‌ها','⚙️ مدیریت'],
+                    ['🛍 خرید اشتراک','📦 سرویس‌های من'],
+                ]
+            else:
+                rows=[
+                    ['🏠 داشبورد','👥 کاربران'],
+                    ['🛒 فروش','🎫 پشتیبانی'],
+                    ['🤝 نمایندگان','📊 گزارش‌ها'],
+                    ['📣 اعلان‌ها','⚙️ مدیریت'],
+                    ['🛍 خرید اشتراک','📦 سرویس‌های من'],
+                ]
         def button(x):return x if isinstance(x,dict) else {'text':x}
         return {'keyboard':[[button(x) for x in row] for row in rows],
                 'resize_keyboard':True,'is_persistent':True}
+
+    def admin_sales_menu(self,chat_id:int):
+        kb=[
+            [{'text':'🛠 محصولات و پلن‌ها','callback_data':'sthome'},
+             {'text':'🧾 سفارش‌ها','callback_data':'ordlist:all'}],
+            [{'text':'💳 پرداخت‌ها','callback_data':'ops_payments'},
+             {'text':'📈 رشد و فروش','callback_data':'growth'}],
+        ]
+        if self.owner_role()=='reseller':
+            kb.append([{'text':'📦 سرویس‌ها','callback_data':'ops_attention'}])
+        kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
+        self.api.send(chat_id,'🛒 مرکز فروش\nمحصول، سفارش، پرداخت و عملیات فروش را از اینجا مدیریت کن.',
+                      {'inline_keyboard':kb})
+
+    def admin_management_menu(self,chat_id:int):
+        kb=[
+            [{'text':'⚙️ تنظیمات ربات','callback_data':'botsettings'},
+             {'text':'📱 Mini App','callback_data':'miniappsetup'}],
+            [{'text':'📣 اعلان‌ها','callback_data':'bcmenu'}],
+        ]
+        if self.owner_role()=='owner':
+            kb.append([{'text':'💾 بکاپ پنل','callback_data':'adminbackup'},
+                       {'text':'➕ ساخت نماینده','callback_data':'repcreate'}])
+        kb.append([{'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
+        self.api.send(chat_id,'⚙️ مدیریت ربات\nتنظیمات کم‌استفاده از منوی اصلی جدا شده‌اند.',
+                      {'inline_keyboard':kb})
 
     def send_home(self,chat_id:int,user_id:int):
         admin=self.is_admin(user_id)
@@ -363,6 +390,7 @@ class BotWorker(CustomerBotFeatures):
         if text in ('💰 کیف پول + شارژ','💳 کیف پول'):self.customer_wallet_menu(chat_id,user_id);return
         if low=='/services' or text=='📦 سرویس‌های من':self.services(chat_id,user_id);return
         if text in ('👥 زیرمجموعه‌گیری','🎁 دعوت دوستان'):self.customer_referral_menu(chat_id,user_id);return
+        if text=='☰ بیشتر' and not self.is_admin(user_id):self.customer_more_menu(chat_id,user_id);return
         if text in ('🏪 خرید پنل نمایندگی','🏪 پنل نمایندگی') and self.owner_role()=='owner':
             self.customer_representative_marketplace(chat_id,user_id);return
         if text in ('📱 فروشگاه','◈ DARK Mini App') and not self.is_admin(user_id):
@@ -376,6 +404,8 @@ class BotWorker(CustomerBotFeatures):
             return
         if low=='/status' or text=='📊 وضعیت ربات':self.status_menu(chat_id,user_id);return
         if text=='🏠 داشبورد' and self.is_admin(user_id):self.admin_dashboard(chat_id);return
+        if text=='🛒 فروش' and self.is_admin(user_id):self.admin_sales_menu(chat_id);return
+        if text=='⚙️ مدیریت' and self.is_admin(user_id):self.admin_management_menu(chat_id);return
         if text in ('👥 کاربران','👥 مدیریت کاربران') and self.is_admin(user_id):self.admin_clients(chat_id);return
         if text=='📦 سرویس‌ها' and self.is_admin(user_id):self.admin_services(chat_id);return
         if text=='🧾 سفارش‌ها' and self.is_admin(user_id):self.admin_orders(chat_id);return
@@ -385,7 +415,10 @@ class BotWorker(CustomerBotFeatures):
         if text=='📈 رشد و فروش' and self.is_admin(user_id):self.admin_growth_center(chat_id);return
         if text=='📊 گزارش‌ها' and self.is_admin(user_id):self.admin_reports(chat_id);return
         if text=='📣 اعلان‌ها' and self.is_admin(user_id):self.admin_broadcast_menu(chat_id);return
-        if text=='💾 بکاپ' and self.is_admin(user_id):self.admin_backup(chat_id);return
+        if text=='💾 بکاپ' and self.is_admin(user_id):
+            if self.owner_role()=='owner':self.admin_backup(chat_id)
+            else:self.api.send(chat_id,'بکاپ پنل اصلی فقط در اختیار مالک پنل است.',self.main_keyboard(True))
+            return
         if text=='⚙️ تنظیمات ربات' and self.is_admin(user_id):self.admin_settings(chat_id);return
         if text=='🤝 نمایندگان' and self.is_admin(user_id) and self.owner_role()=='owner':
             self.representatives(chat_id);return
@@ -493,6 +526,13 @@ class BotWorker(CustomerBotFeatures):
                 self.api.send(chat_id,text,{'inline_keyboard':[[{'text':'🪙 رفتن به درگاه پرداخت','url':result['checkout_url']}]]})
             else:self.api.send(chat_id,'این درگاه هنوز Checkout قابل استفاده ندارد؛ روش دیگری را انتخاب کن.')
             return
+        if data=='adminbackup' and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.admin_backup(chat_id);return
+        if data=='repcreate' and self.is_admin(user_id) and self.owner_role()=='owner':
+            self.sessions[user_id]='rep_new_id';self.session_data[user_id]={}
+            self.api.send(chat_id,'🤝 ساخت نماینده · مرحله ۱ از ۴\nشناسه ورود نماینده را بفرست؛ مثال: seller1\nبرای لغو /cancel را بزن.');return
+        if data=='botsettings' and self.is_admin(user_id):
+            self.admin_settings(chat_id);return
         if data=='sthome' and self.is_admin(user_id):
             self.admin_store(chat_id);return
         if data=='stnew' and self.is_admin(user_id):
@@ -933,8 +973,11 @@ class BotWorker(CustomerBotFeatures):
         kb=[]
         for r in rows[:40]:
             state='🟢' if r['active'] and r['visible'] else ('🟡' if r['active'] else '🔴')
-            kb.append([{'text':f"{state} {r['name']} · {r.get('category') or 'General'}"[:62],
-                        'callback_data':'stprod:'+str(r['row_id'])}])
+            kb.append([
+                {'text':f"{state} {r['name']} · {r.get('category') or 'General'}"[:52],
+                 'callback_data':'stprod:'+str(r['row_id'])},
+                {'text':'🗑','callback_data':'stdelete:'+str(r['row_id'])}
+            ])
         kb.append([{'text':'‹ مدیریت فروشگاه','callback_data':'sthome'},
                    {'text':'⌂ داشبورد ربات','callback_data':'ahome'}])
         self.api.send(chat_id,'📦 محصولات فروشگاه · یک محصول را باز کن:',{'inline_keyboard':kb})
@@ -973,7 +1016,7 @@ class BotWorker(CustomerBotFeatures):
             [{'text':'✏️ ویرایش','callback_data':'stedit:'+str(row_id)},
              {'text':'📑 Clone','callback_data':'stclone:'+str(row_id)}],
             [{'text':'👁 Preview مشتری','callback_data':'stpreview:'+str(row_id)},
-             {'text':'🗑 حذف/آرشیو','callback_data':'stdelete:'+str(row_id)}],
+             {'text':('🗑 حذف پلن' if self.owner_role()=='reseller' else '🗑 حذف/آرشیو'),'callback_data':'stdelete:'+str(row_id)}],
             [{'text':('⛔ خاموش' if p['active'] else '✅ روشن'),'callback_data':f"sttoggle:{row_id}:active"},
              {'text':('🙈 مخفی' if p['visible'] else '👁 نمایش'),'callback_data':f"sttoggle:{row_id}:visible"}],
             [{'text':('🔁 تمدید ON' if p.get('renewal_enabled') else '🔁 تمدید OFF'),'callback_data':'strenew:'+str(row_id)},
@@ -1091,17 +1134,29 @@ class BotWorker(CustomerBotFeatures):
         if not 1<=int(volume)<=1_000_000:raise PolicyError('Invalid simple plan volume')
         self.session_data[user_id]['volume_gb']=int(volume);self.simple_plan_ask_ip(chat_id,user_id)
 
+    def _simple_plan_unlimited_ip_allowed(self,user_id:int)->bool:
+        data=self.session_data.get(user_id) or {}
+        if data.get('plan_type')=='volume':return True
+        try:return int(self.runtime.manager.profile(self.owner).get('max_client_ips') or 0)==0
+        except Exception:return self.owner_role()=='owner'
+
     def simple_plan_ask_ip(self,chat_id:int,user_id:int):
         self.sessions[user_id]='store_simple_ip_wait'
-        self.api.send(chat_id,'مرحله 7/8 · محدودیت IP را انتخاب کن:',{'inline_keyboard':[[
-            {'text':'1','callback_data':'stsip:1'},{'text':'2','callback_data':'stsip:2'},
-            {'text':'3','callback_data':'stsip:3'},{'text':'4','callback_data':'stsip:4'},
-            {'text':'5','callback_data':'stsip:5'}],
-            [{'text':'✍️ سفارشی','callback_data':'stsipcustom'}]]})
+        rows=[]
+        if self._simple_plan_unlimited_ip_allowed(user_id):
+            rows.append([{'text':'♾ نامحدود','callback_data':'stsip:0'}])
+        rows += [
+            [{'text':'1','callback_data':'stsip:1'},{'text':'2','callback_data':'stsip:2'},
+             {'text':'3','callback_data':'stsip:3'},{'text':'4','callback_data':'stsip:4'},
+             {'text':'5','callback_data':'stsip:5'}],
+            [{'text':'✍️ سفارشی','callback_data':'stsipcustom'}]]
+        self.api.send(chat_id,'مرحله 7/8 · محدودیت IP را انتخاب کن:',{'inline_keyboard':rows})
 
     def simple_plan_choose_ip(self,chat_id:int,user_id:int,limit:int):
         if self.sessions.get(user_id)!='store_simple_ip_wait':raise PolicyError('Simple plan wizard is not waiting for IP limit')
-        if int(limit) not in (1,2,3,4,5):raise PolicyError('Invalid simple plan IP limit')
+        if int(limit) not in (0,1,2,3,4,5):raise PolicyError('Invalid simple plan IP limit')
+        if int(limit)==0 and not self._simple_plan_unlimited_ip_allowed(user_id):
+            raise PolicyError('Unlimited IP is available for volumetric plans; this unlimited-traffic plan is capped by Owner policy')
         self.session_data[user_id]['ip_limit']=int(limit)
         self.session_data[user_id]['selected_inbounds']=[]
         self.sessions[user_id]='store_simple_inbounds';self.show_simple_plan_inbounds(chat_id,user_id)
@@ -1136,7 +1191,7 @@ class BotWorker(CustomerBotFeatures):
         quota='نامحدود' if data.get('plan_type')=='unlimited' else str(data.get('volume_gb'))+' GB'
         self.api.send(chat_id,
             f"✦ پیش‌نمایش نهایی\n{data['name']}\nدسته: {data.get('category') or 'General'}\n"
-            f"{quota} · {data['duration_days']} روز · IP {data['ip_limit']}\n"
+            f"{quota} · {data['duration_days']} روز · IP {'نامحدود' if int(data['ip_limit'])==0 else data['ip_limit']}\n"
             f"قیمت: {amount(data['price_minor'],'IRT')}\nلوکیشن‌ها: {locations}\n"
             "⏱ شروع زمان: اولین اتصال واقعی\n🔗 تحویل: Subscription + Portal · QR روشن · HWID خاموش",
             {'inline_keyboard':[[{'text':'✅ انتشار پلن','callback_data':'stspublish'},
@@ -1147,7 +1202,7 @@ class BotWorker(CustomerBotFeatures):
         data=dict(self.session_data[user_id])
         quota='نامحدود' if data['plan_type']=='unlimited' else str(int(data.get('volume_gb') or 0))+' GB'
         payload={'name':data['name'],'category':data.get('category') or 'General',
-                 'description':f"DARK XRAY · {quota} · {int(data['duration_days'])} روز · IP {int(data['ip_limit'])}",
+                 'description':f"DARK XRAY · {quota} · {int(data['duration_days'])} روز · IP {'نامحدود' if int(data['ip_limit'])==0 else int(data['ip_limit'])}",
                  'plan_type':data['plan_type'],'price_minor':int(data['price_minor']),
                  'duration_days':int(data['duration_days']),'volume_gb':int(data.get('volume_gb') or 0),
                  'ip_limit':int(data['ip_limit']),'inbound_ids':[int(x) for x in data['inbound_ids']],
@@ -1197,7 +1252,9 @@ class BotWorker(CustomerBotFeatures):
         if state=='store_simple_ip':
             try:n=int(value)
             except ValueError:self.api.send(chat_id,'IP باید عدد صحیح باشد.');return
-            if not 1<=n<=1000:self.api.send(chat_id,'IP باید بین ۱ تا ۱۰۰۰ باشد.');return
+            if not 0<=n<=1000:self.api.send(chat_id,'IP باید بین ۰ تا ۱۰۰۰ باشد. صفر = نامحدود');return
+            if n==0 and not self._simple_plan_unlimited_ip_allowed(user_id):
+                self.api.send(chat_id,'IP نامحدود برای پلن حجمی مجاز است؛ این پلن نامحدود طبق سیاست Owner سقف IP دارد.');return
             data['ip_limit']=n;data['selected_inbounds']=[];self.sessions[user_id]='store_simple_inbounds';self.show_simple_plan_inbounds(chat_id,user_id);return
         if state=='store_simple_volume':
             try:n=int(value)
