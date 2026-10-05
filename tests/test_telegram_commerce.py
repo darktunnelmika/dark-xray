@@ -6,7 +6,7 @@ from server import make_app
 from telegram_runtime import BotWorker
 from telegram_forum import FORUM_REQUEST_ID,TOPICS
 from test_standalone import env,create
-from test_representatives_v2 import create_inbound
+from test_representatives_v2 import create_inbound,inbound_payload
 
 def product_payload(product_id='turbo',**overrides):
     body={
@@ -128,7 +128,8 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     owner_worker=BotWorker(runtime,'dark',token,'mark-owner')
     try:
         owner_text=' '.join(x['text'] for row in owner_worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '➕ ساخت نماینده' in owner_text and '🤝 نمایندگان' in owner_text
+        assert '🤝 نمایندگان' in owner_text and '🛒 فروش' in owner_text and '⚙️ مدیریت' in owner_text
+        assert '💾 بکاپ' not in owner_text
     finally:
         owner_worker.api.close()
     assert c.put('/api/owners/seller',json={
@@ -141,8 +142,8 @@ def test_main_bot_menu_has_representative_factory_but_reseller_bot_does_not(env)
     seller_worker=BotWorker(runtime,'seller',token,'mark-seller')
     try:
         seller_text=' '.join(x['text'] for row in seller_worker.main_keyboard(True)['keyboard'] for x in row)
-        assert '➕ ساخت نماینده' not in seller_text and '🤝 نمایندگان' not in seller_text
-        assert '👥 کاربران' in seller_text
+        assert '➕ ساخت نماینده' not in seller_text and '🤝 نمایندگان' not in seller_text and '💾 بکاپ' not in seller_text
+        assert '👥 کاربران' in seller_text and '🛒 فروش' in seller_text and '⚙️ مدیریت' in seller_text
     finally:
         seller_worker.api.close()
 
@@ -1427,3 +1428,42 @@ def test_bot_settings_exposes_owner_scoped_customer_miniapp_setup(env):
         assert 'owner=dark' not in url
     finally:
         seller.api.close()
+
+
+def test_simple_plan_supports_explicit_unlimited_ip_zero(env):
+    store,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    r=c.post('/api/commerce/simple-plans',json={
+        'name':'Volume Unlimited IP','plan_type':'volume','price_minor':150000,
+        'duration_days':30,'volume_gb':25,'ip_limit':0,'inbound_ids':[inbound_id],
+        'published':True,
+    })
+    assert r.status_code==201,r.text
+    doc=r.json();price=doc['prices'][0]
+    assert price['ip_limit']==0 and price['device_limit']==0
+    runtime=c.app.state.telegram_runtime
+    order=runtime.commerce.create_order('dark',991001,'buyer',doc['id'],price['id'])
+    with store.lock:
+        row=store.db.execute("SELECT ip_limit FROM commerce_orders WHERE id=?",(order['id'],)).fetchone()
+    assert row['ip_limit']==0
+
+
+def test_guided_checkout_can_narrow_multi_server_plan_to_selected_inbound(env):
+    store,_,_,_,c=env
+    first=create_inbound(c)
+    second_response=c.post('/api/inbounds',json=inbound_payload(25102))
+    assert second_response.status_code==200,second_response.text
+    second=second_response.json()['id']
+    r=c.post('/api/commerce/simple-plans',json={
+        'name':'Pick Server','plan_type':'volume','price_minor':200000,
+        'duration_days':60,'volume_gb':40,'ip_limit':2,'inbound_ids':[first,second],
+        'published':True,
+    })
+    assert r.status_code==201,r.text
+    doc=r.json();price=doc['prices'][0]
+    runtime=c.app.state.telegram_runtime
+    order=runtime.commerce.create_order('dark',991002,'buyer',doc['id'],price['id'],selected_inbound_id=second)
+    with store.lock:
+        row=store.db.execute("SELECT inbound_ids,primary_inbound_id FROM commerce_orders WHERE id=?",(order['id'],)).fetchone()
+    assert json.loads(row['inbound_ids'])==[second]
+    assert row['primary_inbound_id']==second
