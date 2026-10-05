@@ -234,6 +234,7 @@ test('Representative quick create offers random/manual naming and unlimited IP w
   assert.match(src,/data-cv4-name-mode="manual"/);
   assert.match(src,/data-cv4-manual-client/);
   assert.match(src,/function representativeClientId/);
-  assert.match(src,/if\(cap===0\)items\.push\(\['0','♾ '/);
+  assert.match(src,/items\.push\(\['0','♾ '/);
   assert.match(src,/Unlimited IP/);
+  assert.match(src,/zero\.disabled=pm!=='limited'&&cap>0/);
 });
