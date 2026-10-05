@@ -508,7 +508,9 @@ class Manager:
                 now=time.time()
                 with self.store.transaction() as db:db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(row['owner'],group,'',now,now))
             profile=self.profile(row['owner']);ip_cap=int(profile.get('max_client_ips') or 0);hwid_cap=int(profile.get('max_client_hwid') or 0)
-            if ip_cap and (desired.get('limitIp',0)==0 or desired['limitIp']>ip_cap):raise PolicyError('IP cap exceeds reseller policy')
+            if ip_cap and int(desired.get('limitIp') or 0)>ip_cap:raise PolicyError('IP cap exceeds reseller policy')
+            if ip_cap and int(desired.get('limitIp') or 0)==0 and int(desired.get('totalGB') or 0)==0:
+                raise PolicyError('Unlimited IP is only available to volumetric services under this reseller policy')
             if hwid_cap and (desired.get('limitHwid',0)==0 or desired['limitHwid']>hwid_cap):raise PolicyError('HWID cap exceeds reseller policy')
             changes={}
             if 'limitIp' in patch:changes['limit_ip']=patch['limitIp']
@@ -557,7 +559,9 @@ class Manager:
                     if desired.get('group'):
                         group=self._group_name(desired['group']);desired['group']=group
                     profile=self.profile(row['owner']);ip_cap=int(profile.get('max_client_ips') or 0);hwid_cap=int(profile.get('max_client_hwid') or 0)
-                    if ip_cap and (desired.get('limitIp',0)==0 or desired['limitIp']>ip_cap):raise PolicyError('IP cap exceeds reseller policy')
+                    if ip_cap and int(desired.get('limitIp') or 0)>ip_cap:raise PolicyError('IP cap exceeds reseller policy')
+                    if ip_cap and int(desired.get('limitIp') or 0)==0 and int(desired.get('totalGB') or 0)==0:
+                        raise PolicyError('Unlimited IP is only available to volumetric services under this reseller policy')
                     if hwid_cap and (desired.get('limitHwid',0)==0 or desired['limitHwid']>hwid_cap):raise PolicyError('HWID cap exceeds reseller policy')
                     changes={}
                     if 'limitIp' in patch:changes['limit_ip']=patch['limitIp']
