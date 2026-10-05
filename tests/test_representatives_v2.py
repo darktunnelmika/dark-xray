@@ -273,3 +273,24 @@ def test_representative_delete_requires_no_clients_and_preserves_primary_owner(e
     assert c.delete('/api/resellers/dark').status_code==409
     with store.lock:
         assert store.db.execute("SELECT role FROM api_admins WHERE id='dark'").fetchone()['role']=='owner'
+
+
+def test_representative_volumetric_client_can_choose_unlimited_ip_under_positive_ip_cap(env):
+    _,_,_,_,c=env
+    inbound_id=create_inbound(c)
+    gib=1024**3
+    assert c.put('/api/resellers/seller',json=rep_body(
+        inbound_id,volume_credit_bytes=10*gib,unlimited_credit=2,max_client_ips=2)).status_code==200
+
+    volumetric=c.post('/api/clients',json={
+        'owner':'seller',
+        'client':{'email':'s_volume_ip_unlimited','limitIp':0,'limitHwid':1,'totalGB':2*gib},
+        'inboundIds':[inbound_id]})
+    assert volumetric.status_code==202,volumetric.text
+
+    unlimited_traffic=c.post('/api/clients',json={
+        'owner':'seller',
+        'client':{'email':'s_unlimited_ip_unlimited','limitIp':0,'limitHwid':1,'totalGB':0},
+        'inboundIds':[inbound_id]})
+    assert unlimited_traffic.status_code==400,unlimited_traffic.text
+    assert 'Unlimited IP' in unlimited_traffic.text

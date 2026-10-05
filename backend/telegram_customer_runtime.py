@@ -31,6 +31,17 @@ class CustomerBotFeatures:
         users='کاربر نامحدود' if ip==0 else f'حداکثر {ip} IP'
         return f"{quota} · {days} روز · {users} · {money(int(price.get('price_minor') or 0),str(price.get('currency') or 'IRT'))}"
 
+    @staticmethod
+    def _duration_brief(days:int)->str:
+        days=int(days)
+        labels={30:'۱ ماهه',60:'۲ ماهه',90:'۳ ماهه',180:'۶ ماهه',365:'۱۲ ماهه'}
+        return labels.get(days,f'{days} روزه')
+
+    def _category_store_rows(self,anchor_row:int)->tuple[str,list[dict[str,Any]]]:
+        anchor=self.product_by_rowid(int(anchor_row));category=str(anchor.get('category') or 'General')
+        rows=[p for p in self._public_store_rows() if str(p.get('category') or 'General')==category]
+        return category,rows
+
     def customer_shop(self,chat_id:int):
         rows=self._public_store_rows()
         if not rows:self.api.send(chat_id,'◈ DARK MARKET\nفعلاً پلن قابل خریدی منتشر نشده است.');return
@@ -41,22 +52,15 @@ class CustomerBotFeatures:
         buttons=[]
         for category,items in sorted(groups.items(),key=lambda x:x[0].lower()):
             icon=self._store_category_icon(category)
-            buttons.append([{'text':f"{icon} {category} · {len(items)} پلن"[:62],
+            buttons.append([{'text':f"{icon} {category}"[:62],
                              'callback_data':'shopcat:'+str(items[0]['row_id'])}])
         buttons.append([{'text':'✦ نمایش همه محصولات','callback_data':'shopall'}])
         self.api.send(chat_id,
-            f"⚡ DARK XRAY / SECURE MARKET\n{len(rows)} محصول در {len(groups)} دسته آماده خرید است.\n"
-            "دسته موردنظر را انتخاب کن:",
+            f"⚡ DARK MARKET\nمرحله ۱ از ۵ · دسته سرویس را انتخاب کن.\n{len(rows)} پلن فعال در {len(groups)} دسته",
             {'inline_keyboard':buttons})
 
-    def customer_shop_category(self,chat_id:int,anchor_row:int|None=None):
-        rows=self._public_store_rows()
-        category=''
-        if anchor_row is not None:
-            anchor=self.product_by_rowid(int(anchor_row));category=str(anchor.get('category') or 'General')
-            rows=[p for p in rows if str(p.get('category') or 'General')==category]
-        if not rows:self.customer_shop(chat_id);return
-        buttons=[]
+    def customer_shop_all(self,chat_id:int):
+        rows=self._public_store_rows();buttons=[]
         for p in rows[:40]:
             active=[x for x in p.get('prices') or [] if x.get('active')]
             if not active:continue
@@ -64,13 +68,85 @@ class CustomerBotFeatures:
             icon=self._store_category_icon(str(p.get('category') or 'General'))
             buttons.append([{'text':f"{icon} {p['name']} · از {money(cheapest['price_minor'],cheapest['currency'])}"[:62],
                              'callback_data':'p:'+str(p['row_id'])}])
-        categories={str(p.get('category') or 'General') for p in self._public_store_rows()}
-        if anchor_row is not None and len(categories)>1:
-            buttons.append([{'text':'‹ دسته‌بندی‌ها','callback_data':'shopback'}])
-        title=('همه محصولات' if anchor_row is None else category)
+        buttons.append([{'text':'‹ دسته‌بندی‌ها','callback_data':'shopback'}])
+        self.api.send(chat_id,'◈ DARK MARKET / همه محصولات\nپلن موردنظر را انتخاب کن.',
+                      {'inline_keyboard':buttons})
+
+    def customer_shop_category(self,chat_id:int,anchor_row:int):
+        category,rows=self._category_store_rows(int(anchor_row))
+        durations=sorted({int(x.get('duration_days') or 0) for p in rows
+                          for x in (p.get('prices') or []) if x.get('active') and int(x.get('duration_days') or 0)>0})
+        if not durations:self.customer_shop(chat_id);return
+        if len(durations)==1:
+            self.customer_shop_duration(chat_id,int(anchor_row),durations[0]);return
+        buttons=[[{'text':'🗓 '+self._duration_brief(days),
+                   'callback_data':f'shopdur:{int(anchor_row)}:{days}'}] for days in durations[:20]]
+        buttons.append([{'text':'‹ دسته‌بندی‌ها','callback_data':'shopback'}])
         self.api.send(chat_id,
-            f"◈ DARK MARKET / {title}\nپلن را باز کن تا جزئیات و گزینه‌های خرید را ببینی.",
+            f"◈ {category}\nمرحله ۲ از ۵ · مدت سرویس را انتخاب کن:",
             {'inline_keyboard':buttons})
+
+    def customer_shop_duration(self,chat_id:int,anchor_row:int,duration_days:int):
+        category,rows=self._category_store_rows(int(anchor_row));buttons=[]
+        for p in rows[:40]:
+            for price in (p.get('prices') or []):
+                if not price.get('active') or int(price.get('duration_days') or 0)!=int(duration_days):continue
+                quota='∞' if not int(price.get('volume_bytes') or 0) else str(max(1,round(int(price['volume_bytes'])/(1024**3))))+'GB'
+                buttons.append([{'text':f"{quota} · {p['name']} · {money(price['price_minor'],price['currency'])}"[:62],
+                                 'callback_data':'b:'+str(price['row_id'])}])
+        if not buttons:self.customer_shop_category(chat_id,int(anchor_row));return
+        buttons.append([{'text':'‹ مدت‌ها','callback_data':'shopcat:'+str(anchor_row)}])
+        self.api.send(chat_id,
+            f"◈ {category} / {self._duration_brief(duration_days)}\nمرحله ۳ از ۵ · حجم یا پلن را انتخاب کن:",
+            {'inline_keyboard':buttons})
+
+    def customer_purchase_review(self,chat_id:int,user_id:int,price_row:int,selected_inbound_id:int|None=None):
+        price=self.price_by_rowid(int(price_row))
+        with self.runtime.store.lock:
+            product=self.runtime.store.db.execute(
+                "SELECT rowid AS row_id,* FROM commerce_products WHERE owner=? AND id=?",
+                (self.owner,price['product_id'])).fetchone()
+        if not product:raise PolicyError('Product not found')
+        allowed=[int(x) for x in (price.get('inbound_ids') or [])]
+        catalog={int(x['id']):x for x in self.inbound_catalog()}
+        if selected_inbound_id is None and len(allowed)>1:
+            buttons=[]
+            for inbound_id in allowed:
+                item=catalog.get(inbound_id) or {'name':'Server '+str(inbound_id)}
+                buttons.append([{'text':'🌍 '+str(item.get('name') or ('Server '+str(inbound_id)))[:52],
+                                 'callback_data':f'shopinb:{int(price_row)}:{inbound_id}'}])
+            buttons.append([{'text':'‹ پلن‌ها','callback_data':f"shopdur:{int(product['row_id'])}:{int(price['duration_days'])}"}])
+            self.api.send(chat_id,
+                '🌍 مرحله ۴ از ۵ · سرور موردنظر را انتخاب کن:',
+                {'inline_keyboard':buttons});return
+        selected=int(selected_inbound_id if selected_inbound_id is not None else (allowed[0] if allowed else 0))
+        if selected not in allowed:raise PolicyError('Selected server is outside this plan')
+        server=catalog.get(selected) or {'name':'Server '+str(selected)}
+        wallet=self.runtime.customer.wallet(self.owner,user_id)
+        activation='شروع زمان از اولین اتصال واقعی' if price.get('activation_mode')=='first_connection' else 'شروع زمان بلافاصله بعد از خرید'
+        ip_text='نامحدود' if int(price.get('ip_limit') or 0)==0 else str(int(price.get('ip_limit') or 0))
+        self.api.send(chat_id,
+            f"🧾 مرحله ۵ از ۵ · فاکتور\n{product['name']}\n"
+            f"{self._price_brief(price)}\nسرور: {server.get('name') or selected}\nIP: {ip_text}\n"
+            f"{activation}\n\nمبلغ: {money(price['price_minor'],price['currency'])}\n"
+            f"موجودی کیف پول: {money(wallet['balance_minor'],wallet['currency'])}",
+            {'inline_keyboard':[
+                [{'text':'✅ ادامه به پرداخت','callback_data':f'buy:{int(price_row)}:{selected}'}],
+                [{'text':'‹ انتخاب پلن','callback_data':f"shopdur:{int(product['row_id'])}:{int(price['duration_days'])}"},
+                 {'text':'⌂ منوی اصلی','callback_data':'uhome'}]
+            ]})
+
+    def customer_more_menu(self,chat_id:int,user_id:int):
+        kb=[
+            [{'text':'🔄 تمدید سرویس','callback_data':'more_renew'},
+             {'text':'🎁 دعوت دوستان','callback_data':'uref'}],
+            [{'text':'🔔 اعلان‌های من','callback_data':'nprefs'}],
+        ]
+        if self.owner_role()=='owner':
+            kb.append([{'text':'🏪 پنل نمایندگی','callback_data':'rmmarket'}])
+        kb.append([{'text':'⌂ منوی اصلی','callback_data':'uhome'}])
+        self.api.send(chat_id,'☰ امکانات بیشتر\nگزینه‌های کم‌استفاده از منوی اصلی جدا شده‌اند.',
+                      {'inline_keyboard':kb})
 
     def customer_wallet_menu(self,chat_id:int,user_id:int):
         wallet=self.runtime.customer.wallet(self.owner,user_id)
@@ -603,9 +679,17 @@ class CustomerBotFeatures:
         if data=='shopback':
             self.customer_shop(chat_id);return True
         if data=='shopall':
-            self.customer_shop_category(chat_id,None);return True
+            self.customer_shop_all(chat_id);return True
         if data.startswith('shopcat:'):
             self.customer_shop_category(chat_id,int(data.split(':',1)[1]));return True
+        if data.startswith('shopdur:'):
+            _,anchor,days=data.split(':',2)
+            self.customer_shop_duration(chat_id,int(anchor),int(days));return True
+        if data.startswith('shopinb:'):
+            _,price_row,inbound_id=data.split(':',2)
+            self.customer_purchase_review(chat_id,user_id,int(price_row),int(inbound_id));return True
+        if data=='more_renew':
+            self.customer_renew_services(chat_id,user_id);return True
         if data.startswith('p:'):
             p=self.product_by_rowid(int(data.split(':',1)[1]))
             row=next(x for x in self.runtime.commerce.product_rows(self.owner,public=True) if x['id']==p['id'])
@@ -621,40 +705,52 @@ class CustomerBotFeatures:
             self.api.send(chat_id,'\n'.join(lines)+'\n\nیک پلن را برای بررسی نهایی انتخاب کن:',
                           {'inline_keyboard':buttons});return True
         if data.startswith('b:'):
-            price=self.price_by_rowid(int(data.split(':',1)[1]))
-            with self.runtime.store.lock:
-                product=self.runtime.store.db.execute(
-                    "SELECT rowid AS row_id,* FROM commerce_products WHERE owner=? AND id=?",
-                    (self.owner,price['product_id'])).fetchone()
-            wallet=self.runtime.customer.wallet(self.owner,user_id)
-            activation='شروع زمان از اولین اتصال واقعی' if price.get('activation_mode')=='first_connection' else 'شروع زمان بلافاصله بعد از خرید'
-            self.api.send(chat_id,
-                f"✦ تأیید خرید\n{product['name']}\n{self._price_brief(price)}\n"
-                f"{activation}\n\nموجودی کیف پول: {money(wallet['balance_minor'],wallet['currency'])}",
-                {'inline_keyboard':[
-                    [{'text':'✅ تأیید و ساخت سفارش','callback_data':'buy:'+str(price['row_id'])}],
-                    [{'text':'‹ بازگشت به محصول','callback_data':'p:'+str(product['row_id'])}]
-                ]});return True
+            # تأیید و ساخت سفارش فقط بعد از مرحله سرور/فاکتور انجام می‌شود.
+            self.customer_purchase_review(chat_id,user_id,int(data.split(':',1)[1]));return True
         if data.startswith('buy:'):
-            price=self.price_by_rowid(int(data.split(':',1)[1]))
+            parts=data.split(':');price=self.price_by_rowid(int(parts[1]))
+            selected_inbound=int(parts[2]) if len(parts)>2 and parts[2] else None
             with self.runtime.store.lock:
                 product=self.runtime.store.db.execute("SELECT * FROM commerce_products WHERE owner=? AND id=?",
                                                       (self.owner,price['product_id'])).fetchone()
             order=self.runtime.commerce.create_order(self.owner,user_id,str(sender.get('username') or ''),
-                                                     product['id'],price['id'])
+                                                     product['id'],price['id'],selected_inbound_id=selected_inbound)
             wallet=self.runtime.customer.wallet(self.owner,user_id)
             enough=int(wallet['balance_minor'])>=int(order['amount_minor'])
             kb=[]
             if enough:kb.append([{'text':'⚡ پرداخت از کیف پول','callback_data':'uwpay:'+order['id']}])
-            else:kb.append([{'text':'💳 شارژ کیف پول','callback_data':'wmenu'}])
+            else:kb.append([{'text':'💰 شارژ کیف پول','callback_data':'wmenu'}])
+            for gateway in self.runtime.commerce.gateway_rows(self.owner,enabled_only=True):
+                label='💳 کارت به کارت' if gateway.get('kind')=='manual' else '🪙 '+str(gateway.get('label') or 'پرداخت')
+                kb.append([{'text':label[:62],'callback_data':f"ugpay:{gateway['row_id']}:{order['id']}"}])
             kb.append([{'text':'◈ بازگشت به فروشگاه','callback_data':'shopback'}])
-            state='آماده پرداخت' if enough else 'موجودی کیف پول کافی نیست'
+            state='آماده پرداخت' if enough else 'کیف پول کافی نیست؛ روش پرداخت را انتخاب کن'
             self.api.send(chat_id,
-                f"🧾 سفارش ساخته شد\n{product['name']}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
-                f"موجودی: {money(wallet['balance_minor'],wallet['currency'])}\nوضعیت: {state}",
+                f"🧾 فاکتور نهایی\n{product['name']}\nمبلغ: {money(order['amount_minor'],order['currency'])}\n"
+                f"موجودی: {money(wallet['balance_minor'],wallet['currency'])}\nوضعیت: {state}\n\nروش پرداخت را انتخاب کن:",
                 {'inline_keyboard':kb});return True
+        if data.startswith('ugpay:'):
+            _,gateway_row,order_id=data.split(':',2);gateway=self.gateway_by_rowid(int(gateway_row))
+            result=self.runtime.commerce.start_payment(self.owner,order_id,gateway['id'])
+            self.runtime.manager.audit(self.actor(),self.owner,'commerce.payment_start',order_id,gateway['id'])
+            if result['mode']=='manual':
+                card='\n'.join(x for x in [
+                    '💳 کارت به کارت',
+                    ('شماره کارت: '+result['card_number']) if result.get('card_number') else '',
+                    ('به نام: '+result['card_holder']) if result.get('card_holder') else '',
+                    ('بانک: '+result['bank_name']) if result.get('bank_name') else '',
+                    result.get('instructions') or '',
+                    'پس از پرداخت، تصویر یا فایل رسید را همین‌جا بفرست.'
+                ] if x)
+                self.api.send(chat_id,card,{'inline_keyboard':[[{'text':'⌂ منوی اصلی','callback_data':'uhome'}]]})
+            elif result.get('checkout_url'):
+                self.api.send(chat_id,'🪙 پرداخت آنلاین\nبعد از پرداخت به ربات برگرد.',
+                              {'inline_keyboard':[[{'text':'🚀 رفتن به درگاه','url':result['checkout_url']}],
+                                                  [{'text':'⌂ منوی اصلی','callback_data':'uhome'}]]})
+            else:self.api.send(chat_id,'این روش پرداخت در حال حاضر Checkout قابل استفاده ندارد.')
+            return True
         if data.startswith('g:'):
-            self.api.send(chat_id,'پرداخت مستقیم غیرفعال است. برای خرید، ابتدا کیف پول را شارژ کن.');return True
+            self.api.send(chat_id,'این مسیر قدیمی پرداخت غیرفعال است؛ از فاکتور جدید روش پرداخت را انتخاب کن.');return True
         if data.startswith('uwpay:'):
             order_id=data.split(':',1)[1]
             try:
