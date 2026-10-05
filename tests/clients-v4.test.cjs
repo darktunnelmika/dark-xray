@@ -226,3 +226,14 @@ test('Failed deletion keeps client detail and selection available for retry',asy
  await assert.rejects(ctx.runAction('cv4delete',{dataset:{id:'seller-client'}}),/Deletion denied/);
  assert.equal(closed,0);assert.equal(ctx.state.selected.has('seller-client'),true);
 });
+
+
+test('Representative quick create offers random/manual naming and unlimited IP when owner cap is open',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/data-cv4-name-mode="random"/);
+  assert.match(src,/data-cv4-name-mode="manual"/);
+  assert.match(src,/data-cv4-manual-client/);
+  assert.match(src,/function representativeClientId/);
+  assert.match(src,/if\(cap===0\)items\.push\(\['0','♾ '/);
+  assert.match(src,/Unlimited IP/);
+});
