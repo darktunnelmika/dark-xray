@@ -59,7 +59,7 @@ class SimplePlanBody(Model):
     price_minor: StrictInt = Field(ge=0, le=MAX_INT)
     duration_days: StrictInt = Field(default=30, ge=1, le=3650)
     volume_gb: StrictInt = Field(default=50, ge=0, le=1_000_000)
-    ip_limit: StrictInt = Field(default=1, ge=1, le=1000)
+    ip_limit: StrictInt = Field(default=1, ge=0, le=1000)
     inbound_ids: list[StrictInt] = Field(min_length=1, max_length=256)
     description: str = Field(default='', max_length=2000)
     category: str = Field(default='General', min_length=1, max_length=64)
@@ -267,8 +267,9 @@ class TelegramCommerce:
         if not 0<=price_minor<=MAX_INT:raise PolicyError('Simple plan price is outside the allowed range')
         duration_days=int(spec.get('duration_days') or 30)
         if not 1<=duration_days<=3650:raise PolicyError('Simple plan duration must be between 1 and 3650 days')
-        ip_limit=int(spec.get('ip_limit') or 1)
-        if not 1<=ip_limit<=1000:raise PolicyError('Simple plan IP limit must be between 1 and 1000')
+        raw_ip_limit=spec.get('ip_limit',1)
+        ip_limit=int(1 if raw_ip_limit is None else raw_ip_limit)
+        if not 0<=ip_limit<=1000:raise PolicyError('Simple plan IP limit must be between 0 and 1000 (0 = unlimited)')
         inbound_ids=sorted({int(x) for x in (spec.get('inbound_ids') or []) if type(x) is int and int(x)>0})
         if not inbound_ids:raise PolicyError('Select at least one Inbound')
         with self.store.lock:
@@ -321,7 +322,7 @@ class TelegramCommerce:
         return row
 
     def create_order(self, owner: str, buyer_telegram_id: int, buyer_username: str,
-                     product_id: str, price_id: str) -> dict[str,Any]:
+                     product_id: str, price_id: str, selected_inbound_id: int | None = None) -> dict[str,Any]:
         now=time.time();order_id=_id('ord')
         with self.store.transaction() as db:
             price=db.execute("""SELECT cp.*,p.active product_active,p.visible product_visible,
@@ -342,6 +343,10 @@ class TelegramCommerce:
             inbound_ids=json.loads(price['inbound_ids'])
             primary=int(price['primary_inbound_id'] or 0)
             if primary and primary not in inbound_ids:raise PolicyError('Primary inbound must be included in the plan')
+            if selected_inbound_id is not None:
+                selected=int(selected_inbound_id)
+                if selected not in inbound_ids:raise PolicyError('Selected server is outside this plan')
+                inbound_ids=[selected];primary=selected
             db.execute("""INSERT INTO commerce_orders(id,owner,buyer_telegram_id,buyer_username,product_id,price_id,
               amount_minor,currency,status,created_at,updated_at,volume_bytes,duration_days,ip_limit,hwid_limit,
               inbound_ids,activation_mode,delivery_mode,primary_inbound_id,show_qr,show_portal)
