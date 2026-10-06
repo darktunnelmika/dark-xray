@@ -458,3 +458,67 @@ def test_reality_authentication_negative_controls(transport_fleet,fault):
     with transport_client(f.root/'negative-reality',f.binary.path,bad) as client:transfer(client.port,f.target,allowed=False)
     for client in f.clients:transfer(client.port,f.target)
     f.evidence['negative_control_rejected']=fault
+
+
+@pytest.mark.parametrize('transport_fleet', [
+    Case('vless','grpc','reality'), Case('vless','tcp','reality','xtls-rprx-vision')
+], indirect=True, ids=lambda c:c.label)
+def test_port_swap_real_opaque_tcp_destination_charge_and_independent_direct(transport_fleet):
+    f=transport_fleet;source,destination=f.agents
+    ib=f.engine.inbound(destination.iid);ib['listen']='0.0.0.0'
+    f.engine.save_inbound(ib,destination.iid)
+    with f.store.transaction() as db:
+        db.execute('UPDATE remote_nodes SET data_address=? WHERE id=?',('127.0.0.1',destination.id))
+    relay_port,shadow_port=free_port(),free_port()
+    assert relay_port!=shadow_port
+    saved=f.api('/api/swap',{'name':'Disposable Germany SWAP','sourceNodeId':source.id,
+        'sourcePort':relay_port,'exitNodeId':destination.id,'inboundId':destination.iid,
+        'exitPort':shadow_port,'entryAddress':'127.0.0.1','entryPort':relay_port})
+    path='/api/swap/'+str(saved['id'])
+    assert saved['enabled'] is False
+    identity=stable_identity(f)
+    f.api(path+'/state',{'enabled':True})
+    # Consume the actual Hub-exported extra endpoint, not a repaired client.
+    exported=f.api('/api/clients/'+EMAIL+'/links')
+    raw=f.http.get(exported['subscription_url']+'?format=raw')
+    assert raw.status_code==200
+    decoded={decode_link(uri).port:uri for uri in raw.text.splitlines() if uri.strip()}
+    assert set(decoded)=={source.data_port,destination.data_port,relay_port}
+    outbound=outbound_from_link(decoded[relay_port],f.ca)
+    assert outbound['protocol']=='vless'
+    before=meter(f)
+    with transport_client(f.root/'swap-client',f.binary.path,outbound) as forwarded:
+        transfer(forwarded.port,f.target)
+        after=meter(f)
+        old=dict((n,u+d) for n,u,d in before[1]);new=dict((n,u+d) for n,u,d in after[1])
+        assert new.get(source.id,0)==old.get(source.id,0), 'Opaque source must not bill destination customer'
+        assert new[destination.id]>old.get(destination.id,0)
+        assert after[0]>before[0] and after[0]==after[2]
+        assert meter(f)==after
+        assert stable_identity(f)==identity
+        transfer(f.clients[0].port,f.target)
+        transfer(f.clients[1].port,f.target)
+        destination.engine.command('stop')
+        transfer(forwarded.port,f.target,allowed=False)
+        transfer(f.clients[0].port,f.target)
+        destination.engine.command('start')
+        transfer(forwarded.port,f.target)
+        # Client disable is checked at destination, with no bridge customer.
+        f.api('/api/clients/'+EMAIL+'/action',{'action':'disable'})
+        f.api('/api/nodes/'+destination.id+'/sync',{})
+        transfer(forwarded.port,f.target,allowed=False)
+        transfer(f.controls[1].port,f.target)
+        f.api('/api/clients/'+EMAIL+'/action',{'action':'enable'})
+        f.api('/api/nodes/'+destination.id+'/sync',{})
+        transfer(forwarded.port,f.target)
+        f.api(path+'/state',{'enabled':False})
+        transfer(forwarded.port,f.target,allowed=False)
+        transfer(f.clients[0].port,f.target)
+        transfer(f.clients[1].port,f.target)
+    f.api(path,method='DELETE')
+    assert not f.http.app.state.node_port_swaps.rows()
+    assert 'node:'+destination.id not in f.engine.inbound(destination.iid).get('panelMeta',{}).get('tunnelPorts',{})
+    f.evidence.update(opaque_port_swap_generated_link_transferred=True,
+        destination_only_billing=True,normal_source_and_destination_direct_independent=True,
+        no_source_fallback_on_destination_failure=True,destination_customer_disable_enforced=True,
+        port_swap_disabled_and_removed=True)
