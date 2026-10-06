@@ -1552,6 +1552,42 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     from node_credentials import install_hub_credentials
     install_hub_credentials(app,nodes,owner,writable,manager.audit)
 
+    def relay_synchronize(target):
+        return nodes.sync_desired_state(target,ensure_node_desired_state(target))
+
+    @app.get('/api/swap')
+    def swap_workspace(p:Principal=Depends(owner)):
+        listed=nodes.list(); by_id={n['id']:n for n in listed}
+        routes=[]
+        for row in node_relays.rows():
+            item=node_relays.public(row)
+            try:node_relays.validate(row);item['configurationError']=''
+            except PolicyError as ex:item['configurationError']=str(ex)
+            item['lastProbe']=node_relays.last_probe(row['source_node'],row['source_inbound'])
+            item['sourceState']=by_id.get(row['source_node'],{}).get('desired_state',{})
+            item['exitState']=by_id.get(row['exit_node'],{}).get('desired_state',{})
+            routes.append(item)
+        return {'routes':routes,'nodes':listed,'inbounds':[
+            {k:i.get(k) for k in ('id','tag','remark','protocol','enable','listen','port')} |
+            {'network':i.get('streamSettings',{}).get('network','tcp'),
+             'security':i.get('streamSettings',{}).get('security','none'),
+             'tunnelPorts':i.get('panelMeta',{}).get('tunnelPorts',{})}
+            for i in engine.inbounds()]}
+
+    @app.delete('/api/nodes/{node_id}/exits/{inbound_id}')
+    def remote_node_exit_delete(node_id:str,inbound_id:int,p:Principal=Depends(owner)):
+        writable()
+        result=node_relays.delete(node_id,inbound_id,relay_synchronize)
+        manager.audit(p.actor,p.actor.id,'node.exit.delete',node_id,'inbound='+str(inbound_id))
+        return result
+
+    @app.post('/api/nodes/{node_id}/exits/{inbound_id}/probe')
+    def remote_node_exit_probe(node_id:str,inbound_id:int,p:Principal=Depends(owner)):
+        writable()
+        result=node_relays.probe(node_id,inbound_id)
+        manager.audit(p.actor,p.actor.id,'node.exit.probe',node_id,'inbound='+str(inbound_id)+'; success='+str(result['success']))
+        return result
+
     @app.get('/api/nodes/{node_id}/exits')
     def remote_node_exits(node_id:str,p:Principal=Depends(owner)):
         return node_relays.list(node_id)
@@ -1567,11 +1603,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.post('/api/nodes/{node_id}/exits/{inbound_id}')
     def remote_node_exit_toggle(node_id:str,inbound_id:int,body:RelayToggle,p:Principal=Depends(owner)):
         writable()
-        def synchronize(target):
-            # No legacy fallback: full routing/credential ACK is required.
-            # Traffic accounting remains on the existing monitor/lease path.
-            return nodes.sync_desired_state(target,ensure_node_desired_state(target))
-        result=node_relays.toggle(node_id,inbound_id,body.enabled,synchronize)
+        result=node_relays.toggle(node_id,inbound_id,body.enabled,relay_synchronize)
         manager.audit(p.actor,p.actor.id,'node.exit.enable' if body.enabled else 'node.exit.disable',node_id,
                       'inbound='+str(inbound_id))
         return result
