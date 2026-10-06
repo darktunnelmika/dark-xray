@@ -85,7 +85,7 @@ def test_owner_port_swap_workspace_and_inbound_checkbox(relay_env, pairing_brows
         toggle.check()
         expect(toggle).to_be_checked()
         expect(card.locator('[data-swap-inline-phase]')).to_have_text('فعال' if lang == 'fa' else 'Enabled')
-        card.locator('input[name=deployNode]').uncheck()
+        card.locator('input[name=deployNode]').click()
         expect(card.locator('input[name=deployNode]')).to_be_checked()
         toggle.uncheck()
         expect(toggle).not_to_be_checked()
