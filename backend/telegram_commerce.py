@@ -219,6 +219,11 @@ class TelegramCommerce:
                            'bot_username':'','last_error':'','last_seen':0}
         return {k:row[k] for k in ('owner','enabled','configured','admin_telegram_id','bot_username','last_error','last_seen','updated_at')}
 
+    def unlimited_cost(self,owner:str,ip_limit:int,days:int)->int:
+        from unlimited_credit import units_for_days
+        if self.actor_for(owner).role!='reseller' and ip_limit==0:return 0
+        return units_for_days(ip_limit,days)
+
     def unlimited_plan_allowed(self, owner: str) -> bool:
         with self.store.lock:
             if self.actor_for(owner).role != 'reseller':return True
@@ -239,6 +244,9 @@ class TelegramCommerce:
         by={}
         for p in prices:
             p['inbound_ids']=json.loads(p.pop('inbound_ids'));p['active']=bool(p['active'])
+            try:p['credit_units']=self.unlimited_cost(owner,int(p['ip_limit']),int(p['duration_days'])) if int(p['volume_bytes'])==0 else 0
+            except PolicyError:p['credit_units']=None
+            p['credit_unit']='user_month'
             p['show_qr']=bool(p.get('show_qr',1));p['show_portal']=bool(p.get('show_portal',1))
             by.setdefault(p['product_id'],[]).append(p)
         for x in products:
@@ -287,7 +295,7 @@ class TelegramCommerce:
             if not 1<=volume_gb<=1_000_000:raise PolicyError('Volume plan requires a positive GB amount')
             volume_bytes=volume_gb*1024**3;unlimited_units=0
         else:
-            volume_gb=0;volume_bytes=0;unlimited_units=1
+            volume_gb=0;volume_bytes=0;unlimited_units=self.unlimited_cost(owner,ip_limit,duration_days)
         category=str(spec.get('category') or 'General').strip()[:64] or 'General'
         description=str(spec.get('description') or '')[:2000]
         sale_limit=int(spec.get('sale_limit_per_user') or 0)
@@ -449,6 +457,10 @@ class TelegramCommerce:
         return out
 
     def provision_order(self, order_id: str, manager) -> dict[str,Any]:
+        with manager.lock:
+            return self._provision_order_locked(order_id,manager)
+
+    def _provision_order_locked(self, order_id: str, manager) -> dict[str,Any]:
         order=self.order(order_id)
         if order['client_id']:
             actor=self.actor_for(order['owner'])
@@ -468,7 +480,16 @@ class TelegramCommerce:
                 'limitIp':int(order.get('ip_limit') or 0),'limitHwid':int(order.get('hwid_limit') or 0),
                 'tgId':int(order['buyer_telegram_id']),'enable':True,'comment':'DARK BOT order '+order['id']}
         try:
-            result=manager.create(actor,order['owner'],client,inbound_ids)
+            with self.store.lock:
+                existing=self.store.db.execute('SELECT c.owner,m.desired FROM managed_clients m JOIN clients c ON c.id=m.email WHERE m.email=?',(identity,)).fetchone()
+            if existing:
+                saved=json.loads(existing['desired'])
+                if existing['owner']!=order['owner'] or saved.get('comment')!='DARK BOT order '+order['id']:
+                    raise PolicyError('Order identity conflicts with an existing service')
+                manager._reconcile_client_locked(identity)
+                result=manager.detail(actor,identity,credentials=True)
+            else:
+                result=manager.create(actor,order['owner'],client,inbound_ids,billing_duration_days=duration)
         except Exception as ex:
             with self.store.transaction() as db:
                 db.execute("UPDATE commerce_orders SET fulfillment_error=?,updated_at=? WHERE id=?",
@@ -484,6 +505,10 @@ class TelegramCommerce:
                 'activation_pending':activation=='first_connection','delivery':self.delivery_payload(order_id,manager)}
 
     def activate_first_connections(self, manager, limit: int=100) -> list[dict[str,Any]]:
+        with manager.lock:
+            return self._activate_first_connections_locked(manager,limit)
+
+    def _activate_first_connections_locked(self, manager, limit: int=100) -> list[dict[str,Any]]:
         with self.store.lock:
             rows=[dict(r) for r in self.store.db.execute("""SELECT * FROM commerce_orders
               WHERE status='provisioned_waiting_activation' AND client_id<>'' ORDER BY updated_at LIMIT ?""",(limit,))]
@@ -495,6 +520,11 @@ class TelegramCommerce:
                 if float(detail.get('activity_at') or 0)<=0 or detail.get('presence_source') not in ('traffic','access'):continue
                 now=time.time();duration=max(1,int(order.get('duration_days') or 1))
                 expires=now+duration*86400
+                with self.store.transaction() as db:
+                    db.execute('UPDATE commerce_orders SET activation_started_at=?,activation_expires_at=? WHERE id=? AND activation_expires_at<=0',
+                               (now,expires,order['id']))
+                    saved=db.execute('SELECT activation_started_at,activation_expires_at FROM commerce_orders WHERE id=?',(order['id'],)).fetchone()
+                    now=float(saved['activation_started_at']);expires=float(saved['activation_expires_at'])
                 manager.update(actor,order['client_id'],{'expiryTime':int(expires*1000)})
                 with self.store.transaction() as db:
                     db.execute("""UPDATE commerce_orders SET status='provisioned',activation_started_at=?,
@@ -626,13 +656,12 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
         with store.lock:
             exists=store.db.execute("SELECT 1 FROM commerce_products WHERE owner=? AND id=?",(oid,product_id)).fetchone()
         if not exists:raise HTTPException(404,'Product not found')
-        if body.volume_bytes==0 and body.unlimited_units!=1:
-            raise HTTPException(400,'Unlimited price must consume exactly one unlimited credit')
         if body.volume_bytes>0 and body.unlimited_units!=0:
             raise HTTPException(400,'Volume price cannot also consume unlimited credit')
         primary=int(body.primary_inbound_id or 0)
         if primary and primary not in body.inbound_ids:raise HTTPException(400,'Primary inbound must be selected in this price')
         ip_limit=body.resolved_ip_limit();now=time.time()
+        unlimited_units=commerce.unlimited_cost(oid,ip_limit,int(body.duration_days)) if body.volume_bytes==0 else 0
         with store.transaction() as db:
             commerce.require_plan_credit(oid,body.volume_bytes)
             db.execute("""INSERT INTO commerce_prices(id,owner,product_id,label,price_minor,currency,duration_days,
@@ -646,7 +675,7 @@ def install_telegram_commerce(app, store, auth, current, writable, audit, manage
               primary_inbound_id=excluded.primary_inbound_id,show_qr=excluded.show_qr,show_portal=excluded.show_portal,
               active=excluded.active,updated_at=excluded.updated_at""",
               (body.id,oid,product_id,body.label,int(body.price_minor),body.currency.upper(),int(body.duration_days),
-               int(body.volume_bytes),int(body.unlimited_units),ip_limit,ip_limit,int(body.hwid_limit),json.dumps(body.inbound_ids),
+               int(body.volume_bytes),unlimited_units,ip_limit,ip_limit,int(body.hwid_limit),json.dumps(body.inbound_ids),
                body.activation_mode,body.delivery_mode,primary,int(body.show_qr),int(body.show_portal),int(body.active),now,now))
         audit(p.actor,oid,'commerce.price_save',body.id,
               f'product={product_id}; amount={body.price_minor} {body.currency}; activation={body.activation_mode}; delivery={body.delivery_mode}')

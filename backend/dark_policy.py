@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MAX_INT = (1 << 63) - 1
 NAME_RE = re.compile(r"^[A-Za-z0-9_.@+\-]{1,128}$")
 
@@ -210,7 +210,7 @@ class Store:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA busy_timeout=30000")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, SCHEMA_VERSION):
+        if version not in (0, 1, 2, 3, SCHEMA_VERSION):
             raise PolicyError("Unrecognized database schema; refusing automatic downgrade")
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS owners(
@@ -291,19 +291,23 @@ class Store:
             self.db.execute("ALTER TABLE clients ADD COLUMN global_ip_block INTEGER NOT NULL DEFAULT 0")
         if "global_device_block" not in client_columns:
             self.db.execute("ALTER TABLE clients ADD COLUMN global_device_block INTEGER NOT NULL DEFAULT 0")
-        self.db.execute("PRAGMA user_version=3")
+        from unlimited_credit import migrate
+        migrate(self)
         if self.path != ":memory:":
             os.chmod(self.path, 0o600)
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         with self.lock:
-            self.db.execute("BEGIN IMMEDIATE")
+            nested = self.db.in_transaction
+            savepoint = 'dark_sp_' + str(time.time_ns())
+            self.db.execute('SAVEPOINT '+savepoint if nested else 'BEGIN IMMEDIATE')
             try:
                 yield self.db
-                self.db.execute("COMMIT")
+                self.db.execute('RELEASE '+savepoint if nested else 'COMMIT')
             except BaseException:
-                self.db.execute("ROLLBACK")
+                self.db.execute('ROLLBACK TO '+savepoint if nested else 'ROLLBACK')
+                if nested:self.db.execute('RELEASE '+savepoint)
                 raise
 
     def close(self) -> None:
@@ -342,7 +346,7 @@ class Store:
         if manual is not None and not isinstance(manual, bool):
             raise PolicyError("manual must be boolean")
         with self.transaction() as db:
-            previous = db.execute("SELECT manual,volume_credit_bytes,unlimited_credit FROM owners WHERE id=?", (owner,)).fetchone()
+            previous = db.execute("SELECT manual,volume_credit_bytes,unlimited_credit,unlimited_spent FROM owners WHERE id=?", (owner,)).fetchone()
             preserve_manual = previous["manual"] if previous and manual is None else int(bool(manual))
             volume = int(previous["volume_credit_bytes"]) if previous and volume_credit_bytes is None else integer(0 if volume_credit_bytes is None else volume_credit_bytes)
             unlimited = int(previous["unlimited_credit"]) if previous and unlimited_credit is None else integer(0 if unlimited_credit is None else unlimited_credit,0,1000000)
@@ -350,8 +354,8 @@ class Store:
             enforce_credit=self._resource_credit_enforced(db,owner,actor)
             if enforce_credit and volume<allocated_volume:
                 raise PolicyError("Volume credit cannot be lower than currently allocated client volume")
-            if enforce_credit and unlimited<allocated_unlimited:
-                raise PolicyError("Unlimited credit cannot be lower than current unlimited client count")
+            if enforce_credit and unlimited<int(previous["unlimited_spent"] if previous else 0):
+                raise PolicyError("Unlimited credit cannot be lower than already spent user-month units")
             count = db.execute("SELECT COUNT(*) FROM clients WHERE owner=?", (owner,)).fetchone()[0]
             if max_clients and count > max_clients:
                 raise PolicyError("The requested client quota is below the current number of records")
@@ -362,6 +366,11 @@ class Store:
                 unlimited_credit=excluded.unlimited_credit,
                 max_clients=excluded.max_clients,manual=excluded.manual""",
                        (owner,volume,unlimited,max_clients,preserve_manual))
+            delta=unlimited-int(previous['unlimited_credit'] if previous else 0)
+            if delta:
+                import uuid
+                db.execute('INSERT INTO resource_credit_ledger(event_id,owner,volume_bytes,unlimited_units,kind,reference,at) VALUES(?,?,0,?,?,?,?)',
+                    ('unlimited-grant:'+uuid.uuid4().hex,owner,delta,'unlimited_grant_set',actor.id,time.time()))
 
     @staticmethod
     def _usage(db: sqlite3.Connection, owner: str, period: int | None = None) -> int:
@@ -373,11 +382,12 @@ class Store:
 
     def register_client(self, actor: Actor, client_id: str, owner: str,
                         limit_ip: int = 1, quota_bytes: int = 0, price: int = 0,
-                        order_id: str | None = None) -> bool:
+                        order_id: str | None = None, *, expires_at: int = 0,
+                        duration_days: int | None = None) -> bool:
         actor.require("clients", "create", owner)
         if not NAME_RE.fullmatch(client_id):
             raise PolicyError("Invalid client ID")
-        integer(limit_ip, 0, 1000); integer(quota_bytes); integer(price)
+        integer(limit_ip, 0, 1000); integer(quota_bytes); integer(price); integer(expires_at)
         if price or order_id is not None:
             raise PolicyError("Monetary reseller credit is retired; use volume/unlimited resource credits")
         with self.transaction() as db:
@@ -393,9 +403,11 @@ class Store:
                 allocated_volume,allocated_unlimited=self._allocation(db,owner)
                 if quota_bytes>0 and allocated_volume+quota_bytes>int(r["volume_credit_bytes"]):
                     raise PolicyError("Insufficient representative volume credit")
-                if quota_bytes==0 and allocated_unlimited+1>int(r["unlimited_credit"]):
-                    raise PolicyError("Insufficient representative unlimited credit")
-            db.execute("INSERT INTO clients(id,owner,limit_ip,quota_bytes) VALUES(?,?,?,?)", (client_id, owner, limit_ip, quota_bytes))
+
+            from unlimited_credit import change
+            change(self,db,client_id=client_id,owner=owner,quota_bytes=quota_bytes,
+                   ip_limit=limit_ip,expires_at=expires_at,duration_days=duration_days,creation=True)
+            db.execute("INSERT INTO clients(id,owner,limit_ip,quota_bytes,expires_at) VALUES(?,?,?,?,?)", (client_id, owner, limit_ip, quota_bytes,expires_at))
             return True
 
     def edit_client(self, actor: Actor, client_id: str, *, limit_ip: int | None = None,
@@ -415,53 +427,36 @@ class Store:
                     allocated_volume,allocated_unlimited=self._allocation(db,u["owner"],exclude_client=client_id)
                     if new_quota>0 and allocated_volume+new_quota>int(r["volume_credit_bytes"]):
                         raise PolicyError("Insufficient representative volume credit")
-                    if new_quota==0 and allocated_unlimited+1>int(r["unlimited_credit"]):
-                        raise PolicyError("Insufficient representative unlimited credit")
+
                 changes["quota_bytes"] = new_quota
             if expires_at is not None: changes["expires_at"] = integer(expires_at)
             if manual is not None:
                 if not isinstance(manual, bool): raise PolicyError("manual must be boolean")
                 changes["manual"] = int(manual)
+            billing_keys=('limit_ip','quota_bytes','expires_at')
+            if any(k in changes and changes[k]!=u[k] for k in billing_keys):
+                from unlimited_credit import change
+                change(self,db,client_id=client_id,owner=u['owner'],
+                       quota_bytes=changes.get('quota_bytes',u['quota_bytes']),
+                       ip_limit=changes.get('limit_ip',u['limit_ip']),
+                       expires_at=changes.get('expires_at',u['expires_at']))
             if changes:
                 db.execute("UPDATE clients SET "+",".join(k+"=?" for k in changes)+" WHERE id=?", (*changes.values(), client_id))
 
     def edit_clients_many(self, actor: Actor, edits: list[tuple[str,dict[str,Any]]]) -> dict[str,str]:
-        """Apply up to 500 independent policy-row edits in one SQLite transaction.
-
-        Validation remains per client and failed items are skipped, preserving the
-        bulk API's best-effort semantics without one FULL-sync commit per client.
-        """
+        """Best-effort rows, one outer commit and atomic per-row savepoints."""
         if not isinstance(edits,list) or len(edits)>500:
-            raise PolicyError("Bulk client edit requires at most 500 clients")
-        errors:dict[str,str]={};seen:set[str]=set()
-        with self.transaction() as db:
+            raise PolicyError('Bulk client edit requires at most 500 clients')
+        errors={};seen=set()
+        with self.transaction():
             for client_id,requested in edits:
                 try:
                     if not isinstance(client_id,str) or client_id in seen or not isinstance(requested,dict):
-                        raise PolicyError("Invalid or duplicate bulk client edit")
+                        raise PolicyError('Invalid or duplicate bulk client edit')
                     seen.add(client_id)
-                    u=db.execute("SELECT * FROM clients WHERE id=?",(client_id,)).fetchone()
-                    if not u:raise PolicyError("Client does not exist")
-                    actor.require("clients","edit",u["owner"])
-                    changes:dict[str,int]={}
-                    if "limit_ip" in requested:changes["limit_ip"]=integer(requested["limit_ip"],0,1000)
-                    if "quota_bytes" in requested:
-                        new_quota=integer(requested["quota_bytes"])
-                        if self._resource_credit_enforced(db,u["owner"],actor):
-                            owner=db.execute("SELECT * FROM owners WHERE id=?",(u["owner"],)).fetchone()
-                            if not owner:raise PolicyError("Owner is not registered")
-                            allocated_volume,allocated_unlimited=self._allocation(db,u["owner"],exclude_client=client_id)
-                            if new_quota>0 and allocated_volume+new_quota>int(owner["volume_credit_bytes"]):
-                                raise PolicyError("Insufficient representative volume credit")
-                            if new_quota==0 and allocated_unlimited+1>int(owner["unlimited_credit"]):
-                                raise PolicyError("Insufficient representative unlimited credit")
-                        changes["quota_bytes"]=new_quota
-                    if "expires_at" in requested:changes["expires_at"]=integer(requested["expires_at"])
-                    if "manual" in requested:
-                        if not isinstance(requested["manual"],bool):raise PolicyError("manual must be boolean")
-                        changes["manual"]=int(requested["manual"])
-                    if changes:
-                        db.execute("UPDATE clients SET "+",".join(k+"=?" for k in changes)+" WHERE id=?",(*changes.values(),client_id))
+                    if set(requested)-{'limit_ip','quota_bytes','manual','expires_at'}:
+                        raise PolicyError('Unknown client policy field')
+                    self.edit_client(actor,client_id,**requested)
                 except PolicyError as ex:
                     errors[client_id]=str(ex)[:300]
         return errors
@@ -533,7 +528,7 @@ class Store:
             if new_unlimited<0 or new_unlimited>1000000:raise PolicyError("Unlimited credit adjustment is out of range")
             allocated_volume,allocated_unlimited=self._allocation(db,owner)
             if new_volume<allocated_volume:raise PolicyError("Volume credit cannot fall below allocated client volume")
-            if new_unlimited<allocated_unlimited:raise PolicyError("Unlimited credit cannot fall below current unlimited client count")
+            if new_unlimited<int(r["unlimited_spent"]):raise PolicyError("Unlimited credit cannot fall below spent user-month units")
             db.execute("INSERT INTO resource_credit_ledger(event_id,owner,volume_bytes,unlimited_units,kind,reference,at) VALUES(?,?,?,?,?,?,?)",
                        (event_id,owner,volume_bytes,unlimited_units,"adjust","",time.time()))
             db.execute("UPDATE owners SET volume_credit_bytes=?,unlimited_credit=?,quota_bytes=0 WHERE id=?",
@@ -554,7 +549,10 @@ class Store:
                     "allocated_volume_bytes":allocated_volume,
                     "volume_credit_remaining_bytes":max(0,int(r["volume_credit_bytes"])-allocated_volume) if enforced else None,
                     "allocated_unlimited":allocated_unlimited,
-                    "unlimited_credit_remaining":max(0,int(r["unlimited_credit"])-allocated_unlimited) if enforced else None}
+                    "unlimited_credit_used":int(r["unlimited_spent"]),
+                    "unlimited_credit_model":"user_month",
+                    "unlimited_credit_month_days":30,
+                    "unlimited_credit_remaining":max(0,int(r["unlimited_credit"])-int(r["unlimited_spent"])) if enforced else None}
 
     def list_clients(self, actor: Actor) -> list[dict[str, Any]]:
         with self.lock:
@@ -742,6 +740,9 @@ def main(argv: list[str] | None=None) -> int:
         return 0
     except (PolicyError,sqlite3.Error,OSError,json.JSONDecodeError) as exc:
         print("ERROR: "+str(exc),file=sys.stderr);return 2
+
+# Preload the shared policy before restricted workers drop source-tree access.
+import unlimited_credit as _unlimited_credit
 
 if __name__=="__main__":
     raise SystemExit(main())

@@ -1,0 +1,38 @@
+{
+  "version": "0.10.1-rc10",
+  "base_commit": "ab0b3128210dbf4faddc8b473c21c51560a54654",
+  "billing_model": "user_month",
+  "month_days": 30,
+  "suites_overlap_do_not_sum": true,
+  "suites": {
+    "credit-final": {
+      "passed": 121,
+      "failed": 0
+    },
+    "credit-legacy": {
+      "passed": 82,
+      "failed": 0
+    },
+    "credit-integration": {
+      "passed": 37,
+      "failed": 0
+    },
+    "frontend": {
+      "passed": 35,
+      "failed": 0
+    },
+    "all_frontend": {
+      "passed": 359,
+      "failed": 0
+    }
+  },
+  "migration": {
+    "production_database_modified": false,
+    "migration_on_private_copy": "PASS",
+    "all_representative_free_balances_preserved": true,
+    "clients_inbounds_profiles_and_traffic_unchanged": true,
+    "sqlite_integrity": "ok",
+    "schema_from": 3,
+    "schema_to": 4
+  }
+}

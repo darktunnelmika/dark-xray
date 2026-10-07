@@ -19,7 +19,7 @@ class RestorePromotionMixin:
     def representative_catalog(self)->list[dict[str,Any]]:
         with self.store.lock:
             rows=[dict(r) for r in self.store.db.execute("""SELECT a.id,a.disabled,p.name,p.allowed,
-              p.max_client_ips,p.max_client_hwid,o.volume_credit_bytes,o.unlimited_credit,o.max_clients
+              p.max_client_ips,p.max_client_hwid,o.volume_credit_bytes,o.unlimited_credit,o.unlimited_spent,o.max_clients
               FROM api_admins a JOIN owner_profiles p ON p.id=a.id JOIN owners o ON o.id=a.id
               WHERE a.role='reseller' ORDER BY p.name,a.id""")]
             for row in rows:
@@ -30,7 +30,7 @@ class RestorePromotionMixin:
                 allocated_unlimited=int(self.store.db.execute(
                     "SELECT COUNT(*) FROM clients WHERE owner=? AND quota_bytes=0",(row['id'],)).fetchone()[0])
                 row['remaining_volume_bytes']=max(0,int(row['volume_credit_bytes'])-allocated_volume)
-                row['remaining_unlimited']=max(0,int(row['unlimited_credit'])-allocated_unlimited)
+                row['remaining_unlimited']=max(0,int(row['unlimited_credit'])-int(row['unlimited_spent']))
                 row['client_count']=int(self.store.db.execute(
                     "SELECT COUNT(*) FROM clients WHERE owner=?",(row['id'],)).fetchone()[0])
         return rows

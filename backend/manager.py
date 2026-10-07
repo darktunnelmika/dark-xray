@@ -324,7 +324,7 @@ class Manager:
 
     def _stage_create_locked(self,actor:Actor,owner:str,client:dict,ids:list[int],
                              existing:set[str],reserved:set[str],*,inbounds_checked:bool=False,validated:bool=False,
-                             owner_profile:dict|None=None)->str:
+                             owner_profile:dict|None=None,billing_duration_days:int|None=None)->str:
         actor.require('clients','create',owner)
         if not self.engine.config.writes_enabled:raise PolicyError('CoreEngine writes are disabled')
         data=dict(client) if validated else self.validate_client(client);email=data['email'].lower()
@@ -350,26 +350,47 @@ class Manager:
         if ip_ceiling and data['limitIp']==0 and int(data.get('totalGB') or 0)==0:
             raise PolicyError('Unlimited IP is only available to volumetric services under this reseller policy')
         if hwid_ceiling and (data['limitHwid']==0 or data['limitHwid']>hwid_ceiling):raise PolicyError('Requested HWID limit exceeds the reseller policy')
-        try:self.store.register_client(actor,email,owner,data['limitIp'],data['totalGB'])
-        except sqlite3.IntegrityError as ex:raise PolicyError('Identity is already reserved') from ex
         try:
-            self.store.edit_client(SYSTEM,email,manual=not data['enable'],expires_at=max(0,data['expiryTime']//1000))
             with self.store.transaction() as db:
+                self.store.register_client(actor,email,owner,data['limitIp'],data['totalGB'],
+                    expires_at=max(0,data['expiryTime']//1000),duration_days=billing_duration_days)
+                self.store.edit_client(SYSTEM,email,manual=not data['enable'])
                 db.execute('INSERT INTO managed_clients(email,desired,inbounds,public_token,created_at,updated_at) VALUES(?,?,?,?,?,?)',
                            (email,json.dumps(data),json.dumps(ids),secrets.token_urlsafe(32),time.time(),time.time()))
-        except Exception:
-            self.store.delete_client(SYSTEM,email);raise
+        except sqlite3.IntegrityError as ex:
+            raise PolicyError('Identity is already reserved') from ex
         self.audit(actor,owner,'client.create',email,'CoreEngine synchronization requested')
         existing.add(email);reserved.add(email)
         return email
 
-    def create(self, actor: Actor, owner: str, client: dict, ids: list[int]) -> dict:
+    def unlimited_quote(self,actor:Actor,owner:str,patch:dict,*,email:str='')->dict:
+        from unlimited_credit import change
+        with self.lock,self.store.lock:
+            if email:
+                row=self.own_row(actor,email,'read')
+                if row['owner']!=owner:raise PermissionDenied('Client owner mismatch')
+                current=json.loads(self.meta(email)['desired']);current.update(patch)
+            else:
+                actor.require('clients','create',owner)
+                current=dict(patch)
+            quota=current.get('totalGB',0);ips=current.get('limitIp',1)
+            expiry=current.get('expiryTime',0)
+            integer(quota);integer(ips,0,1000);integer(expiry)
+            if email and quota==row['quota_bytes'] and ips==row['limit_ip'] and expiry//1000==row['expires_at']:
+                stats=self.store.owner_stats(actor,owner);remaining=stats['unlimited_credit_remaining']
+                return {'units':0,'remaining':remaining,'after':remaining,'enforced':stats['resource_credit_enforced'],
+                        'affordable':True,'unit':'user_month','month_days':30}
+            return change(self.store,self.store.db,client_id=email,owner=owner,
+                          quota_bytes=quota,ip_limit=ips,expires_at=expiry//1000,
+                          creation=not bool(email),preview=True)
+
+    def create(self, actor: Actor, owner: str, client: dict, ids: list[int], *, billing_duration_days:int|None=None) -> dict:
         # Preserve the public API contract: malformed client payloads are rejected
         # before owner/inbound authorization is evaluated.
         data=self.validate_client(client)
         with self.lock:
             existing,reserved=self._creation_sets_locked()
-            email=self._stage_create_locked(actor,owner,data,ids,existing,reserved,inbounds_checked=False,validated=True)
+            email=self._stage_create_locked(actor,owner,data,ids,existing,reserved,inbounds_checked=False,validated=True,billing_duration_days=billing_duration_days)
             self.tick(suppress=True)
             return self.detail(actor,email)
 
@@ -452,15 +473,13 @@ class Manager:
             rows={r['email']:r for r in self.engine.clients()}
             if email not in rows: raise PolicyError('CoreEngine client disappeared')
             up,down=CoreEngine.counters(rows[email])
-            self.store.register_client(actor,email,owner,int(data.get('limitIp',0)),int(data.get('totalGB',0)))
-            try:
+            with self.store.transaction():
+                self.store.register_client(actor,email,owner,int(data.get('limitIp',0)),int(data.get('totalGB',0)),expires_at=max(0,int(data.get('expiryTime',0))//1000))
                 with self.store.transaction() as db:
                     db.execute('UPDATE clients SET used_bytes=?,manual=?,expires_at=? WHERE id=?',
                         (up+down,int(not data.get('enable',True)),max(0,int(data.get('expiryTime',0))//1000),email))
                     db.execute('''INSERT INTO managed_clients(email,desired,inbounds,public_token,op,state,last_up,last_down,initialized,expected_enable,created_at,updated_at)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(email,json.dumps(data),json.dumps(ids),secrets.token_urlsafe(32),'none','applied',up,down,1,int(bool(data.get('enable',True))),time.time(),time.time()))
-            except Exception:
-                self.store.delete_client(SYSTEM,email);raise
             self.audit(actor,owner,'client.adopt',email,'Historical engine bytes are a baseline; resource credit is reserved from the configured client plan')
             self.tick(suppress=True)
             return self.detail(actor,email)
@@ -517,10 +536,11 @@ class Manager:
             if 'totalGB' in patch:changes['quota_bytes']=patch['totalGB']
             if 'expiryTime' in patch:changes['expires_at']=max(0,patch['expiryTime']//1000)
             if 'enable' in patch:changes['manual']=not patch['enable']
-            if changes:self.store.edit_client(SYSTEM,email,**changes)
-            with self.store.transaction() as db:
-                db.execute("UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?",
-                  (json.dumps(desired),json.dumps(ids),time.time(),'enable' in patch,email))
+            with self.store.transaction():
+                if changes:self.store.edit_client(SYSTEM,email,**changes)
+                with self.store.transaction() as db:
+                    db.execute("UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?",
+                      (json.dumps(desired),json.dumps(ids),time.time(),'enable' in patch,email))
             self.audit(actor,row['owner'],'client.update',email,','.join(sorted(patch)))
             if reconcile:self._reconcile_client_locked(email)
             return self.detail(actor,email) if return_detail else None
@@ -573,23 +593,25 @@ class Manager:
                                   'changes':changes,'patch':patch,'out_index':idx})
                 except (PolicyError,CoreError,ValueError,TypeError) as ex:
                     out.append({'email':label,'error':str(ex)[:300]})
-            policy_edits=[(p['email'],p['changes']) for p in plans if p['changes']]
-            policy_errors=self.store.edit_clients_many(SYSTEM,policy_edits) if policy_edits else {}
-            staged=[]
-            for plan in plans:
-                error=policy_errors.get(plan['email'])
-                if error:
-                    item=out[plan['out_index']];item.pop('_planned',None);item['error']=error
-                else:staged.append(plan)
+            with self.store.transaction():
+                policy_edits=[(p['email'],p['changes']) for p in plans if p['changes']]
+                policy_errors=self.store.edit_clients_many(SYSTEM,policy_edits) if policy_edits else {}
+                staged=[]
+                for plan in plans:
+                    error=policy_errors.get(plan['email'])
+                    if error:
+                        item=out[plan['out_index']];item.pop('_planned',None);item['error']=error
+                    else:staged.append(plan)
+                if staged:
+                    now=time.time();groups={(p['owner'],p['group']) for p in staged if p['group']}
+                    with self.store.transaction() as db:
+                        for owner,group in groups:
+                            db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
+                        db.executemany("""UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?""",
+                            [(json.dumps(p['desired']),json.dumps(p['ids']),now,'enable' in p['patch'],p['email']) for p in staged])
+                        db.executemany('INSERT INTO live_audit(actor,owner,action,target,detail,at) VALUES(?,?,?,?,?,?)',
+                            [(actor.id,p['owner'],'client.update',p['email'],','.join(sorted(p['patch']))[:500],now) for p in staged])
             if staged:
-                now=time.time();groups={(p['owner'],p['group']) for p in staged if p['group']}
-                with self.store.transaction() as db:
-                    for owner,group in groups:
-                        db.execute('INSERT OR IGNORE INTO client_groups(owner,name,color,created_at,updated_at) VALUES(?,?,?,?,?)',(owner,group,'',now,now))
-                    db.executemany("""UPDATE managed_clients SET desired=?,inbounds=?,op='upsert',state='pending',error='',retry_at=0,attempts=0,updated_at=?,external_disabled=CASE WHEN ? THEN 0 ELSE external_disabled END WHERE email=?""",
-                        [(json.dumps(p['desired']),json.dumps(p['ids']),now,'enable' in p['patch'],p['email']) for p in staged])
-                    db.executemany('INSERT INTO live_audit(actor,owner,action,target,detail,at) VALUES(?,?,?,?,?,?)',
-                        [(actor.id,p['owner'],'client.update',p['email'],','.join(sorted(p['patch']))[:500],now) for p in staged])
                 self.tick(suppress=True)
                 details=self.details_many(actor,[p['email'] for p in staged])
                 for plan in staged:

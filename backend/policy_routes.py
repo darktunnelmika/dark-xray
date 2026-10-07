@@ -145,8 +145,8 @@ def create_app(store: Store) -> FastAPI:
 
     @app.post('/v1/clients',status_code=201)
     def add_client(data: ClientCreate,actor: Annotated[Actor,Depends(current)]):
-        created=store.register_client(actor,data.id,data.owner,data.limit_ip,data.quota_bytes)
-        return {'created':created,'note':'Policy record only; resource credits are allocation-based, not price-based'}
+        created=store.register_client(actor,data.id,data.owner,data.limit_ip,data.quota_bytes,expires_at=data.expires_at)
+        return {'created':created,'note':'Policy record only; volume uses allocation; unlimited uses user-month credits; no monetary pricing'}
 
     @app.patch('/v1/clients/{client_id}')
     def edit_client(client_id: str,data: ClientEdit,actor: Annotated[Actor,Depends(current)]):

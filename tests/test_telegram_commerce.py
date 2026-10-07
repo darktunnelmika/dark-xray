@@ -251,19 +251,16 @@ def test_first_connection_activation_is_real_and_starts_expiry_after_activity(en
     assert row['status']=='provisioned' and row['activation_started_at']>0 and row['activation_expires_at']>row['activation_started_at']
 
 
-def test_unlimited_price_consumes_exactly_one_unlimited_credit(env):
+def test_unlimited_price_units_are_server_calculated(env):
     _,_,_,_,c=env
     inbound_id=create_inbound(c)
     assert c.put('/api/commerce/products',json=product_payload(kind='unlimited')).status_code==200
-    bad_zero=c.put('/api/commerce/products/turbo/prices',json=price_payload(
-        inbound_id,volume_bytes=0,unlimited_units=0))
-    assert bad_zero.status_code==400 and 'exactly one' in bad_zero.text.lower()
-    bad_two=c.put('/api/commerce/products/turbo/prices',json=price_payload(
-        inbound_id,volume_bytes=0,unlimited_units=2))
-    assert bad_two.status_code==400 and 'exactly one' in bad_two.text.lower()
-    good=c.put('/api/commerce/products/turbo/prices',json=price_payload(
-        inbound_id,volume_bytes=0,unlimited_units=1))
-    assert good.status_code==200,good.text
+    for supplied in (0,1,2,999):
+        result=c.put('/api/commerce/products/turbo/prices',json=price_payload(
+            inbound_id,volume_bytes=0,unlimited_units=supplied,ip_limit=5,duration_days=60))
+        assert result.status_code==200,result.text
+        assert result.json()['prices'][0]['unlimited_units']==10
+        assert result.json()['prices'][0]['credit_units']==10
 
 
 def test_forum_audit_router_scopes_and_routes_events(env):

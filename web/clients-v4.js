@@ -132,14 +132,14 @@ async function clientFormV4(email=null,inbound=null){
  const body=`<div class="cv4-editor-shell ${representative?'cv4-representative-editor':''}">
   <section class="cv4-edit-section"><header><span>01</span><div><b>${L('Identity','هویت')}</b><small>${representative?L('Choose random or type a manual client name.','نام رندوم یا نام دستی انتخاب کن.'):L('Only what is needed for day-to-day creation.','فقط چیزهایی که برای ساخت روزمره لازم است.')}</small></div></header><div class="cv4-edit-grid">${identityField}${ownerField}${fSelect(L('Group','گروه'),'group',groupItems,c.group||'')}${fSelect(L('State','وضعیت'),'enable',[['true',L('Active','فعال')],['false',L('Disabled','قطع')]],String(c.enable!==false))}</div></section>
   <section class="cv4-edit-section"><header><span>02</span><div><b>${L('Service','سرویس')}</b><small>${L('Select one or more customer inbounds.','یک یا چند اینباند مشتری انتخاب کن.')}</small></div></header><div id="cv4-inbounds">${inboundTiles(ids,owner)}</div></section>
-  <section class="cv4-edit-section"><header><span>03</span><div><b>${L('Plan','پلن')}</b><small>${representative?L('Fast presets only: service time and IP limit.','فقط انتخاب سریع مدت سرویس و محدودیت IP.'):L('Quota, expiry and IP limit.','حجم، انقضا و محدودیت IP.')}</small></div></header><div class="cv4-plan-grid"><div class="cv4-choice"><span>${L('Traffic','حجم')}</span>${segment('planMode',[['unlimited',L('Unlimited','نامحدود')],['limited',L('Limited','حجمی')]],plan)}</div><div data-cv4-quota class="${plan==='limited'?'':'hidden'}">${fInput(L('Quota (GiB)','حجم GiB'),'totalGB',plan==='limited'?(Number(c.totalGB||0)/gb):50,'number','min="0.01" step="0.01"')}</div>${repPlan}</div></section>
+  <section class="cv4-edit-section"><header><span>03</span><div><b>${L('Plan','پلن')}</b><small>${representative?L('Fast presets only: service time and IP limit.','فقط انتخاب سریع مدت سرویس و محدودیت IP.'):L('Quota, expiry and IP limit.','حجم، انقضا و محدودیت IP.')}</small></div></header><div class="cv4-plan-grid"><div class="cv4-choice"><span>${L('Traffic','حجم')}</span>${segment('planMode',[['unlimited',L('Unlimited','نامحدود')],['limited',L('Limited','حجمی')]],plan)}</div><div data-cv4-quota class="${plan==='limited'?'':'hidden'}">${fInput(L('Quota (GiB)','حجم GiB'),'totalGB',plan==='limited'?(Number(c.totalGB||0)/gb):50,'number','min="0.01" step="0.01"')}</div>${repPlan}</div><div class="notice" data-cv4-credit aria-live="polite"></div></section>
   ${advanced}
  </div>`;
  dialog(email?L('Edit client','ویرایش کاربر')+' · '+email:L('Create client','ساخت کاربر'),body,async f=>{
    const selected=f.getAll('inbound').map(Number);if(!selected.length)throw Error(L('Select at least one inbound.','حداقل یک اینباند انتخاب کن.'));
    const planMode=f.get('planMode');let expiryTime=0;
    if(representative){
-     const preset=String(f.get('expiryPreset')||'1');expiryTime=preset==='keep'?Number(c.expiryTime||0):addCalendarMonths(Number(preset));
+     const preset=String(f.get('expiryPreset')||'1');expiryTime=preset==='keep'?Number(c.expiryTime||0):(planMode==='unlimited'?Date.now()+Number(preset)*30*86400000:addCalendarMonths(Number(preset)));
    }else{
      const expMode=f.get('expiryMode');
      if(expMode==='days')expiryTime=Date.now()+Number(f.get('expiryDays')||0)*86400000;
@@ -151,17 +151,41 @@ async function clientFormV4(email=null,inbound=null){
    const selectedIp=representative?String(f.get('limitIpPreset')||'1'):'',limitIp=representative?(selectedIp==='keep'?Number(c.limitIp||0):Number(selectedIp)):Number(f.get('limitIp')||0);
    const compatible=flowCompatible(selected),flow=representative?String(c.flow||''):(compatible?String(f.get('flow')||''):'');
    const payload={totalGB:planMode==='limited'?Math.round(Number(f.get('totalGB')||0)*gb):0,expiryTime,limitIp,limitHwid:Number(f.get('limitHwid')||0),enable:f.get('enable')==='true',group:String(f.get('group')||''),comment:representative?String(c.comment||''):String(f.get('comment')||''),flow,reset:resetMode==='interval'?resetDays:0,resetTraffic:['daily','weekly','monthly'].includes(resetMode)?resetMode:'never',resetTrafficDay:resetMode==='monthly'?resetDay:0,resetCount:Number(c.resetCount||0)};
+   if(payload.totalGB===0){
+     const quote=await api('/api/unlimited-credit/quote','POST',{owner:String(f.get('owner')),email:email||'',client:payload});
+     if(quote.enforced&&!quote.affordable)throw Error(L('Insufficient unlimited credit.','اعتبار نامحدود کافی نیست.'));
+     if(quote.enforced&&quote.units>0&&!confirm(L('Unlimited credit debit: ','کسر اعتبار نامحدود: ')+quote.units+L(' units. Remaining after: ',' واحد؛ موجودی بعد: ')+quote.after))return;
+   }
    let result;if(email)result=await api('/api/clients/'+enc(email),'PATCH',{client:payload,inboundIds:selected});else{payload.email=String(f.get('email')||'').trim();result=await api('/api/clients','POST',{owner:f.get('owner'),client:payload,inboundIds:selected});}
    closeDialog();toast(L('Client saved.','کاربر ذخیره شد.'));await refresh();
  },email?L('Save changes','ذخیره تغییرات'):L('Create client','ساخت کاربر'));
  decorateEditor();
  const form=document.querySelector('#dialog-form');
+ let creditTimer,creditSeq=0;
+ function scheduleCredit(){clearTimeout(creditTimer);creditTimer=setTimeout(renderCredit,180);}
+ async function renderCredit(){
+   const box=form.querySelector('[data-cv4-credit]');if(!box||!form.isConnected)return;
+   const f=new FormData(form),pm=f.get('planMode'),seq=++creditSeq;
+   if(pm!=='unlimited'){box.textContent=L('Volumetric credit is separate; no unlimited units are charged.','اعتبار حجمی جداست؛ از اعتبار نامحدود کم نمی‌شود.');return;}
+   let exp=0;
+   if(representative){const preset=String(f.get('expiryPreset')||'1');exp=preset==='keep'?Number(c.expiryTime||0):Date.now()+Number(preset)*30*86400000;}
+   else if(f.get('expiryMode')==='days')exp=Date.now()+Number(f.get('expiryDays')||0)*86400000;
+   else if(f.get('expiryMode')==='date'&&f.get('expiry'))exp=new Date(f.get('expiry')+'Z').getTime();
+   const selected=String(f.get('limitIpPreset')||'1'),ips=representative?(selected==='keep'?Number(c.limitIp||0):Number(selected)):Number(f.get('limitIp')||0);
+   try{
+     const q=await api('/api/unlimited-credit/quote','POST',{owner:String(f.get('owner')),email:email||'',client:{totalGB:0,expiryTime:exp,limitIp:ips}});
+     if(seq!==creditSeq||!box.isConnected)return;
+     box.textContent=q.enforced?L('User-month credit | Balance: ','اعتبار کاربر×ماه | موجودی: ')+q.remaining+L(' | Debit: ',' | کسر: ')+q.units+L(' | After: ',' | پس از عملیات: ')+q.after+L(' | 1 unit = 1 user × 30 days.',' | هر واحد = ۱ کاربر × ۳۰ روز.'):L('Primary-owner clients do not spend representative credit.','کلاینت مالک از اعتبار نمایندگی مصرف نمی‌کند.');
+     box.classList.toggle('warning',q.enforced&&!q.affordable);
+   }catch(err){if(seq===creditSeq&&box.isConnected){box.textContent=err.message;box.classList.add('warning');}}
+ }
+
  function sync(){
    const pm=form.querySelector('[name=planMode]:checked')?.value||'unlimited';
    form.querySelector('[data-cv4-quota]')?.classList.toggle('hidden',pm!=='limited');
    if(representative){
      const ipSelect=form.querySelector('[name=limitIpPreset]'),zero=ipSelect?.querySelector('option[value="0"]'),cap=Number(ownerProfile(form.elements.owner.value).max_client_ips||0);
-     if(zero){zero.disabled=pm!=='limited'&&cap>0;if(zero.disabled&&ipSelect.value==='0')ipSelect.value='1';}
+     if(zero){zero.disabled=pm!=='limited';if(zero.disabled&&ipSelect.value==='0')ipSelect.value='1';}
    }else{const em=form.querySelector('[name=expiryMode]:checked')?.value||'unlimited';form.querySelector('[data-cv4-days]')?.classList.toggle('hidden',em!=='days');form.querySelector('[data-cv4-date]')?.classList.toggle('hidden',em!=='date');}
    const selected=[...form.querySelectorAll('input[name=inbound]:checked')].map(x=>Number(x.value)),ok=flowCompatible(selected),flow=form.querySelector('[data-cv4-flow]'),note=form.querySelector('[data-cv4-flow-note]');
    if(flow){flow.classList.toggle('disabled',!ok);flow.querySelector('select').disabled=!ok;if(!ok)flow.querySelector('select').value='';}if(note)note.textContent=ok?L('Available for selected VLESS TCP/RAW TLS/REALITY inbounds.','برای اینباندهای VLESS TCP/RAW TLS/REALITY انتخاب‌شده فعال است.'):L('Hidden for gRPC/XHTTP/other incompatible transports.','برای gRPC/XHTTP و انتقال ناسازگار غیرفعال است.');
@@ -185,7 +209,7 @@ async function clientFormV4(email=null,inbound=null){
  form.addEventListener('change',ev=>{
    if(ev.target.name==='owner'){const own=ev.target.value;form.querySelector('#cv4-inbounds').innerHTML=inboundTiles([],own);const gs=form.querySelector('[name=group]');gs.innerHTML=opt([['',L('Ungrouped','بدون گروه')],...groupOptions(own)],'');}
    sync();
- });sync();
+ });form.addEventListener('input',scheduleCredit);form.addEventListener('change',scheduleCredit);sync();scheduleCredit();
 }
 clientForm=clientFormV4;
 

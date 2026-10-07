@@ -181,7 +181,7 @@ def test_reseller_scope_and_shared_inbound(env):
     create(c,'dark-a')
     assert c.put('/api/owners/arda',json={'name':'ARDA','allowed':[1],'max_clients':1,'volume_credit_bytes':0,'unlimited_credit':1}).status_code==200
     assert c.post('/api/admins',json={'username':'arda','password':'AnotherTestOnly123','role':'reseller'}).status_code==200
-    create(c,'arda-a','arda')
+    create(c,'arda-a','arda',extra={'expiryTime':int(time.time()*1000)+30*86400000})
     token,p=auth.login('arda','AnotherTestOnly123','', '127.0.0.2')
     with TestClient(make_app(m,auth,background=False),base_url=engine.config.public_origin) as other:
         other.cookies.set('dark_session',token);other.headers['X-Dark-CSRF']=p.csrf

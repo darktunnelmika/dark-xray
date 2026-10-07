@@ -128,6 +128,7 @@ class ClientCreate(StrictModel):
     owner: str=Field(min_length=1,max_length=128)
     limit_ip: StrictInt=Field(default=1,ge=0,le=1000)
     quota_bytes: StrictInt=Field(default=0,ge=0,le=MAX_INT)
+    expires_at: StrictInt=Field(default=0,ge=0,le=MAX_INT,description='Unix seconds; required for representative unlimited service')
 
 class ClientEdit(StrictModel):
     limit_ip: StrictInt|None=Field(default=None,ge=0,le=1000)

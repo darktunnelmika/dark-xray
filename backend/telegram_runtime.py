@@ -1119,7 +1119,7 @@ class BotWorker(CustomerBotFeatures):
     def simple_plan_choose_months(self,chat_id:int,user_id:int,months:int):
         if self.sessions.get(user_id)!='store_simple_duration_wait':raise PolicyError('Simple plan wizard is not waiting for duration')
         if months not in (1,2,3,6,12):raise PolicyError('Invalid simple plan duration')
-        data=self.session_data[user_id];data['duration_days']={1:30,2:60,3:90,6:180,12:365}[months]
+        data=self.session_data[user_id];data['duration_days']=months*30 if data.get('plan_type')=='unlimited' else {1:30,2:60,3:90,6:180,12:365}[months]
         if data.get('plan_type')=='unlimited':
             data['volume_gb']=0;self.simple_plan_ask_ip(chat_id,user_id);return
         self.sessions[user_id]='store_simple_volume_wait'
@@ -1137,7 +1137,7 @@ class BotWorker(CustomerBotFeatures):
     def _simple_plan_unlimited_ip_allowed(self,user_id:int)->bool:
         data=self.session_data.get(user_id) or {}
         if data.get('plan_type')=='volume':return True
-        try:return int(self.runtime.manager.profile(self.owner).get('max_client_ips') or 0)==0
+        try:return self.owner_role()=='owner'
         except Exception:return self.owner_role()=='owner'
 
     def simple_plan_ask_ip(self,chat_id:int,user_id:int):
@@ -1189,10 +1189,12 @@ class BotWorker(CustomerBotFeatures):
         catalog={x['id']:x for x in self.inbound_catalog()}
         locations=' · '.join(catalog.get(i,{}).get('name',str(i)) for i in ids)
         quota='نامحدود' if data.get('plan_type')=='unlimited' else str(data.get('volume_gb'))+' GB'
+        credit_units=self.runtime.commerce.unlimited_cost(self.owner,int(data['ip_limit']),int(data['duration_days'])) if data.get('plan_type')=='unlimited' else 0
         self.api.send(chat_id,
             f"✦ پیش‌نمایش نهایی\n{data['name']}\nدسته: {data.get('category') or 'General'}\n"
             f"{quota} · {data['duration_days']} روز · IP {'نامحدود' if int(data['ip_limit'])==0 else data['ip_limit']}\n"
             f"قیمت: {amount(data['price_minor'],'IRT')}\nلوکیشن‌ها: {locations}\n"
+            f"♾ سهمیه هر فروش: {credit_units} واحد کاربر×ماه؛ انتشار محصول اعتبار کم نمی‌کند.\n"
             "⏱ شروع زمان: اولین اتصال واقعی\n🔗 تحویل: Subscription + Portal · QR روشن · HWID خاموش",
             {'inline_keyboard':[[{'text':'✅ انتشار پلن','callback_data':'stspublish'},
                                  {'text':'❌ لغو','callback_data':'stscancel'}]]})
@@ -1349,7 +1351,7 @@ class BotWorker(CustomerBotFeatures):
                   primary_inbound_id,show_qr,show_portal,active,created_at,updated_at)
                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (new_price,self.owner,new_id,price['label'],price['price_minor'],price['currency'],price['duration_days'],
-                   price['volume_bytes'],price['unlimited_units'],price['device_limit'],price['ip_limit'],price['hwid_limit'],
+                   price['volume_bytes'],(self.runtime.commerce.unlimited_cost(self.owner,int(price['ip_limit']),int(price['duration_days'])) if int(price['volume_bytes'])==0 else 0),price['device_limit'],price['ip_limit'],price['hwid_limit'],
                    price['inbound_ids'],price['activation_mode'],price['delivery_mode'],price['primary_inbound_id'],
                    price['show_qr'],price['show_portal'],0,now,now))
             new_row=int(db.execute("SELECT rowid FROM commerce_products WHERE owner=? AND id=?",(self.owner,new_id)).fetchone()[0])
@@ -1382,7 +1384,7 @@ class BotWorker(CustomerBotFeatures):
             if not 1<=n<=3650:self.api.send(chat_id,'مدت باید بین 1 تا 3650 روز باشد.');return
             data['duration_days']=n
             if data['product_kind']=='unlimited':
-                data['volume_bytes']=0;data['unlimited_units']=1;self.sessions[user_id]='store_price_ip'
+                data['volume_bytes']=0;data['unlimited_units']=0;self.sessions[user_id]='store_price_ip'
                 self.api.send(chat_id,'IP Limit را بفرست. صفر = نامحدود');return
             self.sessions[user_id]='store_price_volume'
             self.api.send(chat_id,'حجم سرویس را به GB بفرست.');return
@@ -1396,6 +1398,8 @@ class BotWorker(CustomerBotFeatures):
             try:n=int(value)
             except ValueError:self.api.send(chat_id,'IP Limit باید عدد صحیح باشد.');return
             if not 0<=n<=1000:self.api.send(chat_id,'IP Limit خارج از محدوده است.');return
+            if int(data.get('volume_bytes') or 0)==0:
+                data['unlimited_units']=self.runtime.commerce.unlimited_cost(self.owner,n,int(data['duration_days']))
             data['ip_limit']=n;self.sessions[user_id]='store_price_hwid'
             self.api.send(chat_id,'HWID Limit را بفرست. صفر = نامحدود');return
         if state=='store_price_hwid':
