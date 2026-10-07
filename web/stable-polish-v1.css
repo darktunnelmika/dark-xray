@@ -1,0 +1,177 @@
+/* DARK XRAY Stable Polish V1
+ * Presentation-only closeout layer. No dimensions, business rules or control
+ * behavior are changed here; feature/mobile layout contracts remain authoritative.
+ */
+body.skin-cyber-classic{
+  --stable-edge:rgba(25,255,134,.30);
+  --stable-edge-soft:rgba(25,255,134,.12);
+  --stable-glow:rgba(25,255,134,.10);
+  --stable-surface:rgba(2,17,11,.92);
+  --stable-surface-2:rgba(2,12,9,.96);
+}
+
+body.skin-cyber-classic .topbar{
+  background:linear-gradient(180deg,rgba(1,15,10,.965),rgba(0,8,5,.965))!important;
+  border-bottom-color:rgba(25,255,134,.26)!important;
+}
+
+body.skin-cyber-classic .page-heading h1{
+  letter-spacing:-.025em;
+  text-shadow:0 0 24px rgba(25,255,134,.08);
+}
+
+body.skin-cyber-classic .page-heading .eyebrow{
+  letter-spacing:.18em;
+}
+
+body.skin-cyber-classic .panel,
+body.skin-cyber-classic .swap-card,
+body.skin-cyber-classic .cv4-row,
+body.skin-cyber-classic .nv2-node,
+body.skin-cyber-classic .dr-group{
+  position:relative;
+  border-color:var(--stable-edge-soft)!important;
+  background:
+    linear-gradient(145deg,rgba(4,24,16,.94),rgba(0,9,6,.97))!important;
+  box-shadow:
+    inset 0 1px rgba(255,255,255,.018),
+    0 12px 34px rgba(0,0,0,.22)!important;
+}
+
+body.skin-cyber-classic .panel:hover,
+body.skin-cyber-classic .swap-card:hover,
+body.skin-cyber-classic .nv2-node:hover{
+  border-color:var(--stable-edge)!important;
+}
+
+body.skin-cyber-classic .panel-head,
+body.skin-cyber-classic .swap-card-head{
+  border-bottom-color:rgba(25,255,134,.08)!important;
+}
+
+body.skin-cyber-classic .btn{
+  border-color:rgba(25,255,134,.16);
+  background:linear-gradient(180deg,rgba(11,35,25,.92),rgba(3,20,13,.92));
+  box-shadow:inset 0 1px rgba(255,255,255,.018);
+}
+
+body.skin-cyber-classic .btn:hover:not(:disabled){
+  border-color:rgba(25,255,134,.40);
+  background:linear-gradient(180deg,rgba(14,48,33,.96),rgba(4,27,18,.96));
+  box-shadow:0 0 18px rgba(25,255,134,.055);
+}
+
+body.skin-cyber-classic .btn.primary{
+  color:#001b0e;
+  background:linear-gradient(180deg,#51ffa6,#19ff86)!important;
+  border-color:#70ffb5!important;
+  box-shadow:0 0 22px rgba(25,255,134,.13)!important;
+}
+
+body.skin-cyber-classic .btn.danger{
+  background:linear-gradient(180deg,rgba(73,18,27,.62),rgba(36,8,14,.72))!important;
+  border-color:rgba(255,95,103,.30)!important;
+}
+
+body.skin-cyber-classic input,
+body.skin-cyber-classic select,
+body.skin-cyber-classic textarea,
+body.skin-cyber-classic .field-input{
+  background:rgba(0,9,6,.90);
+  border-color:rgba(25,255,134,.17);
+}
+
+body.skin-cyber-classic input:hover,
+body.skin-cyber-classic select:hover,
+body.skin-cyber-classic textarea:hover,
+body.skin-cyber-classic .field-input:hover{
+  border-color:rgba(25,255,134,.28);
+}
+
+body.skin-cyber-classic input:focus,
+body.skin-cyber-classic select:focus,
+body.skin-cyber-classic textarea:focus,
+body.skin-cyber-classic .field-input:focus{
+  border-color:rgba(25,255,134,.58);
+  box-shadow:0 0 0 2px rgba(25,255,134,.055);
+}
+
+body.skin-cyber-classic .dialog{
+  border-color:rgba(25,255,134,.34);
+  background:linear-gradient(180deg,#04150e,#010b07);
+  box-shadow:0 30px 110px rgba(0,0,0,.72),0 0 36px rgba(25,255,134,.055);
+}
+
+body.skin-cyber-classic .dialog-head,
+body.skin-cyber-classic .dialog-foot{
+  background:rgba(1,12,8,.98);
+  border-color:rgba(25,255,134,.14);
+}
+
+body.skin-cyber-classic .data-table tbody tr,
+body.skin-cyber-classic .cv4-row{
+  transition:border-color .14s ease,background .14s ease,box-shadow .14s ease;
+}
+
+body.skin-cyber-classic .data-table tbody tr:hover{
+  background:rgba(25,255,134,.025);
+}
+
+body.skin-cyber-classic .tag,
+body.skin-cyber-classic .pill{
+  box-shadow:inset 0 0 12px rgba(25,255,134,.018);
+}
+
+body.skin-cyber-classic .swap-card{
+  overflow:hidden;
+}
+
+body.skin-cyber-classic .swap-card:before{
+  content:"";
+  position:absolute;
+  inset:0 auto auto 0;
+  width:72px;
+  height:1px;
+  background:linear-gradient(90deg,var(--green),transparent);
+  box-shadow:0 0 12px rgba(25,255,134,.38);
+}
+
+html[dir="rtl"] body.skin-cyber-classic .swap-card:before{
+  inset:0 0 auto auto;
+  background:linear-gradient(270deg,var(--green),transparent);
+}
+
+body.skin-cyber-classic .swap-route-name{
+  color:#effff5;
+  text-shadow:0 0 16px rgba(25,255,134,.09);
+}
+
+body.skin-cyber-classic .swap-path{
+  color:#78bd9a;
+}
+
+body.skin-cyber-classic .swap-accounting{
+  border-color:rgba(25,255,134,.20);
+  background:rgba(25,255,134,.035);
+}
+
+body.skin-cyber-classic .toast{
+  backdrop-filter:blur(8px);
+  border-color:rgba(25,255,134,.30);
+  box-shadow:0 12px 38px rgba(0,0,0,.45);
+}
+
+@media(max-width:760px){
+  body.skin-cyber-classic .topbar{box-shadow:0 7px 20px rgba(0,0,0,.35)!important}
+  body.skin-cyber-classic .panel,
+  body.skin-cyber-classic .swap-card,
+  body.skin-cyber-classic .cv4-row,
+  body.skin-cyber-classic .nv2-node,
+  body.skin-cyber-classic .dr-group{box-shadow:0 8px 22px rgba(0,0,0,.20)!important}
+}
+
+@media(prefers-reduced-motion:reduce){
+  body.skin-cyber-classic *,
+  body.skin-cyber-classic *:before,
+  body.skin-cyber-classic *:after{transition:none!important;animation:none!important}
+}
