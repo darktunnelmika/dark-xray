@@ -276,6 +276,35 @@ def test_quota_metadata_only_revision_reuses_exact_running_validation(tmp_path,m
         assert f.engine.process.pid==pid and f.runtime.status()['appliedRevision']==2
 
 
+def test_offline_other_node_delete_error_does_not_poison_healthy_node_lease():
+    class Rows:
+        def __init__(self, rows): self.rows=rows
+        def fetchall(self): return self.rows
+    row={'email':'alice','state':'error','op':'delete','error':'Node connection failed: ConnectionRefusedError'}
+    store=SimpleNamespace(lock=contextlib.nullcontext(),
+        db=SimpleNamespace(execute=lambda *_args,**_kw:Rows([row])))
+    manager=SimpleNamespace(store=store,tick=Mock(),last_error='')
+    engine=SimpleNamespace(collect_stats=Mock(),stats_error='',config=SimpleNamespace(writes_enabled=True))
+    nodes=SimpleNamespace(
+        installations=SimpleNamespace(operation=lambda _node:contextlib.nullcontext()),
+        _allowed_traffic_clients=lambda _node:{'alice'},
+        sync_desired_state=Mock(),
+        desired_state=Mock(return_value={'pending':False,'last_error':'','revision':7}),
+        commands=SimpleNamespace(status=Mock(return_value={'revision':0})),
+        _request=Mock(return_value=({'lease':{'valid':True,'remaining_seconds':60}},1)),
+    )
+    desired=lambda _node:{'revision':7,'hash':'a'*64}
+    result=renew_accounting_lease(nodes,manager,engine,'healthy',
+        {'accounting_lease':'b'*64},desired,lambda _node:[])
+    assert result['valid'] is True
+    nodes._request.assert_called_once()
+
+    row.update(state='error',op='upsert',error='policy write failed')
+    with pytest.raises(PolicyError,match='unresolved'):
+        renew_accounting_lease(nodes,manager,engine,'healthy',
+            {'accounting_lease':'c'*64},desired,lambda _node:[])
+
+
 def test_hub_failure_or_ignored_identity_never_renews():
     nodes=SimpleNamespace(installations=SimpleNamespace(operation=lambda _:contextlib.nullcontext()),_request=Mock())
     manager=SimpleNamespace(tick=Mock(side_effect=RuntimeError('ledger unavailable')))
