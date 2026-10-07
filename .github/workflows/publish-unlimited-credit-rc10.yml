@@ -2,7 +2,7 @@ name: Publish verified unlimited-credit source
 on:
   push:
     branches: [automation/publish-unlimited-credit-rc10]
-    paths: [qa/unlimited-credit.bundle.b64]
+    paths: [qa/unlimited-credit.ready]
 permissions:
   contents: write
 jobs:
@@ -19,10 +19,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode qa/unlimited-credit.bundle.b64 > /tmp/unlimited-credit.bundle
-          echo 'ee8aac1360220c73bbbe6bd7e8de8788a9f18a5db0cfd6132dc290e4d51de31e  /tmp/unlimited-credit.bundle' | sha256sum --check
+          cat qa/unlimited-credit.part00.b64 qa/unlimited-credit.part01.b64 qa/unlimited-credit.part02.b64 | base64 --decode > /tmp/unlimited-credit.bundle
+          echo 'edcf5ee55bddf0a029e77eb7e698c341dbdf9617f66dd1054533a84351b06f26  /tmp/unlimited-credit.bundle' | sha256sum --check
           git bundle verify /tmp/unlimited-credit.bundle
           git fetch /tmp/unlimited-credit.bundle HEAD
-          test "$(git rev-parse FETCH_HEAD)" = '15173f9b854b73108be0093ab7c4e64d155e32fd'
-          test "$(git rev-parse FETCH_HEAD^{tree})" = 'eacc2decc13844b53bdda30c27ca182cbc4e4284'
+          test "$(git rev-parse FETCH_HEAD)" = '4e2b9c40b0733ce5cbc26c97e8e6129dd773ca0b'
+          test "$(git rev-parse FETCH_HEAD^{tree})" = 'e4cbe61223ab929c153c9f42df924e5a7e7632ac'
           git push origin FETCH_HEAD:refs/heads/fix/unlimited-user-month-credit
