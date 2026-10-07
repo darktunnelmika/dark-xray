@@ -165,6 +165,7 @@ def node_https_request(origin:str, token:str, path:str, method:str='GET', body:d
 class NodeRegistry:
     def __init__(self,store:Store,cipher):
         self.store,self.cipher=store,cipher
+        self.managed_assignment_sources = None
         self.stop=threading.Event();self.thread:threading.Thread|None=None
         self._monitor_lock=threading.RLock();self._monitor_state={}
         self._operation_locks={};self._operation_locks_guard=threading.Lock()
@@ -1625,7 +1626,7 @@ class NodeRegistry:
         try:
             doc,ms=(_requester or self._request)(node_id,'/node/api/v1/state/apply','POST',body,30.0)
         except PolicyError as ex:
-            relay_required=any(str(o.get('tag') or '').startswith('dark-relay-')
+            relay_required=any(str(o.get('tag') or '').startswith(('dark-relay-','dark-swap-'))
                                for o in state['payload'].get('sections',{}).get('outbounds',[]) if isinstance(o,dict))
             if legacy_bundles is not None and not relay_required and str(ex).startswith('Node HTTP 404'):
                 legacy=self.sync_mirrors(node_id,legacy_bundles)
@@ -1662,7 +1663,13 @@ class NodeRegistry:
                 raise PolicyError('Node acknowledged a stale desired state')
             assigned={int(r[0]) for r in db.execute(
                 'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?',(node_id,))}
-            if not desired_sources<=assigned:raise PolicyError('Node assignments changed while applying desired state')
+            # Hub-generated relay listeners intentionally have no customer
+            # assignment row. Recheck their authoritative owner-scoped intent
+            # at ACK time, without exempting arbitrary high IDs or real inbounds.
+            generated = (set(self.managed_assignment_sources(node_id))
+                         if self.managed_assignment_sources is not None else set())
+            if not desired_sources <= assigned | generated:
+                raise PolicyError('Node assignments changed while applying desired state')
             for source in assigned:
                 item=by_source.get(source)
                 db.execute("""UPDATE remote_node_inbounds SET remote_inbound_id=?,last_sync=?,last_error=?,updated_at=?

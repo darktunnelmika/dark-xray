@@ -1412,6 +1412,8 @@ class CoreEngine:
         if fmt not in ('raw','base64','json','clash'):raise CoreError('Unsupported link format',status=400)
         host_format='raw' if fmt=='base64' else fmt
         d=self.client_detail(email);c=d['client'];links=[];warnings=[]
+        provider=getattr(self,'swap_hosts_provider',None)
+        swap_hosts=provider() if provider else []
         for i in d['inboundIds']:
             ib=self.inbound(i)
             if not ib['enable']:continue
@@ -1452,6 +1454,8 @@ class CoreEngine:
                     hs.insert(0,{})
             else:
                 hs=[{}] if runtime_ready is None or i in runtime_ready.get('local',set()) else []
+            hs.extend(h for h in swap_hosts if h.get('inboundId')==i and
+                      (runtime_ready is None or i in runtime_ready.get(h.get('runtime'),set())))
             expanded_hs=[]
             for source_host in hs:
                 if not source_host:
@@ -1467,7 +1471,7 @@ class CoreEngine:
             for host in expanded_hs:
                 runtime=host.get('runtime','local') or 'local'
                 endpoint_type=host.get('endpointType','direct') or 'direct'
-                if endpoint_type!='tunnel':
+                if endpoint_type not in ('tunnel','swap'):
                     direct_key=(i,runtime)
                     if direct_key in direct_seen:continue
                     direct_seen.add(direct_key)

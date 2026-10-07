@@ -45,6 +45,7 @@ from warp_paths import warp_endpoint_candidates, warp_scan_results
 from traffic_matrix import POLICIES as MATRIX_POLICIES,ACCESS_PATHS as MATRIX_ACCESS_PATHS,policy_parts as matrix_policy_parts
 from nodes import NodeRegistry,token_digest
 from node_relay import NodeRelay
+from node_port_swap import NodePortSwap
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -63,6 +64,15 @@ class RelayBody(Model):
     exitInboundId:StrictInt=Field(ge=1)
 class RelayToggle(Model):
     enabled:bool
+class PortSwapBody(Model):
+    sourceNodeId:str=Field(min_length=1,max_length=128)
+    sourcePort:StrictInt=Field(ge=1,le=65535)
+    exitNodeId:str=Field(min_length=1,max_length=128)
+    inboundId:StrictInt=Field(ge=1)
+    exitPort:StrictInt=Field(ge=1,le=65535)
+    entryAddress:str=Field(min_length=1,max_length=253)
+    entryPort:StrictInt=Field(ge=1,le=65535)
+    name:str=Field(min_length=1,max_length=160)
 class Login(Model):
     username:str=Field(min_length=1,max_length=128)
     password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
@@ -273,6 +283,9 @@ class NodeTokenCreate(Model):
 def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
     node_relays=NodeRelay(store,auth.cipher,nodes,engine)
+    node_port_swaps=NodePortSwap(store,nodes,engine)
+    nodes.managed_assignment_sources=node_port_swaps.assignment_sources
+    engine.swap_hosts_provider=node_port_swaps.hosts
     from licensing import LicenseClient
     license_client=LicenseClient(Path(store.path).resolve().parent if store.path!=':memory:' else Path('/tmp/dark-xray-test-license'))
     from node_replacement import NodeReplacement
@@ -944,13 +957,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             # Failover entries are direct Node routes. Never clone a local
             # Tunnel/CDN endpoint onto a Node data address; doing so creates a
             # misleading tunnel-labelled link that actually bypasses the tunnel.
-            if (item.get('endpointType','direct') or 'direct')=='tunnel':continue
+            if (item.get('endpointType','direct') or 'direct') in ('tunnel','swap'):continue
             inbound_id=int(item.get('inboundId') or 0)
             for target in targets:
                 if inbound_id not in target['inbound_ids']:continue
                 explicit_direct=any(int(h.get('inboundId') or 0)==inbound_id and h.get('enable',True)
                                     and h.get('runtime')=='node:'+str(target['node_id'])
-                                    and (h.get('endpointType','direct') or 'direct')!='tunnel'
+                                    and (h.get('endpointType','direct') or 'direct')=='direct'
                                     for h in engine.section('hosts'))
                 if explicit_direct:continue
                 remark=str(item['remark'])+' · '+str(target['name'])
@@ -1100,7 +1113,6 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     def build_node_desired_payload(node_id:str)->dict:
         bundles=build_node_bundles(node_id)
-        managed_files=node_managed_files(bundles)
         assigned={int(x['sourceInboundId']) for x in bundles}
         with store.lock:
             policy_rows={str(r['id']):dict(r) for r in store.db.execute(
@@ -1121,6 +1133,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         sections['outbounds']=engine.runtime_outbounds('node:'+str(node_id))
         sections['routing']=engine.routing_for_scope('node:'+str(node_id),sections['routing'])
         sections=node_relays.compile(node_id,sections)
+        bundles,sections=node_port_swaps.enrich(node_id,bundles,sections)
+        managed_files=node_managed_files(bundles)
         # Local and Node packet-source trust are separate boundaries. A Central
         # host behind Backhaul may have to remain Observe while direct-source
         # Nodes enforce through their own root-owned broker. Never send the
@@ -1559,20 +1573,59 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def swap_workspace(p:Principal=Depends(owner)):
         listed=nodes.list(); by_id={n['id']:n for n in listed}
         routes=[]
-        for row in node_relays.rows():
-            item=node_relays.public(row)
-            try:node_relays.validate(row);item['configurationError']=''
+        for row in node_port_swaps.rows():
+            item=node_port_swaps.public(row)
+            try:node_port_swaps.validate(row);item['configurationError']=''
             except PolicyError as ex:item['configurationError']=str(ex)
-            item['lastProbe']=node_relays.last_probe(row['source_node'],row['source_inbound'])
             item['sourceState']=by_id.get(row['source_node'],{}).get('desired_state',{})
             item['exitState']=by_id.get(row['exit_node'],{}).get('desired_state',{})
             routes.append(item)
-        return {'routes':routes,'nodes':listed,'inbounds':[
+        return {'model':'dedicated-tcp-port','routes':routes,'legacyRoutes':[node_relays.public(r) for r in node_relays.rows()], 'nodes':listed,'inbounds':[
             {k:i.get(k) for k in ('id','tag','remark','protocol','enable','listen','port')} |
             {'network':i.get('streamSettings',{}).get('network','tcp'),
              'security':i.get('streamSettings',{}).get('security','none'),
              'tunnelPorts':i.get('panelMeta',{}).get('tunnelPorts',{})}
             for i in engine.inbounds()]}
+
+    @app.post('/api/swap')
+    def swap_create(body:PortSwapBody,p:Principal=Depends(owner)):
+        writable();result=node_port_swaps.configure(body.model_dump())
+        manager.audit(p.actor,p.actor.id,'swap.port.create',str(result['id']),result['name'])
+        return result
+
+    @app.put('/api/swap/{route_id}')
+    def swap_edit(route_id:int,body:PortSwapBody,p:Principal=Depends(owner)):
+        writable();result=node_port_swaps.configure(body.model_dump(),route_id,relay_synchronize)
+        manager.audit(p.actor,p.actor.id,'swap.port.edit',str(route_id),result['name'])
+        return result
+
+    @app.post('/api/swap/{route_id}/state')
+    def swap_toggle(route_id:int,body:RelayToggle,p:Principal=Depends(owner)):
+        writable();result=node_port_swaps.toggle(route_id,body.enabled,relay_synchronize)
+        manager.audit(p.actor,p.actor.id,'swap.port.enable' if body.enabled else 'swap.port.disable',str(route_id),'')
+        return result
+
+    @app.delete('/api/swap/{route_id}')
+    def swap_delete(route_id:int,p:Principal=Depends(owner)):
+        writable();result=node_port_swaps.delete(route_id,relay_synchronize)
+        manager.audit(p.actor,p.actor.id,'swap.port.delete',str(route_id),'')
+        return result
+
+    @app.post('/api/swap/{route_id}/diagnostics')
+    def swap_diagnostics(route_id:int,p:Principal=Depends(owner)):
+        writable();row=node_port_swaps.get(route_id)
+        if not row['enabled'] or row['phase']!='enabled':raise PolicyError('Enable and synchronize the route first')
+        node_port_swaps.validate(row)
+        listener=nodes.traffic_matrix_probe(row['source_node'],row['source_port'],'dark-swap-'+str(route_id),attempts=1,timeout_seconds=3)
+        direct=next((o['tag'] for o in engine.runtime_outbounds('node:'+row['exit_node']) if o.get('protocol')=='freedom'),None)
+        if not direct:raise PolicyError('Destination has no direct outbound to diagnose')
+        probe=nodes.outbound_probe(row['exit_node'],direct,attempts=1,timeout_seconds=3)['probe']
+        egress=probe.get('egress',{})
+        result={'relayListenerReady':bool(listener['listenerReady']), 'destinationInternet':{'success':bool(probe.get('success')), 'delayMs':probe.get('delayMs'),
+                'egress':{k:egress[k] for k in ('ip','country') if k in egress}},
+                'endToEndVerified':False,'scope':'relay listener and destination internet separately; test the generated customer link for end-to-end', 'checkedAt':time.time()}
+        manager.audit(p.actor,p.actor.id,'swap.port.diagnostics',str(route_id),'')
+        return result
 
     @app.delete('/api/nodes/{node_id}/exits/{inbound_id}')
     def remote_node_exit_delete(node_id:str,inbound_id:int,p:Principal=Depends(owner)):
@@ -1609,6 +1662,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         return result
 
     app.state.node_relays=node_relays
+    app.state.node_port_swaps=node_port_swaps
 
     @app.post('/api/nodes')
     def remote_node_add(body:NodeCreate,p:Principal=Depends(owner)):
@@ -1616,6 +1670,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         known={i['id'] for i in engine.inbounds()}
         if not set(body.inboundIds)<=known:raise HTTPException(400,'Unknown inbound assignment')
         node_relays.check_node_change(body.id,enabled=body.enabled,inbound_ids=body.inboundIds,origin=body.origin)
+        node_port_swaps.check_node_change(body.id,enabled=body.enabled,inbound_ids=body.inboundIds,origin=body.origin)
         result=nodes.put(body.id,body.name,body.origin,body.token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
         manager.audit(p.actor,p.actor.id,'node.create',body.id)
@@ -1640,6 +1695,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             return result
         if not body.keep_token:raise HTTPException(400,'Provide a replacement token or keep_token=true')
         node_relays.check_node_change(node_id,enabled=body.enabled,inbound_ids=body.inboundIds,origin=body.origin)
+        node_port_swaps.check_node_change(node_id,enabled=body.enabled,inbound_ids=body.inboundIds,origin=body.origin)
         token=nodes.get(node_id,secret=True)['token']
         result=nodes.put(node_id,body.name,body.origin,token,body.enabled,body.inboundIds,
                          body.dataAddress,body.priority,body.failoverEnabled)
@@ -1650,6 +1706,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def remote_node_delete(node_id:str,p:Principal=Depends(owner)):
         writable()
         node_relays.check_node_change(node_id,deleting=True)
+        node_port_swaps.check_node_change(node_id,deleting=True)
         refs=[h for h in engine.section('hosts') if h.get('runtime')=='node:'+node_id]
         if refs:raise HTTPException(409,'Move or delete Public Endpoints that use this Node before deleting it')
         result=nodes.delete(node_id)
@@ -1738,7 +1795,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                     'matchingHosts':len(matching),'configuredHosts':len(configured)}
         routes={'local':tunnel_route('local')}
         for n in fleet:routes['node:'+str(n['id'])]=tunnel_route('node:'+str(n['id']))
-        return {'inboundId':inbound_id,'local':meta.get('deployLocal',True) is not False,
+        swaps=[node_port_swaps.public(r) for r in node_port_swaps.rows() if r['inbound_id']==inbound_id]
+        return {'inboundId':inbound_id,'swapRoutes':swaps,'local':meta.get('deployLocal',True) is not False,
                 'nodeIds':sorted(selected),'tunnelPorts':tunnel_ports,'tunnelRoutes':routes,
                 'targets':[{'id':n['id'],'name':n['name'],'online':bool(n.get('online')),'enabled':bool(n.get('enabled')),
                             'selected':n['id'] in selected,'pending':bool(n.get('desired_state',{}).get('pending')),
@@ -1755,6 +1813,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             remaining=[i for i in node['inboundIds'] if i!=inbound_id]
             if node['id'] in requested:remaining.append(inbound_id)
             node_relays.check_node_change(node['id'],inbound_ids=remaining)
+            node_port_swaps.check_node_change(node['id'],inbound_ids=remaining)
         allowed_runtimes=({'local'} if body.local else set())|{'node:'+x for x in requested}
         tunnel_ports={}
         for runtime,port in body.tunnelPorts.items():
@@ -1768,7 +1827,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         inbound=copy.deepcopy(inbound);inbound.pop('id',None);inbound.pop('applied',None)
         meta=copy.deepcopy(meta);meta['deployLocal']=bool(body.local);meta['deploymentTargets']=['local']*int(bool(body.local))+requested
         meta['tunnelPorts']=dict(sorted(tunnel_ports.items()))
-        inbound['panelMeta']=meta;engine.save_inbound(inbound,inbound_id)
+        inbound['panelMeta']=meta;node_port_swaps.check_inbound(inbound,inbound_id);engine.save_inbound(inbound,inbound_id)
         # Tunnel Port is a real listener contract. Apply the new local Xray
         # generation immediately; CoreEngine validates and rolls back the
         # previous running generation if the shadow listener cannot start.
@@ -2579,12 +2638,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.put('/api/inbounds/{inbound_id}')
     def put_inbound(inbound_id:int,body:dict,p:Principal=Depends(owner)):
-        writable();result=engine.save_inbound(body,inbound_id);manager.tick(suppress=True)
+        writable();node_port_swaps.check_inbound(body,inbound_id);result=engine.save_inbound(body,inbound_id);manager.tick(suppress=True)
         manager.audit(p.actor,p.actor.id,'inbound.update',str(inbound_id));return result
 
     @app.delete('/api/inbounds/{inbound_id}')
     def delete_inbound(inbound_id:int,p:Principal=Depends(owner)):
-        writable();result=engine.delete_inbound(inbound_id)
+        writable();node_port_swaps.check_inbound({},inbound_id,deleting=True);result=engine.delete_inbound(inbound_id)
         with store.transaction() as db:
             for row in db.execute('SELECT id,allowed FROM owner_profiles').fetchall():
                 db.execute('UPDATE owner_profiles SET allowed=? WHERE id=?',(json.dumps([i for i in json.loads(row['allowed']) if i!=inbound_id]),row['id']))

@@ -277,7 +277,8 @@ def test_swap_workspace_redacts_inbound_secrets_and_is_owner_only(relay_env):
     state, _, relay = relay_env; configured(relay_env)
     c=state[-1]; response=c.get('/api/swap')
     assert response.status_code==200
-    assert len(response.json()['routes'])==1
+    assert len(response.json()['routes'])==0
+    assert len(response.json()['legacyRoutes'])==1
     assert 'privateKey' not in response.text and 'credential_enc' not in response.text
     assert 'identity' not in response.text
     c.post('/api/auth/logout')
