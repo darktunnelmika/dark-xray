@@ -104,7 +104,8 @@ def run(binary:Path,report_path:Path):
                     'allowed':[ib['id']],'volume_credit_bytes':0,'unlimited_credit':1,
                     'max_clients':10,'prefix':'','max_client_ips':0,'max_client_hwid':0
                 },'PUT')
-                api('/api/clients',{'owner':owner,'client':{'email':owner+'-client','limitIp':0,'totalGB':0},'inboundIds':[ib['id']]})
+                api('/api/clients',{'owner':owner,'client':{'email':owner+'-client','limitIp':1,'totalGB':0,
+                    'expiryTime':int(time.time()*1000)+30*86400000},'inboundIds':[ib['id']]})
             api('/api/core/start',{})
             report['checks'].append('real Xray -test and owned process start')
             socks={}
@@ -137,7 +138,8 @@ def run(binary:Path,report_path:Path):
             report['checks'].append('real traffic is metered without spending or disabling reserved resource credit')
 
             code,doc=api_result('/api/clients',{
-                'owner':'alpha','client':{'email':'alpha-extra','limitIp':0,'totalGB':0},'inboundIds':[ib['id']]},'POST')
+                'owner':'alpha','client':{'email':'alpha-extra','limitIp':1,'totalGB':0,
+                    'expiryTime':int(time.time()*1000)+30*86400000},'inboundIds':[ib['id']]},'POST')
             assert code==400 and 'unlimited credit' in str(doc).lower(),f'Expected exhausted Unlimited Credit rejection, got {code}: {doc}'
             assert proxied_request(socks['beta'],target.server_port),'Other representative was interrupted by alpha credit exhaustion'
             report['checks'].append('exhausted Unlimited Credit blocks only new allocation, not existing shared-inbound traffic')
@@ -145,7 +147,8 @@ def run(binary:Path,report_path:Path):
             topup=api('/api/resellers/alpha/credits',{
                 'volume_bytes':0,'unlimited_units':1,'event_id':'real-core-alpha-credit-0001'},'POST')
             assert topup['recorded'] is True
-            api('/api/clients',{'owner':'alpha','client':{'email':'alpha-extra','limitIp':0,'totalGB':0},'inboundIds':[ib['id']]})
+            api('/api/clients',{'owner':'alpha','client':{'email':'alpha-extra','limitIp':1,'totalGB':0,
+                'expiryTime':int(time.time()*1000)+30*86400000},'inboundIds':[ib['id']]})
             alpha_stats=next(x for x in api('/api/owners') if x['id']=='alpha')
             assert alpha_stats['allocated_unlimited']==2 and alpha_stats['unlimited_credit_remaining']==0
             report['checks'].append('Unlimited Credit top-up permits a new service allocation')
