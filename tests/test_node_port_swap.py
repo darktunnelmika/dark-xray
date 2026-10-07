@@ -162,3 +162,46 @@ def test_legacy_payload_fallback_forbidden(relay_env, monkeypatch):
     monkeypatch.setattr(nodes,'_request',reject)
     monkeypatch.setattr(nodes,'sync_mirrors',lambda *a:pytest.fail('cannot bypass port forwarding'))
     with pytest.raises(PolicyError): nodes._sync_desired_state_locked('nl',payload,legacy_bundles=payload['payload']['assignments'])
+
+
+def _acknowledge_payload(node_id, path, method, body, timeout):
+    return {'service': 'DARK XRAY NODE', 'appliedRevision': body['revision'],
+            'appliedHash': body['hash'], 'items': [
+                {'sourceInboundId': item['sourceInboundId'], 'remoteInboundId': i+10}
+                for i, item in enumerate(body['payload']['assignments'])]}, 1
+
+
+def test_generated_relay_ack_preserves_real_assignments(relay_env):
+    state, nodes, _ = relay_env; client = state[-1]
+    swap, rid = setup_route(relay_env); swap.toggle(rid, True, ACK)
+    before = {a['local_inbound_id'] for a in nodes.assignments('nl')}
+    desired_state = client.get('/api/nodes/nl/desired').json()
+    result = nodes._sync_desired_state_locked('nl', desired_state, _requester=_acknowledge_payload)
+    assert result['desired_state_applied'] is True
+    assert not nodes.desired_state('nl')['pending']
+    assert {a['local_inbound_id'] for a in nodes.assignments('nl')} == before
+    assert all(a['remote_inbound_id'] > 0 for a in nodes.assignments('nl'))
+    assert state[0].db.execute('SELECT COUNT(*) FROM managed_clients').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('mutation', ['disabled', 'deleted', 'other-node', 'unassigned-inbound', 'no-provider'])
+def test_generated_relay_ack_does_not_bypass_assignment_guard(relay_env, mutation):
+    state, nodes, _ = relay_env; store = state[0]; client = state[-1]
+    swap, rid = setup_route(relay_env); swap.toggle(rid, True, ACK)
+    desired_state = client.get('/api/nodes/nl/desired').json()
+    def changed_while_applying(*args):
+        with store.transaction() as db:
+            if mutation == 'disabled':
+                db.execute("UPDATE node_port_swaps SET enabled=0,phase='disabled' WHERE id=?", (rid,))
+            elif mutation == 'deleted':
+                db.execute('DELETE FROM node_port_swaps WHERE id=?', (rid,))
+            elif mutation == 'other-node':
+                db.execute("UPDATE node_port_swaps SET source_node='am' WHERE id=?", (rid,))
+            elif mutation == 'unassigned-inbound':
+                db.execute("DELETE FROM remote_node_inbounds WHERE node_id='nl' AND local_inbound_id=1")
+            else:
+                nodes.managed_assignment_sources = None
+        return _acknowledge_payload(*args)
+    with pytest.raises(PolicyError, match='Node assignments changed'):
+        nodes._sync_desired_state_locked('nl', desired_state, _requester=changed_while_applying)
+    assert nodes.desired_state('nl')['applied_revision'] != desired_state['revision']

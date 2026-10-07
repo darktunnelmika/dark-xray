@@ -25,6 +25,16 @@ class NodePortSwap:
                 phase TEXT NOT NULL DEFAULT 'disabled', updated_at REAL NOT NULL,
                 UNIQUE(source_node,source_port), UNIQUE(exit_node,inbound_id))''')
 
+    @staticmethod
+    def source_id(route_id):
+        return 1000000000 + route_id
+
+    def assignment_sources(self, node_id):
+        # Only currently enabled, node-scoped routes may acknowledge generated
+        # listeners. An ID range or tag prefix alone is not authorization.
+        return {self.source_id(r['id']) for r in self.rows()
+                if r['source_node'] == node_id and r['enabled'] and r['phase'] != 'deleting'}
+
     def rows(self):
         with self.store.lock:
             return [dict(r) for r in self.store.db.execute('SELECT * FROM node_port_swaps ORDER BY id')]
@@ -210,7 +220,7 @@ class NodePortSwap:
                 # Invalid active intent must fail closed, not silently omit its
                 # relay listener and accidentally reuse a customer's port.
                 self.validate(r)
-                synthetic = 1000000000 + r['id']
+                synthetic = self.source_id(r['id'])
                 tag = 'dark-swap-' + str(r['id'])
                 if any(b['sourceInboundId'] == synthetic for b in bundles): raise PolicyError('SWAP synthetic inbound collision')
                 bundles.append({'sourceInboundId': synthetic, 'clients': [], 'inbound': {

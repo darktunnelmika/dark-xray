@@ -284,6 +284,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     config=manager.engine.config;store=manager.store;engine=manager.engine;nodes=NodeRegistry(store,auth.cipher)
     node_relays=NodeRelay(store,auth.cipher,nodes,engine)
     node_port_swaps=NodePortSwap(store,nodes,engine)
+    nodes.managed_assignment_sources=node_port_swaps.assignment_sources
     engine.swap_hosts_provider=node_port_swaps.hosts
     from licensing import LicenseClient
     license_client=LicenseClient(Path(store.path).resolve().parent if store.path!=':memory:' else Path('/tmp/dark-xray-test-license'))
