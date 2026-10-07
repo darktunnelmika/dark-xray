@@ -21,8 +21,20 @@ def renew_accounting_lease(nodes, manager, engine, node_id, traffic, desired_pro
             with manager.store.lock:
                 rows = manager.store.db.execute(
                     "SELECT email,state,op,error FROM managed_clients WHERE state!='deleted'").fetchall()
-            if any(row['email'] in allowed and (row['op'] != 'none' or row['error'] or
-                   row['state'] not in ('applied',)) for row in rows):
+            def lease_blocked(row):
+                if row['email'] not in allowed:
+                    return False
+                unresolved = row['op'] != 'none' or row['error'] or row['state'] not in ('applied',)
+                if not unresolved:
+                    return False
+                # A delete has not changed policy/core yet when its remote final-traffic
+                # reset cannot reach another Node. Keep healthy Nodes accounted and
+                # serving the last acknowledged policy instead of poisoning the fleet.
+                if (row['op'] == 'delete' and row['state'] == 'error' and
+                        str(row['error']).startswith('Node connection failed:')):
+                    return False
+                return True
+            if any(lease_blocked(row) for row in rows):
                 raise PolicyError('Managed client policy has unresolved operations or errors')
             state = desired_provider(node_id)
             nodes.sync_desired_state(node_id, state, legacy_bundles=sync_provider(node_id))
