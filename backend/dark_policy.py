@@ -741,5 +741,8 @@ def main(argv: list[str] | None=None) -> int:
     except (PolicyError,sqlite3.Error,OSError,json.JSONDecodeError) as exc:
         print("ERROR: "+str(exc),file=sys.stderr);return 2
 
+# Preload the shared policy before restricted workers drop source-tree access.
+import unlimited_credit as _unlimited_credit
+
 if __name__=="__main__":
     raise SystemExit(main())

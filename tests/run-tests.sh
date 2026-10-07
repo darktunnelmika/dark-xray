@@ -137,4 +137,4 @@ node --test tests/backup-recovery-ui.test.cjs
 
 python -m pytest tests/test_stable_release_checks.py -q --junitxml=qa/junit/stable-release-checks.xml
 
-python -m pytest tests/test_unlimited_user_month.py tests/test_unlimited_credit_integration.py -q --junitxml=qa/junit/unlimited-user-month.xml
+python -m pytest tests/test_unlimited_user_month.py tests/test_unlimited_credit_integration.py tests/test_node_credit_dependency.py -q --junitxml=qa/junit/unlimited-user-month.xml
