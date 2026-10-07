@@ -73,6 +73,8 @@ class PortSwapBody(Model):
     entryAddress:str=Field(min_length=1,max_length=253)
     entryPort:StrictInt=Field(ge=1,le=65535)
     name:str=Field(min_length=1,max_length=160)
+class PortSwapRename(Model):
+    name:str=Field(min_length=1,max_length=160)
 class Login(Model):
     username:str=Field(min_length=1,max_length=128)
     password:str=Field(min_length=1,max_length=PASSWORD_MAX_LENGTH)
@@ -1606,6 +1608,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def swap_edit(route_id:int,body:PortSwapBody,p:Principal=Depends(owner)):
         writable();result=node_port_swaps.configure(body.model_dump(),route_id,relay_synchronize)
         manager.audit(p.actor,p.actor.id,'swap.port.edit',str(route_id),result['name'])
+        return result
+
+    @app.patch('/api/swap/{route_id}/name')
+    def swap_rename(route_id:int,body:PortSwapRename,p:Principal=Depends(owner)):
+        writable();result=node_port_swaps.rename(route_id,body.name)
+        manager.audit(p.actor,p.actor.id,'swap.port.rename',str(route_id),result['name'])
         return result
 
     @app.post('/api/swap/{route_id}/state')

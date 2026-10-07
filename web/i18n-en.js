@@ -224,6 +224,7 @@ const exact=new Map(Object.entries({
  'بکاپ DARK':'Download DARK Backup',
  'اعتبار فروش حجمی و نامحدود، حساب ورود، سیاست مشتری و اینباندهای هر نماینده از همین بخش مدیریت می‌شود.':'Volume and unlimited sales credit, login account, client policy, and allowed inbounds are managed here for each representative.',
  'DARK فقط یک مالک اصلی دارد. اعتبار نماینده پول نیست: سرویس حجمی از Volume Credit رزرو می‌کند و هر سرویس نامحدود یک Unlimited Credit می‌گیرد. مصرف واقعی Xray فقط گزارش است و از اعتبار فروش کم نمی‌شود.':'DARK has one primary owner. Representative credit is not money: volume services reserve Volume Credit and each unlimited service reserves one Unlimited Credit. Real Xray traffic is reporting only and does not spend sales credit.',
+ 'DARK فقط یک مالک اصلی دارد. اعتبار نماینده پول نیست: سرویس حجمی از Volume Credit رزرو می‌کند و سرویس نامحدود برحسب تعداد کاربر × ماه از اعتبار مصرف می‌کند؛ هر ماه 30 روز است. مصرف واقعی Xray فقط گزارش است و از اعتبار فروش کم نمی‌شود.':'DARK has one primary owner. Representative credit is not money: volume services reserve Volume Credit; unlimited services consume user-month credit based on IP-user count and duration. One month is 30 days. Real Xray traffic is reporting only and does not spend sales credit.',
  'هنوز نماینده‌ای ساخته نشده است.':'No representatives yet.',
  'این API فقط برای اتصال ابزارهای مجاز به DARK XRAY است و سطح دسترسی آن از حساب سازنده فراتر نمی‌رود.':'This API is only for authorized DARK XRAY integrations and cannot exceed the creator account permissions.'
 }));
