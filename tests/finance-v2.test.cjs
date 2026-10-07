@@ -75,11 +75,11 @@ test('representative filter scopes credit and traffic ledgers plus position',asy
   assert.doesNotMatch(html,/traffic-2/);
 });
 
-test('current credit position shows total allocated and remaining pools',async()=>{
+test('current credit position shows volume allocation, unlimited spent and remaining pools',async()=>{
   const ctx=context();
   const html=await ctx.financePage();
   assert.match(html,/Volume allocated/);
-  assert.match(html,/Unlimited allocated/);
+  assert.match(html,/Unlimited units spent/);
   assert.match(html,/100B/);
   assert.match(html,/40B/);
   assert.match(html,/60B/);

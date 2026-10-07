@@ -228,7 +228,7 @@ test('Failed deletion keeps client detail and selection available for retry',asy
 });
 
 
-test('Representative quick create offers random/manual naming and unlimited IP when owner cap is open',()=>{
+test('Representative quick create offers random/manual naming; unlimited IP stays volume-only',()=>{
   const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
   assert.match(src,/data-cv4-name-mode="random"/);
   assert.match(src,/data-cv4-name-mode="manual"/);
@@ -236,5 +236,5 @@ test('Representative quick create offers random/manual naming and unlimited IP w
   assert.match(src,/function representativeClientId/);
   assert.match(src,/items\.push\(\['0','♾ '/);
   assert.match(src,/Unlimited IP/);
-  assert.match(src,/zero\.disabled=pm!=='limited'&&cap>0/);
+  assert.match(src,/zero\.disabled=pm!=='limited'/);
 });

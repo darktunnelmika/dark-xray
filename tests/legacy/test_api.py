@@ -34,7 +34,7 @@ def test_anonymous_cannot_read(env):
 
 def test_scoped_client_crud(env):
     s,c,auth=env;root=auth();arda=auth('arda');ro=auth('read')
-    assert c.post('/v1/clients',headers=arda,json={'id':'a','owner':'arda','limit_ip':1}).status_code==201
+    assert c.post('/v1/clients',headers=arda,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400,'limit_ip':1}).status_code==201
     assert c.post('/v1/clients',headers=root,json={'id':'b','owner':'dark'}).status_code==201
     assert [x['id'] for x in c.get('/v1/clients',headers=arda).json()]==['a']
     assert c.patch('/v1/clients/b',headers=arda,json={'manual':True}).status_code==403
@@ -43,17 +43,17 @@ def test_scoped_client_crud(env):
 
 def test_no_owner_escalation_or_unknown_fields(env):
     s,c,auth=env;h=auth('arda')
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','role':'owner'}).status_code==422
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400,'role':'owner'}).status_code==422
     assert c.put('/v1/owners/arda',headers=h,json={'volume_credit_bytes':100,'unlimited_credit':1}).status_code==403
     assert c.post('/v1/admins',headers=h,json={'username':'evil','password':PW,'role':'owner'}).status_code==403
 
 def test_customer_price_fields_are_not_part_of_policy_api(env):
     _,c,auth=env;h=auth('arda')
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','price':1,'order_id':'one'}).status_code==422
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400,'price':1,'order_id':'one'}).status_code==422
 
 def test_usage_not_writeable_by_reseller(env):
     s,c,auth=env;root=auth();h=auth('arda')
-    c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda'})
+    c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400})
     event={'event_id':'e1','client_id':'a','up_bytes':13,'down_bytes':10}
     assert c.post('/v1/usage',headers=h,json=event).status_code==403
     assert c.post('/v1/usage',headers=root,json=event).json()['recorded'] is True
@@ -88,7 +88,7 @@ def test_permission_change_effective_without_old_session(env):
     _,c,auth=env;h=auth('arda');root=auth()
     assert c.patch('/v1/admins/arda',headers=root,json={'permissions':{'clients.read':'own'}}).status_code==200
     assert c.get('/v1/me',headers=h).status_code==401
-    h=auth('arda');assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda'}).status_code==403
+    h=auth('arda');assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400}).status_code==403
 
 def test_rate_limit_forwarded_ip_cannot_bypass(env):
     _,c,_=env
@@ -97,12 +97,12 @@ def test_rate_limit_forwarded_ip_cannot_bypass(env):
 
 def test_cross_origin_forbidden(env):
     _,c,auth=env;h=auth()|{'Origin':'https://untrusted.invalid'}
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda'}).status_code==403
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400}).status_code==403
 
 def test_size_and_type_validation(env):
     _,c,auth=env;h=auth()
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','limit_ip':True}).status_code==422
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','limit_ip':-1}).status_code==422
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400,'limit_ip':True}).status_code==422
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400,'limit_ip':-1}).status_code==422
     assert c.post('/v1/clients',headers=h,json={'id':'a'*70000}).status_code==413
 
 def test_real_metrics_not_sample_and_scoped(env):
@@ -119,9 +119,12 @@ def test_resource_credit_api_idempotency(env):
     data={'volume_bytes':300000,'unlimited_units':2,'event_id':'resource-credit-0001'}
     assert c.post('/v1/owners/arda/credits',headers=h,json=data).json()['recorded']
     assert not c.post('/v1/owners/arda/credits',headers=h,json=data).json()['recorded']
-    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','quota_bytes':100000}).status_code==201
+    assert c.post('/v1/clients',headers=h,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400,'quota_bytes':100000}).status_code==201
     rows=c.get('/v1/ledger/credits',headers=auth('arda')).json()
-    assert len(rows)==1 and rows[0]['owner']=='arda' and rows[0]['volume_bytes']==300000
+    assert all(row['owner']=='arda' for row in rows)
+    adjustments=[row for row in rows if row['kind']=='adjust']
+    assert len(adjustments)==1 and adjustments[0]['volume_bytes']==300000
+    assert any(row['kind']=='unlimited_grant_set' and row['unlimited_units']==10 for row in rows)
     assert c.get('/v1/ledger/money',headers=h).status_code==422
 
 
@@ -135,7 +138,7 @@ def test_password_hash_correct():
     assert not verify_password(PW,'broken')
 
 def test_disabled_account_blocks_policy_without_clearing_manual(env):
-    s,c,auth=env;root=auth();c.post('/v1/clients',headers=root,json={'id':'a','owner':'arda'})
+    s,c,auth=env;root=auth();c.post('/v1/clients',headers=root,json={'id':'a','owner':'arda','expires_at':int(time.time())+30*86400})
     c.patch('/v1/clients/a',headers=root,json={'manual':True})
     c.patch('/v1/admins/arda',headers=root,json={'disabled':True})
     assert set(s.client_reasons('a'))=={'client_manual','owner_account_disabled'}

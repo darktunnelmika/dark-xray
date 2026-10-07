@@ -8,11 +8,11 @@ from test_standalone import env,IB,OWNER
 META={'status':'verified','error':'','upload':3000,'download':7000,'total':50000,'expire':2000000000}
 
 
-def prepare(env,monkeypatch,total=50000,suffix='one'):
+def prepare(env,monkeypatch,total=50000,suffix='one',expire=None):
     store,engine,manager,auth,c=env
     inbound=c.post('/api/inbounds',json=copy.deepcopy(IB)).json()['id']
     restore=c.app.state.dark_restore
-    monkeypatch.setattr(restore,'_scan',lambda url:{**META,'total':total})
+    monkeypatch.setattr(restore,'_scan',lambda url:{**META,'total':total,'expire':META['expire'] if expire is None else expire})
     r=c.post('/api/dark-restore/import',json={
         'urls':['https://legacy.example/sub/'+suffix],'inboundIds':[inbound],
         'groupName':'Restore Closeout','scan':True})
@@ -124,7 +124,7 @@ def test_promotion_respects_representative_credit_and_leaves_failed_restore_inta
 
 
 def test_unlimited_promotion_consumes_unlimited_credit_not_volume(env,monkeypatch):
-    store,engine,manager,auth,c,restore,inbound,item=prepare(env,monkeypatch,total=0)
+    store,engine,manager,auth,c,restore,inbound,item=prepare(env,monkeypatch,total=0,expire=int(time.time())+30*86400)
     make_rep(manager,auth,inbound,volume=0,unlimited=2)
     result=c.post('/api/dark-restore/promote',json={'ids':[item['id']],'representativeId':'restore_rep'})
     assert result.status_code==200 and result.json()['promoted']==1
@@ -135,7 +135,7 @@ def test_unlimited_promotion_consumes_unlimited_credit_not_volume(env,monkeypatc
     assert tuple(native)==(0,'restore_rep')
     catalog=c.get('/api/dark-restore/representatives').json()
     rep=next(x for x in catalog if x['id']=='restore_rep')
-    assert rep['remaining_unlimited']==1 and rep['remaining_volume_bytes']==0
+    assert rep['remaining_unlimited']==0 and rep['remaining_volume_bytes']==0
 
 
 def test_promotion_baselines_complete_hub_and_node_dark_usage(env,monkeypatch):

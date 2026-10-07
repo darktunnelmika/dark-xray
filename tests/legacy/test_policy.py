@@ -2,6 +2,7 @@ import dataclasses
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -139,7 +140,7 @@ def test_log_parser_source_only(line,ip):
 def test_invalid_log_ignored(line):assert parse_access_line(line) is None
 
 def test_owner_usage_survives_reset_delete(store):
-    store.register_client(OWNER,'a','arda');store.record_usage('evt','a',13,10)
+    store.register_client(OWNER,'a','arda',expires_at=int(time.time())+30*86400);store.record_usage('evt','a',13,10)
     assert store.owner_stats(OWNER,'arda')['used_bytes']==23
     store.reset_client_usage(RESELLER,'a')
     assert store.owner_stats(OWNER,'arda')['used_bytes']==23
@@ -148,13 +149,13 @@ def test_owner_usage_survives_reset_delete(store):
     assert store.owner_stats(OWNER,'arda')['client_count']==0
 
 def test_usage_idempotency_and_conflict(store):
-    store.register_client(OWNER,'a','arda');assert store.record_usage('one','a',7,9)
+    store.register_client(OWNER,'a','arda',expires_at=int(time.time())+30*86400);assert store.record_usage('one','a',7,9)
     assert not store.record_usage('one','a',7,9)
     with pytest.raises(PolicyError):store.record_usage('one','a',8,9)
     assert store.owner_stats(OWNER,'arda')['used_bytes']==16
 
 def test_cross_owner_no_read_or_edit(store):
-    store.register_client(OWNER,'a','arda');store.register_client(OWNER,'b','dark')
+    store.register_client(OWNER,'a','arda',expires_at=int(time.time())+30*86400);store.register_client(OWNER,'b','dark')
     assert [u['id'] for u in store.list_clients(RESELLER)]==['a']
     with pytest.raises(PermissionDenied):store.edit_client(RESELLER,'b',limit_ip=9)
     with pytest.raises(PermissionDenied):store.owner_stats(RESELLER,'dark')
@@ -172,14 +173,14 @@ def test_manual_flags_survive_topup_and_resets(store):
 
 def test_exhausted_representative_unlimited_credit_cannot_create(store):
     store.register_owner(OWNER,'arda',volume_credit_bytes=0,unlimited_credit=1)
-    store.register_client(RESELLER,'a','arda')
+    store.register_client(RESELLER,'a','arda',expires_at=int(time.time())+30*86400)
     store.record_usage('evt','a',MAX_INT//4,0)
     assert 'owner_quota' not in store.client_reasons('a')
-    with pytest.raises(PolicyError,match='unlimited credit'):store.register_client(RESELLER,'b','arda')
+    with pytest.raises(PolicyError,match='unlimited credit'):store.register_client(RESELLER,'b','arda',expires_at=int(time.time())+30*86400)
 
 def test_atomic_client_quota_under_concurrency(store):
     def add(n):
-        try:return store.register_client(RESELLER,'c'+str(n),'arda')
+        try:return store.register_client(RESELLER,'c'+str(n),'arda',expires_at=int(time.time())+30*86400)
         except PolicyError:return False
     with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(add,range(20)))
     assert sum(results)==2 and store.owner_stats(OWNER,'arda')['client_count']==2
@@ -210,12 +211,12 @@ def test_legacy_paid_client_creation_is_rejected(store):
 
 
 def test_overflow_no_partial_mutation(store):
-    store.register_client(OWNER,'a','arda');store.record_usage('one','a',MAX_INT,0)
+    store.register_client(OWNER,'a','arda',expires_at=int(time.time())+30*86400);store.record_usage('one','a',MAX_INT,0)
     with pytest.raises(PolicyError):store.record_usage('two','a',1,0)
     assert store.owner_stats(OWNER,'arda')['used_bytes']==MAX_INT
 
 def test_backup_persistence(store,tmp_path):
-    store.register_client(OWNER,'a','arda');store.record_usage('one','a',30,10);store.backup(tmp_path/'backup.db')
+    store.register_client(OWNER,'a','arda',expires_at=int(time.time())+30*86400);store.record_usage('one','a',30,10);store.backup(tmp_path/'backup.db')
     other=Store(tmp_path/'backup.db')
     try:assert other.owner_stats(OWNER,'arda')['used_bytes']==40
     finally:other.close()

@@ -191,7 +191,10 @@ def test_customer_bot_marketplace_is_only_on_primary_owner_bot(env):
     owner_worker=BotWorker(c.app.state.telegram_runtime,'dark',
                            '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','owner-menu')
     try:
-        labels=[x['text'] for row in owner_worker.main_keyboard(False)['keyboard'] for x in row]
+        sent=[]
+        owner_worker.api.send=lambda chat,text,reply_markup=None:sent.append(reply_markup)
+        owner_worker.customer_more_menu(830088,830088)
+        labels=[x['text'] for row in sent[-1]['inline_keyboard'] for x in row]
         assert '🏪 پنل نمایندگی' in labels
     finally:owner_worker.api.close()
 
@@ -209,7 +212,10 @@ def test_customer_bot_marketplace_is_only_on_primary_owner_bot(env):
         repworker=BotWorker(seller.app.state.telegram_runtime,'repmenu',
                             '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789','rep-menu')
         try:
-            labels=[x['text'] for row in repworker.main_keyboard(False)['keyboard'] for x in row]
+            sent=[]
+            repworker.api.send=lambda chat,text,reply_markup=None:sent.append(reply_markup)
+            repworker.customer_more_menu(830088,830088)
+            labels=[x['text'] for row in sent[-1]['inline_keyboard'] for x in row]
             assert '🏪 پنل نمایندگی' not in labels
         finally:repworker.api.close()
 

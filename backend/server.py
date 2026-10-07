@@ -809,6 +809,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.audit(p.actor,owner_id,'owner.reset_period',owner_id,'Historical ledger preserved')
         manager.tick(suppress=True);return {'reset':True}
 
+    @app.post('/api/unlimited-credit/quote')
+    def unlimited_credit_quote(body:dict,p:Principal=Depends(current)):
+        if set(body)-{'owner','email','client'}:raise HTTPException(400,'Unknown quote field')
+        oid=body.get('owner') or p.actor.id;email=body.get('email') or ''
+        patch=body.get('client') or {}
+        if not isinstance(oid,str) or not isinstance(email,str) or not isinstance(patch,dict):
+            raise HTTPException(400,'Invalid credit quote')
+        return manager.unlimited_quote(p.actor,oid,patch,email=email)
+
     @app.get('/api/clients')
     def clients(p:Principal=Depends(current)):return manager.list(p.actor)
     @app.post('/api/clients',status_code=202)

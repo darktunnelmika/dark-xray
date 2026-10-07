@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -79,7 +80,7 @@ def test_v2_database_migrates_to_resource_credit_pools_without_losing_history(tm
             historical=store.db.execute("SELECT amount FROM money_ledger WHERE event_id='historical-money'").fetchone()[0]
         assert tuple(seller)==(0,1000,1)
         assert tuple(primary)==(0,0,0)
-        assert version==3
+        assert version==4
         assert historical==123
     finally:
         store.close()
@@ -157,7 +158,7 @@ def test_representative_prefix_ip_and_hwid_are_real_client_policies(env):
     assert too_many_hwid.status_code==400 and 'HWID limit' in too_many_hwid.text
 
     good=c.post('/api/clients',json={
-        'owner':'seller','client':{'email':'s_ok','limitIp':2,'limitHwid':1},'inboundIds':[inbound_id]})
+        'owner':'seller','client':{'email':'s_ok','expiryTime':int(time.time()*1000)+30*86400000,'limitIp':2,'limitHwid':1},'inboundIds':[inbound_id]})
     assert good.status_code==202,good.text
     patch=c.patch('/api/clients/s_ok',json={'client':{'limitHwid':2}})
     assert patch.status_code==400 and 'HWID cap' in patch.text
@@ -181,11 +182,11 @@ def test_representative_resource_credits_reserve_configured_plans(env):
         'inboundIds':[inbound_id]})
     assert too_large.status_code==400 and 'volume credit' in too_large.text.lower()
     unlimited=c.post('/api/clients',json={
-        'owner':'seller','client':{'email':'s_unlimited','limitIp':1,'limitHwid':1,'totalGB':0},
+        'owner':'seller','client':{'email':'s_unlimited','expiryTime':int(time.time()*1000)+30*86400000,'limitIp':1,'limitHwid':1,'totalGB':0},
         'inboundIds':[inbound_id]})
     assert unlimited.status_code==202,unlimited.text
     no_slot=c.post('/api/clients',json={
-        'owner':'seller','client':{'email':'s_unlimited2','limitIp':1,'limitHwid':1,'totalGB':0},
+        'owner':'seller','client':{'email':'s_unlimited2','expiryTime':int(time.time()*1000)+30*86400000,'limitIp':1,'limitHwid':1,'totalGB':0},
         'inboundIds':[inbound_id]})
     assert no_slot.status_code==400 and 'unlimited credit' in no_slot.text.lower()
     store.record_usage('rep-usage-does-not-spend-credit','s_limited',50*gib,25*gib)
@@ -238,7 +239,7 @@ def test_representative_credit_adjustment_is_idempotent(env):
         'volume_bytes':-(3*gib),'unlimited_units':0,'event_id':'rep-credit-adjust-0002'})
     assert below.status_code==400 and 'allocated' in below.text.lower()
     with store.lock:
-        assert store.db.execute("SELECT COUNT(*) FROM resource_credit_ledger WHERE owner='seller'").fetchone()[0]==1
+        assert store.db.execute("SELECT COUNT(*) FROM resource_credit_ledger WHERE owner='seller' AND kind='adjust'").fetchone()[0]==1
 
 
 def test_disabling_representative_revokes_login_and_blocks_owned_clients(env):
@@ -246,7 +247,7 @@ def test_disabling_representative_revokes_login_and_blocks_owned_clients(env):
     inbound_id=create_inbound(c)
     assert c.put('/api/resellers/seller',json=rep_body(inbound_id)).status_code==200
     created=c.post('/api/clients',json={
-        'owner':'seller','client':{'email':'s_off','limitIp':1,'limitHwid':1},'inboundIds':[inbound_id]})
+        'owner':'seller','client':{'email':'s_off','expiryTime':int(time.time()*1000)+30*86400000,'limitIp':1,'limitHwid':1},'inboundIds':[inbound_id]})
     assert created.status_code==202,created.text
     _,principal=auth.login('seller','SellerPass88','','127.0.0.2')
     assert principal.actor.role=='reseller'
@@ -267,7 +268,7 @@ def test_representative_delete_requires_no_clients_and_preserves_primary_owner(e
     inbound_id=create_inbound(c)
     assert c.put('/api/resellers/seller',json=rep_body(inbound_id)).status_code==200
     assert c.post('/api/clients',json={
-        'owner':'seller','client':{'email':'s_keep','limitIp':1,'limitHwid':1},'inboundIds':[inbound_id]}).status_code==202
+        'owner':'seller','client':{'email':'s_keep','expiryTime':int(time.time()*1000)+30*86400000,'limitIp':1,'limitHwid':1},'inboundIds':[inbound_id]}).status_code==202
     blocked=c.delete('/api/resellers/seller')
     assert blocked.status_code==409 and 'clients' in blocked.text.lower()
     assert c.delete('/api/resellers/dark').status_code==409

@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -59,7 +60,7 @@ def test_legacy_owner_can_adjust_resource_credits(tmp_path):
         assert r.status_code==200 and r.json()['recorded'] is True
         r=c.post('/v1/clients',headers=h,json={'id':'limited-client','owner':'seller','quota_bytes':25})
         assert r.status_code==201
-        r=c.post('/v1/clients',headers=h,json={'id':'unlimited-client','owner':'seller','quota_bytes':0})
+        r=c.post('/v1/clients',headers=h,json={'id':'unlimited-client','owner':'seller','quota_bytes':0,'expires_at':int(time.time())+30*86400})
         assert r.status_code==201
         assert c.post('/v1/owners/seller/credit',headers=h,json={'amount':1,'event_id':'old-money-credit'}).status_code==404
         assert c.post('/v1/refunds',headers=h,json={'order_id':'sale-1','event_id':'refund-1'}).status_code==404

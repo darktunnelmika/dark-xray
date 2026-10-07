@@ -295,6 +295,10 @@ class CustomerCenter:
         return self.commerce.order(order_id,owner)
 
     def pay_renewal(self,owner:str,order_id:str)->dict[str,Any]:
+        with self.manager.lock:
+            return self._pay_renewal_locked(owner,order_id)
+
+    def _pay_renewal_locked(self,owner:str,order_id:str)->dict[str,Any]:
         order=self.commerce.order(order_id,owner)
         if order.get('order_type')!='renewal':raise PolicyError('Order is not a renewal')
         if str(order['currency']).upper()!=CURRENCY:raise PolicyError('Wallet currently supports IRT products only')
@@ -328,6 +332,9 @@ class CustomerCenter:
             if target_expiry<=0:
                 current_expiry=int(client.get('expiryTime') or 0)
                 target_expiry=max(int(time.time()*1000),current_expiry)+max(1,int(order['duration_days']))*86400*1000
+                with self.store.transaction() as db:
+                    db.execute('UPDATE commerce_orders SET renewal_target_expiry=? WHERE id=? AND renewal_target_expiry<=0',(target_expiry,order_id))
+                    target_expiry=int(db.execute('SELECT renewal_target_expiry FROM commerce_orders WHERE id=?',(order_id,)).fetchone()[0])
             patch={'expiryTime':target_expiry,'totalGB':int(order['volume_bytes']),
                    'limitIp':int(order['ip_limit']),'limitHwid':int(order['hwid_limit'])}
             ids=[int(x) for x in json.loads(order['inbound_ids'])]
