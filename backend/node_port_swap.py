@@ -49,7 +49,8 @@ class NodePortSwap:
         return {'id': r['id'], 'sourceNodeId': r['source_node'], 'sourcePort': r['source_port'],
                 'exitNodeId': r['exit_node'], 'inboundId': r['inbound_id'], 'exitPort': r['exit_port'],
                 'entryAddress': r['entry_address'], 'entryPort': r['entry_port'], 'name': r['name'],
-                'enabled': bool(r['enabled']), 'phase': r['phase'], 'updatedAt': r['updated_at']}
+                'enabled': bool(r['enabled']), 'phase': r['phase'], 'updatedAt': r['updated_at'],
+                'accountingMode': 'destination-customer'}
 
     def _ports(self, node_id):
         node = self.nodes.get(node_id)
@@ -126,6 +127,27 @@ class NodePortSwap:
                 else:
                     rid = db.execute('INSERT INTO node_port_swaps ('+','.join(fields)+',updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
                                      tuple(row[k] for k in fields)+(time.time(),)).lastrowid
+            return self.public(self.get(rid))
+
+    def rename(self, rid, name):
+        """Rename a route without interrupting an active data path.
+
+        The name is presentation metadata plus an Xray remark. Persisting it does
+        not synchronize/restart the relay; the runtime remark catches up on the
+        next ordinary desired-state apply, while subscriptions/UI update now.
+        """
+        with self.lock:
+            row = self.get(rid)
+            if row['phase'] == 'deleting':
+                raise PolicyError('Complete deletion before renaming DARK SWAP')
+            value = str(name or '').strip()
+            if not value or len(value) > 160:
+                raise PolicyError('Choose a route name up to 160 characters')
+            if value == row['name']:
+                return self.public(row)
+            with self.store.transaction() as db:
+                db.execute('UPDATE node_port_swaps SET name=?,updated_at=? WHERE id=?',
+                           (value, time.time(), rid))
             return self.public(self.get(rid))
 
     def _state(self, rid, enabled, phase):
