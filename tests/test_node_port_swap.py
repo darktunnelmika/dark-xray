@@ -67,6 +67,51 @@ def test_same_inbound_independent_ports_no_source_customer(relay_env, tmp_path, 
         finally: rt_engine.close(); db.close()
 
 
+def test_live_rename_is_non_disruptive_and_keeps_route_enabled(relay_env):
+    state, _, _ = relay_env; c = state[-1]
+    swap, rid = setup_route(relay_env)
+    swap.toggle(rid, True, ACK)
+    before = swap.get(rid)
+    r = c.patch(f'/api/swap/{rid}/name', json={'name': 'DE Premium via NL'})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body['name'] == 'DE Premium via NL'
+    assert body['enabled'] is True and body['phase'] == 'enabled'
+    assert body['accountingMode'] == 'destination-customer'
+    after = swap.get(rid)
+    assert after['source_node'] == before['source_node']
+    assert after['source_port'] == before['source_port']
+    assert after['exit_node'] == before['exit_node']
+    assert after['exit_port'] == before['exit_port']
+    assert after['inbound_id'] == before['inbound_id']
+
+
+def test_swap_customer_usage_is_charged_at_destination_not_synthetic_relay(relay_env):
+    state, nodes, _ = relay_env; c = state[-1]
+    create(c, 'swap-customer', extra={'totalGB': 1024 ** 3})
+    swap, rid = setup_route(relay_env)
+    swap.toggle(rid, True, ACK)
+
+    src = desired(c, 'nl')
+    generated = next(x for x in src['assignments'] if x['sourceInboundId'] == swap.source_id(rid))
+    assert generated['clients'] == []
+
+    dst = desired(c, 'de')
+    destination = next(x for x in dst['assignments'] if x['sourceInboundId'] == BODY['inboundId'])
+    assert any(x['sourceEmail'] == 'swap-customer' for x in destination['clients'])
+
+    baseline = nodes.apply_traffic_snapshot('de', [{'sourceEmail': 'swap-customer', 'up': 0, 'down': 0}])
+    assert baseline['charged_bytes'] == 0
+    charged = nodes.apply_traffic_snapshot('de', [{'sourceEmail': 'swap-customer', 'up': 31, 'down': 69}])
+    assert charged['charged_bytes'] == 100
+
+    fake_relay = nodes.apply_traffic_snapshot('nl', [
+        {'sourceEmail': 'dark-swap-' + str(rid), 'up': 5000, 'down': 7000}
+    ])
+    assert fake_relay['charged_bytes'] == 0
+    assert fake_relay['ignored_clients'] == 1
+
+
 @pytest.mark.parametrize('changes', [
     {'sourcePort': 24443}, {'sourcePort': 24445}, {'sourcePort': 443},
     {'exitPort': 24443}, {'sourceNodeId': 'de'}, {'entryPort': 0}, {'entryAddress': 'https://bad.test'},
