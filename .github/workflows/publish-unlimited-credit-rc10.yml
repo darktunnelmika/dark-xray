@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 jobs:
-  checksums:
+  publish:
     if: github.repository == 'darktunnelmika/dark-xray'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -16,15 +16,19 @@ jobs:
           ref: fix/unlimited-user-month-credit
           fetch-depth: 0
           persist-credentials: true
-      - name: Refresh checksums without modifying reviewed runtime
+      - name: Publish exact tested dependency fix and refreshed checksums
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = '4e2b9c40b0733ce5cbc26c97e8e6129dd773ca0b'
-          python3 tools/release_snapshot.py --refresh-source-sums
-          test "$(git diff --name-only)" = 'SHA256SUMS'
+          test "$(git rev-parse HEAD)" = '38053801e7c34775c5fe81b8ffc3b58a497fa6f3'
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-time 60 \
+            'https://steven.darkvpn.info:2087/assets/source-transfer-node-credit-closeout.bundle' -o /tmp/credit-final.bundle
+          echo '0f144f90216ce4ccf027098c298bd621dba15e6ce2d7b647c1c216e820be847a  /tmp/credit-final.bundle' | sha256sum --check
+          git bundle verify /tmp/credit-final.bundle
+          git fetch /tmp/credit-final.bundle HEAD
+          test "$(git rev-parse FETCH_HEAD)" = '93739a6ebe74eb9818b40c8287cb83d23378c5be'
+          test "$(git rev-parse FETCH_HEAD^{tree})" = 'af60ffdd93735e3f66436617674e10bf25c399e6'
+          git checkout --detach FETCH_HEAD
           sha256sum -c SHA256SUMS
-          diff -u <(git ls-files | grep -vx 'SHA256SUMS' | LC_ALL=C sort) <(cut -c67- SHA256SUMS | LC_ALL=C sort)
-          git add SHA256SUMS
-          git -c user.name='DARK XRAY Automation' -c user.email='automation@users.noreply.github.com' commit -m 'chore: refresh rc10 exact source checksum manifest'
+          python3 tools/repo-check.py
           git push origin HEAD:refs/heads/fix/unlimited-user-month-credit
