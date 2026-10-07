@@ -4,3 +4,9 @@
 
 .iv3-swap-route .iv3-tunnel-toggle{position:relative}
 .iv3-swap-route .iv3-tunnel-toggle:has(input:focus-visible){outline:2px solid var(--green);outline-offset:2px}
+
+.swap-route-name{font-size:17px!important;letter-spacing:.01em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.swap-path{font-family:var(--mono);font-size:11px!important;color:var(--muted);direction:ltr;text-align:left}
+.swap-accounting{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 10px;border:1px solid color-mix(in srgb,var(--green) 24%,transparent);background:color-mix(in srgb,var(--green) 5%,transparent)}
+.swap-name-form{grid-template-columns:1fr}
+@media(max-width:600px){.swap-route-name{white-space:normal}.swap-path{text-align:start}.swap-accounting{align-items:flex-start}}
