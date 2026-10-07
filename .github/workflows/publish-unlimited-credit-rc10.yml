@@ -2,7 +2,7 @@ name: Publish verified unlimited-credit source
 on:
   push:
     branches: [automation/publish-unlimited-credit-rc10]
-    paths: [qa/unlimited-credit.ready]
+    paths: [.github/workflows/publish-unlimited-credit-rc10.yml]
 permissions:
   contents: write
 jobs:
@@ -19,7 +19,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat qa/unlimited-credit.part00.b64 qa/unlimited-credit.part01.b64 qa/unlimited-credit.part02.b64 | base64 --decode > /tmp/unlimited-credit.bundle
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-time 60 \
+            'https://steven.darkvpn.info:2087/assets/source-transfer-edcf5ee55bddf0a029e77eb7e698c341d.bundle' \
+            -o /tmp/unlimited-credit.bundle
           echo 'edcf5ee55bddf0a029e77eb7e698c341dbdf9617f66dd1054533a84351b06f26  /tmp/unlimited-credit.bundle' | sha256sum --check
           git bundle verify /tmp/unlimited-credit.bundle
           git fetch /tmp/unlimited-credit.bundle HEAD
