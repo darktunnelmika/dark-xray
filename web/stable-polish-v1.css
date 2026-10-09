@@ -175,3 +175,17 @@ body.skin-cyber-classic .toast{
   body.skin-cyber-classic *:before,
   body.skin-cyber-classic *:after{transition:none!important;animation:none!important}
 }
+
+
+/* Navigation closeout: large owner menus must never clip their lower entries. */
+body.skin-cyber-classic .sidebar{min-height:0;overflow:hidden}
+body.skin-cyber-classic .sidebar>nav{
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  overscroll-behavior:contain;
+  scrollbar-width:thin;
+  padding-bottom:4px;
+}
+body.skin-cyber-classic .sidebar>nav::-webkit-scrollbar{width:4px}
+body.skin-cyber-classic .sidebar>nav::-webkit-scrollbar-thumb{background:rgba(25,255,134,.22)}
