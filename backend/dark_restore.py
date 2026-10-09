@@ -156,7 +156,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
                 if changed.rowcount!=1:raise HTTPException(409,'Restore archive state changed; retry')
                 db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
                            (restore_id,'restore.archived',json.dumps({'reason':reason,'dark_used':dark_used}),now))
-            if apply_runtime:self.engine.apply(start=self.engine.running)
+            if apply_runtime and self.engine.running:self.engine.apply(start=True)
         return {'archived':True,'id':restore_id,'historical_dark_used':dark_used}
 
     def archive_finished(self)->dict:
@@ -173,7 +173,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         done=[]
         for rid in ids:
             self.archive_user(rid,reason='finished',apply_runtime=False,collect=False);done.append(rid)
-        self.engine.apply(start=self.engine.running)
+        if self.engine.running:self.engine.apply(start=True)
         return {'archived':len(done),'ids':done,'history_preserved':True}
 
     def ensure_domain(self,domain:str,acme_email:str=''):
