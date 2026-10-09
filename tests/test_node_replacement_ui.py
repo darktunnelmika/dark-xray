@@ -173,7 +173,7 @@ def test_completed_receipt_is_optional_history_and_new_replacement_is_primary(br
     expect(page.locator('.nr-prepare [data-nr=prepare]')).to_be_enabled()
     expect(page.locator('.nr-previous-receipt')).to_be_visible()
     assert not page.locator('.nr-completed').is_visible()
-    assert not page.locator('[data-nr-phase=activated]').count()
+    expect(page.locator('[data-nr-phase=activated]')).to_be_visible()
     assert len(env['posts'])==expected_posts
     # Old receipt can be viewed on purpose, without hiding the new replacement form.
     page.locator('.nr-previous-receipt summary').click()
