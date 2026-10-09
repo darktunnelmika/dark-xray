@@ -49,8 +49,23 @@ def grant_stopped_replacement_lease(nodes, manager, engine, node_id, traffic,
     if (not command.get('persisted') or command['action'] != 'start' or
             command['revision'] != control_revision or not command.get('pending')):
         raise PolicyError('Replacement Start intent changed before accounting grant')
+    # The Node may still have the staged Stop revision: the new Start is a
+    # Hub-saved intent, but has not yet been sent. Bind the lease to the
+    # Node's CURRENT durable command, either stopped at N-1 or a failed Start
+    # at N. Do not fake a future Node receipt or disable lease enforcement.
+    health, _ = request('/node/api/health')
+    receipt = health.get('control_receipt') if isinstance(health, dict) else None
+    core = health.get('core') if isinstance(health, dict) else None
+    if (not isinstance(receipt, dict) or not isinstance(core, dict) or
+            core.get('state') != 'stopped' or
+            type(receipt.get('revision')) is not int or
+            receipt['revision'] not in (control_revision - 1, control_revision) or
+            (receipt['revision'] == control_revision - 1 and
+             (receipt.get('action') != 'stop' or receipt.get('phase') != 'applied')) or
+            (receipt['revision'] == control_revision and receipt.get('action') != 'start')):
+        raise PolicyError('Replacement control intent and Node state do not match')
     body = {'challenge': challenge, 'revision': state['revision'], 'hash': state['hash'],
-            'controlRevision': control_revision}
+            'controlRevision': receipt['revision']}
     doc, _ms = request('/node/api/v1/accounting/lease', 'POST', body)
     if not isinstance(doc, dict) or not isinstance(doc.get('lease'), dict) or doc['lease'].get('valid') is not True:
         raise PolicyError('Replacement Node did not acknowledge valid accounting authority')
