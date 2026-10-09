@@ -212,7 +212,7 @@ body.skin-cyber-classic .notice.error{
   color:#ffc2ca!important;
 }
 body.skin-cyber-classic .field-input,
-body.skin-cyber-classic input:not([type=checkbox]):not([type=radio]):not([type=hidden]),
+body.skin-cyber-classic input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=range]):not([type=color]):not([type=file]),
 body.skin-cyber-classic select,
 body.skin-cyber-classic textarea{
   border-radius:10px!important;
