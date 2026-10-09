@@ -346,7 +346,9 @@ def test_management_outage_is_distinct_from_customer_data_plane(real_fleet):
         with pytest.raises(PolicyError, match='RemoteDisconnected'):
             f.reg.probe(first.id)
         f.reg.probe(other.id)
-        assert set(f.links()) == {other.data_port}
+        # A transient control-plane outage must not remove the Node's
+        # already-deployed customer configuration from subscriptions.
+        assert set(f.links()) == {a.data_port for a in f.agents}
         # Loss of management reachability is not a firewall/data-plane stop.
         for client in f.clients: transfer(client.port, f.target)
     finally: first.wire.down = False
