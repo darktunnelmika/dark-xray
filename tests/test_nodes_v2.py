@@ -54,9 +54,9 @@ def test_live_telemetry_freshness_preserves_system_snapshot(env,monkeypatch):
  assert fresh['telemetry_state']=='fresh' and fresh['telemetry_age_seconds']<=2
  assert fresh['health']['system']['network']['down_bps']==256.0
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-30,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-50,))
  stale={x['id']:x for x in c.get('/api/nodes').json()}['live1']
- assert stale['telemetry_state']=='stale' and stale['online'] is True and stale['telemetry_age_seconds']>=29
+ assert stale['telemetry_state']=='stale' and stale['online'] is True and stale['telemetry_age_seconds']>=49
  with store.transaction() as db:
   db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-181,))
  offline={x['id']:x for x in c.get('/api/nodes').json()}['live1']
@@ -119,7 +119,7 @@ def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
  assert {'memory_critical','xray_not_running','hub_lease_invalid'} <= {x['code'] for x in ops['alerts']}
 
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-30,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-50,))
  ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
  assert ops['state']=='warning' and ops['score']==55 and ops['capacity_percent'] is None
  assert ops['alerts'][0]['code']=='telemetry_stale'
@@ -195,6 +195,22 @@ def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env
  assert hosts.status_code==200,hosts.text
  before_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
  assert any(x.get('runtime')=='node:maint1' for x in before_links)
+ # A short Node timeout must not erase a saved Direct link. A confirmed real
+ # outage may suppress delivery, but it must NOT delete the inbound mapping.
+ for attempts in (1,2):
+  with store.transaction() as db:
+   db.execute("UPDATE remote_nodes SET last_error='Node connection failed: Timeout',failure_count=? WHERE id='maint1'",(attempts,))
+  links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+  assert any(x.get('runtime')=='node:maint1' for x in links)
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_error='Node connection failed: Timeout',failure_count=3 WHERE id='maint1'")
+ links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+ assert all(x.get('runtime')!='node:maint1' for x in links)
+ with store.lock:
+  assert store.db.execute("SELECT COUNT(*) FROM remote_node_inbounds WHERE node_id='maint1' AND local_inbound_id=?",(inbound,)).fetchone()[0]==1
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_error='',failure_count=0 WHERE id='maint1'")
+ assert any(x.get('runtime')=='node:maint1' for x in c.get('/api/clients/maintenance-user/links').json()['engine']['links'])
  before={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
  assert before['enabled']==1 and before['online'] is True
  assert before['assignments'][0]['failover_ready'] is True

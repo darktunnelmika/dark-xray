@@ -289,7 +289,7 @@ def test_offline_other_node_delete_error_does_not_poison_healthy_node_lease():
         installations=SimpleNamespace(operation=lambda _node:contextlib.nullcontext()),
         _allowed_traffic_clients=lambda _node:{'alice'},
         sync_desired_state=Mock(),
-        desired_state=Mock(return_value={'pending':False,'last_error':'','revision':7}),
+        desired_state=Mock(return_value={'pending':False,'last_error':'','revision':7,'hash':'a'*64,'applied_revision':7,'applied_hash':'a'*64}),
         commands=SimpleNamespace(status=Mock(return_value={'revision':0})),
         _request=Mock(return_value=({'lease':{'valid':True,'remaining_seconds':60}},1)),
     )

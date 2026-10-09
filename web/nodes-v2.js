@@ -14,7 +14,7 @@ async function loadNodes(){
  state.nv2={nodes,orchestration,nodeError,orchestrationError};return state.nv2;
 }
 function healthMetric(label,value){return `<div><small>${e(label)}</small><b>${e(value??'—')}</b></div>`;}
-const NV6_FRESH_SECONDS=20;
+const NV6_FRESH_SECONDS=45;
 let nv6LiveTimer=0,nv6LiveBusy=false;
 function nv6Num(value){const n=Number(value);return Number.isFinite(n)?n:null;}
 function nv6Pct(value){const n=nv6Num(value);return n===null?'—':Math.max(0,Math.min(100,n)).toFixed(n>=10?0:1)+'%';}
