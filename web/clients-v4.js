@@ -3,7 +3,10 @@
 'use strict';
 if(typeof clientsPage!=='function'||typeof runAction!=='function'||typeof clientForm!=='function')return;
 const baseClientsPage=clientsPage,baseRunAction=runAction,baseClientForm=clientForm;
-state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',filters:false,delivery:null,page:1,pageSize:50};
+let savedCv4View='clients';
+try{if(typeof sessionStorage!=='undefined'&&sessionStorage.getItem('dark_clients_view')==='groups')savedCv4View='groups';}catch{}
+state.cv4=state.cv4||{view:savedCv4View,presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',filters:false,delivery:null,page:1,pageSize:50};
+if(!['clients','groups'].includes(state.cv4.view))state.cv4.view=savedCv4View;
 if(state.cv4.sort==='activity')state.cv4.sort='created';
 state.cv4.page=Math.max(1,Number(state.cv4.page||1));state.cv4.pageSize=[25,50,100].includes(Number(state.cv4.pageSize))?Number(state.cv4.pageSize):50;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
@@ -321,7 +324,7 @@ async function bulkCreate(){
 }
 runAction=async function(act,el){
  const id=el?.dataset?.id;
- if(act==='cv4view'){state.cv4.view=el.dataset.view;state.selected.clear();return renderPage();}
+ if(act==='cv4view'){state.cv4.view=el.dataset.view;try{if(typeof sessionStorage!=='undefined')sessionStorage.setItem('dark_clients_view',state.cv4.view);}catch{}state.selected.clear();return renderPage();}
  if(act==='cv4filters'){state.cv4.filters=!state.cv4.filters;return renderPage();}
  if(act==='cv4quick'){state.cv4.page=1;if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
  if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',page:1});state.selected.clear();return renderPage();}
