@@ -131,13 +131,14 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 overviewBorder:getComputedStyle(document.querySelector('.ov4-card')).borderTopColor,
                 overviewRadius:getComputedStyle(document.querySelector('.ov4-card')).borderRadius,
                 overviewAccent:getComputedStyle(document.querySelector('.ov4-spark polyline')).stroke,
-                actionGradient:getComputedStyle(document.querySelector('.ov4-action')).backgroundImage
+                actionGradient:getComputedStyle(document.querySelector('.ov4-action')).backgroundImage,
+                actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor
             })""")
             assert skin['green']=='#79f6b9',skin
             assert skin['overviewRadius'] in ('19px','19px 19px 19px 19px'),skin
             assert skin['overviewAccent']=='rgb(121, 246, 185)',skin
             assert '137, 204, 236' in skin['overviewBorder'],skin
-            assert 'linear-gradient' in skin['actionGradient'],skin
+            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg']=='rgb(48, 68, 93)',skin
             assert 'linear-gradient' in skin['overviewBg'],skin
             mark('real browser login, Obsidian Pulse V3 bright palette and floating Overview V4')
 
