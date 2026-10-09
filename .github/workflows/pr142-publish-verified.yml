@@ -1,0 +1,71 @@
+name: Publish verified PR142 security correction
+on:
+  push:
+    branches: [fix/node-watchdog-telemetry-isolation-20261009]
+    paths: [.github/workflows/pr142-publish-verified.yml]
+permissions:
+  contents: write
+jobs:
+  verified-patch:
+    if: github.repository == 'darktunnelmika/dark-xray' && github.ref == 'refs/heads/fix/node-watchdog-telemetry-isolation-20261009'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: true
+      - name: Materialize only pre-reviewed source and regression fixtures
+        env:
+          GH_REPO_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, subprocess, urllib.request
+          from pathlib import Path
+          root = Path.cwd()
+          repo = 'darktunnelmika/dark-xray'
+          updates = {
+              'backend/nodes.py': ('07cccc3744a8c17932e5e4843d18090324b54d70', 'f61c075268ec1bbb1a1e8ed704aa115e8be7ea020a559a88d7e6d7f86be2badd', '7b54710496f7336ed0984dbda4438ff38a6eeb027b2822129a665dae193ba9a2'),
+              'tests/test_node_stability_regression.py': ('447c9dafd7d0034c4a93f0c9fd589f2d75917c97', '66475670bf852e9d871241516da6c8780547a89db27811af037ec64d81f53b00', 'c0e7c4685effb66ebfbd6697594d1de8656a36d37257f4536cadbde328c5834d'),
+              'tests/test_node_monitor.py': ('d118a92aeda33e15ac40c9cf5440d1ff41e6dbee', 'c7527c8f017dd7358d930a966df4d78b253661cdd55b376226e637387823770f', '7f1aad68119924703d9e9374f02484f16b0656fc19ce24a94618d28918acf707'),
+          }
+          for path, (blob, before, after) in updates.items():
+              target = root / path
+              assert hashlib.sha256(target.read_bytes()).hexdigest() == before, path
+              request = urllib.request.Request('https://api.github.com/repos/'+repo+'/git/blobs/'+blob, headers={'Authorization': 'Bearer '+os.environ['GH_REPO_TOKEN'], 'Accept': 'application/vnd.github+json'})
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  document = json.load(response)
+              data = base64.b64decode(document['content'])
+              assert hashlib.sha256(data).hexdigest() == after, path
+              compile(data.decode(), path, 'exec')
+              target.write_bytes(data)
+          path = 'tests/test_nodes_v2.py'
+          target = root / path
+          assert hashlib.sha256(target.read_bytes()).hexdigest() == '9f1bf5bede9cd0dc01fd2233777b2b181a732dedfc6c782726c9904f69f40572'
+          text = target.read_text()
+          for before in ("'temporary HTTPS timeout'", "'network down'"):
+              assert text.count(before) == 1
+              text = text.replace(before, "'Node connection failed: TimeoutError'")
+          target.write_text(text)
+          assert hashlib.sha256(target.read_bytes()).hexdigest() == 'a38e3ac978fb68848b9a088baaf875de980e3ee57b169f998151af694466a928'
+          compile(text, path, 'exec')
+          manifest = root / 'SHA256SUMS'
+          lines = manifest.read_text().splitlines()
+          for path in (*updates, path):
+              suffix = '  '+path
+              assert sum(line.endswith(suffix) for line in lines) == 1
+              digest = hashlib.sha256((root/path).read_bytes()).hexdigest()
+              lines = [digest+suffix if line.endswith(suffix) else line for line in lines]
+          manifest.write_text('\n'.join(lines)+'\n')
+          assert hashlib.sha256(manifest.read_bytes()).hexdigest() == '5146eaa159053f0749ba3789f42868a60d820d4836a5e5eba15570f4f04dac00'
+          subprocess.run(['sha256sum', '-c', 'SHA256SUMS'], check=True, stdout=subprocess.DEVNULL)
+          # This one-shot publication helper is not part of the final product.
+          # It removes only itself, never any pre-existing project file.
+          (root/'.github/workflows/pr142-publish-verified.yml').unlink()
+          print('ALL_REVIEWED_CONTENT_HASHES_MATCH')
+          PY
+          git config user.name 'DARK XRAY verified maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -- backend/nodes.py tests/test_node_stability_regression.py tests/test_node_monitor.py tests/test_nodes_v2.py SHA256SUMS .github/workflows/pr142-publish-verified.yml
+          git commit -m 'fix(nodes): immediately fence identity and TLS errors while tolerating transient transport failures'
+          git push origin HEAD:refs/heads/fix/node-watchdog-telemetry-isolation-20261009
