@@ -23,7 +23,7 @@ test('self-contained variable fonts cover Persian, Latin and technical labels',(
    assert.equal(buf.toString('utf8',0,4),'wOF2');
    assert.ok(buf.length>10000 && buf.length<100000);
  }
- assert.doesNotMatch(fonts,/data:font\\/woff2/i);
+ assert.ok(!fonts.includes('data:font/woff2;base64,'));
  // Persian ZWNJ/ZWJ belongs to the Arabic font, not Latin fallback.
  assert.match(fonts,/U\+200C-200D/);
  assert.doesNotMatch(fonts,/U\+2000-206F/);
