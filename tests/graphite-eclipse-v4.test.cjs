@@ -15,15 +15,15 @@ test('graphite layers are loaded last; removal is a two-link rollback',()=>{
 });
 test('self-contained variable fonts cover Persian, Latin and technical labels',()=>{
  assert.equal((fonts.match(/@font-face/g)||[]).length,3);
- for(const token of ['font-family:"DX UI"','font-family:"DX Mono"','font-display:swap','unicode-range:U+0600-06FF','unicode-range:U+0000-05FF','font-weight:100 900','data:font/woff2;base64,'])
+ for(const token of ['font-family:"DX UI"','font-family:"DX Mono"','font-display:swap','unicode-range:U+0600-06FF','unicode-range:U+0000-05FF','font-weight:100 900'])
    assert.ok(fonts.includes(token),token);
- const base64=[...fonts.matchAll(/data:font\/woff2;base64,([A-Za-z0-9+/=]+)/g)];
- assert.equal(base64.length,3);
- for(const [,b64] of base64) {
-   const buf=Buffer.from(b64,'base64');
+ for(const font of ['vazirmatn-arabic-variable.woff2','manrope-latin-variable.woff2','jetbrains-mono-latin-variable.woff2']) {
+   assert.ok(fonts.includes('./fonts/'+font),font);
+   const buf=fs.readFileSync(path.join(root,'fonts',font));
    assert.equal(buf.toString('utf8',0,4),'wOF2');
    assert.ok(buf.length>10000 && buf.length<100000);
  }
+ assert.doesNotMatch(fonts,/data:font\\/woff2/i);
  // Persian ZWNJ/ZWJ belongs to the Arabic font, not Latin fallback.
  assert.match(fonts,/U\+200C-200D/);
  assert.doesNotMatch(fonts,/U\+2000-206F/);
