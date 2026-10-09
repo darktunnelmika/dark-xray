@@ -1,0 +1,319 @@
+/* DARK XRAY / Deployment Targets Visual Polish V1
+ * VISUAL ONLY — existing 2-column card grid, DOM, input names, status semantics,
+ * disabled flags, save flow, Direct/Tunnel/SWAP control remain 100% unchanged.
+ * Loaded last after Classic Gangster V2; revert by removing the single CSS link.
+ */
+
+/* Standalone section with a readable title and explanation. */
+body.skin-cyber-classic #iv3-editor .iv3-deploy {
+  color-scheme: dark;
+  margin-top: 10px;
+  padding: 17px;
+  border: 1px solid rgba(94, 229, 187, .31) !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(115deg, rgba(71, 204, 160, .095), transparent 53%),
+    linear-gradient(165deg, #10242e, #081820 85%) !important;
+  box-shadow:
+    0 10px 32px rgba(0, 4, 12, .25),
+    inset 0 1px 0 rgba(231, 255, 241, .045) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact {
+  display: grid;
+  gap: 6px;
+  justify-content: stretch;
+  text-align: start;
+  margin-bottom: 15px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(222, 185, 121, .25);
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact b {
+  color: #f4fff8;
+  font-size: 15px;
+  font-weight: 820;
+  letter-spacing: .01em;
+  line-height: 1.5;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact small {
+  max-width: none;
+  color: #afcbc3;
+  font-size: 11px;
+  line-height: 1.75;
+  font-weight: 450;
+  text-align: start;
+}
+
+/* Keep original grid placement and list order; improve spacing and surfaces. */
+body.skin-cyber-classic #iv3-editor .iv3-deploy-grid {
+  gap: 11px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(103, 178, 183, .30) !important;
+  border-radius: 12px !important;
+  background: #0c1d27 !important;
+  box-shadow: 0 6px 19px rgba(0, 4, 12, .23) !important;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card:hover {
+  border-color: rgba(90, 220, 188, .50) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected {
+  border-color: rgba(76, 255, 180, .60) !important;
+  box-shadow: 0 0 0 1px rgba(76, 255, 180, .055),
+              0 9px 24px rgba(0, 3, 10, .27) !important;
+}
+
+/* Node / Hub header, retaining the original clickable checkbox label. */
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card > .iv3-deploy-target {
+  min-height: 64px;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid rgba(103, 178, 183, .17) !important;
+  background: linear-gradient(120deg, #1a323e, #112631) !important;
+  cursor: pointer;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected > .iv3-deploy-target,
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card > .iv3-deploy-target:has(input:checked) {
+  background: linear-gradient(120deg, #194639, #122f34) !important;
+  border-bottom-color: rgba(76, 255, 180, .24) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target > span {
+  flex: 1;
+  min-width: 0;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target b {
+  color: #effff8 !important;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 760;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target small {
+  color: #b6d2cd !important;
+  font-size: 10px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target > i {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  border-radius: 6px;
+  border: 1.5px solid #7faba8;
+  background: rgba(3, 12, 18, .47);
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target.selected > i,
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target:has(input:checked) > i {
+  border-color: #8dffca;
+  background: #4cffb4;
+  box-shadow: inset 0 0 0 3px #194637, 0 0 11px rgba(76, 255, 180, .22);
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target:focus-within {
+  outline: 2px solid rgba(159, 255, 208, .80);
+  outline-offset: -3px;
+}
+
+/* Distinct but non-distracting Tunnel section, same toggle/port semantics. */
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-route {
+  gap: 10px;
+  padding: 13px 14px 15px;
+  border-top: 0;
+  background: linear-gradient(160deg, rgba(11, 37, 51, .98), rgba(8, 23, 32, .98)) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.tunnel-on .iv3-tunnel-route {
+  background: linear-gradient(160deg, rgba(16, 57, 67, .88), rgba(8, 28, 38, .97)) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head {
+  align-items: center;
+  gap: 8px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > span {
+  color: #8fdbec;
+  font: 750 10px/1.55 var(--mono);
+  letter-spacing: .045em;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > b {
+  color: #bed4d7;
+  font: 680 9px/1.5 var(--mono);
+  letter-spacing: .01em;
+  padding: 4px 8px;
+  border: 1px solid rgba(128, 180, 188, .28);
+  border-radius: 7px;
+  background: rgba(31, 64, 76, .45);
+  max-width: 60%;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > b.ok {
+  color: #a4ffd3;
+  border-color: rgba(75, 239, 168, .40);
+  background: rgba(43, 165, 112, .16);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > b.warn {
+  color: #ffe1a2;
+  border-color: rgba(255, 208, 116, .39);
+  background: rgba(171, 122, 32, .15);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > b.bad {
+  color: #ffb2bf;
+  border-color: rgba(255, 123, 144, .40);
+  background: rgba(171, 52, 78, .18);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > b.off {
+  color: #9aafb6;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-controls {
+  gap: 10px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle {
+  min-width: 0;
+  min-height: 44px;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid rgba(108, 187, 199, .26);
+  border-radius: 9px;
+  color: #d7ebec;
+  background: rgba(20, 50, 62, .75);
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.5;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:checked) {
+  color: #d6fff0;
+  border-color: rgba(76, 255, 180, .45);
+  background: rgba(18, 77, 64, .57);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:disabled) {
+  opacity: .60;
+  cursor: not-allowed;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle > i {
+  width: 32px;
+  height: 19px;
+  border-radius: 20px;
+  border-color: #64838e;
+  background: #11212c;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle > i:after {
+  width: 13px;
+  height: 13px;
+  top: 2px;
+  left: 2px;
+  background: #a3b7bd;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:checked) > i {
+  border-color: rgba(76, 255, 180, .68);
+  background: rgba(47, 174, 122, .39);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:checked) > i:after {
+  left: 15px;
+  background: #91ffcd;
+  box-shadow: 0 0 7px rgba(76, 255, 180, .32);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:focus-within {
+  outline: 2px solid #a0ffce;
+  outline-offset: 2px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port {
+  min-width: 0;
+  gap: 5px;
+  color: #b9d9da;
+  font-size: 10px;
+  font-weight: 640;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port > input {
+  height: 44px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: 9px !important;
+  border: 1px solid rgba(100, 193, 205, .45) !important;
+  background: #0a202b !important;
+  color: #e9fffa !important;
+  font: 680 14px/1.4 var(--mono) !important;
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  text-align: center;
+  box-shadow: inset 0 2px 7px rgba(0, 3, 9, .18);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port > input:focus {
+  border-color: #69f5c0 !important;
+  outline: 2px solid rgba(76, 255, 180, .23);
+  outline-offset: 1px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port > input:disabled {
+  opacity: .52;
+  cursor: not-allowed;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-route > small,
+body.skin-cyber-classic #iv3-editor .iv3-swap-route > small {
+  color: #a5c4c7;
+  font-size: 10px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+/* Preserve SWAP's original placement and activation logic.
+ * Gold marks relay settings; never imply readiness from a color alone. */
+body.skin-cyber-classic #iv3-editor .iv3-swap-route {
+  padding: 13px 14px 15px;
+  border-top: 1px solid rgba(222, 185, 121, .26);
+  background: linear-gradient(150deg, rgba(61, 44, 37, .42), rgba(10, 24, 32, .93));
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .iv3-tunnel-head > span {
+  color: #edce91;
+  font-weight: 850;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .iv3-tunnel-toggle {
+  border-color: rgba(222, 185, 121, .32);
+  background: rgba(69, 50, 42, .30);
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .btn {
+  min-height: 44px;
+  border-color: rgba(222, 185, 121, .48) !important;
+  background: linear-gradient(150deg, #433e38, #222b30) !important;
+  color: #ffebca !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .btn:hover:not(:disabled) {
+  border-color: #f2d39a !important;
+  background: #554737 !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-empty {
+  color: #b9d0ce;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+/* Retain previous card columns and mobile stacking, only reduce visual density. */
+@media(max-width:620px) {
+  body.skin-cyber-classic #iv3-editor .iv3-deploy {
+    padding: 11px;
+    margin-top: 7px;
+  }
+  body.skin-cyber-classic #iv3-editor .iv3-deploy-grid {
+    gap: 9px;
+  }
+  body.skin-cyber-classic #iv3-editor .iv3-deploy-card > .iv3-deploy-target {
+    min-height: 59px;
+    padding: 10px 12px;
+  }
+  body.skin-cyber-classic #iv3-editor .iv3-tunnel-route,
+  body.skin-cyber-classic #iv3-editor .iv3-swap-route {
+    padding: 11px 12px;
+  }
+  body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact b {
+    font-size: 14px;
+  }
+  body.skin-cyber-classic #iv3-editor .iv3-tunnel-head > b {
+    max-width: 58%;
+  }
+}
+@media(prefers-reduced-motion:reduce) {
+  body.skin-cyber-classic #iv3-editor .iv3-deploy-card,
+  body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle > i:after {
+    transition: none !important;
+  }
+}
