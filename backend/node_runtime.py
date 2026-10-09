@@ -830,9 +830,11 @@ class LeaseGuard:
         # Continue watchdog keepalives for the ENTIRE valid accounting lease.
         # Cutting them off WatchdogSec+2 before expiry restarted Xray even
         # when the Hub was merely late in renewing an otherwise valid grant.
+        fed = False
         if lease.allowed:
             try:
                 self.watchdog.notify()
+                fed = True
             except Exception as exc:
                 self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
                 return
@@ -859,7 +861,9 @@ class LeaseGuard:
                 return
             # After a confirmed Stop it is safe to keep the Agent alive even
             # without a valid lease, allowing clean recovery without SIGKILL.
-            self.watchdog.notify()
+            # Do not duplicate a valid-lease heartbeat from the same tick.
+            if not fed:
+                self.watchdog.notify()
             self.last_error = ''
         except Exception as exc:
             self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
