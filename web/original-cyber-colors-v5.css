@@ -1,0 +1,341 @@
+/* DARK XRAY / Original Cyber Palette V5
+ * Presentation-only restoration of the ORIGINAL black / neon-green identity.
+ * Keeps all V4 self-hosted fonts, V3 rounded geometry and existing DOM/logic.
+ * Loaded last; remove one stylesheet link to return to Graphite Eclipse V4.
+ */
+body.skin-cyber-classic {
+  --cyber-original-black:#000604;
+  --cyber-original-green:#19ff86;
+  --cyber-original-line:rgba(25,255,134,.24);
+  --classic-green:#19ff86;
+  --classic-green-2:#6affb2;
+  --classic-black:#000604;
+  --classic-black-2:#010a07;
+  --classic-panel:#081710;
+  --classic-panel-2:#0b2016;
+  --classic-line:rgba(25,255,134,.24);
+  --classic-line-soft:rgba(25,255,134,.105);
+  --bg:#000604;
+  --panel:#081710;
+  --panel2:#0b2016;
+  --border:#23543c;
+  --text:#ecfff4;
+  --muted:#a2c9b1;
+  --faint:#77a38c;
+  --green:#19ff86;
+  --cyan:#65ffc0;
+  --purple:#98eeba;
+  --red:#ff788f;
+  --amber:#ffcf83;
+  --dx-bg:#000604;
+  --dx-bg2:#010a07;
+  --dx-panel:rgba(4,17,11,.94);
+  --dx-panel2:rgba(6,23,14,.96);
+  --dx-line:rgba(25,255,134,.19);
+  --dx-green:#19ff86;
+  --dx-cyan:#65ffc0;
+  --dx-purple:#98eeba;
+  --pulse-bg:#000604;
+  --pulse-shell:#05120c;
+  --pulse-panel:#081710;
+  --pulse-panel-glow:#0c261a;
+  --pulse-ink:#ecfff4;
+  --pulse-muted:#a2c9b1;
+  --pulse-faint:#77a38c;
+  --pulse-edge:rgba(25,255,134,.23);
+  --pulse-edge-hot:rgba(25,255,134,.5);
+  --pulse-turquoise:#65ffc0;
+  --pulse-mint:#19ff86;
+  --pulse-iris:#98eeba;
+  --ge-back:#000604;
+  --ge-sidebar:#05120c;
+  --ge-surface:#081710;
+  --ge-surface-high:#0c261a;
+  --ge-ink:#ecfff4;
+  --ge-secondary:#a2c9b1;
+  --ge-faint:#77a38c;
+  --ge-border:rgba(25,255,134,.23);
+  --ge-border-active:rgba(25,255,134,.5);
+  --ge-mint:#19ff86;
+  --ge-cyan:#65ffc0;
+  --ge-violet:#98eeba;
+  --ov4-accent:#19ff86;
+  --ov4-panel:#081710;
+  --ov4-panel-2:#0b2016;
+  color:#ecfff4;
+  background:
+    radial-gradient(ellipse at 82% -21%,rgba(25,255,134,.083),transparent 47%),
+    radial-gradient(ellipse at 0 100%,rgba(25,255,134,.036),transparent 54%),
+    linear-gradient(150deg,#010c07,#000604 62%,#030d08) !important;
+}
+body.skin-cyber-classic:before {
+  background-image:
+    linear-gradient(rgba(25,255,134,.014) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(25,255,134,.014) 1px,transparent 1px) !important;
+  opacity:.5 !important;
+}
+body.skin-cyber-classic .sidebar {
+  background:linear-gradient(180deg,#07190f,#020a06) !important;
+  border-color:rgba(25,255,134,.22) !important;
+  box-shadow:10px 0 30px rgba(0,0,0,.40) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .sidebar {
+  box-shadow:-10px 0 30px rgba(0,0,0,.40) !important;
+}
+body.skin-cyber-classic .brand {
+  border-color:rgba(25,255,134,.21) !important;
+}
+body.skin-cyber-classic .brand-mark {
+  background:#103823 !important;
+  color:#19ff86 !important;
+  border-color:rgba(25,255,134,.51) !important;
+  box-shadow:0 0 17px rgba(25,255,134,.105) !important;
+}
+body.skin-cyber-classic .brand-name {color:#eafff0 !important}
+body.skin-cyber-classic .brand-name span,
+body.skin-cyber-classic .brand-sub,
+body.skin-cyber-classic .nav-section-label,
+body.skin-cyber-classic .nav-label,
+body.skin-cyber-classic .page-heading .eyebrow,
+body.skin-cyber-classic .section-tag {
+  color:#19ff86 !important;
+}
+body.skin-cyber-classic .topbar {
+  background:rgba(3,16,10,.96) !important;
+  border-color:rgba(25,255,134,.23) !important;
+  box-shadow:0 7px 22px rgba(0,0,0,.3) !important;
+}
+body.skin-cyber-classic .breadcrumb,
+body.skin-cyber-classic .page-heading p {color:#a0cdb4 !important}
+body.skin-cyber-classic .page-heading h1 {
+  color:#f0fff6 !important;
+  text-shadow:0 0 17px rgba(25,255,134,.083) !important;
+}
+body.skin-cyber-classic .nav-btn {
+  color:#a5d0b5 !important;
+  background:transparent !important;
+  border-color:transparent !important;
+}
+body.skin-cyber-classic .nav-btn:hover {
+  color:#f1fff6 !important;
+  background:rgba(25,255,134,.075) !important;
+  border-color:rgba(25,255,134,.22) !important;
+}
+body.skin-cyber-classic .nav-btn.active {
+  color:#aaffd3 !important;
+  background:linear-gradient(90deg,rgba(25,255,134,.17),rgba(25,255,134,.025)) !important;
+  border-color:rgba(25,255,134,.46) !important;
+  box-shadow:inset 3px 0 0 #19ff86,0 4px 15px rgba(25,255,134,.042) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .nav-btn.active {
+  background:linear-gradient(270deg,rgba(25,255,134,.17),rgba(25,255,134,.025)) !important;
+  box-shadow:inset -3px 0 0 #19ff86,0 4px 15px rgba(25,255,134,.042) !important;
+}
+body.skin-cyber-classic .panel,
+body.skin-cyber-classic .service-tile,
+body.skin-cyber-classic .reseller-mini,
+body.skin-cyber-classic .system-bottom,
+body.skin-cyber-classic .swap-card,
+body.skin-cyber-classic .nv2-node,
+body.skin-cyber-classic .dr-group,
+body.skin-cyber-classic .ov4-commandbar,
+body.skin-cyber-classic .ov4-resource,
+body.skin-cyber-classic .ov4-card,
+body.skin-cyber-classic .ov4-telemetry-strip,
+body.skin-cyber-classic .ov4-summary-grid,
+body.skin-cyber-classic .ov4-management-grid .up-dashboard-compact-inner {
+  background:linear-gradient(145deg,#0d2217,#06120c) !important;
+  border-color:rgba(25,255,134,.2) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.03),0 9px 26px rgba(0,0,0,.28) !important;
+}
+body.skin-cyber-classic .panel:hover,
+body.skin-cyber-classic .swap-card:hover,
+body.skin-cyber-classic .nv2-node:hover {
+  border-color:rgba(25,255,134,.43) !important;
+}
+body.skin-cyber-classic .panel-head,
+body.skin-cyber-classic .swap-card-head {
+  background:linear-gradient(90deg,rgba(25,255,134,.045),transparent 70%) !important;
+  border-color:rgba(25,255,134,.14) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .panel-head {
+  background:linear-gradient(270deg,rgba(25,255,134,.045),transparent 70%) !important;
+}
+body.skin-cyber-classic .metric-number,
+body.skin-cyber-classic .kpi-value,
+body.skin-cyber-classic .ov4-resource-value,
+body.skin-cyber-classic .ov4-connection-total b {
+  color:#edfff5 !important;
+}
+body.skin-cyber-classic .ov4 {
+  --ov4-accent:#19ff86;
+  --ov4-border:rgba(25,255,134,.22);
+  --ov4-border-soft:rgba(25,255,134,.1);
+  --ov4-panel:#081710;
+  --ov4-panel-2:#0b2016;
+}
+body.skin-cyber-classic .ov4-action,
+body.skin-cyber-classic .ov4-small-button {
+  background:#143024 !important;
+  border-color:rgba(25,255,134,.27) !important;
+  color:#d0ffe0 !important;
+}
+body.skin-cyber-classic .ov4-action:first-child {
+  background:#1c4630 !important;
+  border-color:rgba(25,255,134,.52) !important;
+  color:#acffd2 !important;
+}
+body.skin-cyber-classic .btn,
+body.skin-cyber-classic .icon-btn,
+body.skin-cyber-classic .search-btn {
+  background:linear-gradient(145deg,#183b29,#10281d) !important;
+  color:#e6ffef !important;
+  border-color:rgba(25,255,134,.28) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.04) !important;
+}
+body.skin-cyber-classic .btn:hover:not(:disabled),
+body.skin-cyber-classic .icon-btn:hover:not(:disabled) {
+  background:linear-gradient(145deg,#235037,#153723) !important;
+  border-color:rgba(25,255,134,.60) !important;
+}
+body.skin-cyber-classic .btn-primary,
+body.skin-cyber-classic .btn.primary,
+body.skin-cyber-classic .btn-primary:hover:not(:disabled),
+body.skin-cyber-classic .btn.primary:hover:not(:disabled) {
+  background:linear-gradient(125deg,#a1ffd1,#19ff86) !important;
+  color:#062313 !important;
+  border-color:#9effcb !important;
+  box-shadow:0 6px 19px rgba(25,255,134,.13) !important;
+}
+body.skin-cyber-classic .btn.danger,
+body.skin-cyber-classic .btn-danger {
+  background:rgba(112,36,51,.46) !important;
+  border-color:rgba(255,120,143,.4) !important;
+  color:#ffb6c3 !important;
+}
+body.skin-cyber-classic .field-input,
+body.skin-cyber-classic input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]),
+body.skin-cyber-classic select,
+body.skin-cyber-classic textarea {
+  background:#081b11 !important;
+  border-color:rgba(25,255,134,.25) !important;
+  color:#edfff5 !important;
+}
+body.skin-cyber-classic table th {
+  color:#9fdbb9 !important;
+  background:#0b1d13 !important;
+  border-color:rgba(25,255,134,.17) !important;
+}
+body.skin-cyber-classic table td {color:#deffea !important}
+body.skin-cyber-classic table tbody tr:hover {background:rgba(25,255,134,.042) !important}
+body.skin-cyber-classic .cv4-row,
+body.skin-cyber-classic .iv3-row {
+  background:#0c1d14 !important;
+  border-color:rgba(25,255,134,.18) !important;
+}
+body.skin-cyber-classic .dialog,
+body.skin-cyber-classic .nr-dialog {
+  background:linear-gradient(150deg,#112d1e,#07140d) !important;
+  border-color:rgba(25,255,134,.35) !important;
+  box-shadow:0 28px 70px rgba(0,0,0,.55) !important;
+}
+body.skin-cyber-classic .dialog-head,
+body.skin-cyber-classic .dialog-foot {
+  background:#0b2016 !important;
+  border-color:rgba(25,255,134,.16) !important;
+}
+body.skin-cyber-classic .terminal,
+body.skin-cyber-classic .json-box {
+  background:#031409 !important;
+  color:#b0ffcb !important;
+  border-color:rgba(25,255,134,.24) !important;
+}
+body.skin-cyber-classic .iv3-drawer {
+  background:linear-gradient(160deg,#0d2418,#06130d) !important;
+  border-color:rgba(25,255,134,.27) !important;
+}
+body.skin-cyber-classic .iv3-drawer header,
+body.skin-cyber-classic .iv3-tabs,
+body.skin-cyber-classic .iv3-drawer footer {
+  background:#10291c !important;
+  border-color:rgba(25,255,134,.18) !important;
+}
+body.skin-cyber-classic .iv3-tab-buttons button,
+body.skin-cyber-classic .iv3-segments button,
+body.skin-cyber-classic .iv3-chips button {
+  background:#173d2a !important;
+  color:#d1ffdf !important;
+  border-color:rgba(25,255,134,.24) !important;
+}
+body.skin-cyber-classic .iv3-tab-buttons button.active,
+body.skin-cyber-classic .iv3-segments button.active,
+body.skin-cyber-classic .iv3-chips button.active {
+  background:#245c3d !important;
+  border-color:rgba(25,255,134,.66) !important;
+  color:#c2ffda !important;
+}
+body.skin-cyber-classic .iv3-drawer [data-v3-pane].active,
+body.skin-cyber-classic .iv3-tab-more {
+  background:#0d261a !important;
+  border-color:rgba(25,255,134,.20) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy,
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card {
+  background:#10281c !important;
+  border-color:rgba(25,255,134,.24) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected {
+  border-color:rgba(25,255,134,.60) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card>.iv3-deploy-target,
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-route {
+  background:#153824 !important;
+  border-color:rgba(25,255,134,.14) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected>.iv3-deploy-target,
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.tunnel-on .iv3-tunnel-route {
+  background:#1c4930 !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle {
+  background:#143824 !important;
+  color:#e0ffeb !important;
+  border-color:rgba(25,255,134,.29) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:checked) {
+  background:#235438 !important;
+  border-color:rgba(25,255,134,.53) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port>input {
+  background:#0b2c19 !important;
+  color:#eafff3 !important;
+  border-color:rgba(25,255,134,.34) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route {
+  background:#192f22 !important;
+  border-color:rgba(25,255,134,.22) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .iv3-tunnel-head>span {
+  color:#aaffd2 !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .btn {
+  background:#1b482e !important;
+  border-color:rgba(25,255,134,.4) !important;
+  color:#caffdf !important;
+}
+/* Meaningful warnings and errors stay amber/red, not green. */
+body.skin-cyber-classic .notice.warning {
+  color:#ffe2a9 !important;
+  background:rgba(101,70,23,.28) !important;
+  border-color:rgba(255,207,131,.33) !important;
+}
+body.skin-cyber-classic .notice.error {
+  color:#ffbdc8 !important;
+  background:rgba(108,38,53,.28) !important;
+  border-color:rgba(255,120,143,.35) !important;
+}
+body.skin-cyber-classic :is(button,a,input,textarea,select,summary,[tabindex]):focus-visible {
+  outline:2px solid #93ffc5 !important;
+  outline-offset:3px;
+}
+/* No font-family/size, radii, dimensions, positioning, grid or app logic
+ * overrides in this palette. V4 type, V3 rounded layout remain untouched. */
