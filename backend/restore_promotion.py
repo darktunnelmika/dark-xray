@@ -42,6 +42,7 @@ class RestorePromotionMixin:
             profile=self.store.db.execute("SELECT allowed,prefix,max_client_ips,max_client_hwid FROM owner_profiles WHERE id=?",(owner_id,)).fetchone()
             core=self.store.db.execute("SELECT body FROM core_clients WHERE email=?",(row['core_email'],)).fetchone() if row else None
         if not row:raise PolicyError('Restore user not found')
+        if float(row['deleted_at'] or 0)>0:raise PolicyError('Archived Restore user cannot be promoted')
         if float(row['promoted_at'] or 0)>0:raise PolicyError('Restore user was already promoted')
         if not account or account['role']!='reseller' or account['disabled']:raise PolicyError('Representative is unavailable')
         if not profile:raise PolicyError('Representative profile is unavailable')
