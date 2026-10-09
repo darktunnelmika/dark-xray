@@ -100,7 +100,7 @@ function paint(s){
  const labels=[['Select target','انتخاب هدف'],['Prepare','آماده‌سازی'],['Save binding','ثبت جایگزینی'],['Stage stopped','استقرار خاموش'],['Review / Start','بازبینی و شروع'],['Receipt','رسید']];
  const completed=p==='activated'&&s.activation?.activation_completed===true;
  let body=completed?
- `<section class="nr-new-primary"><h3>${L('Replace this Node with a new server','جایگزینی این نود با سرور جدید')}</h3>
+ `<section class="nr-new-primary" data-nr-phase="${esc(p)}"><h3>${L('Replace this Node with a new server','جایگزینی این نود با سرور جدید')}</h3>
  <p>${L('Enter the Pair Code from a different freshly installed VPS to start a new replacement. The existing Node remains active until the new replacement is explicitly reviewed and confirmed.','برای شروع جایگزینی جدید، کد اتصال یک سرور تازه‌نصب‌شدهٔ دیگر را وارد کن. نود فعلی تا زمانی که جایگزینی جدید را بررسی و تأیید نکنی فعال می‌ماند.')}</p></section>`:
  `<ol class="nr-steps">${labels.map((x,i)=>`<li ${i===step?'aria-current="step"':''}>${i+1}. ${L(...x)}</li>`).join('')}</ol>
  <div class="notice warning">${L('Users and recorded usage stay on the Hub. Closing this window does not cancel, stop, or roll back an operation. DNS, tunnels and the old VPS are not changed here.','کاربران و مصرف ثبت‌شده در پنل می‌مانند. بستن این پنجره عملیات را لغو، متوقف یا برنمی‌گرداند. DNS، تانل و VPS قبلی اینجا تغییر نمی‌کنند.')}</div>
