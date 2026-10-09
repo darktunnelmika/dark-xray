@@ -152,31 +152,43 @@ def test_browser_full_replacement_flow_with_explicit_consents_and_preserved_usag
     count=len(env['posts']);page.keyboard.press('Escape')
     expect(page.locator('.nr-dialog')).to_have_count(0)
     page.locator('.nv2-actions [data-act=nr-open]').click()
-    expect(page.locator('[data-nr-phase=activated]')).to_be_visible()
+    expect(page.locator('.nr-new-primary')).to_be_visible()
+    expect(page.locator('.nr-prepare [data-nr=prepare]')).to_be_visible()
+    expect(page.locator('.nr-previous-receipt')).to_be_visible()
+    expect(page.locator('.nr-previous-receipt')).not_to_have_attribute('open','')
     assert len(env['posts'])==count
 
 
 
-def test_completed_receipt_does_not_prompt_pairing_when_live_health_is_stale(browser_env):
+def test_completed_receipt_is_optional_history_and_new_replacement_is_primary(browser_env):
     env=browser_env;page=enter(env)
     ready_ui(page);start_ui(page)
     expected_posts=len(env['posts'])
     assert env['reg'].get(NODE)['enabled'] and env['target'].running
     with env['reg'].store.transaction() as db:
         db.execute('UPDATE remote_nodes SET last_seen=0 WHERE id=?',(NODE,))
-    do(page,'refresh','activated')
-    expect(page.locator('.nr-completed')).to_be_visible()
-    expect(page.locator('.nr-future-replacement')).to_be_visible()
-    assert not page.locator('.nr-dialog [data-nr=prepare]').is_visible()
-    assert 'not confirmed current readiness' in page.locator('.nr-completed').inner_text()
+    do(page,'refresh')
+    expect(page.locator('.nr-new-primary')).to_be_visible()
+    expect(page.locator('.nr-prepare')).to_be_visible()
+    expect(page.locator('.nr-prepare [data-nr=prepare]')).to_be_enabled()
+    expect(page.locator('.nr-previous-receipt')).to_be_visible()
+    assert not page.locator('.nr-completed').is_visible()
+    expect(page.locator('[data-nr-phase=activated]')).to_be_visible()
     assert len(env['posts'])==expected_posts
-    # Changing the cached observation never changes the durable Start receipt.
+    # Old receipt can be viewed on purpose, without hiding the new replacement form.
+    page.locator('.nr-previous-receipt summary').click()
+    expect(page.locator('.nr-completed')).to_be_visible()
+    assert 'readiness was not confirmed' in page.locator('.nr-completed').inner_text()
+    assert 'fresh Pair Code' in page.locator('.nr-prepare').inner_text()
+    # Observations can recover, but never change completed receipt or cause a POST.
     from time import time
     with env['reg'].store.transaction() as db:
         db.execute('UPDATE remote_nodes SET last_seen=? WHERE id=?',(time(),NODE))
-    do(page,'refresh','activated')
-    assert 'latest saved Node observation confirms' in page.locator('.nr-completed').inner_text()
-    assert not page.locator('.nr-dialog [data-nr=prepare]').is_visible()
+    do(page,'refresh')
+    expect(page.locator('.nr-new-primary')).to_be_visible()
+    assert not page.locator('.nr-completed').is_visible()
+    page.locator('.nr-previous-receipt summary').click()
+    assert 'Last saved Node observation was running' in page.locator('.nr-completed').inner_text()
     assert len(env['posts'])==expected_posts
     assert env['target'].running and env['reg'].get(NODE)['enabled']
 
