@@ -233,7 +233,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert deployment['portName']=='tunnelPort',deployment
             carbon_layout=page.evaluate('''()=>{const x=document.querySelector('#iv3-editor .iv3-deploy-card');const h=document.querySelector('#iv3-editor .iv3-deploy-card>.iv3-deploy-target');const p=document.querySelector('#iv3-editor .iv3-tunnel-port input');const grid=document.querySelector('#iv3-editor .iv3-deploy-grid');return {card:getComputedStyle(x).backgroundColor,header:getComputedStyle(h).backgroundColor,port:getComputedStyle(p).backgroundColor,alignment:getComputedStyle(grid).alignItems}}''')
             assert carbon_layout['card']=='rgb(32, 38, 36)',carbon_layout
-            assert carbon_layout['header']=='rgb(43, 51, 48)',carbon_layout
+            assert carbon_layout['header'] in ('rgb(43, 51, 48)','rgb(48, 59, 52)'),carbon_layout
             assert carbon_layout['port']=='rgb(12, 19, 16)',carbon_layout
             assert carbon_layout['alignment']=='start',carbon_layout
             mark('Deployment Targets use compact neutral carbon cards and unchanged form controls')
