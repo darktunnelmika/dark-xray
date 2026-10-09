@@ -140,7 +140,8 @@ body.skin-cyber-classic .topbar {
   background:rgba(26,37,55,.94) !important;
   border-color:rgba(161,203,239,.21) !important;
   box-shadow:0 8px 19px rgba(1,8,27,.16) !important;
-  backdrop-filter:blur(14px);
+  /* Do not create a stacking context: mobile menu button must rise above
+   * the opened sidebar in the existing z-index contract. */
 }
 body.skin-cyber-classic .breadcrumb {color:#bdd5e8}
 body.skin-cyber-classic .breadcrumb b,
