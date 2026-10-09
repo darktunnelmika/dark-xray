@@ -29,8 +29,9 @@ def _hash(value):
 
 
 class ReplacementActivation:
-    def __init__(self, deployment):
+    def __init__(self, deployment, *, lease_provider=None):
         self.deployment = deployment
+        self.lease_provider = lease_provider
         self.registry, self.store = deployment.registry, deployment.store
         with self.store.lock:
             self.store.db.execute('''CREATE TABLE IF NOT EXISTS remote_node_replacement_activations(
@@ -319,16 +320,33 @@ class ReplacementActivation:
         # accounting change as the new snapshot; other edits are still fenced.
         with self.store.lock:
             self._assert(self.store.db,row,binding,inputs=row['phase']=='starting')
-            self.registry.apply_traffic_snapshot(row['node_id'],items)
+            accounted = self.registry.apply_traffic_snapshot(row['node_id'],items)
             updated = self.deployment._source_hash(self.store.db,row['node_id'])
             with self.store.transaction() as db:
                 self._base_assert(db,row,binding)
                 db.execute('UPDATE remote_node_replacement_activations SET source_hash=? WHERE attempt_id=?',
                            (updated,row['attempt_id']))
             row['source_hash'] = updated
+        return {'accounting_lease':traffic.get('accountingLease'), **accounted}
 
     def _run(self, row, binding):
         self._fresh_inputs(row,binding)
+        if self.lease_provider is not None:
+            health,_ = self._exchange(row,binding,'/node/api/health')
+            lease = health.get('hub_lease') if isinstance(health,dict) else None
+            if not isinstance(lease,dict) or type(lease.get('required')) is not bool:
+                raise ActivationRejected('replacement_lease_state_unverified')
+            if lease['required']:
+                # A disabled candidate receives no background lease. Prove durable
+                # metering/policy, then grant the SAME saved Start revision before
+                # conditional activation. Never relax the Agent's fail-closed guard.
+                snapshot = self._traffic(row,binding)
+                try:
+                    self.lease_provider(row,binding,snapshot,
+                        lambda path,method='GET',body=None: self._exchange(row,binding,path,method,body))
+                except (PolicyError,OSError,ValueError) as exc:
+                    raise ActivationRejected('replacement_accounting_lease_withheld') from exc
+                self._fresh_inputs(row,binding)
         command = {'nodeId':binding['agent_id'],'revision':row['start_revision'],
                    'commandId':row['start_id'],'action':'start','desiredRevision':row['desired_revision'],
                    'desiredHash':row['desired_hash'],'validatedHash':row['validated_hash']}

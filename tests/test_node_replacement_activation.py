@@ -41,6 +41,47 @@ def pause(owner,receipt):
     return response.json()
 
 
+def test_hub_lease_required_replacement_grants_verified_lease_before_start(hub,tmp_path,monkeypatch):
+    reg,owner,engine=hub
+    seed_account(reg,owner,engine)
+    manager=owner.app.state.manager
+    monkeypatch.setattr(engine,'collect_stats',lambda *args,**kw:None)
+    monkeypatch.setattr(manager,'tick',lambda **kw:None)
+    with candidate(tmp_path/'required-lease',lease_required=True) as (target,rt,client,token):
+        http_transport(reg,client,monkeypatch)
+        receipt=resolve(owner,prepare(owner));reviewed=review(owner,receipt)
+        assert rt.hub_lease.required and not rt.hub_lease.allowed
+        result=activate(owner,receipt,reviewed)
+        assert result['activation_completed'] and result['service_activated'],result
+        assert target.running and rt.hub_lease.allowed
+        assert rt.command_status()['revision']==2 and rt.command_status()['action']=='start'
+        assert rt.command_status()['phase']=='applied'
+        assert reg.get(NODE)['enabled']
+
+
+def test_replacement_lease_refusal_keeps_node_stopped_and_same_start_retry_succeeds(hub,tmp_path,monkeypatch):
+    reg,owner,engine=hub
+    seed_account(reg,owner,engine)
+    manager=owner.app.state.manager
+    monkeypatch.setattr(engine,'collect_stats',lambda *args,**kw:None)
+    monkeypatch.setattr(manager,'tick',lambda **kw:None)
+    with candidate(tmp_path/'blocked-lease',lease_required=True) as (target,rt,client,token):
+        http_transport(reg,client,monkeypatch)
+        receipt=resolve(owner,prepare(owner));reviewed=review(owner,receipt)
+        manager.last_error='simulated unhealthy accounting'
+        result=activate(owner,receipt,reviewed)
+        assert result['phase']=='starting'
+        assert result['last_error']=='replacement_accounting_lease_withheld'
+        assert not target.running and not rt.hub_lease.allowed
+        assert not reg.get(NODE)['enabled']
+        prior=reg.commands.status(NODE)
+        manager.last_error=''
+        result=activate(owner,receipt,reviewed)
+        assert result['activation_completed'] and result['service_activated'],result
+        assert reg.commands.status(NODE)['command_id']==prior['command_id']
+        assert target.running
+
+
 def test_review_does_not_start_or_modify_addresses(hub,tmp_path,monkeypatch):
     reg,owner,engine=hub;seed_account(reg,owner,engine)
     with candidate(tmp_path/'target') as (eng,rt,client,token):

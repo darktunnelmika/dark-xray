@@ -1176,7 +1176,15 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     replacement_deployments=ReplacementDeployment(nodes,replacements,build_node_desired_payload,refresh_replacement_policy)
     app.state.replacement_deployments=replacement_deployments
     from node_replacement_activation import ReplacementActivation
-    replacement_activation=ReplacementActivation(replacement_deployments)
+    from node_lease_sync import grant_stopped_replacement_lease
+    def replacement_lease_provider(row,binding,traffic,request):
+        state=nodes.desired_state(row['node_id'],include_payload=False)
+        if (state['revision']!=row['desired_revision'] or state['hash']!=row['desired_hash']
+                or state.get('pending') or state.get('last_error')):
+            raise PolicyError('Replacement desired policy is no longer current')
+        return grant_stopped_replacement_lease(
+            nodes,manager,engine,row['node_id'],traffic,state,row['start_revision'],request)
+    replacement_activation=ReplacementActivation(replacement_deployments,lease_provider=replacement_lease_provider)
     app.state.replacement_activation=replacement_activation
 
     def sync_node_assignments(node_id:str)->dict:
