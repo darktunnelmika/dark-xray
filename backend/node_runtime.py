@@ -799,15 +799,23 @@ class SystemdWatchdog:
                             self.seconds > 0 and pid == os.getpid())
         self.last_notify = 0.0
 
-    def notify(self):
+    def _send(self, payload):
         if not self.enabled:
-            return
+            return False
         address = '\0' + self.address[1:] if self.address.startswith('@') else self.address
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
             sock.settimeout(.2)
-            sock.sendto(b'WATCHDOG=1', address)
-        self.last_notify = time.monotonic()
+            sock.sendto(payload, address)
+        return True
 
+    def notify(self):
+        if self._send(b'WATCHDOG=1'):
+            self.last_notify = time.monotonic()
+
+    def trigger(self):
+        # Explicitly fail the unit and its owned Xray cgroup when an expired
+        # lease cannot fence a still-running core.
+        self._send(b'WATCHDOG=trigger')
 
 class LeaseGuard:
     def __init__(self, runtime):
@@ -819,31 +827,47 @@ class LeaseGuard:
 
     def tick(self):
         lease = self.runtime.hub_lease
-        # The Hub grant already acknowledges a durable, metered checkpoint and
-        # current policy. Local validation/statistics work may hold engine.lock
-        # for seconds; it must not revoke that still-valid authority. Keep the
-        # OS deadline fenced by the ORIGINAL grant, even if Python/engine stalls.
-        enough = (not lease.required or
-                  lease.status()['remaining_seconds'] > self.watchdog.seconds + 2)
-        authorized = lease.allowed and enough
-        if authorized:
-            try:self.watchdog.notify()
+        # Continue watchdog keepalives for the ENTIRE valid accounting lease.
+        # Cutting them off WatchdogSec+2 before expiry restarted Xray even
+        # when the Hub was merely late in renewing an otherwise valid grant.
+        if lease.allowed:
+            try:
+                self.watchdog.notify()
             except Exception as exc:
                 self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
                 return
         if not self.engine.lock.acquire(timeout=.1):
-            self.last_error = ('engine_busy_with_valid_lease' if authorized
-                               else 'engine_busy_without_safe_lease')
+            if lease.required and not lease.allowed:
+                # Expired authority with an unresponsive engine must fail
+                # closed immediately at the systemd cgroup boundary.
+                self.last_error = 'lease_expired_engine_busy'
+                try:
+                    self.watchdog.trigger()
+                except Exception as exc:
+                    self.last_error += ': ' + type(exc).__name__
+            else:
+                self.last_error = 'engine_busy_with_valid_lease'
             return
         try:
             if lease.required and not lease.allowed:
                 self.runtime.pause_expired_lease()
-            running = self.engine.running
-            if not running and not authorized:
-                self.watchdog.notify()
+            # Recheck under the engine lock: renewal/expiration may race
+            # the first keepalive; never feed while expired Xray is running.
+            if lease.required and not lease.allowed and self.engine.running:
+                self.last_error = 'lease_expired_core_still_running'
+                self.watchdog.trigger()
+                return
+            # After a confirmed Stop it is safe to keep the Agent alive even
+            # without a valid lease, allowing clean recovery without SIGKILL.
+            self.watchdog.notify()
             self.last_error = ''
         except Exception as exc:
             self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
+            if lease.required and not lease.allowed:
+                try:
+                    self.watchdog.trigger()
+                except Exception:
+                    pass
         finally:
             self.engine.lock.release()
 
