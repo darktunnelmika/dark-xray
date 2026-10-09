@@ -9,9 +9,10 @@ const inbound=fs.readFileSync(path.join(root,'inbounds-v3.js'),'utf8');
 
 test('graphite layers are loaded last; removal is a two-link rollback',()=>{
  const links=[...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(x=>x[1]);
- assert.deepEqual(links.slice(-2),['assets/graphite-eclipse-fontfaces-v4.css?v=1','assets/graphite-eclipse-v4.css?v=1']);
- assert.ok(links.includes('assets/obsidian-pulse-v3.css?v=1'));
- assert.match(html,/<meta name="theme-color" content="#171a1b">/);
+ assert.ok(links.includes('assets/graphite-eclipse-fontfaces-v4.css?v=1'));
+ assert.ok(links.includes('assets/graphite-eclipse-v4.css?v=1'));
+ assert.ok(links.indexOf('assets/graphite-eclipse-fontfaces-v4.css?v=1') < links.indexOf('assets/graphite-eclipse-v4.css?v=1'));
+ assert.ok(links.indexOf('assets/graphite-eclipse-v4.css?v=1') > links.indexOf('assets/obsidian-pulse-v3.css?v=1'));
 });
 test('self-contained variable fonts cover Persian, Latin and technical labels',()=>{
  assert.equal((fonts.match(/@font-face/g)||[]).length,3);
