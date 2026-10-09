@@ -139,6 +139,11 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert '25, 255, 134' in skin['overviewBorder'],skin
             assert skin['actionBg'] in ('rgb(0, 16, 8)','rgba(0, 16, 8, 1)'),skin
             mark('real browser login, Cyber Classic shell and theme-inherited Overview V4')
+            # Deferred feature scripts must be present on the very first shell;
+            # no click/second render is allowed to reveal missing lower menu items.
+            assert page.locator('.nav-btn[data-page="darkrestore"]').count()==1
+            assert page.locator('.nav-btn[data-page="swap"]').count()==1
+            mark('complete owner navigation is visible on first render without a priming click')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
@@ -180,6 +185,22 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert page.evaluate("document.documentElement.lang")=='en'
             assert page.evaluate("document.documentElement.dir")=='ltr'
             mark('English is the default browser language and LTR normalization is active')
+
+            # Hard refresh must preserve both the top-level workspace and the
+            # Clients/Groups sub-workspace.
+            visit(page,'clients')
+            page.locator('[data-act="cv4view"][data-view="groups"]').click()
+            page.locator('.cv4-group-grid').wait_for(state='visible',timeout=10000)
+            page.reload(wait_until='domcontentloaded')
+            page.locator('.nav-btn[data-page="clients"].active').wait_for(state='visible',timeout=10000)
+            page.locator('[data-act="cv4view"][data-view="groups"].active').wait_for(state='visible',timeout=10000)
+            page.locator('.cv4-group-grid').wait_for(state='visible',timeout=10000)
+            mark('hard refresh preserves Clients and Groups workspace state')
+            # Return the QA harness to Clients for later create/edit scenarios;
+            # persistence itself has already been proven above.
+            page.locator('[data-act="cv4view"][data-view="clients"]').click()
+            page.locator('.cv4-console').wait_for(state='visible',timeout=10000)
+            visit(page,'dashboard')
 
             # Every owner workspace must render without leaving a busy/blank content surface.
             pages=['dashboard','inbounds','clients','resellers','ipguard','finance','sync',

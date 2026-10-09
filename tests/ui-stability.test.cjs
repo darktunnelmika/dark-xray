@@ -46,3 +46,15 @@ test('page navigation starts at top and does not refocus a stale control',async(
  const next=t.byId.search;assert.equal(next.focused,false);
  assert.equal(t.scroll.left,0);assert.equal(t.scroll.top,0);assert.equal(t.scroll.behavior,'auto');
 });
+
+
+test('main shell persists active page and waits for all deferred feature navigation',()=>{
+ const live=fs.readFileSync(path.join(__dirname,'..','web','live.js'),'utf8');
+ const polish=fs.readFileSync(path.join(__dirname,'..','web','stable-polish-v1.css'),'utf8');
+ assert.match(live,/PAGE_KEY='dark_active_page'/);
+ assert.match(live,/sessionStorage\.setItem\(PAGE_KEY/);
+ assert.match(live,/state\.page=restorePage\(\)/);
+ assert.match(live,/document\.readyState!=='complete'/);
+ assert.match(live,/async function go\(page\)[\s\S]*await load\(\)/);
+ assert.match(polish,/\.sidebar>nav\{[\s\S]*overflow-y:auto/);
+});

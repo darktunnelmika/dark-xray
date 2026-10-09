@@ -110,14 +110,14 @@ class RestoreSafetyMixin:
                  meta.get('metadata_state'), meta.get('note'), meta.get('checked_at'), meta.get('external_disabled')]
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
 
-    def rows(self, group_id=None):
-        rows = super().rows(group_id); metadata = self._safety_records()
+    def rows(self, group_id=None, *, include_archived=False):
+        rows = super().rows(group_id, include_archived=include_archived); metadata = self._safety_records()
         with self.store.lock:
             clients = {r['email']: json.loads(r['body']) for r in self.store.db.execute('SELECT email,body FROM core_clients')}
         now = time.time()
         for row in rows:
             meta = metadata.get(row['id'], {'metadata_state': 'verified' if row['scan_status'] == 'verified' else 'review'})
-            row['service_status'] = decision(row, meta, clients.get(row['core_email']), row['dark_used'], now=now)
+            row['service_status'] = 'archived' if row.get('archived') else decision(row, meta, clients.get(row['core_email']), row['dark_used'], now=now)
             row['metadata_state'] = meta['metadata_state']
             row['metadata_checked_at'] = meta.get('checked_at', 0)
             row['metadata_note'] = meta.get('note', '')
@@ -151,6 +151,8 @@ class RestoreSafetyMixin:
 
     def require_eligible(self, row):
         row = dict(row)
+        if float(row.get('archived_at') or 0)>0:
+            raise HTTPException(410, {'code':'restore_archived','message':'Restore subscription is archived'})
         with self.store.lock:
             s = self.store.db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (row['id'],)).fetchone()
             c = self.store.db.execute('SELECT body FROM core_clients WHERE email=?', (row['core_email'],)).fetchone()
@@ -175,6 +177,8 @@ class RestoreSafetyMixin:
                 raise HTTPException(404, 'Restore user not found')
             if float(r['promoted_at'] or 0)>0:
                 raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
+            if float(r['archived_at'] or 0)>0:
+                raise HTTPException(409, 'Archived Restore history is read-only')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Metadata changed. Reopen the review before saving.')
@@ -202,6 +206,8 @@ class RestoreSafetyMixin:
                 raise HTTPException(404, 'Restore user not found')
             if float(r['promoted_at'] or 0)>0:
                 raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
+            if float(r['archived_at'] or 0)>0:
+                raise HTTPException(409, 'Archived Restore history is read-only')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
             if not s or self._review_revision(dict(r), dict(s)) != value['expectedRevision']:
                 raise HTTPException(409, 'Restore state changed. Reopen before saving.')

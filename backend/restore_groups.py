@@ -43,6 +43,10 @@ class RestoreGroupsMixin:
                 db.execute("ALTER TABLE restore_subscriptions ADD COLUMN promoted_owner TEXT NOT NULL DEFAULT ''")
             if 'promoted_at' not in cols:
                 db.execute("ALTER TABLE restore_subscriptions ADD COLUMN promoted_at REAL NOT NULL DEFAULT 0")
+            if 'archived_at' not in cols:
+                db.execute("ALTER TABLE restore_subscriptions ADD COLUMN archived_at REAL NOT NULL DEFAULT 0")
+            if 'archived_reason' not in cols:
+                db.execute("ALTER TABLE restore_subscriptions ADD COLUMN archived_reason TEXT NOT NULL DEFAULT ''")
             db.execute('CREATE INDEX IF NOT EXISTS restore_by_group ON restore_subscriptions(group_id,created_at)')
             db.execute('''CREATE TABLE IF NOT EXISTS restore_usage(
                 restore_id TEXT NOT NULL,scope TEXT NOT NULL,
@@ -104,7 +108,7 @@ class RestoreGroupsMixin:
             assigned = {int(r[0]) for r in db.execute(
                 'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=?', (node_id,))}
             restored = {r['core_email']: r for r in db.execute(
-                'SELECT id,core_email,inbound_ids FROM restore_subscriptions WHERE promoted_at=0')
+                'SELECT id,core_email,inbound_ids FROM restore_subscriptions WHERE promoted_at=0 AND archived_at=0')
                 if assigned.intersection(json.loads(r['inbound_ids']))}
             seen = set()
             for item in items:
@@ -178,9 +182,12 @@ class RestoreGroupsMixin:
             raise PolicyError('Select 1..2000 Restore users')
         marks = ','.join('?' for _ in ids); now = time.time()
         with self.store.transaction() as db:
-            rows = list(db.execute('SELECT id,group_id FROM restore_subscriptions WHERE id IN (' + marks + ')', ids))
-            if len(rows) != len(ids):
+            all_rows = list(db.execute('SELECT id,group_id,archived_at FROM restore_subscriptions WHERE id IN (' + marks + ')', ids))
+            if len(all_rows) != len(ids):
                 raise HTTPException(404, 'A selected Restore user no longer exists')
+            if any(float(r['archived_at'] or 0)>0 for r in all_rows):
+                raise HTTPException(409, 'Archived Restore history is read-only')
+            rows = all_rows
             db.execute('UPDATE restore_subscriptions SET group_id=?,updated_at=? WHERE id IN (' + marks + ')', (group_id, now, *ids))
             db.executemany('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
                            [(r['id'], 'group.changed', json.dumps({'from':r['group_id'],'to':group_id}), now) for r in rows if r['group_id'] != group_id])
@@ -191,10 +198,15 @@ class RestoreGroupsMixin:
             r = self.store.db.execute('SELECT COALESCE(SUM(up),0) up,COALESCE(SUM(down),0) down FROM restore_usage WHERE restore_id=?', (restore_id,)).fetchone()
         return dict(r)
 
-    def rows(self, group_id=None):
+    def rows(self, group_id=None, *, include_archived=False):
         if group_id:
             self._require_group(group_id)
-        where = ' WHERE r.group_id=?' if group_id else ''
+        clauses=[];params=[]
+        if group_id:
+            clauses.append('r.group_id=?');params.append(group_id)
+        if not include_archived:
+            clauses.append('r.archived_at=0')
+        where = (' WHERE ' + ' AND '.join(clauses)) if clauses else ''
         with self.store.lock:
             rows = [dict(r) for r in self.store.db.execute('''SELECT r.*,g.name group_name,
                 COALESCE(u.dark_up,0) dark_up,COALESCE(u.dark_down,0) dark_down,
@@ -206,7 +218,7 @@ class RestoreGroupsMixin:
                     SUM(CASE WHEN scope<>'local' THEN up+down ELSE 0 END) node_used,
                     MAX(activity_at) activity_at
                     FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id''' + where +
-                ' ORDER BY r.created_at DESC,r.id', (group_id,) if group_id else ())]
+                ' ORDER BY r.created_at DESC,r.id', tuple(params))]
         for r in rows:
             r['inbound_ids'] = json.loads(r['inbound_ids']); r['node_ids'] = json.loads(r['node_ids'])
             r['enabled'] = bool(r['enabled'])
@@ -220,22 +232,29 @@ class RestoreGroupsMixin:
             r['presence_age_seconds']=age
             r['plan_type']='unlimited' if int(r['legacy_total'])==0 else 'limited'
             r['promoted']=float(r.get('promoted_at') or 0)>0
+            r['archived']=float(r.get('archived_at') or 0)>0
         return rows
 
     def groups(self):
-        rows = self.rows()
+        # Historical DARK usage remains attached to the group after an explicit
+        # archive. Active client counts/presence intentionally exclude archives.
+        rows = self.rows(include_archived=True)
         with self.store.lock:
             groups = [dict(r) for r in self.store.db.execute('SELECT id,name,created_at,updated_at FROM restore_groups ORDER BY created_at,id')]
         by_id = {g['id']: g for g in groups}
         for g in groups:
-            g.update(clients=0, migrated=0, dark_up=0, dark_down=0, dark_used=0, local_used=0, node_used=0,
+            g.update(clients=0, archived=0, historical_clients=0, migrated=0, dark_up=0, dark_down=0, dark_used=0, local_used=0, node_used=0,
                      limited=0,unlimited=0,promoted=0,online=0,idle=0,offline=0)
             g['unassigned'] = g['id'] == UNGROUPED
         for r in rows:
-            g = by_id[r['group_id']]; g['clients'] += 1; g['migrated'] += int(r['first_seen'] > 0)
-            g[r['plan_type']] += 1;g['promoted'] += int(r['promoted']);g[r['presence_state']] += 1
+            g = by_id[r['group_id']];g['historical_clients'] += 1
             for key in ('dark_up','dark_down','dark_used','local_used','node_used'):
                 g[key] += int(r[key])
+            if r.get('archived'):
+                g['archived'] += 1
+                continue
+            g['clients'] += 1; g['migrated'] += int(r['first_seen'] > 0)
+            g[r['plan_type']] += 1;g['promoted'] += int(r['promoted']);g[r['presence_state']] += 1
         # Surface actual runtime target health on each group card. Mixed groups
         # report the union of their active mapping variants rather than hiding
         # destinations just because users differ.
@@ -281,6 +300,9 @@ class RestoreGroupsMixin:
                     old = self.store.db.execute('SELECT * FROM restore_subscriptions WHERE legacy_host=? AND legacy_path=? AND legacy_query=?', (host,path,query)).fetchone()
                 if old and float(old['promoted_at'] or 0)>0:
                     conflicts.append({'id':old['id'],'group_id':old['group_id'],'reason':'promoted_to_native'})
+                    continue
+                if old and float(old['archived_at'] or 0)>0:
+                    conflicts.append({'id':old['id'],'group_id':old['group_id'],'reason':'archived_history'})
                     continue
                 if old and group and old['group_id'] != group['id']:
                     conflicts.append({'id':old['id'],'group_id':old['group_id'],'reason':'already_in_another_group'})

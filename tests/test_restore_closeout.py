@@ -157,3 +157,77 @@ def test_promotion_baselines_complete_hub_and_node_dark_usage(env,monkeypatch):
     # Native quota remains the post-legacy total, while used baseline includes
     # every DARK byte already consumed on Hub and Nodes.
     assert tuple(native)==(40000,9000)
+
+
+def test_finished_restore_archive_preserves_group_usage_and_active_users(env,monkeypatch):
+    expired=int(time.time())-60
+    store,engine,manager,auth,c,restore,inbound,item=prepare(env,monkeypatch,expire=expired,suffix='expired')
+    gid=item['group_id']
+    # Keep a second, still-active client in the same group. Bulk cleanup must
+    # never touch it.
+    future=int(time.time())+30*86400
+    monkeypatch.setattr(restore,'_scan',lambda url:{**META,'expire':future})
+    active=c.post('/api/dark-restore/import',json={
+        'urls':['https://legacy.example/sub/active'],'inboundIds':[inbound],
+        'groupId':gid,'scan':True})
+    assert active.status_code==200,active.text
+    active_id=next(x['id'] for x in c.get('/api/dark-restore').json()['items'] if x['id']!=item['id'])
+
+    # DARK traffic is immutable group history, not a property of the live row.
+    with store.transaction() as db:
+        db.execute('UPDATE core_clients SET up=1200,down=800 WHERE email=?',(item['core_email'],))
+    before=c.get('/api/dark-restore').json()
+    before_group=next(g for g in before['groups'] if g['id']==gid)
+    assert before_group['dark_used']==2000 and before_group['clients']==2
+
+    out=c.post('/api/dark-restore/archive-finished',json={'groupId':gid})
+    assert out.status_code==200,out.text
+    assert out.json()['archived']==1 and out.json()['failed']==0
+
+    after=c.get('/api/dark-restore').json()
+    assert {x['id'] for x in after['items']}=={active_id}
+    group=next(g for g in after['groups'] if g['id']==gid)
+    assert group['clients']==1
+    assert group['archived']==1
+    assert group['historical_clients']==2
+    assert group['dark_used']==before_group['dark_used']==2000
+
+    with store.lock:
+        archived=store.db.execute(
+            'SELECT archived_at,archived_reason FROM restore_subscriptions WHERE id=?',(item['id'],)).fetchone()
+        usage=store.db.execute(
+            'SELECT COALESCE(SUM(up+down),0) FROM restore_usage WHERE restore_id=?',(item['id'],)).fetchone()[0]
+        active_core=store.db.execute(
+            'SELECT 1 FROM core_clients WHERE email=(SELECT core_email FROM restore_subscriptions WHERE id=?)',(active_id,)).fetchone()
+    assert archived['archived_at']>0 and archived['archived_reason']=='expired'
+    assert usage==2000
+    assert active_core is not None
+
+    # Archived subscriptions are history-only and cannot be recreated by
+    # rescanning the old URL.
+    assert c.get('/restore/sub/'+item['public_token']+'?format=raw').status_code==410
+    monkeypatch.setattr(restore,'_scan',lambda url:(_ for _ in ()).throw(AssertionError('archive must not rescan')))
+    again=c.post('/api/dark-restore/import',json={
+        'urls':['https://legacy.example/sub/expired'],'inboundIds':[inbound],
+        'groupId':gid,'scan':True})
+    assert again.status_code==200,again.text
+    assert again.json()['conflicts'][0]['reason']=='archived_history'
+
+
+def test_single_restore_delete_is_soft_archive_and_keeps_traffic(env,monkeypatch):
+    store,engine,manager,auth,c,restore,inbound,item=prepare(env,monkeypatch,suffix='manual-delete')
+    with store.transaction() as db:
+        db.execute('UPDATE core_clients SET up=333,down=667 WHERE email=?',(item['core_email'],))
+    before=c.get('/api/dark-restore').json()
+    gid=item['group_id'];used=next(g for g in before['groups'] if g['id']==gid)['dark_used']
+    out=c.delete('/api/dark-restore/'+item['id'])
+    assert out.status_code==200,out.text
+    assert out.json()['archived'] is True and out.json()['deleted'] is True
+
+    after=c.get('/api/dark-restore').json()
+    assert all(x['id']!=item['id'] for x in after['items'])
+    group=next(g for g in after['groups'] if g['id']==gid)
+    assert group['dark_used']==used==1000 and group['archived']==1
+    with store.lock:
+        assert store.db.execute('SELECT COUNT(*) FROM restore_subscriptions WHERE id=?',(item['id'],)).fetchone()[0]==1
+        assert store.db.execute('SELECT COALESCE(SUM(up+down),0) FROM restore_usage WHERE restore_id=?',(item['id'],)).fetchone()[0]==1000
