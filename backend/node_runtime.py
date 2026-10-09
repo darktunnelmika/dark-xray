@@ -760,9 +760,12 @@ class HubLease:
                     now - issued > CHALLENGE_SECONDS or issued > now):
                 raise PolicyError('Accounting lease challenge is expired, stale or unknown')
             # Persist the enforcement latch BEFORE granting; NEVER persist authority.
-            with self.store.transaction() as db:
-                db.execute('UPDATE node_hub_lease SET required=1 WHERE scope=?', (self.scope,))
-            self.required = True
+            if not self.required:
+                with self.store.transaction() as db:
+                    db.execute('UPDATE node_hub_lease SET required=1 WHERE scope=?', (self.scope,))
+                self.required = True
+            # The latch is already durable after activation. Rewriting it on
+            # every grant adds FULL-sync I/O under the lease lock for no gain.
             self.deadline = issued + LEASE_SECONDS
             self.last_issued = issued
             self.last_sequence = sequence
@@ -808,9 +811,28 @@ class SystemdWatchdog:
             sock.sendto(payload, address)
         return True
 
-    def notify(self):
-        if self._send(b'WATCHDOG=1'):
+    def notify(self, *, lease=None):
+        # Never renew the OS watchdog beyond metered authority. A frozen
+        # interpreter cannot send WATCHDOG=trigger at expiry; PID 1 must
+        # already have a bounded deadline. WATCHDOG_USEC is updated together
+        # with the keepalive (systemd >= 233; supported installer targets).
+        if not self.enabled:
+            return False
+        seconds = self.seconds
+        if lease is not None and lease.required:
+            with lease.lock:
+                remaining = lease.deadline - lease.clock()
+            # Cover notification delivery/scheduling; never send zero, which
+            # would disable systemd's watchdog. No new authority is created.
+            if remaining <= 1.0:
+                return False
+            seconds = min(seconds, remaining - 1.0)
+        usec = max(1, int(seconds * 1000000))
+        payload = ('WATCHDOG_USEC=' + str(usec) + '\nWATCHDOG=1').encode('ascii')
+        if self._send(payload):
             self.last_notify = time.monotonic()
+            return True
+        return False
 
     def trigger(self):
         # Explicitly fail the unit and its owned Xray cgroup when an expired
@@ -833,8 +855,7 @@ class LeaseGuard:
         fed = False
         if lease.allowed:
             try:
-                self.watchdog.notify()
-                fed = True
+                fed = bool(self.watchdog.notify(lease=lease))
             except Exception as exc:
                 self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
                 return
@@ -863,7 +884,9 @@ class LeaseGuard:
             # without a valid lease, allowing clean recovery without SIGKILL.
             # Do not duplicate a valid-lease heartbeat from the same tick.
             if not fed:
-                self.watchdog.notify()
+                # An unbounded keepalive is safe ONLY after Xray is stopped.
+                # Near expiry, never undo the bounded timer set above.
+                self.watchdog.notify(lease=lease if self.engine.running else None)
             self.last_error = ''
         except Exception as exc:
             self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]

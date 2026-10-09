@@ -203,7 +203,7 @@ def test_watchdog_socket_is_main_process_only(tmp_path,monkeypatch):
         monkeypatch.setenv('NOTIFY_SOCKET',path);monkeypatch.setenv('WATCHDOG_USEC','30000000')
         monkeypatch.delenv('WATCHDOG_PID',raising=False)
         watch=SystemdWatchdog();assert watch.enabled;watch.notify()
-        assert receiver.recv(100)==b'WATCHDOG=1'
+        assert receiver.recv(100)==b'WATCHDOG_USEC=30000000\nWATCHDOG=1'
         monkeypatch.setenv('WATCHDOG_PID','999999999')
         assert not SystemdWatchdog().enabled
 
