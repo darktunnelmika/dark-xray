@@ -220,7 +220,7 @@ function loginPage(){state.clients=[];state.owners=[];state.resellers=[];state.i
  state.me=await api('/api/me');if(!localStorage.getItem('dark_lang'))localStorage.setItem('dark_lang','en');
  // live.js is the first feature shell script. Wait until all deferred feature
  // scripts have patched navItems/enginePage/load before the first shell render.
- if(document.readyState==='loading')await new Promise(resolve=>document.addEventListener('DOMContentLoaded',resolve,{once:true}));
+ if(document.readyState!=='complete')await new Promise(resolve=>document.addEventListener('DOMContentLoaded',resolve,{once:true}));
  state.page=restorePage();shell();await refresh();
 }catch{loginPage();}})();
 setInterval(()=>{if(state.me&&!document.hidden&&!$('#overlay').classList.contains('show')&&!enginePages[state.page])refresh();},12000);
