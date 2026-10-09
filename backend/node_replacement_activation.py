@@ -332,16 +332,21 @@ class ReplacementActivation:
     def _run(self, row, binding):
         self._fresh_inputs(row,binding)
         if self.lease_provider is not None:
-            # A disabled candidate receives no background lease. Prove durable
-            # metering/policy, then grant the SAME saved Start revision before
-            # conditional activation. Never relax the Agent's fail-closed guard.
-            snapshot = self._traffic(row,binding)
-            try:
-                self.lease_provider(row,binding,snapshot,
-                    lambda path,method='GET',body=None: self._exchange(row,binding,path,method,body))
-            except (PolicyError,OSError,ValueError) as exc:
-                raise ActivationRejected('replacement_accounting_lease_withheld') from exc
-            self._fresh_inputs(row,binding)
+            health,_ = self._exchange(row,binding,'/node/api/health')
+            lease = health.get('hub_lease') if isinstance(health,dict) else None
+            if not isinstance(lease,dict) or type(lease.get('required')) is not bool:
+                raise ActivationRejected('replacement_lease_state_unverified')
+            if lease['required']:
+                # A disabled candidate receives no background lease. Prove durable
+                # metering/policy, then grant the SAME saved Start revision before
+                # conditional activation. Never relax the Agent's fail-closed guard.
+                snapshot = self._traffic(row,binding)
+                try:
+                    self.lease_provider(row,binding,snapshot,
+                        lambda path,method='GET',body=None: self._exchange(row,binding,path,method,body))
+                except (PolicyError,OSError,ValueError) as exc:
+                    raise ActivationRejected('replacement_accounting_lease_withheld') from exc
+                self._fresh_inputs(row,binding)
         command = {'nodeId':binding['agent_id'],'revision':row['start_revision'],
                    'commandId':row['start_id'],'action':'start','desiredRevision':row['desired_revision'],
                    'desiredHash':row['desired_hash'],'validatedHash':row['validated_hash']}
