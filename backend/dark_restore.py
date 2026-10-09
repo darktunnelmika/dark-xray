@@ -8,6 +8,7 @@ from fastapi.responses import Response, RedirectResponse
 from pydantic import BaseModel, Field
 
 from dark_policy import PolicyError
+from core import CoreError
 from restore_groups import RestoreGroupsMixin
 from restore_frontend import inspect_domain
 from restore_targets import RestoreTargetsMixin
@@ -36,6 +37,9 @@ class RestoreMappingBody(BaseModel):
 class RestoreDomainBody(BaseModel):
     domain:str=Field(min_length=3,max_length=253)
     acme_email:str=Field(default='',max_length=254)
+
+class RestoreArchiveFinishedBody(BaseModel):
+    groupId:str=Field(default='',max_length=80)
 
 class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,RestoreGroupsMixin):
     def __init__(self,store,engine,nodes,manager=None):
@@ -167,6 +171,102 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
                 db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',(r['id'],'subscription.update',fmt,now))
         return body,headers
 
+
+    @staticmethod
+    def _finished_record(row:dict, dark_used:int, *, now:int|None=None)->tuple[bool,str]:
+        now=int(time.time()) if now is None else int(now)
+        expiry=int(row.get('legacy_expire') or 0)
+        total=int(row.get('legacy_total') or 0)
+        legacy_used=int(row.get('legacy_upload') or 0)+int(row.get('legacy_download') or 0)
+        effective=legacy_used+int(dark_used or 0)
+        if expiry>0 and expiry<=now:
+            return True,'expired'
+        if total>0 and effective>=total:
+            return True,'quota_exhausted'
+        return False,''
+
+    def archive_restore(self, restore_id:str, *, require_finished:bool=False)->dict:
+        """Remove an explicitly selected Restore user from active runtime only.
+
+        Subscription identity, group membership, events and restore_usage remain
+        durable so historical group traffic can never decrease after cleanup.
+        """
+        self.engine._write()
+        with self.store.lock:
+            row=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
+        if not row:
+            raise HTTPException(404,'Restore subscription not found')
+        row=dict(row)
+        if float(row.get('promoted_at') or 0)>0:
+            raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
+        if float(row.get('archived_at') or 0)>0:
+            return {'id':restore_id,'archived':True,'alreadyArchived':True,
+                    'reason':str(row.get('archived_reason') or '')}
+        usage=self.usage(restore_id);dark_used=int(usage['up'])+int(usage['down'])
+        finished,reason=self._finished_record(row,dark_used)
+        if require_finished and not finished:
+            raise HTTPException(409,'Restore user is still active; only finished users can be bulk archived')
+        reason=reason or 'owner_requested'
+
+        # Capture local cumulative counters before deleting the live Core row.
+        # Existing remote-node counters are already durable in restore_usage and
+        # are never removed by archive.
+        self.engine.collect_stats(force=True,strict=True)
+        core_deleted=False
+        try:
+            self.engine.delete(str(row['core_email']))
+            core_deleted=True
+        except CoreError as ex:
+            if getattr(ex,'status',0)!=404:
+                raise
+        usage=self.usage(restore_id);dark_used=int(usage['up'])+int(usage['down'])
+        now=time.time()
+        with self.store.transaction() as db:
+            current=db.execute('SELECT archived_at,promoted_at FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
+            if not current:
+                raise HTTPException(404,'Restore subscription not found')
+            if float(current['promoted_at'] or 0)>0:
+                raise HTTPException(409,'Restore user was promoted while archive was running')
+            if float(current['archived_at'] or 0)==0:
+                db.execute('''UPDATE restore_subscriptions SET archived_at=?,archived_reason=?,enabled=0,updated_at=?
+                              WHERE id=? AND archived_at=0''',(now,reason,now,restore_id))
+                db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
+                           (restore_id,'archive.explicit',
+                            json.dumps({'reason':reason,'dark_used':dark_used,'core_deleted':core_deleted}),now))
+        try:
+            self.engine.apply(start=self.engine.running)
+            applied=True;apply_error=''
+        except Exception as ex:
+            applied=False;apply_error=str(ex)[:500]
+        return {'id':restore_id,'archived':True,'alreadyArchived':False,'reason':reason,
+                'darkUsed':dark_used,'applied':applied,'applyError':apply_error}
+
+    def archive_finished(self, group_id:str='')->dict:
+        if group_id:
+            self._require_group(group_id)
+        # One strict local snapshot before scanning all candidates avoids losing
+        # the final local bytes while also avoiding N stats calls for large groups.
+        self.engine.collect_stats(force=True,strict=True)
+        with self.store.lock:
+            query='SELECT id FROM restore_subscriptions WHERE promoted_at=0 AND archived_at=0'
+            args=[]
+            if group_id:
+                query+=' AND group_id=?';args.append(group_id)
+            ids=[str(r[0]) for r in self.store.db.execute(query,args)]
+        archived=[];failed=[]
+        for rid in ids:
+            try:
+                result=self.archive_restore(rid,require_finished=True)
+                archived.append(result)
+            except HTTPException as ex:
+                if ex.status_code==409 and 'still active' in str(ex.detail):
+                    continue
+                failed.append({'id':rid,'error':str(ex.detail)[:300]})
+            except (CoreError,PolicyError) as ex:
+                failed.append({'id':rid,'error':str(ex)[:300]})
+        return {'archived':len(archived),'failed':len(failed),'items':archived,'failures':failed,
+                'groupId':group_id or None}
+
 def install_dark_restore(app,restore,current,owner,writable,audit):
     restore.install_group_routes(app,owner,writable,audit)
     restore.install_promotion_routes(app,owner,writable,audit)
@@ -196,15 +296,17 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
 
     @app.delete('/api/dark-restore/{restore_id}')
     def delete_restore(restore_id:str,p=Depends(owner)):
-        writable()
-        with restore.store.lock:r=restore.store.db.execute('SELECT core_email,promoted_at FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
-        if not r:raise HTTPException(404,'Restore subscription not found')
-        if float(r['promoted_at'] or 0)>0:raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
-        restore.engine.delete(r['core_email'])
-        with restore.store.transaction() as db:db.execute('DELETE FROM restore_subscriptions WHERE id=?',(restore_id,))
-        restore.engine.apply(start=restore.engine.running)
-        audit(p.actor,p.actor.id,'dark_restore.delete',restore_id,'restore user deleted')
-        return {'deleted':True}
+        writable();result=restore.archive_restore(restore_id)
+        audit(p.actor,p.actor.id,'dark_restore.archive',restore_id,
+              'active service removed; Restore traffic/group history preserved; reason='+str(result.get('reason') or ''))
+        return {'deleted':True,**result}
+
+    @app.post('/api/dark-restore/archive-finished')
+    def archive_finished_restore(body:RestoreArchiveFinishedBody,p=Depends(owner)):
+        writable();result=restore.archive_finished(body.groupId)
+        audit(p.actor,p.actor.id,'dark_restore.archive_finished',body.groupId or 'all',
+              'archived='+str(result['archived'])+'; failed='+str(result['failed'])+'; historical usage preserved')
+        return result
 
     @app.put('/api/dark-restore/domains/{domain}')
     def save_domain(domain:str,body:RestoreDomainBody,p=Depends(owner)):
