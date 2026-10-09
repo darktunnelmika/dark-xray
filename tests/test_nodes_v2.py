@@ -195,6 +195,22 @@ def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env
  assert hosts.status_code==200,hosts.text
  before_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
  assert any(x.get('runtime')=='node:maint1' for x in before_links)
+ # A short Node timeout must not erase a saved Direct link. A confirmed real
+ # outage may suppress delivery, but it must NOT delete the inbound mapping.
+ for attempts in (1,2):
+  with store.transaction() as db:
+   db.execute("UPDATE remote_nodes SET last_error='Node connection failed: Timeout',failure_count=? WHERE id='maint1'",(attempts,))
+  links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+  assert any(x.get('runtime')=='node:maint1' for x in links)
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_error='Node connection failed: Timeout',failure_count=3 WHERE id='maint1'")
+ links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+ assert all(x.get('runtime')!='node:maint1' for x in links)
+ with store.lock:
+  assert store.db.execute("SELECT COUNT(*) FROM remote_node_inbounds WHERE node_id='maint1' AND local_inbound_id=?",(inbound,)).fetchone()[0]==1
+ with store.transaction() as db:
+  db.execute("UPDATE remote_nodes SET last_error='',failure_count=0 WHERE id='maint1'")
+ assert any(x.get('runtime')=='node:maint1' for x in c.get('/api/clients/maintenance-user/links').json()['engine']['links'])
  before={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
  assert before['enabled']==1 and before['online'] is True
  assert before['assignments'][0]['failover_ready'] is True
