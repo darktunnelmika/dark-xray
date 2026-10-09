@@ -136,16 +136,16 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 fontFamily:getComputedStyle(document.body).fontFamily,
                 graphite:getComputedStyle(document.body).getPropertyValue('--ge-back').trim()
             })""")
-            assert skin['green']=='#7af0c0',skin
+            assert skin['green']=='#19ff86',skin
             assert skin['overviewRadius'] in ('17px','17px 17px 17px 17px'),skin
-            assert skin['overviewAccent']=='rgb(122, 240, 192)',skin
-            assert '173, 201, 190' in skin['overviewBorder'],skin
-            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg']=='rgb(60, 72, 71)',skin
+            assert skin['overviewAccent']=='rgb(25, 255, 134)',skin
+            assert '25, 255, 134' in skin['overviewBorder'],skin
+            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg']=='rgb(20, 48, 36)',skin
             assert 'linear-gradient' in skin['overviewBg'],skin
-            assert skin['graphite']=='#171a1b' and 'DX UI' in skin['fontFamily'],skin
+            assert skin['graphite']=='#000604' and 'DX UI' in skin['fontFamily'],skin
             fonts_ready=page.evaluate('''async()=>{await document.fonts.load('600 14px "DX UI"','سلام');await document.fonts.load('600 14px "DX UI"','DARK');await document.fonts.load('600 14px "DX Mono"','443');return {persian:document.fonts.check('600 14px "DX UI"','سلام'),english:document.fonts.check('600 14px "DX UI"','DARK'),mono:document.fonts.check('600 14px "DX Mono"','443')}}''')
             assert all(fonts_ready.values()),fonts_ready
-            mark('real browser uses Graphite Eclipse neutral carbon palette and locally embedded Persian/Latin/mono fonts')
+            mark('real browser restores original neon-green/black palette with unchanged V4 Persian/Latin/mono fonts')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
