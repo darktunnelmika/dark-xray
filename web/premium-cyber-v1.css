@@ -408,3 +408,54 @@ body.skin-cyber-classic .toast {
 body.skin-cyber-classic.dark-reduced-motion .nav-btn,
 body.skin-cyber-classic.dark-reduced-motion .btn,
 body.skin-cyber-classic.dark-reduced-motion .icon-btn { transition: none !important; }
+
+/* Overview V4 has its own strict Cyber Classic overrides; bridge it into
+ * Premium tokens so dashboard tiles and actions match the main shell. */
+body.skin-cyber-classic .ov4 {
+  --ov4-radius: 11px;
+  --ov4-border: var(--premium-line);
+  --ov4-border-soft: rgba(113, 201, 185, .10);
+}
+body.skin-cyber-classic .ov4-commandbar,
+body.skin-cyber-classic .ov4-resource,
+body.skin-cyber-classic .ov4-card,
+body.skin-cyber-classic .ov4-telemetry-strip,
+body.skin-cyber-classic .ov4-summary-grid,
+body.skin-cyber-classic .ov4-management-grid .up-dashboard-compact-inner {
+  border-radius: 11px !important;
+  border-color: var(--premium-line) !important;
+  background: linear-gradient(155deg, rgba(17, 35, 42, .97), rgba(9, 22, 28, .98)) !important;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .028), var(--premium-shadow) !important;
+}
+body.skin-cyber-classic .ov4-action,
+body.skin-cyber-classic .ov4-small-button {
+  border-radius: 8px !important;
+  background: #122f39 !important;
+  color: #c4e9dd !important;
+  border-color: rgba(113, 201, 185, .28) !important;
+}
+body.skin-cyber-classic .ov4-action:first-child {
+  color: #98efcd !important;
+  background: #173b40 !important;
+  border-color: rgba(84, 226, 174, .42) !important;
+}
+body.skin-cyber-classic .ov4-action.danger {
+  color: #ff9eaa !important;
+  background: rgba(112, 37, 58, .23) !important;
+  border-color: rgba(255, 130, 148, .34) !important;
+}
+body.skin-cyber-classic .ov4-action:hover,
+body.skin-cyber-classic .ov4-small-button:hover {
+  color: #f1fff9 !important;
+  border-color: rgba(84, 226, 174, .50) !important;
+}
+body.skin-cyber-classic .ov4-status-pill,
+body.skin-cyber-classic .ov4-node-kpis>div,
+body.skin-cyber-classic .ov4-backup-main>div,
+body.skin-cyber-classic .ov4-management-grid .up-dashboard-metrics>div {
+  border-radius: 8px !important;
+}
+body.skin-cyber-classic .ov4-spark polyline,
+body.skin-cyber-classic .ov4-connection-chart .tcp {
+  filter: drop-shadow(0 0 3px rgba(84, 226, 174, .15));
+}
