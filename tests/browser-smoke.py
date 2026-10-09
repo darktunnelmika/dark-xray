@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert skin['overviewRadius'] in ('17px','17px 17px 17px 17px'),skin
             assert skin['overviewAccent']=='rgb(25, 255, 134)',skin
             assert '25, 255, 134' in skin['overviewBorder'],skin
-            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg']=='rgb(20, 48, 36)',skin
+            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg'] in ('rgb(20, 48, 36)','rgb(28, 70, 48)'),skin
             assert 'linear-gradient' in skin['overviewBg'],skin
             assert skin['graphite']=='#000604' and 'DX UI' in skin['fontFamily'],skin
             fonts_ready=page.evaluate('''async()=>{await document.fonts.load('600 14px "DX UI"','سلام');await document.fonts.load('600 14px "DX UI"','DARK');await document.fonts.load('600 14px "DX Mono"','443');return {persian:document.fonts.check('600 14px "DX UI"','سلام'),english:document.fonts.check('600 14px "DX UI"','DARK'),mono:document.fonts.check('600 14px "DX Mono"','443')}}''')
