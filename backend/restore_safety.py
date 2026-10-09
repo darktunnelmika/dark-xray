@@ -202,6 +202,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['deleted_at'] or 0)>0:
+                raise HTTPException(410, 'Archived Restore user is read-only')
             if float(r['promoted_at'] or 0)>0:
                 raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
