@@ -133,13 +133,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 overviewAccent:getComputedStyle(document.querySelector('.ov4-spark polyline')).stroke,
                 actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor
             })""")
-            assert skin['green']=='#54e2ae',skin
-            assert skin['overviewRadius'] in ('11px','11px 11px 11px 11px'),skin
-            assert skin['overviewAccent']=='rgb(84, 226, 174)',skin
-            assert '113, 201, 185' in skin['overviewBorder'],skin
-            assert skin['actionBg'] in ('rgb(18, 47, 57)','rgb(23, 59, 64)'),skin
+            assert skin['green']=='#4cffb4',skin
+            assert skin['overviewRadius'] in ('13px','13px 13px 13px 13px'),skin
+            assert skin['overviewAccent']=='rgb(76, 255, 180)',skin
+            assert '100, 199, 187' in skin['overviewBorder'],skin
+            assert skin['actionBg'] in ('rgb(26, 57, 69)','rgb(32, 80, 69)'),skin
             assert 'linear-gradient' in skin['overviewBg'],skin
-            mark('real browser login, Premium Cyber shell and theme-inherited Overview V4')
+            mark('real browser login, Classic Gangster V2 palette and premium Overview V4')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
@@ -202,6 +202,17 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             visit(page,'inbounds')
             page.locator('[data-v3-action="new"]').click()
             form=page.locator('#iv3-editor');form.wait_for(state='visible',timeout=10000)
+            # Core controls stay prominent. Advanced controls are discoverable
+            # and use the unchanged inbound tab actions.
+            assert form.locator('.iv3-tab-group [data-v3-action=tab]').count()==3
+            assert form.locator('.iv3-tab-more [data-v3-action=tab]').count()==3
+            assert form.locator('.iv3-tab-more').get_attribute('open') is None
+            form.locator('.iv3-tab-more summary').click()
+            form.locator('[data-v3-action=tab][data-tab=sniffing]').click()
+            assert form.locator('[data-v3-pane=sniffing]').is_visible()
+            form.locator('[data-v3-action=tab][data-tab=general]').click()
+            assert form.locator('[data-v3-pane=general]').is_visible()
+            mark('Inbound V3 groups six existing tabs into primary workflow + optional advanced tools')
             assert form.locator('input[name="deployLocal"]').count()==1 and form.locator('input[name="deployLocal"]').is_checked()
             assert form.locator('input[name="deployNode"]').count()==0
             assert_language_surface(page,'inbounds editor / English')
