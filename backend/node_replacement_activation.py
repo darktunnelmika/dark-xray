@@ -52,6 +52,88 @@ class ReplacementActivation:
                                         'WHERE node_id=? AND attempt_id=?', (node, attempt)).fetchone()
         return dict(row) if row else None
 
+    def _direct_host_cutover(self, db, node):
+        """Plan a Hub-subscription-only cutover; never change external DNS/tunnels.
+
+        The stopped candidate inherits the logical Node's assignments. Old tunnel
+        hosts must not silently advertise the retired VPS once Direct starts.
+        Preview and commit use this same pure plan, under the replacement lock.
+        """
+        record = db.execute('SELECT name,data_address FROM remote_nodes WHERE id=?', (node,)).fetchone()
+        if not record:
+            raise PolicyError('Replacement Node not found')
+        address = str(record['data_address'] or '').strip()
+        if not address:
+            raise PolicyError('Replacement Direct address is missing')
+        runtime = 'node:' + node
+        raw = db.execute("SELECT body FROM core_sections WHERE name='hosts'").fetchone()
+        saved = json.loads(raw['body']) if raw else []
+        if not isinstance(saved, list):
+            raise PolicyError('Invalid saved Hosts section')
+        hosts = [dict(h) if isinstance(h, dict) else h for h in saved]
+        assignments = [int(r[0]) for r in db.execute(
+            'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id', (node,))]
+        old = db.execute('SELECT retirement_json FROM remote_node_installations '
+                         'WHERE node_id=? AND retired_at>0 ORDER BY retired_at DESC LIMIT 1', (node,)).fetchone()
+        try:
+            previous_address = str(json.loads(old['retirement_json']).get('data_address') or '') if old else ''
+        except (ValueError, TypeError, KeyError):
+            previous_address = ''
+        changes, inbound_changes = [], {}
+        for inbound_id in assignments:
+            original = db.execute('SELECT body FROM core_inbounds WHERE id=?', (inbound_id,)).fetchone()
+            if not original:
+                raise PolicyError('Replacement inbound is missing')
+            inbound = json.loads(original['body'])
+            port = inbound.get('port')
+            if type(port) is not int or not 1 <= port <= 65535:
+                raise PolicyError('Replacement Direct port is invalid')
+            targets = [(index, host) for index, host in enumerate(hosts)
+                       if isinstance(host, dict) and host.get('runtime') == runtime
+                       and host.get('inboundId') == inbound_id]
+            directs = [(index, host) for index, host in targets
+                       if (host.get('endpointType', 'direct') or 'direct') == 'direct'
+                       and host.get('enable', True)]
+            tunnels = [(index, host) for index, host in targets
+                       if (host.get('endpointType', 'direct') or 'direct') == 'tunnel'
+                       and host.get('enable', True)]
+            def report(action):
+                changes.append({'inboundId': inbound_id, 'action': action,
+                                'address': address, 'port': port, 'runtime': runtime})
+            if not directs and tunnels:
+                index, host = tunnels.pop(0)
+                host.update(address=address, port=port, endpointType='direct',
+                            remark=str(record['name']) + ' · Direct', enable=True)
+                host.pop('addresses', None)  # Old multi-address tunnel IPs must not leak into subscriptions.
+                report('tunnel_to_direct')
+                directs = [(index, host)]
+            elif not directs and not targets:
+                hosts.append({'inboundId': inbound_id, 'runtime': runtime, 'address': address,
+                              'port': port, 'endpointType': 'direct', 'security': 'same',
+                              'remark': str(record['name']) + ' · Direct', 'enable': True})
+                report('add_direct')
+            for index, host in directs:
+                # Move only the exact former node IP; leave owner-managed DNS hosts unchanged.
+                if previous_address and previous_address != address and host.get('address') == previous_address:
+                    host['address'] = address
+                    entries = host.get('addresses')
+                    if isinstance(entries, list):
+                        updated = list(dict.fromkeys(address if a == previous_address else a for a in entries))
+                        host['addresses'] = updated
+                    host['port'] = port
+                    report('old_direct_ip_to_new_direct')
+            for index, host in targets:
+                if (host.get('endpointType', 'direct') or 'direct') == 'tunnel' and host.get('enable', True):
+                    host['enable'] = False   # Retain record; never advertise an unconfigured tunnel.
+                    report('disable_retired_tunnel')
+            meta = inbound.get('panelMeta')
+            if isinstance(meta, dict) and isinstance(meta.get('tunnelPorts'), dict):
+                if runtime in meta['tunnelPorts']:
+                    inbound['panelMeta'] = {**meta, 'tunnelPorts': {k:v for k,v in meta['tunnelPorts'].items() if k != runtime}}
+                    inbound_changes[inbound_id] = inbound
+                    report('clear_retired_tunnel_port')
+        return saved, hosts, inbound_changes, changes
+
     def _endpoints(self, node):
         """Expose only public endpoint fields, not UUIDs/private keys or bearer tokens."""
         with self.store.lock:
@@ -64,7 +146,8 @@ class ReplacementActivation:
             raw = self.store.db.execute("SELECT body FROM core_sections WHERE name='hosts'").fetchone()
             hosts = json.loads(raw[0]) if raw else []
             public_hosts = [{k: h[k] for k in ('inboundId','runtime','address','port','enable','remark','endpointType') if k in h}
-                            for h in hosts if h.get('inboundId') in assignments]
+                            for h in hosts if h.get('runtime') == 'node:' + node and h.get('inboundId') in assignments]
+            _, _, _, planned_changes = self._direct_host_cutover(self.store.db, node)
             ports = []
             for inbound_id in assignments:
                 r = self.store.db.execute('SELECT body FROM core_inbounds WHERE id=?', (inbound_id,)).fetchone()
@@ -75,6 +158,8 @@ class ReplacementActivation:
                               'protocol': inbound['protocol'], 'enabled': inbound.get('enable', True)})
         return {'node_data_address': saved['data_address'], 'priority': saved['priority'],
                 'failover_enabled': bool(saved['failover_enabled']), 'inbounds': ports, 'hosts': public_hosts,
+                'planned_direct_host_changes': planned_changes,
+                'direct_hosts_switch_after_verified_start': True,
                 'addresses_changed_automatically': False, 'dns_and_tunnel_verified': False,
                 'operator_must_verify_dns_tunnel_and_client_addresses': True,
                 'direct_clients_may_connect_as_soon_as_start_is_sent': True}
@@ -294,6 +379,14 @@ class ReplacementActivation:
             db.execute("UPDATE remote_node_control SET applied_revision=revision,applied_at=?,last_error='' WHERE node_id=?", (now,row['node_id']))
             db.execute("UPDATE remote_node_replacement_deployments SET activation_hold=0,phase='activated',updated_at=? WHERE attempt_id=?", (now,row['attempt_id']))
             db.execute("UPDATE remote_node_replacement_activations SET phase='activated',last_error='',completed_at=?,updated_at=? WHERE attempt_id=?", (now,now,row['attempt_id']))
+            before_hosts, after_hosts, inbound_changes, changes = self._direct_host_cutover(db, row['node_id'])
+            if before_hosts != after_hosts:
+                db.execute("INSERT INTO core_sections(name,body) VALUES('hosts',?) "
+                           "ON CONFLICT(name) DO UPDATE SET body=excluded.body",
+                           (json.dumps(after_hosts, ensure_ascii=False),))
+            for inbound_id, inbound in inbound_changes.items():
+                db.execute('UPDATE core_inbounds SET body=? WHERE id=?',
+                           (json.dumps(inbound, ensure_ascii=False), inbound_id))
             db.execute("UPDATE remote_nodes SET enabled=1,last_health=?,last_seen=?,last_latency_ms=?,last_error='',failure_count=0,updated_at=? WHERE id=?", (json.dumps(health),now,max(1,int(ms)),now,row['node_id']))
 
     def activate(self, node, attempt, *, binding_id, review_hash, confirm_start,
