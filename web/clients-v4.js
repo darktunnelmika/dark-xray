@@ -3,7 +3,11 @@
 'use strict';
 if(typeof clientsPage!=='function'||typeof runAction!=='function'||typeof clientForm!=='function')return;
 const baseClientsPage=clientsPage,baseRunAction=runAction,baseClientForm=clientForm;
+const CV4_STATE_KEY='dark_clients_v4_state';
+let savedCv4={};try{savedCv4=JSON.parse(sessionStorage.getItem(CV4_STATE_KEY)||'{}')||{};}catch{}
 state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',filters:false,delivery:null,page:1,pageSize:50};
+Object.assign(state.cv4,Object.fromEntries(Object.entries(savedCv4).filter(([k])=>['view','presence','status','owner','inbound','group','sort','filters','page','pageSize'].includes(k))));
+const persistCv4=()=>{try{sessionStorage.setItem(CV4_STATE_KEY,JSON.stringify({view:state.cv4.view,presence:state.cv4.presence,status:state.cv4.status,owner:state.cv4.owner,inbound:state.cv4.inbound,group:state.cv4.group,sort:state.cv4.sort,filters:state.cv4.filters,page:state.cv4.page,pageSize:state.cv4.pageSize}));}catch{}};
 if(state.cv4.sort==='activity')state.cv4.sort='created';
 state.cv4.page=Math.max(1,Number(state.cv4.page||1));state.cv4.pageSize=[25,50,100].includes(Number(state.cv4.pageSize))?Number(state.cv4.pageSize):50;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
@@ -104,7 +108,7 @@ function clientsView(){
 }
 function groupsView(){
  const gs=groups(state.cv4.owner);
- return heading(L('Client Groups','گروه‌های کاربران'),L('Organization without mixing reseller ownership.','سازماندهی کاربران بدون قاطی‌شدن مالکیت نماینده‌ها.'),can('clients.edit')?button(L('New group','گروه جدید'),'cv2groupnew','plus','',true):'')+notices()+`<div class="clients-v4"><div class="cv4-nav"><button data-act="cv4view" data-view="clients"><span>01</span>${L('Clients','کاربران')}</button><button class="active" data-act="cv4view" data-view="groups"><span>02</span>${L('Groups','گروه‌ها')}</button></div><div class="cv4-group-grid">${gs.length?gs.map(g=>`<article class="cv4-group-card" style="--g:${e(g.color||'#22d3ee')}"><i></i><header><span>${e(g.owner)}</span><b>${e(g.name)}</b></header><div><strong>${g.client_count||0}</strong><small>${L('clients','کاربر')}</small></div><footer><span>${bytes(g.used_bytes||0)}</span>${g.implicit?`<button data-act="cv2groupregister" data-owner="${e(g.owner)}" data-name="${e(g.name)}">${L('Register','ثبت')}</button>`:`<button data-act="cv2groupdelete" data-owner="${e(g.owner)}" data-name="${e(g.name)}">${L('Delete','حذف')}</button>`}</footer></article>`).join(''):`<div class="cv4-empty">${icon('users')}<b>${L('No groups yet','هنوز گروهی نیست')}</b><small>${L('Create groups only when you need organization.','فقط وقتی لازم داری گروه بساز.')}</small></div>`}</div></div>`;
+ return heading(L('Client Groups','گروه‌های کاربران'),L('Organization without mixing reseller ownership.','سازماندهی کاربران بدون قاطی‌شدن مالکیت نماینده‌ها.'),can('clients.edit')?button(L('New group','گروه جدید'),'cv2groupnew','plus','',true):'')+notices()+`<div class="clients-v4"><div class="cv4-nav"><button data-act="cv4view" data-view="clients"><span>01</span>${L('Clients','کاربران')}</button><button class="active" data-act="cv4view" data-view="groups"><span>02</span>${L('Groups','گروه‌ها')}</button></div><div class="cv4-group-grid">${gs.length?gs.map(g=>`<article class="cv4-group-card" style="--g:${e(g.color||'#22d3ee')}"><i></i><header><span>${e(g.owner)}</span><b>${e(g.name)}</b></header><div><strong>${g.client_count||0}</strong><small>${L('clients','کاربر')}</small></div><footer><span>${bytes(g.used_bytes||0)}</span><span class="cv4-group-actions"><button data-act="cv4groupopen" data-owner="${e(g.owner)}" data-name="${e(g.name)}">${L('View clients','نمایش کاربران')}</button>${g.implicit?`<button data-act="cv2groupregister" data-owner="${e(g.owner)}" data-name="${e(g.name)}">${L('Register','ثبت')}</button>`:`<button data-act="cv2groupdelete" data-owner="${e(g.owner)}" data-name="${e(g.name)}">${L('Delete','حذف')}</button>`}</span></footer></article>`).join(''):`<div class="cv4-empty">${icon('users')}<b>${L('No groups yet','هنوز گروهی نیست')}</b><small>${L('Create groups only when you need organization.','فقط وقتی لازم داری گروه بساز.')}</small></div>`}</div></div>`;
 }
 clientsPage=function(){return state.cv4.view==='groups'?groupsView():clientsView();};
 
@@ -321,11 +325,12 @@ async function bulkCreate(){
 }
 runAction=async function(act,el){
  const id=el?.dataset?.id;
- if(act==='cv4view'){state.cv4.view=el.dataset.view;state.selected.clear();return renderPage();}
- if(act==='cv4filters'){state.cv4.filters=!state.cv4.filters;return renderPage();}
+ if(act==='cv4view'){state.cv4.view=el.dataset.view;state.selected.clear();persistCv4();return renderPage();}
+ if(act==='cv4groupopen'){state.cv4.view='clients';state.cv4.owner=el.dataset.owner||'all';state.cv4.group=groupKey(el.dataset.owner||'',el.dataset.name||'');state.cv4.page=1;state.selected.clear();persistCv4();return renderPage();}
+ if(act==='cv4filters'){state.cv4.filters=!state.cv4.filters;persistCv4();return renderPage();}
  if(act==='cv4quick'){state.cv4.page=1;if(el.dataset.key==='presence'){state.cv4.presence=el.dataset.value;state.cv4.status='all';}else{state.cv4.status=el.dataset.value;state.cv4.presence='all';}state.selected.clear();return renderPage();}
- if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',page:1});state.selected.clear();return renderPage();}
- if(act==='cv4page'){state.cv4.page=Math.max(1,Number(el.dataset.page||1));return renderPage();}
+ if(act==='cv4reset'){Object.assign(state.cv4,{presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',page:1});state.selected.clear();persistCv4();return renderPage();}
+ if(act==='cv4page'){state.cv4.page=Math.max(1,Number(el.dataset.page||1));persistCv4();return renderPage();}
  if(act==='cv4delete'){
   if(!confirm(L('Delete this client? Traffic history is preserved.','این کاربر حذف شود؟ تاریخچه مصرف حفظ می‌شود.')+'\n'+id))return;
   const result=await api('/api/clients/'+enc(id)+'/action','POST',{action:'delete'});
@@ -346,8 +351,8 @@ runAction=async function(act,el){
 };
 document.addEventListener('change',async ev=>{
  const el=ev.target;
- if(el?.dataset?.cv4Filter){state.cv4.page=1;state.cv4[el.dataset.cv4Filter]=el.value;if(el.dataset.cv4Filter==='owner'&&state.cv4.group!=='all'){const valid=new Set(groups(el.value).map(g=>groupKey(g.owner,g.name)));valid.add('__ungrouped');if(!valid.has(state.cv4.group))state.cv4.group='all';}state.selected.clear();await renderPage();}
- if(el?.id==='cv4-sort'){state.cv4.page=1;state.cv4.sort=el.value;await renderPage();}
- if(el?.id==='cv4-page-size'){state.cv4.pageSize=Number(el.value);state.cv4.page=1;await renderPage();}
+ if(el?.dataset?.cv4Filter){state.cv4.page=1;state.cv4[el.dataset.cv4Filter]=el.value;if(el.dataset.cv4Filter==='owner'&&state.cv4.group!=='all'){const valid=new Set(groups(el.value).map(g=>groupKey(g.owner,g.name)));valid.add('__ungrouped');if(!valid.has(state.cv4.group))state.cv4.group='all';}state.selected.clear();persistCv4();await renderPage();}
+ if(el?.id==='cv4-sort'){state.cv4.page=1;state.cv4.sort=el.value;persistCv4();await renderPage();}
+ if(el?.id==='cv4-page-size'){state.cv4.pageSize=Number(el.value);state.cv4.page=1;persistCv4();await renderPage();}
 });
 })();
