@@ -58,7 +58,7 @@ test('acknowledged historical Start no longer expands the live fleet card',async
  assert.doesNotMatch(html,/data-node-control="acknowledged"/);
 });
 test('healthy Hub lease stays in a compact chip; lease failure remains visible',async()=>{
- const healthy={telemetry_state:'fresh',control:{persisted:true,pending:false,action:'start',revision:2},
+ const healthy={telemetry_state:'fresh',telemetry_age_seconds:0,control:{persisted:true,pending:false,action:'start',revision:2},
   health:{hub_lease:{required:true,valid:true},core:{state:'running'},system:{cpu:1}}};
  const {x}=context({},'en',healthy);const html=await x.enginePage();
  assert.match(html,/Hub protection/);assert.match(html,/Active/);
