@@ -265,5 +265,5 @@ class NodePortSwap:
                 continue
             hosts.append({'inboundId': r['inbound_id'], 'runtime': 'node:' + r['exit_node'],
                           'address': r['entry_address'], 'port': r['entry_port'],
-                          'remark': r['name'] + ' · DARK SWAP', 'endpointType': 'swap', 'swapId': r['id']})
+                          'remark': r['name'], 'endpointType': 'swap', 'swapId': r['id']})
         return hosts
