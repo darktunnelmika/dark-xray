@@ -32,6 +32,8 @@ test('skin uses scoped Midnight tokens and keeps visible warnings distinct', () 
     'body.skin-cyber-classic .nr-dialog',
     'body.skin-cyber-classic .dr-group',
     'body.skin-cyber-classic .nv2-node',
+    'body.skin-cyber-classic .ov4-card',
+    'body.skin-cyber-classic .ov4-action',
   ]) assert.ok(css.includes(declaration), declaration);
   assert.match(css, /--premium-warning:\s*#ffce7b/);
   assert.match(css, /--premium-danger:\s*#ff8294/);
