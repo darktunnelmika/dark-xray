@@ -1481,7 +1481,12 @@ class CoreEngine:
                     base_remark=str(base_remark)+' · 🚇 TUNNEL'
                 if int(host.get('_addressTotal') or 1)>1:
                     base_remark=base_remark+' · '+str(int(host.get('_addressIndex') or 1))
-                label=sub.get('remark_template','{remark} | {email}').replace('{remark}',base_remark).replace('{email}',email).replace('{protocol}',proto.upper())
+                # User identity belongs only on the Hub's own subscription entry.
+                # Remote Direct, Tunnel and SWAP endpoints keep their clean host
+                # remarks, regardless of the owner's global Hub remark template.
+                label=(sub.get('remark_template','{remark} | {email}')
+                       .replace('{remark}',base_remark).replace('{email}',email)
+                       .replace('{protocol}',proto.upper())) if runtime=='local' else str(base_remark)
                 st=ib['streamSettings'];net=st.get('network','tcp');base_sec=st.get('security','none')
                 force=host.get('security','same') or 'same';sec=base_sec if force=='same' else force
                 q={'type':net,'security':sec}
