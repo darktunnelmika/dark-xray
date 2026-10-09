@@ -977,7 +977,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                                     and (h.get('endpointType','direct') or 'direct')=='direct'
                                     for h in engine.section('hosts'))
                 if explicit_direct:continue
-                remark=str(item['remark'])+' · '+str(target['name'])
+                # Failover is a remote Direct connection, not a Hub-local
+                # one. Never inherit the customer's email from the Hub URI.
+                remark=str(target['name']).strip()
+                if 'مستقیم' not in remark:remark+=' ⚡ مستقیم'
                 clone={k:json.loads(json.dumps(v)) for k,v in item.items() if k!='uri'}
                 clone['remark']=remark
                 source_port=int(engine.inbound(inbound_id)['port'])

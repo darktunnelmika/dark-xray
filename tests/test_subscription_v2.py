@@ -28,3 +28,63 @@ def test_clash_user_agent_auto_detect(env):
 
 def test_invalid_format_is_not_silently_substituted(env):
  c,url=env;assert c.get(url+"?format=singbox").status_code==400
+
+
+def test_email_appears_only_on_hub_label_across_all_sub_formats(env):
+ c,url=env;engine=c.app.state.engine
+ inbound=engine.inbounds()[0]['id']
+ local='🇹🇷 Turkey ⚡ مستقیم'
+ direct='🇦🇿 Azerbaijan ⚡ مستقیم'
+ tunnel='🇳🇱 Netherlands 🚇 تانل'
+ swap='🇩🇪 Germany 🔀 تانل سواپ'
+ ib=engine.inbound(inbound)
+ ib.setdefault('panelMeta',{})['tunnelPorts']={'node:remote-tunnel':24777}
+ engine.save_inbound(ib,inbound)
+ engine.save_section('hosts',[
+     {'inboundId':inbound,'runtime':'local','address':'turkey.example.test','port':19701,
+      'endpointType':'direct','remark':local,'enable':True},
+     {'inboundId':inbound,'runtime':'node:remote-direct','address':'azerbaijan.example.test','port':19701,
+      'endpointType':'direct','remark':direct,'enable':True},
+     {'inboundId':inbound,'runtime':'node:remote-tunnel','address':'iran.example.test','port':24777,
+      'endpointType':'tunnel','remark':tunnel,'enable':True},
+ ])
+ engine.swap_hosts_provider=lambda:[{'inboundId':inbound,'runtime':'node:remote-swap',
+      'address':'swap.example.test','port':26010,'endpointType':'swap','remark':swap}]
+ sub=engine.section('subscription')
+ sub['remark_template']='{protocol} | {remark} | {email}'
+ engine.save_section('subscription',sub)
+ links=engine.links('sub-v2')['links']
+ names=[v['remark'] for v in links]
+ assert names==['VLESS | '+local+' | sub-v2',direct,tunnel,swap]
+ from urllib.parse import unquote,urlsplit
+ assert [unquote(urlsplit(v['uri']).fragment) for v in links]==names
+ assert all('sub-v2' not in v['remark'] for v in links[1:])
+ raw,_=engine.subscription('sub-v2','raw')
+ assert raw.decode().splitlines()==[v['uri'] for v in links]
+ encoded,_=engine.subscription('sub-v2','base64')
+ assert base64.b64decode(encoded)==raw
+ document,_=engine.subscription('sub-v2','json')
+ assert [v['remark'] for v in json.loads(document)['links']]==names
+ clash,_=engine.subscription('sub-v2','clash')
+ for name in names:
+  assert name in clash.decode()
+
+
+def test_generated_node_failover_never_inherits_hub_email(env,monkeypatch):
+ c,url=env;engine=c.app.state.engine;nodes=c.app.state.nodes
+ inbound=engine.inbounds()[0]['id']
+ monkeypatch.setattr(nodes,'failover_targets',lambda email:[{
+   'node_id':'remote-failover','name':'🇩🇪 Germany','address':'germany.example.test',
+   'inbound_ids':[inbound],'priority':20,'latency_ms':25,
+ }])
+ response=c.get('/api/clients/sub-v2/links')
+ assert response.status_code==200,response.text
+ body=response.json()
+ assert 'sub-v2' in body['engine']['links'][0]['remark']
+ assert len(body['engine']['failover'])==1
+ remote=body['engine']['failover'][0]
+ assert remote['remark']=='🇩🇪 Germany ⚡ مستقیم'
+ assert 'sub-v2' not in remote['remark']
+ from urllib.parse import unquote,urlsplit
+ assert unquote(urlsplit(remote['uri']).fragment)==remote['remark']
+ assert urlsplit(remote['uri']).hostname=='germany.example.test'
