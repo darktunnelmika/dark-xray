@@ -186,6 +186,10 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         return False,''
 
     def archive_restore(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True)->dict:
+        with self._import_lock:
+            return self._archive_restore_locked(restore_id,require_finished=require_finished,snapshot=snapshot)
+
+    def _archive_restore_locked(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True)->dict:
         """Remove an explicitly selected Restore user from active runtime only.
 
         Subscription identity, group membership, events and restore_usage remain
