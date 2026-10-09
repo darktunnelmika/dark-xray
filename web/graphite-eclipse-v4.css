@@ -1,0 +1,545 @@
+/* DARK XRAY / GRAPHITE ECLIPSE V4
+ * Typography and color-only visual skin. No DOM/JS/backend/route changes.
+ * Neutral carbon and soft graphite replace the old navy-dominant palette.
+ * Font faces live in graphite-eclipse-fontfaces-v4.css (offline embeddable).
+ * Remove the two final CSS links to restore Obsidian Pulse V3 instantly.
+ */
+body.skin-cyber-classic {
+  --ge-back:#171a1b;
+  --ge-sidebar:#202526;
+  --ge-surface:#272d2e;
+  --ge-surface-high:#303839;
+  --ge-ink:#f1f8f5;
+  --ge-secondary:#bbceca;
+  --ge-faint:#8eaaa4;
+  --ge-border:rgba(173,201,190,.20);
+  --ge-border-active:rgba(133,246,197,.47);
+  --ge-mint:#7af0c0;
+  --ge-cyan:#95e5dc;
+  --ge-violet:#baa8ff;
+  --ge-orange:#ffd098;
+  --ge-danger:#ff9cae;
+  --ge-soft-shadow:0 9px 27px rgba(4,10,10,.18);
+
+  --font:"DX UI","Vazirmatn","Manrope",system-ui,Tahoma,sans-serif;
+  --mono:"DX Mono","Cascadia Code","DejaVu Sans Mono",monospace;
+  --bg:var(--ge-back);
+  --panel:var(--ge-surface);
+  --panel2:var(--ge-surface-high);
+  --border:#4a5b57;
+  --text:var(--ge-ink);
+  --muted:var(--ge-secondary);
+  --faint:var(--ge-faint);
+  --green:var(--ge-mint);
+  --cyan:var(--ge-cyan);
+  --purple:var(--ge-violet);
+  --red:var(--ge-danger);
+  --amber:var(--ge-orange);
+  --classic-green:var(--ge-mint);
+  --classic-green-2:#aeffdb;
+  --classic-panel:var(--ge-surface);
+  --classic-panel-2:var(--ge-surface-high);
+  --classic-black:var(--ge-back);
+  --classic-black-2:var(--ge-sidebar);
+  --classic-line:var(--ge-border);
+  --classic-line-soft:rgba(156,210,188,.11);
+  --pulse-bg:var(--ge-back);
+  --pulse-shell:var(--ge-sidebar);
+  --pulse-panel:var(--ge-surface);
+  --pulse-panel-glow:var(--ge-surface-high);
+  --pulse-ink:var(--ge-ink);
+  --pulse-muted:var(--ge-secondary);
+  --pulse-faint:var(--ge-faint);
+  --pulse-edge:var(--ge-border);
+  --pulse-edge-hot:var(--ge-border-active);
+  --pulse-turquoise:var(--ge-cyan);
+  --pulse-mint:var(--ge-mint);
+  --pulse-iris:var(--ge-violet);
+  --pulse-coral:var(--ge-danger);
+  --pulse-amber:var(--ge-orange);
+  --pulse-shadow:var(--ge-soft-shadow);
+  color:var(--ge-ink);
+  background:
+    radial-gradient(ellipse 950px 500px at 100% -28%,rgba(108,220,170,.095),transparent 76%),
+    radial-gradient(ellipse 760px 620px at -15% 85%,rgba(124,188,163,.065),transparent 71%),
+    linear-gradient(155deg,#1b2020,#171a1b 62%,#1d2221) !important;
+  font-family:var(--font);
+  font-size:13px;
+  line-height:1.7;
+  font-weight:480;
+  font-optical-sizing:auto;
+  font-synthesis:weight;
+  text-rendering:optimizeLegibility;
+}
+body.skin-cyber-classic:before {
+  background-image:
+    linear-gradient(rgba(147,212,178,.009) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(147,212,178,.009) 1px,transparent 1px) !important;
+  opacity:.31 !important;
+}
+body.skin-cyber-classic .sidebar {
+  background:linear-gradient(180deg,#242a2a,#1b2020) !important;
+  border-color:var(--ge-border) !important;
+  box-shadow:11px 0 32px rgba(4,10,10,.19) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .sidebar {
+  box-shadow:-11px 0 32px rgba(4,10,10,.19) !important;
+}
+body.skin-cyber-classic .brand {
+  border-color:rgba(150,231,185,.18) !important;
+}
+body.skin-cyber-classic .brand-mark {
+  color:#d4fff0 !important;
+  background:linear-gradient(140deg,#356254,#293d3b) !important;
+  border:1px solid rgba(122,240,192,.43) !important;
+  border-radius:14px !important;
+}
+body.skin-cyber-classic .brand-name {
+  font-size:18px;
+  letter-spacing:.03em;
+  font-weight:850;
+  color:#fff !important;
+}
+body.skin-cyber-classic .brand-name span {
+  color:#8df4cd !important;
+}
+body.skin-cyber-classic .brand-sub {
+  color:#a3beb1 !important;
+  letter-spacing:.07em;
+}
+body.skin-cyber-classic .nav-section-label,
+body.skin-cyber-classic .nav-label {
+  color:#90b6a9 !important;
+}
+body.skin-cyber-classic .nav-btn {
+  color:#c5d8d1;
+  background:transparent !important;
+  border-color:transparent !important;
+  border-radius:12px !important;
+  min-height:40px;
+  font:620 13px/1.45 var(--font);
+  letter-spacing:0;
+}
+body.skin-cyber-classic .nav-btn:hover {
+  color:#f8fffb !important;
+  background:rgba(123,217,175,.11) !important;
+  border-color:rgba(124,233,179,.21) !important;
+}
+body.skin-cyber-classic .nav-btn.active {
+  color:#eafff4 !important;
+  background:linear-gradient(90deg,rgba(85,204,145,.23),rgba(76,154,133,.10)) !important;
+  border-color:rgba(122,240,192,.37) !important;
+  box-shadow:inset 3px 0 0 #85f2bd,0 3px 13px rgba(4,12,10,.08) !important;
+  font-weight:750;
+}
+html[dir="rtl"] body.skin-cyber-classic .nav-btn.active {
+  background:linear-gradient(270deg,rgba(85,204,145,.23),rgba(76,154,133,.10)) !important;
+  box-shadow:inset -3px 0 0 #85f2bd,0 3px 13px rgba(4,12,10,.08) !important;
+}
+body.skin-cyber-classic .topbar {
+  background:rgba(33,39,39,.94) !important;
+  border-color:rgba(178,219,195,.17) !important;
+  box-shadow:0 7px 19px rgba(4,10,10,.12) !important;
+}
+body.skin-cyber-classic .breadcrumb {color:#c1d8ce;font-size:12px}
+body.skin-cyber-classic .breadcrumb b {color:#f2fff8 !important}
+body.skin-cyber-classic .page-heading h1 {
+  font:800 clamp(21px,2.2vw,29px)/1.4 var(--font) !important;
+  letter-spacing:-.024em !important;
+  color:#f9fffc !important;
+  text-shadow:none !important;
+}
+body.skin-cyber-classic .page-heading p {
+  color:#b8d0c5 !important;
+  font:460 12px/1.75 var(--font);
+}
+body.skin-cyber-classic .page-heading .eyebrow,
+body.skin-cyber-classic .section-tag {
+  color:#a0e8cb !important;
+  font:730 10px/1.65 var(--font);
+  letter-spacing:.06em;
+}
+body.skin-cyber-classic .panel,
+body.skin-cyber-classic .service-tile,
+body.skin-cyber-classic .reseller-mini,
+body.skin-cyber-classic .swap-card,
+body.skin-cyber-classic .nv2-node,
+body.skin-cyber-classic .dr-group,
+body.skin-cyber-classic .ov4-commandbar,
+body.skin-cyber-classic .ov4-resource,
+body.skin-cyber-classic .ov4-card,
+body.skin-cyber-classic .ov4-telemetry-strip,
+body.skin-cyber-classic .ov4-summary-grid,
+body.skin-cyber-classic .ov4-management-grid .up-dashboard-compact-inner {
+  background:linear-gradient(145deg,#303839,#252b2c) !important;
+  border-color:var(--ge-border) !important;
+  border-radius:17px !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.040),var(--ge-soft-shadow) !important;
+}
+body.skin-cyber-classic .panel:hover,
+body.skin-cyber-classic .nv2-node:hover,
+body.skin-cyber-classic .swap-card:hover {
+  border-color:rgba(140,230,187,.38) !important;
+}
+body.skin-cyber-classic .panel-head,
+body.skin-cyber-classic .swap-card-head {
+  background:linear-gradient(95deg,rgba(126,196,159,.065),transparent 77%) !important;
+  border-color:rgba(173,208,185,.13) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .panel-head {
+  background:linear-gradient(265deg,rgba(126,196,159,.065),transparent 77%) !important;
+}
+body.skin-cyber-classic .panel-head h2,
+body.skin-cyber-classic .iv3-section-title b {
+  font:750 14px/1.5 var(--font);
+  letter-spacing:0;
+  color:#f4fff9 !important;
+}
+body.skin-cyber-classic .metric-number,
+body.skin-cyber-classic .kpi-value,
+body.skin-cyber-classic .ov4-resource-value,
+body.skin-cyber-classic .ov4-connection-total b {
+  color:#f3fff9 !important;
+  text-shadow:none !important;
+  font-variant-numeric:tabular-nums;
+}
+body.skin-cyber-classic .ov4 {
+  --ov4-border:var(--ge-border);
+  --ov4-border-soft:rgba(173,201,190,.14);
+  --ov4-accent:var(--ge-mint);
+  --ov4-panel:var(--ge-surface);
+  --ov4-panel-2:var(--ge-surface-high);
+}
+body.skin-cyber-classic .ov4-action,
+body.skin-cyber-classic .ov4-small-button {
+  border-radius:10px !important;
+  color:#d9f4e9 !important;
+  border-color:rgba(172,217,193,.24) !important;
+  background:#3c4847 !important;
+  font-family:var(--font);
+  font-weight:640;
+}
+body.skin-cyber-classic .ov4-action:first-child {
+  color:#e2fff3 !important;
+  background:linear-gradient(135deg,#39715d,#3e6359) !important;
+  border-color:rgba(137,239,193,.47) !important;
+}
+body.skin-cyber-classic .ov4-action.danger {
+  color:#ffccd7 !important;
+  border-color:rgba(255,156,174,.40) !important;
+  background:#5a3a43 !important;
+}
+body.skin-cyber-classic .btn,
+body.skin-cyber-classic .icon-btn,
+body.skin-cyber-classic .search-btn {
+  border-radius:11px !important;
+  color:#e4f5ea !important;
+  background:linear-gradient(145deg,#43514e,#35413f) !important;
+  border:1px solid rgba(172,211,192,.32) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.065),0 3px 8px rgba(4,10,10,.10) !important;
+  font:670 12px/1.55 var(--font);
+}
+body.skin-cyber-classic .btn:hover:not(:disabled),
+body.skin-cyber-classic .icon-btn:hover:not(:disabled),
+body.skin-cyber-classic .search-btn:hover:not(:disabled) {
+  color:#fff !important;
+  background:linear-gradient(145deg,#52665c,#3d5249) !important;
+  border-color:rgba(146,243,197,.66) !important;
+}
+body.skin-cyber-classic .btn-primary,
+body.skin-cyber-classic .btn.primary,
+body.skin-cyber-classic .btn-primary:hover:not(:disabled),
+body.skin-cyber-classic .btn.primary:hover:not(:disabled) {
+  color:#15352a !important;
+  background:linear-gradient(120deg,#afffdc,#7cf1bf 63%,#7bd9ae) !important;
+  border-color:rgba(201,255,226,.89) !important;
+  box-shadow:0 6px 20px rgba(79,209,146,.17) !important;
+  font-weight:820;
+}
+body.skin-cyber-classic .btn.danger,
+body.skin-cyber-classic .btn-danger {
+  color:#ffd4dd !important;
+  background:linear-gradient(135deg,#603b47,#49353d) !important;
+  border-color:rgba(255,156,174,.42) !important;
+}
+body.skin-cyber-classic .field-input,
+body.skin-cyber-classic input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]),
+body.skin-cyber-classic select,
+body.skin-cyber-classic textarea {
+  background:#242d2e !important;
+  border-color:rgba(153,201,182,.32) !important;
+  color:#f0fcf5 !important;
+  border-radius:11px !important;
+  font-family:var(--font);
+  font-size:12px;
+  font-weight:500;
+}
+body.skin-cyber-classic .field-input::placeholder,
+body.skin-cyber-classic input::placeholder {
+  color:#94b1a6;
+}
+body.skin-cyber-classic :is(button,a,input,select,textarea,summary,[tabindex]):focus-visible {
+  outline:2px solid #a1fdd1 !important;
+  outline-offset:3px;
+}
+body.skin-cyber-classic .tag,
+body.skin-cyber-classic .pill,
+body.skin-cyber-classic .ov4-status-pill {
+  border-radius:10px !important;
+  background:rgba(89,142,110,.13);
+  color:#d6f4df;
+  border-color:rgba(148,209,173,.27);
+  font-family:var(--font);
+  font-weight:650;
+  letter-spacing:0;
+}
+body.skin-cyber-classic .tag.green,
+body.skin-cyber-classic .pill.green {
+  color:#b0fdd0;
+  background:rgba(68,171,113,.16);
+  border-color:rgba(111,237,172,.37);
+}
+body.skin-cyber-classic .tag.amber,
+body.skin-cyber-classic .pill.amber {
+  color:#ffe2b2;
+  background:rgba(181,121,52,.19);
+  border-color:rgba(255,208,152,.37);
+}
+body.skin-cyber-classic .tag.red,
+body.skin-cyber-classic .pill.red {
+  color:#ffbdc9;
+  background:rgba(193,87,116,.17);
+  border-color:rgba(255,156,174,.34);
+}
+body.skin-cyber-classic .notice {
+  border-radius:11px !important;
+  color:#cae5d6;
+  background:rgba(70,103,85,.25) !important;
+  border-color:rgba(153,210,172,.24) !important;
+}
+body.skin-cyber-classic .notice.error {
+  color:#ffd0d8 !important;
+  background:rgba(117,56,75,.31) !important;
+  border-color:rgba(255,156,174,.41) !important;
+}
+body.skin-cyber-classic .notice.warning {
+  color:#ffe3b7 !important;
+  background:rgba(132,85,36,.28) !important;
+  border-color:rgba(255,208,152,.45) !important;
+}
+body.skin-cyber-classic table th {
+  font:700 11px/1.65 var(--font);
+  background:#2a3633 !important;
+  border-color:rgba(168,210,176,.17) !important;
+  color:#bfdbca !important;
+  letter-spacing:0;
+}
+body.skin-cyber-classic table td {
+  color:#e4f1e8 !important;
+  font-family:var(--font);
+  font-size:12px;
+}
+body.skin-cyber-classic table tbody tr:hover {
+  background:rgba(104,171,126,.07) !important;
+}
+body.skin-cyber-classic .cv4-row,
+body.skin-cyber-classic .iv3-row {
+  background:linear-gradient(135deg,#313a38,#252e2d) !important;
+  border:1px solid rgba(151,204,172,.20) !important;
+  border-radius:13px !important;
+}
+body.skin-cyber-classic .overlay {
+  background:rgba(12,17,16,.72) !important;
+  backdrop-filter:blur(6px);
+}
+body.skin-cyber-classic .dialog,
+body.skin-cyber-classic .nr-dialog {
+  border:1px solid rgba(151,215,175,.29) !important;
+  border-radius:18px !important;
+  background:linear-gradient(150deg,#323d3a,#232c2a) !important;
+  color:#f4fff9;
+  box-shadow:0 25px 70px rgba(4,8,7,.39) !important;
+}
+body.skin-cyber-classic .dialog-head,
+body.skin-cyber-classic .dialog-foot {
+  background:rgba(42,54,49,.92) !important;
+  border-color:rgba(160,208,178,.16) !important;
+}
+body.skin-cyber-classic .terminal,
+body.skin-cyber-classic .json-box {
+  color:#caffdf !important;
+  background:#202c28 !important;
+  border-color:rgba(147,214,164,.26) !important;
+  border-radius:11px !important;
+}
+/* Re-establish visual rhythm in the Inbound drawer without resizing its layout. */
+body.skin-cyber-classic .iv3-drawer {
+  background:linear-gradient(160deg,#293331,#1d2523 87%) !important;
+  border-color:rgba(153,211,170,.26) !important;
+}
+body.skin-cyber-classic .iv3-drawer header {
+  background:linear-gradient(110deg,#364a41,#293730) !important;
+  border-color:rgba(156,216,181,.19) !important;
+}
+body.skin-cyber-classic .iv3-drawer header span {
+  color:#a4f0c2;
+  font-family:var(--font);
+  letter-spacing:0;
+}
+body.skin-cyber-classic .iv3-drawer header strong {
+  color:#f6fff9;
+  font-family:var(--font);
+  font-weight:790;
+}
+body.skin-cyber-classic .iv3-tabs {
+  background:#2b3733 !important;
+  border-color:rgba(153,214,179,.19) !important;
+}
+body.skin-cyber-classic .iv3-tab-heading {color:#b2edc9 !important}
+body.skin-cyber-classic .iv3-tab-buttons button {
+  color:#d6eae0;
+  background:#3a4943 !important;
+  border-color:rgba(158,209,182,.23) !important;
+  border-radius:10px !important;
+  font:660 12px/1.5 var(--font);
+}
+body.skin-cyber-classic .iv3-tab-buttons button.active {
+  color:#153d2a !important;
+  border-color:#c8ffdd !important;
+  background:linear-gradient(120deg,#b8f7cf,#86ecb6) !important;
+  box-shadow:0 3px 12px rgba(41,164,93,.11) !important;
+}
+body.skin-cyber-classic .iv3-tab-more {
+  border:1px solid rgba(143,207,164,.21) !important;
+  background:#303f39 !important;
+  border-radius:11px !important;
+}
+body.skin-cyber-classic .iv3-tab-more summary {
+  color:#cdeed9 !important;
+  font-family:var(--font);
+}
+body.skin-cyber-classic .iv3-drawer [data-v3-pane].active {
+  border:1px solid rgba(152,208,177,.18) !important;
+  background:rgba(54,69,60,.45) !important;
+  border-radius:15px !important;
+}
+body.skin-cyber-classic .iv3-section-title {border-color:rgba(148,215,174,.22) !important}
+body.skin-cyber-classic .iv3-field>span {
+  color:#e3f3e8 !important;
+  font:670 12px/1.6 var(--font);
+}
+body.skin-cyber-classic .iv3-field>small {
+  color:#accbb9 !important;
+  font:460 10px/1.65 var(--font);
+}
+body.skin-cyber-classic .iv3-segments button,
+body.skin-cyber-classic .iv3-chips button {
+  background:#3a4943 !important;
+  border-color:rgba(152,203,170,.28) !important;
+  color:#e1f2e8 !important;
+  border-radius:9px !important;
+  font:600 11px/1.55 var(--font);
+}
+body.skin-cyber-classic .iv3-segments button.active,
+body.skin-cyber-classic .iv3-chips button.active {
+  background:#33614a !important;
+  color:#dcffe8 !important;
+  border-color:rgba(120,240,176,.65) !important;
+}
+body.skin-cyber-classic .iv3-drawer footer {
+  background:#293831 !important;
+  border-color:rgba(164,218,179,.20) !important;
+}
+/* Keep exactly the same Hub/Node/tunnel/swap controls and two-column layout. */
+body.skin-cyber-classic #iv3-editor .iv3-deploy {
+  background:linear-gradient(135deg,#374440,#2c3934) !important;
+  border-color:rgba(141,206,166,.29) !important;
+  border-radius:15px !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card {
+  background:linear-gradient(135deg,#37423f,#2c3532) !important;
+  border-color:rgba(150,202,174,.23) !important;
+  border-radius:14px !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected {
+  border-color:rgba(130,241,183,.57) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card>.iv3-deploy-target {
+  background:linear-gradient(135deg,#43544c,#37483e) !important;
+  border-color:rgba(156,206,166,.12) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected>.iv3-deploy-target,
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card>.iv3-deploy-target:has(input:checked) {
+  background:linear-gradient(135deg,#3f6551,#354c41) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target b {
+  font:740 12px/1.4 var(--font);
+  color:#f3fff7 !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target small {
+  color:#c4dcca !important;
+  font:460 10px/1.5 var(--font);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-route {
+  background:rgba(47,65,56,.64) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.tunnel-on .iv3-tunnel-route {
+  background:rgba(48,90,71,.52) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head>span {
+  color:#b4eacd !important;
+  font:740 10px/1.45 var(--font);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle {
+  background:#3c5045 !important;
+  border-color:rgba(140,205,158,.26) !important;
+  color:#e0f4e7 !important;
+  font:600 10px/1.55 var(--font);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:checked) {
+  background:#36634d !important;
+  border-color:rgba(123,240,177,.50) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port>input {
+  color:#eafff3 !important;
+  background:#283b32 !important;
+  border-color:rgba(138,221,164,.39) !important;
+  font:690 12px/1.5 var(--mono) !important;
+  font-variant-numeric:tabular-nums;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route {
+  background:linear-gradient(130deg,rgba(103,78,126,.26),rgba(49,60,54,.60)) !important;
+  border-color:rgba(186,168,255,.27) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .iv3-tunnel-head>span {
+  color:#d6c7ff !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .btn {
+  background:#554b61 !important;
+  border-color:rgba(186,168,255,.42) !important;
+  color:#ecddff !important;
+}
+/* Technical names and numbers stay deliberately distinct from prose. */
+body.skin-cyber-classic .mono,
+body.skin-cyber-classic .code-caption,
+body.skin-cyber-classic .terminal,
+body.skin-cyber-classic .json-box,
+body.skin-cyber-classic code {
+  font-family:var(--mono);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0;
+}
+body.skin-cyber-classic :is(.iv3-deploy-card,.iv3-tunnel-port,.cv4-row,.nv2-node,.dr-group) {
+  font-variant-numeric:tabular-nums;
+}
+@media(max-width:760px) {
+  body.skin-cyber-classic {font-size:12px}
+  body.skin-cyber-classic .page-heading h1 {font-size:20px !important;line-height:1.4}
+  body.skin-cyber-classic .nav-btn {min-height:44px;font-size:13px}
+  body.skin-cyber-classic .panel,
+  body.skin-cyber-classic .dialog {border-radius:14px !important}
+}
+@media(prefers-reduced-motion:reduce) {
+  body.skin-cyber-classic .nav-btn,
+  body.skin-cyber-classic .btn {transition:none !important}
+}
