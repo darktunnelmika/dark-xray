@@ -117,7 +117,7 @@ class RestoreSafetyMixin:
         now = time.time()
         for row in rows:
             meta = metadata.get(row['id'], {'metadata_state': 'verified' if row['scan_status'] == 'verified' else 'review'})
-            row['service_status'] = decision(row, meta, clients.get(row['core_email']), row['dark_used'], now=now)
+            row['service_status'] = 'archived' if row.get('archived') else decision(row, meta, clients.get(row['core_email']), row['dark_used'], now=now)
             row['metadata_state'] = meta['metadata_state']
             row['metadata_checked_at'] = meta.get('checked_at', 0)
             row['metadata_note'] = meta.get('note', '')
