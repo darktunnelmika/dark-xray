@@ -180,6 +180,7 @@ body.skin-cyber-classic .toast{
 /* Navigation closeout: large owner menus must never clip their lower entries. */
 body.skin-cyber-classic .sidebar{min-height:0;overflow:hidden}
 body.skin-cyber-classic .sidebar>nav{
+  flex:1 1 auto;
   min-height:0;
   overflow-y:auto;
   overflow-x:hidden;
