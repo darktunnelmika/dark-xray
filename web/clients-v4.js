@@ -4,10 +4,11 @@
 if(typeof clientsPage!=='function'||typeof runAction!=='function'||typeof clientForm!=='function')return;
 const baseClientsPage=clientsPage,baseRunAction=runAction,baseClientForm=clientForm;
 const CV4_STATE_KEY='dark_clients_v4_state';
-let savedCv4={};try{savedCv4=JSON.parse(sessionStorage.getItem(CV4_STATE_KEY)||'{}')||{};}catch{}
+const cv4Session=globalThis.sessionStorage||{getItem:()=>null,setItem:()=>{}};
+let savedCv4={};try{savedCv4=JSON.parse(cv4Session.getItem(CV4_STATE_KEY)||'{}')||{};}catch{}
 state.cv4=state.cv4||{view:'clients',presence:'all',status:'all',owner:'all',inbound:'all',group:'all',sort:'created',filters:false,delivery:null,page:1,pageSize:50};
 Object.assign(state.cv4,Object.fromEntries(Object.entries(savedCv4).filter(([k])=>['view','presence','status','owner','inbound','group','sort','filters','page','pageSize'].includes(k))));
-const persistCv4=()=>{try{sessionStorage.setItem(CV4_STATE_KEY,JSON.stringify({view:state.cv4.view,presence:state.cv4.presence,status:state.cv4.status,owner:state.cv4.owner,inbound:state.cv4.inbound,group:state.cv4.group,sort:state.cv4.sort,filters:state.cv4.filters,page:state.cv4.page,pageSize:state.cv4.pageSize}));}catch{}};
+const persistCv4=()=>{try{cv4Session.setItem(CV4_STATE_KEY,JSON.stringify({view:state.cv4.view,presence:state.cv4.presence,status:state.cv4.status,owner:state.cv4.owner,inbound:state.cv4.inbound,group:state.cv4.group,sort:state.cv4.sort,filters:state.cv4.filters,page:state.cv4.page,pageSize:state.cv4.pageSize}));}catch{}};
 if(state.cv4.sort==='activity')state.cv4.sort='created';
 state.cv4.page=Math.max(1,Number(state.cv4.page||1));state.cv4.pageSize=[25,50,100].includes(Number(state.cv4.pageSize))?Number(state.cv4.pageSize):50;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
