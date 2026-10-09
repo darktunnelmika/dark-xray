@@ -409,7 +409,8 @@ class NodeRegistry:
         if maintenance.get('statistics_error'):add(alerts,'critical','accounting_checkpoint_error')
         checkpoint=number(maintenance.get('checkpoint_age_seconds'))
         if checkpoint is not None and checkpoint>15:add(alerts,'warning','accounting_checkpoint_stale',checkpoint,15)
-        if node.get('last_error'):add(alerts,'critical','node_error')
+        if node.get('last_error') and int(node.get('failure_count') or 0)>=3:
+            add(alerts,'critical','node_error')
 
         penalty=sum(28 if x['severity']=='critical' else 10 for x in alerts)
         score=max(0,100-min(100,penalty))
@@ -471,8 +472,12 @@ class NodeRegistry:
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
             age=max(0.0,now-float(r['last_seen'] or 0)) if r['last_seen'] else None
             r['telemetry_age_seconds']=round(age,1) if age is not None else None
-            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
-            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
+            # Monitoring is observational: one transient request error
+            # must not flip LIVE/STALE or affect the saved Node assignment.
+            # Lease validity remains enforced independently by the Agent.
+            stable=not r['last_error'] or int(r.get('failure_count') or 0)<3
+            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=45 and stable else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
+            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and stable)
             r['operational_health']=self._operations_health(r)
             r['operational_health']['alerts']=self._annotate_alert_times(r,r['operational_health'].get('alerts',[]),now)
             with self.store.lock:
@@ -737,13 +742,17 @@ class NodeRegistry:
     def _request_failed(self,node_id:str,error:str):
         now=time.time()
         with self._node_transaction(node_id) as db:
-            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            old=db.execute('SELECT last_error,failure_count FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
             first=bool(old and not old['last_error'])
+            failures=int(old['failure_count'] or 0)+1 if old else 1
             db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
                           last_offline_at=CASE WHEN ? THEN ? ELSE last_offline_at END WHERE id=?''',
                        (str(error)[:300],now,int(first),now,node_id))
-            self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
-                                                {'severity':'critical','code':'node_error'}],now)
+            # A single failed HTTP request is not an offline Node. Align
+            # alerts with the three-failure routing hysteresis.
+            if failures>=3:
+                self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
+                                                    {'severity':'critical','code':'node_error'}],now)
 
     @staticmethod
     def _response_error(status:int,raw:bytes)->PolicyError:
@@ -1401,7 +1410,10 @@ class NodeRegistry:
                                  last_error_at=time.time(),failed_stage=state.get('stage',''),
                                  consecutive_failures=state.get('consecutive_failures',0)+1)
                     stage=state.get('stage','')
-                logger.warning('Node monitor cycle failed for %s at %s (%s)',node_id,stage,type(exc).__name__)
+                # Include bounded diagnostic context (never the bearer token)
+                # so accounting PolicyErrors can be distinguished from transport.
+                detail=re.sub(r'dkn_[A-Za-z0-9_-]{12,256}','dkn_[REDACTED]',str(exc)).replace('\\n',' ')[:200]
+                logger.warning('Node monitor cycle failed for %s at %s (%s): %s',node_id,stage,type(exc).__name__,detail)
             finally:record(cycle_seconds=round(time.monotonic()-started,3))
 
         def worker(node_id,retired):
