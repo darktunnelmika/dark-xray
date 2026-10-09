@@ -77,3 +77,12 @@ test('V3 is scoped CSS only and preserves the working application contract',()=>
   }
   assert.equal(balance,0);
 });
+
+test('mobile menu retains its existing stacking hierarchy above an open sidebar',()=>{
+  const topbar=css.match(/body\.skin-cyber-classic \.topbar\s*\{([^}]+)\}/);
+  assert.ok(topbar,'Topbar must be styled');
+  assert.doesNotMatch(topbar[1],/backdrop-filter\s*:/i);
+  const original=fs.readFileSync(path.join(dir,'style.css'),'utf8');
+  assert.match(original,/mobile-menu/);
+  assert.match(original,/sidebar/);
+});
