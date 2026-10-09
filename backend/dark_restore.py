@@ -143,7 +143,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
                 return {'archived':True,'id':restore_id,'already_archived':True}
             if float(r['promoted_at'] or 0)>0:
                 raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
-            if collect:
+            if collect and self.engine.running:
                 self.engine.collect_stats(force=True,strict=True)
             usage=self.usage(restore_id);dark_used=int(usage['up'])+int(usage['down'])
             with self.store.lock:
@@ -169,7 +169,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
                   (r.legacy_total>0 AND r.legacy_upload+r.legacy_download+COALESCE(u.used,0)>=r.legacy_total)
                 ) ORDER BY r.created_at,r.id''',(now,))]
         if not ids:return {'archived':0,'ids':[],'history_preserved':True}
-        self.engine.collect_stats(force=True,strict=True)
+        if self.engine.running:self.engine.collect_stats(force=True,strict=True)
         done=[]
         for rid in ids:
             self.archive_user(rid,reason='finished',apply_runtime=False,collect=False);done.append(rid)
