@@ -25,7 +25,7 @@ const consent={
  acceptUnconfirmedOldServer:['I understand the old VPS has not been confirmed stopped. I must retire it separately.','می‌دانم توقف VPS قبلی تأیید نشده و باید آن را جداگانه بازنشسته کنم.'],
  acceptUnreportedTraffic:['I accept that traffic never reported by the old server cannot be reconstructed. Recorded usage is preserved.','می‌پذیرم مصرف گزارش‌نشدهٔ سرور قبلی قابل بازسازی نیست؛ مصرف ثبت‌شده حفظ می‌شود.'],
  confirmStart:['Start the replacement Xray. Direct clients may connect immediately, before Hub publication finishes.','Xray جایگزین شروع شود؛ مشتری مستقیم ممکن است همان لحظه، قبل از ثبت نهایی در پنل، وصل شود.'],
- acceptEndpointResponsibility:['I have reviewed the addresses, ports, DNS and tunnel destination. This action does not change DNS or tunnels.','آدرس‌ها، پورت‌ها، DNS و مقصد تانل را بررسی کرده‌ام؛ این عملیات DNS یا تانل را تغییر نمی‌دهد.'],
+ acceptEndpointResponsibility:['I reviewed the Direct address. After verified Start, Hub subscription hosts for this Node switch to Direct; external DNS and tunnels are not changed.','آدرس مستقیم را بررسی کردم. پس از فعال‌سازی تأییدشده، هاست‌های اشتراک این نود به مستقیم تبدیل می‌شوند؛ DNS و تانل‌های بیرونی تغییر نمی‌کنند.'],
  discardCandidate:['Discard this unused candidate and revoke its pairing credentials. Reuse requires reinstall or authorized local token reset.','این هدفِ استفاده‌نشده کنار گذاشته و اعتبار اتصال آن باطل شود؛ استفاده مجدد نیاز به نصب یا بازنشانی مجاز توکن روی خودش دارد.'],
  confirmStop:['Stop this pending activation. Connections on the replacement may disconnect; the old VPS is not changed.','این فعال‌سازی در انتظار متوقف شود؛ اتصال‌های هدف ممکن است قطع شوند؛ VPS قبلی تغییر نمی‌کند.']
 };
@@ -77,11 +77,22 @@ function allowed(s){
 function endpoints(plan){
  if(!plan)return '';
  const hosts=Array.isArray(plan.hosts)?plan.hosts:[],ibs=Array.isArray(plan.inbounds)?plan.inbounds:[];
- return `<section class="nr-plan"><h3>${L('Reviewed customer endpoints','آدرس‌های بازبینی‌شدهٔ مشتری')}</h3><p><bdi>${esc(plan.node_data_address)}</bdi></p>
- <div class="nr-table"><table><thead><tr><th>${L('Inbound','اینباند')}</th><th>${L('Protocol','پروتکل')}</th><th>${L('Port','پورت')}</th></tr></thead><tbody>${ibs.map(i=>`<tr><td>${esc(i.inbound_id)}</td><td>${esc(i.protocol)}</td><td>${esc(i.port)}</td></tr>`).join('')}</tbody></table></div>
- <h4>${L('Related public hosts','هاست‌های عمومی مرتبط')}</h4>${hosts.length?`<ul>${hosts.map(h=>`<li><bdi>${esc(h.address)}:${esc(h.port)}</bdi> · ${esc(h.remark)} · ${esc(h.runtime)}</li>`).join('')}</ul>`:`<p>${L('No explicit hosts in this plan.','هاست صریحی در این برنامه نیست.')}</p>`}
- <p>${L('This is an address review, not a network reachability or DNS verification.','این بازبینی آدرس است؛ نه اثبات دسترسی شبکه یا صحت DNS.')}</p></section>`;
+ const changes=Array.isArray(plan.planned_direct_host_changes)?plan.planned_direct_host_changes:[];
+ const actionLabel={tunnel_to_direct:L('Old tunnel host → Direct','هاست تانل قدیمی ← مستقیم'),
+  add_direct:L('Create new Direct host','ساخت هاست مستقیم جدید'),
+  disable_retired_tunnel:L('Disable old tunnel host','غیرفعال کردن هاست تانل قبلی'),
+  clear_retired_tunnel_port:L('Clear obsolete tunnel port','پاک‌سازی پورت تانل قبلی'),
+  old_direct_ip_to_new_direct:L('Replace retired Direct IP','جایگزینی آی‌پی مستقیم قبلی')};
+ return `<section class="nr-plan"><h3>${L('New Node · Direct only','نود جدید · فقط مستقیم')}</h3>
+ <p><strong>${L('New address','آدرس جدید')}:</strong> <bdi>${esc(plan.node_data_address)}</bdi></p>
+ <div class="nr-table"><table><thead><tr><th>${L('Inbound','اینباند')}</th><th>${L('Protocol','پروتکل')}</th><th>${L('Direct port','پورت مستقیم')}</th></tr></thead><tbody>${ibs.map(i=>`<tr><td>${esc(i.inbound_id)}</td><td>${esc(i.protocol)}</td><td>${esc(i.port)}</td></tr>`).join('')}</tbody></table></div>
+ <h4>${L('Automatic Host changes after verified Start','تغییر خودکار هاست پس از فعال‌سازی تأییدشده')}</h4>
+ ${changes.length?`<ul>${changes.map(x=>`<li>${esc(actionLabel[x.action]||x.action)} · <bdi>${esc(x.address)}:${esc(x.port)}</bdi></li>`).join('')}</ul>`:`<p>${L('Current Direct hosts will be preserved.','هاست‌های مستقیم فعلی حفظ می‌شوند.')}</p>`}
+ <details><summary>${L('Previous hosts belonging to this Node','هاست‌های قدیمی همین نود')}</summary>${hosts.length?`<ul>${hosts.map(h=>`<li><bdi>${esc(h.address)}:${esc(h.port)}</bdi> · ${esc(h.remark)} · ${esc(h.endpointType||'direct')}</li>`).join('')}</ul>`:`<p>${L('None','موردی نیست')}</p>`}</details>
+ <p>${L('Old tunnel endpoints will not be reused. Add a new tunnel later in Inbound settings. External DNS and tunnels stay unchanged.','هاست‌های تانل قدیمی دوباره استفاده نمی‌شوند. تانل جدید را بعداً در تنظیمات اینباند اضافه کن. DNS و خود تانل‌های بیرونی تغییر نمی‌کنند.')}</p>
+ <p>${L('This is an address review, not a WAN/DNS test.','این بازبینی آدرس است؛ نه تست اتصال یا DNS.')}</p></section>`;
 }
+
 function paint(s){
  if(!s.live)return;
  const a=s.doc?.attempt,p=phase(s),actions=allowed(s),pair=names[p]||['Unrecognized state; refresh only','وضعیت ناشناخته؛ فقط تازه‌سازی'];
@@ -99,7 +110,7 @@ function paint(s){
  if(actions.includes('prepare'))body+=`<section><h3>${L('Prepare a new server','آماده‌سازی سرور جدید')}</h3><p>${L('Run install-node.sh on the new VPS and enter its Pair Code. Do not add it as an unrelated node first.','روی VPS جدید install-node.sh را اجرا و کد اتصالش را وارد کن؛ ابتدا آن را به‌عنوان نود جدا اضافه نکن.')}</p><label for="nr-code">${L('Pair Code (sensitive)','کد اتصال (محرمانه)')}</label><textarea id="nr-code" dir="ltr" autocomplete="off" spellcheck="false" maxlength="4096" rows="3" placeholder="DXN1.…"></textarea>${buttonFor('prepare','Prepare candidate','آماده‌سازی هدف')}</section>`;
  if(actions.includes('retry'))body+=buttonFor('retry','Retry the saved preparation','ادامهٔ آماده‌سازی ذخیره‌شده');
  if(actions.includes('commit'))body+=`<section><h3>${L('Save the replacement binding','ثبت سرور جایگزین')}</h3><p>${L('This retires the old binding but leaves the replacement disabled. It is not customer service activation.','ارتباط مدیریتی قبلی بازنشسته می‌شود ولی جایگزین غیرفعال می‌ماند؛ این فعال‌سازی سرویس مشتری نیست.')}</p>${checks(commitKeys)}${buttonFor('commit','Confirm replacement binding','تأیید ثبت جایگزینی',commitKeys)}</section>`;
- if(actions.includes('stage'))body+=`<section>${buttonFor('stage','Stage / recheck while stopped','استقرار و بررسی در حالت خاموش')} ${buttonFor('review','Review configuration and addresses','بازبینی تنظیمات و آدرس‌ها')}</section>`;
+ if(actions.includes('stage'))body+=`<section>${buttonFor('review','Check Direct and continue','بررسی مستقیم و ادامه')} ${buttonFor('stage','Recheck stopped setup','بررسی دوبارهٔ تنظیمات خاموش')}</section>`;
  body+=endpoints(s.review?.endpoints);
  if(actions.includes('start'))body+=`<section>${p==='starting'?`<p>${L('Continue the existing saved Start; do not create a new activation. The target may already be serving direct clients.','همان Start ذخیره‌شده پیگیری می‌شود؛ فعال‌سازی جدید نساز. هدف ممکن است همین حالا به مشتری مستقیم سرویس بدهد.')}</p>`:''}${checks(startKeys)}${buttonFor('start',p==='starting'?'Retry the same Start':'Confirm Start',p==='starting'?'پیگیری همان فرمان شروع':'تأیید شروع',startKeys)}</section>`;
  if(actions.includes('pause'))body+=`<section>${checks(['confirmStop'])}${buttonFor('pause',p==='stopping'?'Retry saved Stop':'Stop pending activation',p==='stopping'?'پیگیری توقف ذخیره‌شده':'توقف فعال‌سازی در انتظار',['confirmStop'])}</section>`;
