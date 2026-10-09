@@ -243,7 +243,7 @@ class RestoreGroupsMixin:
         # Archived Restore users are hidden from the active list, but their DARK
         # traffic remains part of the historical group total forever.
         with self.store.lock:
-            archived = list(self.store.db.execute('''SELECT r.group_id,COUNT(*) clients,
+            archived = list(self.store.db.execute('''SELECT r.group_id,COUNT(DISTINCT r.id) clients,
                 COALESCE(SUM(CASE WHEN u.scope='local' THEN u.up+u.down ELSE 0 END),0) local_used,
                 COALESCE(SUM(CASE WHEN u.scope<>'local' THEN u.up+u.down ELSE 0 END),0) node_used,
                 COALESCE(SUM(u.up),0) dark_up,COALESCE(SUM(u.down),0) dark_down
