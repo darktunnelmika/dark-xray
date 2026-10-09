@@ -150,7 +150,7 @@ class RestoreTargetsMixin:
     def _group_target_state(self, group_id, db):
         rows = list(db.execute('''SELECT r.id,r.core_email,r.inbound_ids,r.node_ids,r.node_mode,r.include_local,
             c.inbounds core_inbounds FROM restore_subscriptions r LEFT JOIN core_clients c ON c.email=r.core_email
-            WHERE r.group_id=? AND r.promoted_at=0 ORDER BY r.id''', (group_id,)))
+            WHERE r.group_id=? AND r.promoted_at=0 AND r.deleted_at=0 ORDER BY r.id''', (group_id,)))
         default = db.execute('SELECT body FROM restore_group_targets WHERE group_id=?', (group_id,)).fetchone()
         revision = hashlib.sha256(json.dumps([group_id, [tuple(r) for r in rows], default[0] if default else None],
                                             separators=(',', ':')).encode()).hexdigest()
@@ -190,7 +190,7 @@ class RestoreTargetsMixin:
                     raise HTTPException(409, 'Group membership or mapping changed. Preview again before applying.')
             else:
                 rows = list(db.execute('''SELECT r.*,c.inbounds core_inbounds FROM restore_subscriptions r
-                    LEFT JOIN core_clients c ON c.email=r.core_email WHERE r.id=?''', (restore_id,)))
+                    LEFT JOIN core_clients c ON c.email=r.core_email WHERE r.id=? AND r.deleted_at=0''', (restore_id,)))
                 if not rows:
                     raise HTTPException(404, 'Restore user not found')
                 if float(rows[0]['promoted_at'] or 0)>0:
