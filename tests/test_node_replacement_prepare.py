@@ -44,12 +44,13 @@ from test_node_hub_recovery import free_port,payload,post_state
 
 
 @contextlib.contextmanager
-def candidate(root, *, background=False):
+def candidate(root, *, background=False, lease_required=False):
     root.mkdir(parents=True,exist_ok=True)
     fake=root/'fake-xray'
     shutil.copy2(Path(__file__).parent/'fixtures/fake_xray.py',fake);fake.chmod(0o755)
     cfg=Config(public_origin=TARGET_ORIGIN,secure_cookie=True,xray_binary=str(fake),
-               xray_assets=str(root),xray_api_port=free_port(),core_autostart=True,test_engine=True)
+               xray_assets=str(root),xray_api_port=free_port(),core_autostart=True,test_engine=True,
+               hub_lease_required=lease_required)
     store=Store(root/'node.sqlite3');engine=CoreEngine(cfg,store,root/'runtime')
     token_path=root/'token'
     if not token_path.exists():token_path.write_text(TOKEN+'\n');token_path.chmod(0o600)
