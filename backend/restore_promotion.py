@@ -114,7 +114,7 @@ class RestorePromotionMixin:
         try:
             with self.store.transaction() as db:
                 db.execute("""UPDATE restore_subscriptions SET promoted_owner=?,promoted_at=?,updated_at=?
-                  WHERE id=? AND promoted_at=0""",(owner_id,now,now,restore_id))
+                  WHERE id=? AND promoted_at=0 AND deleted_at=0""",(owner_id,now,now,restore_id))
                 if db.execute("SELECT changes()").fetchone()[0]!=1:
                     raise PolicyError('Restore promotion state changed')
                 db.execute("INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)",
