@@ -133,12 +133,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 overviewAccent:getComputedStyle(document.querySelector('.ov4-spark polyline')).stroke,
                 actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor
             })""")
-            assert skin['green']=='#19ff86',skin
-            assert skin['overviewRadius'] in ('2px','2px 2px 2px 2px'),skin
-            assert skin['overviewAccent']=='rgb(25, 255, 134)',skin
-            assert '25, 255, 134' in skin['overviewBorder'],skin
-            assert skin['actionBg'] in ('rgb(0, 16, 8)','rgba(0, 16, 8, 1)'),skin
-            mark('real browser login, Cyber Classic shell and theme-inherited Overview V4')
+            assert skin['green']=='#54e2ae',skin
+            assert skin['overviewRadius'] in ('11px','11px 11px 11px 11px'),skin
+            assert skin['overviewAccent']=='rgb(84, 226, 174)',skin
+            assert '113, 201, 185' in skin['overviewBorder'],skin
+            assert skin['actionBg'] in ('rgb(18, 47, 57)','rgb(23, 59, 64)'),skin
+            assert 'linear-gradient' in skin['overviewBg'],skin
+            mark('real browser login, Premium Cyber shell and theme-inherited Overview V4')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
