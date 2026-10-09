@@ -54,9 +54,9 @@ def test_live_telemetry_freshness_preserves_system_snapshot(env,monkeypatch):
  assert fresh['telemetry_state']=='fresh' and fresh['telemetry_age_seconds']<=2
  assert fresh['health']['system']['network']['down_bps']==256.0
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-30,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-50,))
  stale={x['id']:x for x in c.get('/api/nodes').json()}['live1']
- assert stale['telemetry_state']=='stale' and stale['online'] is True and stale['telemetry_age_seconds']>=29
+ assert stale['telemetry_state']=='stale' and stale['online'] is True and stale['telemetry_age_seconds']>=49
  with store.transaction() as db:
   db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='live1'",(time.time()-181,))
  offline={x['id']:x for x in c.get('/api/nodes').json()}['live1']
@@ -119,7 +119,7 @@ def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
  assert {'memory_critical','xray_not_running','hub_lease_invalid'} <= {x['code'] for x in ops['alerts']}
 
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-30,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-50,))
  ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
  assert ops['state']=='warning' and ops['score']==55 and ops['capacity_percent'] is None
  assert ops['alerts'][0]['code']=='telemetry_stale'
