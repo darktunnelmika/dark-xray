@@ -180,6 +180,31 @@ def test_ports_reserved_through_inbound_api_and_owner_only(relay_env, monkeypatc
         assert c.delete(f'/api/swap/{rid}').status_code == 403
 
 
+
+def test_swap_subscription_uses_exact_custom_label_instead_of_english_suffix(relay_env,monkeypatch):
+    state,nodes,_=relay_env
+    swap,rid=setup_route(relay_env)
+    swap.toggle(rid,True,ACK)
+    name='🇩🇪 Germany 🔀 تانل سواپ'
+    before=swap.get(rid)
+    updated=swap.rename(rid,name)
+    assert updated['name']==name and updated['enabled']
+    after=swap.get(rid)
+    for key in ('source_node','exit_node','source_port','exit_port','entry_address','entry_port','inbound_id'):
+        assert before[key]==after[key]
+    monkeypatch.setattr(nodes,'list',lambda:[
+        nodes.get(n)|{'online':True,'desired_state':{'pending':False}}
+        for n in ('nl','de','am')])
+    monkeypatch.setattr(nodes,'_runtime_block_reason',lambda n:'')
+    hosts=swap.hosts()
+    assert len(hosts)==1
+    assert hosts[0]['remark']==name
+    assert hosts[0]['endpointType']=='swap'
+    assert hosts[0]['address']==BODY['entryAddress']
+    assert hosts[0]['port']==BODY['entryPort']
+
+
+
 def test_subscriptions_destination_scoped_direct_preserved(relay_env, monkeypatch):
     state, nodes, _ = relay_env; c = state[-1]; engine = state[1]
     create(c, 'swap-customer', extra={'totalGB': 1024**3})
