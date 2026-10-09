@@ -119,7 +119,7 @@ def test_node_health_score_alerts_and_capacity_use_fresh_system_telemetry(env):
  assert {'memory_critical','xray_not_running','hub_lease_invalid'} <= {x['code'] for x in ops['alerts']}
 
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-30,))
+  db.execute("UPDATE remote_nodes SET last_seen=?,last_error='' WHERE id='health1'",(time.time()-50,))
  ops={x['id']:x for x in c.get('/api/nodes').json()}['health1']['operational_health']
  assert ops['state']=='warning' and ops['score']==55 and ops['capacity_percent'] is None
  assert ops['alerts'][0]['code']=='telemetry_stale'
