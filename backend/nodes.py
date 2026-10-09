@@ -37,7 +37,7 @@ def resolve_origin(raw:str)->tuple[str,str,int,tuple[str,...]]:
     try:parsed_port=p.port
     except ValueError as ex:raise PolicyError('Invalid node URL port') from ex
     port=443 if parsed_port is None else parsed_port
-    if not 1<=port<=65535:raise PolicyError('Invalid node URL port')
+    if not 1<=port<=65535:raise PolicyError('Node URL port is invalid')
     host=p.hostname
     try:
         literal=ipaddress.ip_address(host)
@@ -281,6 +281,29 @@ class NodeRegistry:
             return self._operation_locks.setdefault(node_id,threading.RLock())
 
     @staticmethod
+    def _transient_transport_error(error:str)->bool:
+        # Only known reachability failures qualify for display hysteresis.
+        # Identity, authentication, TLS and malformed responses fail at once.
+        return str(error) in {
+            'Node hostname does not resolve',
+            'Node connection failed: Timeout',
+            'Node connection failed: TimeoutError',
+            'Node connection failed: ConnectionRefusedError',
+            'Node connection failed: ConnectionResetError',
+            'Node connection failed: ConnectionAbortedError',
+            'Node connection failed: RemoteDisconnected',
+            'Node connection failed: BrokenPipeError',
+            'Node connection failed: IncompleteRead',
+            'Node connection failed: OSError',
+        }
+
+    @staticmethod
+    def _transport_stable(node:dict)->bool:
+        error=str(node.get('last_error') or '')
+        return not error or (NodeRegistry._transient_transport_error(error)
+                             and int(node.get('failure_count') or 0)<3)
+
+    @staticmethod
     def _runtime_block_reason(node:dict)->str:
         control=node.get('control') or {}
         if control.get('pending'):return 'control_pending'
@@ -314,7 +337,7 @@ class NodeRegistry:
         # through two transient failures; three consecutive failures (or stale
         # telemetry) remove it. Explicit maintenance/config/runtime failures remain
         # immediate below.
-        transport_stable=bool(not node.get('last_error') or int(node.get('failure_count') or 0)<3)
+        transport_stable=NodeRegistry._transport_stable(node)
         online=bool(node.get('enabled') and telemetry_fresh and transport_stable)
         if sync_error:deployment_state='sync_error'
         elif runtime_block:deployment_state=runtime_block
@@ -409,7 +432,8 @@ class NodeRegistry:
         if maintenance.get('statistics_error'):add(alerts,'critical','accounting_checkpoint_error')
         checkpoint=number(maintenance.get('checkpoint_age_seconds'))
         if checkpoint is not None and checkpoint>15:add(alerts,'warning','accounting_checkpoint_stale',checkpoint,15)
-        if node.get('last_error'):add(alerts,'critical','node_error')
+        if node.get('last_error') and not NodeRegistry._transport_stable(node):
+            add(alerts,'critical','node_error')
 
         penalty=sum(28 if x['severity']=='critical' else 10 for x in alerts)
         score=max(0,100-min(100,penalty))
@@ -450,7 +474,7 @@ class NodeRegistry:
             if stored:
                 item['started_at']=float(stored['first_seen']);item['last_observed_at']=float(stored['last_seen'])
             elif code=='telemetry_stale':
-                item['started_at']=float(node.get('last_seen') or now)+20.0;item['last_observed_at']=now
+                item['started_at']=float(node.get('last_seen') or now)+45.0;item['last_observed_at']=now
             elif code in {'telemetry_offline','node_error'}:
                 item['started_at']=float(node.get('last_offline_at') or node.get('last_seen') or now);item['last_observed_at']=now
             else:
@@ -471,8 +495,12 @@ class NodeRegistry:
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
             age=max(0.0,now-float(r['last_seen'] or 0)) if r['last_seen'] else None
             r['telemetry_age_seconds']=round(age,1) if age is not None else None
-            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
-            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
+            # Monitoring is observational: one transient request error
+            # must not flip LIVE/STALE or affect the saved Node assignment.
+            # Lease validity remains enforced independently by the Agent.
+            stable=self._transport_stable(r)
+            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=45 and stable else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
+            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and stable)
             r['operational_health']=self._operations_health(r)
             r['operational_health']['alerts']=self._annotate_alert_times(r,r['operational_health'].get('alerts',[]),now)
             with self.store.lock:
@@ -727,8 +755,8 @@ class NodeRegistry:
     def _request_ok(self,node_id:str,latency_ms:int):
         now=time.time()
         with self._node_transaction(node_id) as db:
-            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-            recovered=bool(old and old['last_error'])
+            old=db.execute('SELECT last_error,failure_count FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            recovered=bool(old and old['last_error'] and not self._transport_stable(dict(old)))
             db.execute('''UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=?,
                        failure_count=0,recovery_count=recovery_count+?,last_recovered_at=CASE WHEN ? THEN ? ELSE last_recovered_at END
                        WHERE id=?''',
@@ -737,13 +765,26 @@ class NodeRegistry:
     def _request_failed(self,node_id:str,error:str):
         now=time.time()
         with self._node_transaction(node_id) as db:
-            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-            first=bool(old and not old['last_error'])
+            old=db.execute('SELECT last_error,failure_count FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            failures=int(old['failure_count'] or 0)+1 if old else 1
+            error=str(error)[:300]
+            # A subsequent timeout cannot clear an identity or TLS failure.
+            # Only a fully validated successful request may release the fence.
+            if (old and old['last_error'] and
+                    not self._transient_transport_error(old['last_error']) and
+                    self._transient_transport_error(error)):
+                error=old['last_error']
+            blocked=not self._transport_stable({'last_error':error,'failure_count':failures})
+            previously_blocked=bool(old and not self._transport_stable(dict(old)))
+            first=bool(blocked and not previously_blocked)
             db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
                           last_offline_at=CASE WHEN ? THEN ? ELSE last_offline_at END WHERE id=?''',
                        (str(error)[:300],now,int(first),now,node_id))
-            self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
-                                                {'severity':'critical','code':'node_error'}],now)
+            # A single failed HTTP request is not an offline Node. Align
+            # alerts with the three-failure routing hysteresis.
+            if blocked:
+                self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
+                                                    {'severity':'critical','code':'node_error'}],now)
 
     @staticmethod
     def _response_error(status:int,raw:bytes)->PolicyError:
@@ -957,6 +998,7 @@ class NodeRegistry:
         result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=time.time(),
                                           initialize_absent=isinstance(doc.get('accountingLease'),str))
         return {'latency_ms':ms,**result,'accounting_lease':doc.get('accountingLease')}
+
 
 
     def _client_inbounds(self,client_id:str)->list[int]:
@@ -1307,6 +1349,7 @@ class NodeRegistry:
                 results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
         return {'nodes':len(results),'items':results,'reset':True}
 
+
     def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None,lease_callback=None):
         import logging
         import math
@@ -1401,7 +1444,10 @@ class NodeRegistry:
                                  last_error_at=time.time(),failed_stage=state.get('stage',''),
                                  consecutive_failures=state.get('consecutive_failures',0)+1)
                     stage=state.get('stage','')
-                logger.warning('Node monitor cycle failed for %s at %s (%s)',node_id,stage,type(exc).__name__)
+                # Include bounded diagnostic context (never the bearer token)
+                # so accounting PolicyErrors can be distinguished from transport.
+                detail=re.sub(r'dkn_[A-Za-z0-9_-]{12,256}','dkn_[REDACTED]',str(exc)).replace('\\n',' ')[:200]
+                logger.warning('Node monitor cycle failed for %s at %s (%s): %s',node_id,stage,type(exc).__name__,detail)
             finally:record(cycle_seconds=round(time.monotonic()-started,3))
 
         def worker(node_id,retired):

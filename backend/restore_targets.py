@@ -96,7 +96,7 @@ class RestoreTargetsMixin:
                     'online': bool(n.get('online')), 'enabled': bool(n.get('enabled')),
                     'inboundIds': [int(a['local_inbound_id']) for a in n.get('assignments', [])],
                     'readyInboundIds': [int(a['local_inbound_id']) for a in n.get('assignments', [])
-                        if n.get('online') and n.get('enabled') and not n.get('last_error') and a.get('deployed') and not a.get('last_error')]}
+                        if n.get('online') and n.get('enabled') and a.get('deployed') and not a.get('last_error')]}
                     for n in nodes],
                 'hub': {'name': os.environ.get('DARK_HUB_NAME', 'HUB'), 'address': self.engine.config.public_address}}
 

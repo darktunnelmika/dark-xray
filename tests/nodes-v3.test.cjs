@@ -47,6 +47,7 @@ test('Node editor can still manage inbound assignments for recovery/admin use',(
 
 
 test('Nodes V6 exposes live resource telemetry without pretending stale data is live',()=>{
+  assert.ok(src.includes('NV6_FRESH_SECONDS=45'),'Live node resource samples must tolerate 45s of collector jitter');
   for(const token of ['telemetry_state','telemetry_age_seconds','NV6_FRESH_SECONDS','CPU','RAM','Disk','Uptime','↓ RX','↑ TX','Connections'])
     assert.ok(src.includes(token),token);
   for(const token of ["api('/api/nodes')",'setInterval(nv6RefreshLive,5000)','nv6-not-fresh','STALE','data-nv6-node'])

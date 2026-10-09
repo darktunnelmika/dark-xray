@@ -63,9 +63,16 @@ def test_request_failure_then_success_records_recovery(tmp_path,monkeypatch):
     monkeypatch.setattr(nodes_mod.socket,'getaddrinfo',lambda *a,**k:[(2,1,6,'',('93.184.216.34',443))])
     store=Store(tmp_path/'dark.sqlite3');auth=Auth(store,tmp_path/'secret.key');registry=NodeRegistry(store,auth.cipher)
     registry.put('n1','Node','https://node.example','dkn_'+('R'*60),True)
-    registry._request_failed('n1','network down')
+    registry._request_ok('n1',10)
+    registry._request_failed('n1','Node connection failed: TimeoutError')
+    transient=registry.list()[0]
+    assert transient['failure_count']==1 and transient['last_offline_at']==0 and transient['online'] is True
+    registry._request_ok('n1',15)
+    steady=registry.list()[0]
+    assert steady['failure_count']==0 and steady['recovery_count']==0 and steady['online'] is True
+    for _ in range(3):registry._request_failed('n1','Node connection failed: TimeoutError')
     down=registry.list()[0]
-    assert down['failure_count']==1 and down['last_offline_at']>0 and down['online'] is False
+    assert down['failure_count']==3 and down['last_offline_at']>0 and down['online'] is False
     registry._request_ok('n1',15)
     up=registry.list()[0]
     assert up['failure_count']==0 and up['recovery_count']==1 and up['last_recovered_at']>0

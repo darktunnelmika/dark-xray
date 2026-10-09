@@ -24,7 +24,7 @@ function num(v){const n=Number(v);return Number.isFinite(n)?n:null;}
 function pct(v){const n=num(v);return n===null?'—':Math.max(0,Math.min(100,n)).toFixed(n>=10?0:1)+'%';}
 function duration(v){let s=Math.max(0,Number(v)||0);if(s<60)return Math.floor(s)+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d '+Math.floor((s%86400)/3600)+'h';}
 function rate(v){const n=num(v);return n===null?'—':bytes(Math.max(0,n))+'/s';}
-function fresh(n){return n&&n.telemetry_state==='fresh'&&Number(n.telemetry_age_seconds)<=20;}
+function fresh(n){return n&&n.telemetry_state==='fresh'&&Number(n.telemetry_age_seconds)<=45;}
 function live(n,v,fmt){return fresh(n)&&v!==undefined&&v!==null?(fmt||String)(v):'—';}
 function metric(label,value){return '<div><small>'+e(label)+'</small><b>'+e(value===undefined||value===null?'—':value)+'</b></div>';}
 function healthLabel(s){return s==='healthy'?L('HEALTHY','سالم'):s==='warning'?L('WARNING','هشدار'):s==='critical'?L('CRITICAL','بحرانی'):L('DISABLED','غیرفعال');}
