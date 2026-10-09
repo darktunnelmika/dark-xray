@@ -95,7 +95,7 @@ class RestoreSafetyMixin:
             SELECT r.id,CASE WHEN r.scan_status='verified' THEN ? ELSE 'review' END,r.created_at,
                 CASE WHEN COALESCE(json_extract(c.body,'$.enable'),1) THEN 1 ELSE 0 END,
                 CASE WHEN COALESCE(json_extract(c.body,'$.enable'),1) THEN 0 ELSE 1 END
-            FROM restore_subscriptions r LEFT JOIN core_clients c ON c.email=r.core_email''', (state,))
+            FROM restore_subscriptions r LEFT JOIN core_clients c ON c.email=r.core_email WHERE r.deleted_at=0''', (state,))
 
     def reconcile_safety(self, records=None):
         return reconcile(self, decision, records)
