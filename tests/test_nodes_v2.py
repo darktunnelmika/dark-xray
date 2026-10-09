@@ -198,7 +198,7 @@ def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env
  # A momentary control-plane timeout must never make a working client
  # configuration disappear from subscriptions or the Restore target catalog.
  for failure in (1,2):
-  app.state.nodes._request_failed('maint1','temporary HTTPS timeout')
+  app.state.nodes._request_failed('maint1','Node connection failed: TimeoutError')
   snapshot={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
   assert snapshot['online'] is True and snapshot['failure_count']==failure
   stable_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
@@ -866,7 +866,7 @@ def test_failover_subscription_uses_only_healthy_deployed_nodes(env):
  # One or two transient control-plane failures must not churn a healthy
  # subscription route. A sustained third failure removes it until recovery.
  with store.transaction() as db:
-  db.execute("UPDATE remote_nodes SET last_error='network down',failure_count=1 WHERE id='edge1'")
+  db.execute("UPDATE remote_nodes SET last_error='Node connection failed: TimeoutError',failure_count=1 WHERE id='edge1'")
  assert len(app.state.nodes.failover_targets('fail-user'))==1
  sub=c.get(client['subscription_url']+'?format=clash')
  assert sub.status_code==200 and 'data-edge.example.com' in sub.text
