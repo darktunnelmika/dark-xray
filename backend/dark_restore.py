@@ -215,7 +215,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         # Capture local cumulative counters before deleting the live Core row.
         # Bulk cleanup snapshots once before its loop; single archive snapshots here.
         # Existing remote-node counters are already durable in restore_usage.
-        if snapshot:
+        if snapshot and self.engine.running:
             self.engine.collect_stats(force=True,strict=True)
         core_deleted=False
         try:
@@ -254,7 +254,8 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
             self._require_group(group_id)
         # One strict local snapshot before scanning all candidates avoids losing
         # the final local bytes while also avoiding N stats calls for large groups.
-        self.engine.collect_stats(force=True,strict=True)
+        if self.engine.running:
+            self.engine.collect_stats(force=True,strict=True)
         with self.store.lock:
             query='SELECT id FROM restore_subscriptions WHERE promoted_at=0 AND archived_at=0'
             args=[]
