@@ -63,6 +63,7 @@ def test_request_failure_then_success_records_recovery(tmp_path,monkeypatch):
     monkeypatch.setattr(nodes_mod.socket,'getaddrinfo',lambda *a,**k:[(2,1,6,'',('93.184.216.34',443))])
     store=Store(tmp_path/'dark.sqlite3');auth=Auth(store,tmp_path/'secret.key');registry=NodeRegistry(store,auth.cipher)
     registry.put('n1','Node','https://node.example','dkn_'+('R'*60),True)
+    registry._request_ok('n1',10)
     registry._request_failed('n1','transient network down')
     transient=registry.list()[0]
     assert transient['failure_count']==1 and transient['last_offline_at']==0 and transient['online'] is True
