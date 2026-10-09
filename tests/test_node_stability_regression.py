@@ -105,15 +105,18 @@ def test_transient_node_request_failure_does_not_flip_live_or_change_assignment(
             state = registry.list()[0]
             assert state['failure_count'] == count
             assert state['online'] and state['telemetry_state'] == 'fresh'
+            assert state['last_offline_at'] == 0
+            assert state['recovery_count'] == 0
             assert state['assignments'] == assignments
         registry._request_failed('stable', 'third consecutive timeout')
         offline = registry.list()[0]
-        assert offline['failure_count'] == 3
+        assert offline['failure_count'] == 3 and offline['last_offline_at'] > 0
         assert not offline['online'] and offline['telemetry_state'] == 'stale'
         assert offline['assignments'] == assignments
         registry._request_ok('stable', 5)
         recovered = registry.list()[0]
         assert recovered['online'] and recovered['failure_count'] == 0
+        assert recovered['recovery_count'] == 1 and recovered['last_recovered_at'] > 0
     finally:
         registry.close()
         store.close()

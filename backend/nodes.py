@@ -451,7 +451,7 @@ class NodeRegistry:
             if stored:
                 item['started_at']=float(stored['first_seen']);item['last_observed_at']=float(stored['last_seen'])
             elif code=='telemetry_stale':
-                item['started_at']=float(node.get('last_seen') or now)+20.0;item['last_observed_at']=now
+                item['started_at']=float(node.get('last_seen') or now)+45.0;item['last_observed_at']=now
             elif code in {'telemetry_offline','node_error'}:
                 item['started_at']=float(node.get('last_offline_at') or node.get('last_seen') or now);item['last_observed_at']=now
             else:
@@ -732,8 +732,8 @@ class NodeRegistry:
     def _request_ok(self,node_id:str,latency_ms:int):
         now=time.time()
         with self._node_transaction(node_id) as db:
-            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-            recovered=bool(old and old['last_error'])
+            old=db.execute('SELECT last_error,failure_count FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            recovered=bool(old and old['last_error'] and int(old['failure_count'] or 0)>=3)
             db.execute('''UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=?,
                        failure_count=0,recovery_count=recovery_count+?,last_recovered_at=CASE WHEN ? THEN ? ELSE last_recovered_at END
                        WHERE id=?''',
@@ -743,8 +743,9 @@ class NodeRegistry:
         now=time.time()
         with self._node_transaction(node_id) as db:
             old=db.execute('SELECT last_error,failure_count FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-            first=bool(old and not old['last_error'])
             failures=int(old['failure_count'] or 0)+1 if old else 1
+            # A single timeout must not create a false offline/recovery event.
+            first=bool(old and failures==3)
             db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
                           last_offline_at=CASE WHEN ? THEN ? ELSE last_offline_at END WHERE id=?''',
                        (str(error)[:300],now,int(first),now,node_id))
