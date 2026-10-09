@@ -208,21 +208,26 @@ def test_watchdog_socket_is_main_process_only(tmp_path,monkeypatch):
         assert not SystemdWatchdog().enabled
 
 
-def test_guard_does_not_feed_past_os_watchdog_safety_margin(tmp_path):
+def test_guard_keeps_watchdog_alive_for_every_valid_lease_second(tmp_path):
     with guarded_agent(tmp_path/'node') as f:
         post_state(f.api,payload(f.engine));grant(f)
-        watcher=f.app.state.lease_guard.watchdog;watcher.seconds=30;watcher.notify=Mock()
-        f.app.state.lease_guard.tick();assert watcher.notify.call_count==1
-        f.clock[0]=135;f.app.state.lease_guard.tick();assert watcher.notify.call_count==1
+        watcher=f.app.state.lease_guard.watchdog
+        watcher.notify=Mock();watcher.trigger=Mock()
+        f.app.state.lease_guard.tick()
+        first=watcher.notify.call_count
+        f.clock[0]=135;f.app.state.lease_guard.tick()
+        assert watcher.notify.call_count>first and f.engine.running
+        before=watcher.notify.call_count
         f.clock[0]=161;f.app.state.lease_guard.tick()
-        assert not f.engine.running and watcher.notify.call_count==2
+        assert not f.engine.running and watcher.notify.call_count>before
+        watcher.trigger.assert_not_called()
 
 
-def test_busy_engine_keeps_only_original_metered_authority(tmp_path):
+def test_busy_engine_preserves_valid_grant_but_fences_on_actual_expiry(tmp_path):
     with guarded_agent(tmp_path/'node') as f:
         post_state(f.api,payload(f.engine));grant(f)
         guard=f.app.state.lease_guard;watcher=guard.watchdog
-        watcher.seconds=30;watcher.notify=Mock()
+        watcher.notify=Mock();watcher.trigger=Mock()
         entered=threading.Event();release=threading.Event()
         def busy():
             with f.engine.lock:entered.set();release.wait(3)
@@ -230,12 +235,14 @@ def test_busy_engine_keeps_only_original_metered_authority(tmp_path):
         try:
             assert entered.wait(1)
             guard.tick()
-            assert watcher.notify.call_count==1 and f.engine.running
+            count=watcher.notify.call_count
+            assert count>=1 and f.engine.running
             assert guard.last_error=='engine_busy_with_valid_lease'
             f.clock[0]=135;guard.tick()
+            assert watcher.notify.call_count>count and f.engine.running
             f.clock[0]=161;guard.tick()
-            assert watcher.notify.call_count==1
-            assert guard.last_error=='engine_busy_without_safe_lease'
+            watcher.trigger.assert_called_once()
+            assert guard.last_error=='lease_expired_engine_busy'
             assert f.runtime.hub_lease.deadline==160
         finally:release.set();thread.join(2)
         guard.tick();assert not f.engine.running
