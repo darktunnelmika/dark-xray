@@ -79,3 +79,14 @@ test('Restore detail opens legacy metadata instead of expanding every list row',
  assert.match(source,/DARK USAGE/);
  assert.match(source,/TARGETS/);
 });
+
+
+test('Restore cleanup exposes finished-user archive and preserves historical group totals',()=>{
+ assert.match(source,/data-act="drarchivefinished"/);
+ assert.match(source,/\/api\/dark-restore\/archive-finished/);
+ assert.match(source,/Delete finished clients/);
+ assert.match(source,/group totals will remain permanently in history/);
+ assert.match(source,/historical_clients/);
+ assert.match(source,/g\.archived/);
+ assert.match(source,/traffic history preserved/);
+});
