@@ -314,7 +314,7 @@ class NodeRegistry:
         # through two transient failures; three consecutive failures (or stale
         # telemetry) remove it. Explicit maintenance/config/runtime failures remain
         # immediate below.
-        transport_stable=bool(not node.get('last_error') or int(node.get('failure_count') or 0)<3)
+        transport_stable=not NodeRegistry._transport_unavailable(node)
         online=bool(node.get('enabled') and telemetry_fresh and transport_stable)
         if sync_error:deployment_state='sync_error'
         elif runtime_block:deployment_state=runtime_block
@@ -409,7 +409,9 @@ class NodeRegistry:
         if maintenance.get('statistics_error'):add(alerts,'critical','accounting_checkpoint_error')
         checkpoint=number(maintenance.get('checkpoint_age_seconds'))
         if checkpoint is not None and checkpoint>15:add(alerts,'warning','accounting_checkpoint_stale',checkpoint,15)
-        if node.get('last_error'):add(alerts,'critical','node_error')
+        if node.get('last_error'):
+            severity='critical' if NodeRegistry._transport_unavailable(node) else 'warning'
+            add(alerts,severity,'node_error')
 
         penalty=sum(28 if x['severity']=='critical' else 10 for x in alerts)
         score=max(0,100-min(100,penalty))
@@ -450,7 +452,7 @@ class NodeRegistry:
             if stored:
                 item['started_at']=float(stored['first_seen']);item['last_observed_at']=float(stored['last_seen'])
             elif code=='telemetry_stale':
-                item['started_at']=float(node.get('last_seen') or now)+20.0;item['last_observed_at']=now
+                item['started_at']=float(node.get('last_seen') or now)+45.0;item['last_observed_at']=now
             elif code in {'telemetry_offline','node_error'}:
                 item['started_at']=float(node.get('last_offline_at') or node.get('last_seen') or now);item['last_observed_at']=now
             else:
@@ -471,8 +473,14 @@ class NodeRegistry:
                     'SELECT local_inbound_id,remote_inbound_id,last_sync,last_error FROM remote_node_inbounds WHERE node_id=? ORDER BY local_inbound_id',(r['id'],))]
             age=max(0.0,now-float(r['last_seen'] or 0)) if r['last_seen'] else None
             r['telemetry_age_seconds']=round(age,1) if age is not None else None
-            r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=20 and not r['last_error'] else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
-            r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and not r['last_error'])
+            unavailable=self._transport_unavailable(r)
+            # Health probes run on a 15s cadence, while accounting/lease calls
+            # have their own 5s cadence. Use 3 probe windows to tolerate a brief
+            # busy server / timeout; NEVER turn stale telemetry into a new
+            # deployment assignment or assume a lease is valid from this flag.
+            r['telemetry_state']=('offline' if not r['enabled'] or age is None or age>=180 or unavailable
+                                  else 'fresh' if age<=45 else 'stale')
+            r['online']=bool(r['enabled'] and age is not None and age<180 and not unavailable)
             r['operational_health']=self._operations_health(r)
             r['operational_health']['alerts']=self._annotate_alert_times(r,r['operational_health'].get('alerts',[]),now)
             with self.store.lock:
@@ -724,11 +732,29 @@ class NodeRegistry:
             if not cur.rowcount:raise PolicyError('Node not found')
         return {'deleted':True}
 
+    # Separate a short-lived Node Agent request failure from true unavailability.
+    # A single accounting/probe timeout must not hide a deployed Node's link or
+    # inflate offline/recovery events; explicit TLS/identity/auth violations are
+    # still immediate and never receive this transport-only grace.
+    @staticmethod
+    def _transport_unavailable(node:dict)->bool:
+        error=str(node.get('last_error') or '')
+        if not error:return False
+        if error.startswith(('Node response installation identity mismatch',
+                             'Node credential cannot be decrypted',
+                             'Node HTTP 401','Node HTTP 403',
+                             'Node connection failed: SSLCertVerificationError',
+                             'Node connection failed: CertificateError')):
+            return True
+        return int(node.get('failure_count') or 0)>=3
+
     def _request_ok(self,node_id:str,latency_ms:int):
         now=time.time()
         with self._node_transaction(node_id) as db:
-            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-            recovered=bool(old and old['last_error'])
+            old=db.execute('SELECT last_error,failure_count,last_offline_at,last_recovered_at FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            recovered=bool(old and old['last_error'] and
+                           (self._transport_unavailable(dict(old)) or
+                            (old['last_offline_at'] and old['last_offline_at']>old['last_recovered_at'])))
             db.execute('''UPDATE remote_nodes SET last_seen=?,last_latency_ms=?,last_error='',updated_at=?,
                        failure_count=0,recovery_count=recovery_count+?,last_recovered_at=CASE WHEN ? THEN ? ELSE last_recovered_at END
                        WHERE id=?''',
@@ -736,14 +762,21 @@ class NodeRegistry:
 
     def _request_failed(self,node_id:str,error:str):
         now=time.time()
+        message=str(error)[:300]
         with self._node_transaction(node_id) as db:
-            old=db.execute('SELECT last_error FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
-            first=bool(old and not old['last_error'])
+            old=db.execute('SELECT last_seen,last_error,failure_count FROM remote_nodes WHERE id=?',(node_id,)).fetchone()
+            count=int(old['failure_count'] or 0)+1 if old else 1
+            confirmed=self._transport_unavailable({'last_error':message,'failure_count':count})
+            was_offline=bool(old and (self._transport_unavailable(dict(old)) or
+                                    not old['last_seen'] or now-float(old['last_seen'])>=180))
+            entering_offline=bool(confirmed and not was_offline)
             db.execute('''UPDATE remote_nodes SET last_error=?,updated_at=?,failure_count=failure_count+1,
                           last_offline_at=CASE WHEN ? THEN ? ELSE last_offline_at END WHERE id=?''',
-                       (str(error)[:300],now,int(first),now,node_id))
-            self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
-                                                {'severity':'critical','code':'node_error'}],now)
+                       (message,now,int(entering_offline or bool(old and not old['last_seen'] and not old['last_error'])),now,node_id))
+            if confirmed:
+                self._sync_active_alerts(db,node_id,[{'severity':'critical','code':'telemetry_offline'},
+                                                    {'severity':'critical','code':'node_error'}],now)
+
 
     @staticmethod
     def _response_error(status:int,raw:bytes)->PolicyError:
