@@ -159,6 +159,32 @@ def test_failed_activation_does_not_change_tunnel_host_before_verified_receipt(h
         assert engine.section('hosts')[0]['endpointType']=='direct'
 
 
+
+def test_owner_can_begin_a_different_replacement_after_completed_receipt(hub,tmp_path,monkeypatch):
+    reg,owner,engine=hub;seed_account(reg,owner,engine)
+    from test_node_replacement_prepare import code
+    with candidate(tmp_path/'first-target') as (target,rt,client,_):
+        http_transport(reg,client,monkeypatch)
+        first=resolve(owner,prepare(owner));activate(owner,first,review(owner,first))
+        assert reg.get(NODE)['enabled'] and target.running
+        before={t:sql_rows(reg,t) for t in ('clients','core_clients','traffic_ledger')}
+        # A distinct Pair Code starts a NEW journal. No backend mutation to the
+        # currently serving Node occurs until explicit, verified replacement.
+        next_pair=code(nodeId='next-turkey-agent',
+                       origin='https://different-next-turkey.example.test:9443',
+                       dataAddress='different-next-turkey.example.test')
+        response=owner.post(f'/api/nodes/{NODE}/replacement/prepare',json={'code':next_pair})
+        assert response.status_code==200,response.text
+        next_attempt=response.json()
+        assert next_attempt['attempt_id']!=first['attempt_id']
+        assert next_attempt['phase'] in ('pending','rotating','prepared')
+        assert reg.get(NODE)['enabled'] and target.running
+        assert before=={t:sql_rows(reg,t) for t in before}
+        status=owner.get(f'/api/nodes/{NODE}/replacement/current')
+        assert status.status_code==200,status.text
+        assert status.json()['attempt']['attempt_id']==next_attempt['attempt_id']
+
+
 def test_activation_enables_after_exact_ack_and_preserves_master_accounts(hub,tmp_path,monkeypatch):
     reg,owner,engine=hub;seed_account(reg,owner,engine)
     with candidate(tmp_path/'target') as (eng,rt,client,token):
