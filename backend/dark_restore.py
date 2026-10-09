@@ -185,11 +185,11 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
             return True,'quota_exhausted'
         return False,''
 
-    def archive_restore(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True)->dict:
+    def archive_restore(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True, apply_runtime:bool=True)->dict:
         with self._import_lock:
-            return self._archive_restore_locked(restore_id,require_finished=require_finished,snapshot=snapshot)
+            return self._archive_restore_locked(restore_id,require_finished=require_finished,snapshot=snapshot,apply_runtime=apply_runtime)
 
-    def _archive_restore_locked(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True)->dict:
+    def _archive_restore_locked(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True, apply_runtime:bool=True)->dict:
         """Remove an explicitly selected Restore user from active runtime only.
 
         Subscription identity, group membership, events and restore_usage remain
@@ -238,11 +238,14 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
                 db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
                            (restore_id,'archive.explicit',
                             json.dumps({'reason':reason,'dark_used':dark_used,'core_deleted':core_deleted}),now))
-        try:
-            self.engine.apply(start=self.engine.running)
-            applied=True;apply_error=''
-        except Exception as ex:
-            applied=False;apply_error=str(ex)[:500]
+        if apply_runtime:
+            try:
+                self.engine.apply(start=self.engine.running)
+                applied=True;apply_error=''
+            except Exception as ex:
+                applied=False;apply_error=str(ex)[:500]
+        else:
+            applied=None;apply_error=''
         return {'id':restore_id,'archived':True,'alreadyArchived':False,'reason':reason,
                 'darkUsed':dark_used,'applied':applied,'applyError':apply_error}
 
@@ -261,7 +264,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         archived=[];failed=[]
         for rid in ids:
             try:
-                result=self.archive_restore(rid,require_finished=True,snapshot=False)
+                result=self.archive_restore(rid,require_finished=True,snapshot=False,apply_runtime=False)
                 archived.append(result)
             except HTTPException as ex:
                 if ex.status_code==409 and 'still active' in str(ex.detail):
@@ -269,8 +272,14 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
                 failed.append({'id':rid,'error':str(ex.detail)[:300]})
             except (CoreError,PolicyError) as ex:
                 failed.append({'id':rid,'error':str(ex)[:300]})
+        applied=True;apply_error=''
+        if archived:
+            try:
+                self.engine.apply(start=self.engine.running)
+            except Exception as ex:
+                applied=False;apply_error=str(ex)[:500]
         return {'archived':len(archived),'failed':len(failed),'items':archived,'failures':failed,
-                'groupId':group_id or None}
+                'groupId':group_id or None,'applied':applied,'applyError':apply_error}
 
 def install_dark_restore(app,restore,current,owner,writable,audit):
     restore.install_group_routes(app,owner,writable,audit)
