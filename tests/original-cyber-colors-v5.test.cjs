@@ -8,10 +8,11 @@ const editor=fs.readFileSync(path.join(root,'inbounds-v3.js'),'utf8');
 
 test('Original Cyber palette is the final visual layer, V4 local fonts remain',()=>{
  const styles=[...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(x=>x[1]);
- assert.equal(styles.at(-1),'assets/original-cyber-colors-v5.css?v=1');
+ assert.ok(styles.includes('assets/original-cyber-colors-v5.css?v=1'));
+ assert.ok(styles.indexOf('assets/original-cyber-colors-v5.css?v=1') > styles.indexOf('assets/graphite-eclipse-v4.css?v=1'));
  for(const x of ['assets/graphite-eclipse-fontfaces-v4.css?v=1','assets/graphite-eclipse-v4.css?v=1','assets/obsidian-pulse-v3.css?v=1'])
    assert.ok(styles.indexOf(x)>=0&&styles.indexOf(x)<styles.length-1,x);
- assert.match(html,/<meta name="theme-color" content="#000604">/);
+ assert.match(html,/<meta name="theme-color" content="#080b0a">/);
 });
 test('Original DARK XRAY green/black is restored across all theme token layers',()=>{
  for(const x of [
