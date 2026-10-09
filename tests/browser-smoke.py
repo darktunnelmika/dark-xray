@@ -131,15 +131,15 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 overviewBorder:getComputedStyle(document.querySelector('.ov4-card')).borderTopColor,
                 overviewRadius:getComputedStyle(document.querySelector('.ov4-card')).borderRadius,
                 overviewAccent:getComputedStyle(document.querySelector('.ov4-spark polyline')).stroke,
-                actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor
+                actionGradient:getComputedStyle(document.querySelector('.ov4-action')).backgroundImage
             })""")
-            assert skin['green']=='#4cffb4',skin
-            assert skin['overviewRadius'] in ('13px','13px 13px 13px 13px'),skin
-            assert skin['overviewAccent']=='rgb(76, 255, 180)',skin
-            assert '100, 199, 187' in skin['overviewBorder'],skin
-            assert skin['actionBg'] in ('rgb(26, 57, 69)','rgb(32, 80, 69)'),skin
+            assert skin['green']=='#79f6b9',skin
+            assert skin['overviewRadius'] in ('19px','19px 19px 19px 19px'),skin
+            assert skin['overviewAccent']=='rgb(121, 246, 185)',skin
+            assert '137, 204, 236' in skin['overviewBorder'],skin
+            assert 'linear-gradient' in skin['actionGradient'],skin
             assert 'linear-gradient' in skin['overviewBg'],skin
-            mark('real browser login, Classic Gangster V2 palette and premium Overview V4')
+            mark('real browser login, Obsidian Pulse V3 bright palette and floating Overview V4')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
@@ -218,13 +218,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 portName:port?.name||''
               };
             }""")
-            assert deployment['cardRadius']=='12px',deployment
-            assert deployment['sectionRadius']=='14px',deployment
-            assert deployment['titleSize']>=13,deployment
-            assert deployment['portHeight']>=44,deployment
+            assert deployment['cardRadius']=='16px',deployment
+            assert deployment['sectionRadius']=='17px',deployment
+            assert deployment['titleSize']>=12,deployment
+            assert 36<=deployment['portHeight']<=40,deployment
             assert deployment['localName']=='deployLocal',deployment
             assert deployment['portName']=='tunnelPort',deployment
-            mark('Deployment Targets cards/ports are readable without changing their form fields')
+            mark('Deployment Targets are slimmer floating pills without changes to their field names')
             # Core controls stay prominent. Advanced controls are discoverable
             # and use the unchanged inbound tab actions.
             assert form.locator('.iv3-tab-group [data-v3-action=tab]').count()==3
