@@ -195,6 +195,15 @@ def test_node_maintenance_preserves_runtime_and_excludes_new_failover_routes(env
  assert hosts.status_code==200,hosts.text
  before_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
  assert any(x.get('runtime')=='node:maint1' for x in before_links)
+ # A momentary control-plane timeout must never make a working client
+ # configuration disappear from subscriptions or the Restore target catalog.
+ for failure in (1,2):
+  app.state.nodes._request_failed('maint1','temporary HTTPS timeout')
+  snapshot={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
+  assert snapshot['online'] is True and snapshot['failure_count']==failure
+  stable_links=c.get('/api/clients/maintenance-user/links').json()['engine']['links']
+  assert any(x.get('runtime')=='node:maint1' for x in stable_links)
+ app.state.nodes._request_ok('maint1',11)
  before={x['id']:x for x in c.get('/api/nodes').json()}['maint1']
  assert before['enabled']==1 and before['online'] is True
  assert before['assignments'][0]['failover_ready'] is True
