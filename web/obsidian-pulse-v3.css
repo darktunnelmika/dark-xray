@@ -185,7 +185,7 @@ body.skin-cyber-classic .ov4-resource:before {
   opacity:.56;
   box-shadow:none !important;
 }
-body.skin-cyber-classic .panel:after {display:none !important}
+body.skin-cyber-classic .panel:after {opacity:0 !important}
 body.skin-cyber-classic .panel:hover,
 body.skin-cyber-classic .swap-card:hover,
 body.skin-cyber-classic .nv2-node:hover {
