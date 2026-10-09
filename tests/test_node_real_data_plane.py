@@ -346,6 +346,14 @@ def test_management_outage_is_distinct_from_customer_data_plane(real_fleet):
         with pytest.raises(PolicyError, match='RemoteDisconnected'):
             f.reg.probe(first.id)
         f.reg.probe(other.id)
+        # An isolated management timeout must not drop an established customer
+        # link or remove the persisted inbound mapping.
+        assert set(f.links()) == {first.data_port,other.data_port}
+        for _ in range(2):
+            with pytest.raises(PolicyError, match='RemoteDisconnected'):
+                f.reg.probe(first.id)
+        # A confirmed sustained management outage can suppress the dead
+        # subscription route while other Node/Xray sessions stay independent.
         assert set(f.links()) == {other.data_port}
         # Loss of management reachability is not a firewall/data-plane stop.
         for client in f.clients: transfer(client.port, f.target)
