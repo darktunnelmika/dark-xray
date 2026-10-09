@@ -51,9 +51,21 @@ test('fleet and manage dialog expose pending identity, escaped errors and Start/
  await x.runAction('nv2edit',{dataset:{id:'n1'}});
  for(const key of ['Start Xray','Stop Xray','Restart Xray','data-core="start"','data-core="stop"','COMMAND PENDING'])assert.ok(x.dialogHTML.includes(key),key);
 });
-test('acknowledged command is labelled historical, not live health',async()=>{
+test('acknowledged historical Start no longer expands the live fleet card',async()=>{
  const {x}=context({},'en',{control:{persisted:true,pending:false,action:'start',revision:2}});
- const html=await x.enginePage();assert.match(html,/LAST COMMAND ACKNOWLEDGED/);assert.match(html,/not a live health check/);
+ const html=await x.enginePage();
+ assert.doesNotMatch(html,/LAST COMMAND ACKNOWLEDGED/);
+ assert.doesNotMatch(html,/data-node-control="acknowledged"/);
+});
+test('healthy Hub lease stays in a compact chip; lease failure remains visible',async()=>{
+ const healthy={telemetry_state:'fresh',control:{persisted:true,pending:false,action:'start',revision:2},
+  health:{hub_lease:{required:true,valid:true},core:{state:'running'},system:{cpu:1}}};
+ const {x}=context({},'en',healthy);const html=await x.enginePage();
+ assert.match(html,/Hub protection/);assert.match(html,/Active/);
+ assert.doesNotMatch(html,/data-node-lease-warning/);
+ assert.doesNotMatch(html,/LAST COMMAND ACKNOWLEDGED/);
+ const bad=context({},'en',{...healthy,health:{...healthy.health,hub_lease:{required:true,valid:false}}});
+ assert.match(await bad.x.enginePage(),/data-node-lease-warning/);
 });
 test('duplicate clicks during an in-flight command make only one API call',async()=>{
  const {x,messages,calls}=context();let release;
