@@ -54,7 +54,7 @@ test('mobile navigation, touch inputs and keyboard focus remain accessible', () 
   assert.match(css, /prefers-reduced-motion:reduce/);
   assert.match(css, /body\.skin-cyber-classic\.dark-reduced-motion/);
   assert.match(mobile, /\.cv4-row/);
-  assert.match(mobile, /\.overlay,.overlay/); // the mobile bottom-sheet contract stays in its owner file
+  assert.match(mobile, /\.overlay\{padding:0/); // mobile bottom sheets stay owned by the previous layout layer
 });
 
 test('Premium layer has balanced CSS blocks and does not own table pagination', () => {
