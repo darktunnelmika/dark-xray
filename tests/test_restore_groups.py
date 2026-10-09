@@ -131,6 +131,50 @@ def test_group_validation_and_duplicate_url_in_batch(env,monkeypatch):
     assert bad['created']==1 and bad['duplicates']==1
     assert c.post('/api/dark-restore/import',json={'inboundIds':[inbound],'urls':['https://legacy.example/sub/two'],'groupId':'missing'}).status_code==404
 
+
+def test_archive_finished_preserves_group_traffic_and_restore_history(env,monkeypatch):
+    store,engine,c,_,inbound=prepare(env,monkeypatch)
+    add(c,inbound);x=row(c);rid=x['id'];gid=x['group_id'];email=x['core_email']
+    counters(store,email,1234,4321)
+    before=c.get('/api/dark-restore').json()
+    group_before=next(g for g in before['groups'] if g['id']==gid)
+    assert group_before['dark_used']==5555 and before['archive']['finished']==0
+
+    # Mark the migrated service finished without deleting any history.
+    with store.transaction() as db:
+        db.execute('UPDATE restore_subscriptions SET legacy_expire=? WHERE id=?',(int(__import__('time').time())-1,rid))
+
+    summary=c.get('/api/dark-restore').json()['archive']
+    assert summary['finished']==1
+    out=c.post('/api/dark-restore/archive-finished')
+    assert out.status_code==200,out.text
+    assert out.json()['archived']==1 and out.json()['history_preserved'] is True
+
+    doc=c.get('/api/dark-restore').json()
+    assert doc['items']==[]
+    group=next(g for g in doc['groups'] if g['id']==gid)
+    assert group['clients']==0 and group['archived_clients']==1
+    assert group['dark_used']==5555
+    with store.lock:
+        archived=store.db.execute('SELECT deleted_at,deleted_reason FROM restore_subscriptions WHERE id=?',(rid,)).fetchone()
+        usage=store.db.execute('SELECT SUM(up+down) FROM restore_usage WHERE restore_id=?',(rid,)).fetchone()[0]
+        core=store.db.execute('SELECT 1 FROM core_clients WHERE email=?',(email,)).fetchone()
+    assert archived['deleted_at']>0 and archived['deleted_reason']=='finished'
+    assert usage==5555 and core is None
+    assert c.get('/restore/sub/'+x['public_token']).status_code==410
+
+
+def test_manual_restore_delete_is_soft_archive_and_keeps_usage(env,monkeypatch):
+    store,engine,c,_,inbound=prepare(env,monkeypatch)
+    add(c,inbound);x=row(c);counters(store,x['core_email'],10,20)
+    response=c.delete('/api/dark-restore/'+x['id'])
+    assert response.status_code==200,response.text
+    assert response.json()['archived'] is True
+    assert c.get('/api/dark-restore').json()['items']==[]
+    with store.lock:
+        assert store.db.execute('SELECT deleted_at FROM restore_subscriptions WHERE id=?',(x['id'],)).fetchone()[0]>0
+        assert store.db.execute('SELECT SUM(up+down) FROM restore_usage WHERE restore_id=?',(x['id'],)).fetchone()[0]==30
+
 def test_group_and_usage_tables_survive_sqlite_backup(env,monkeypatch,tmp_path):
     store,_,c,_,inbound=prepare(env,monkeypatch)
     add(c,inbound);x=row(c);counters(store,x['core_email'],2,9)
