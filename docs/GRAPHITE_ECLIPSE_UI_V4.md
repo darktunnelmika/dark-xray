@@ -6,7 +6,7 @@ Keep the improved V3 ergonomics and rounded deployment cards but remove the domi
 
 ## Bundled typefaces
 
-The stylesheet `web/graphite-eclipse-fontfaces-v4.css` embeds actual variable WOFF2 data via locally served CSS, so it does **not** make requests to Google Fonts or a third-party CDN when users open the panel.
+The stylesheet `web/graphite-eclipse-fontfaces-v4.css` references same-origin variable WOFF2 files in `web/fonts/`, so it does **not** make requests to Google Fonts or a third-party CDN when users open the panel.
 
 | Text | Typeface | Purpose |
 | --- | --- | --- |
@@ -14,7 +14,7 @@ The stylesheet `web/graphite-eclipse-fontfaces-v4.css` embeds actual variable WO
 | English/Latin | Manrope variable | Modern English headings, labels and controls |
 | Technical | JetBrains Mono variable | IPs, ports, UUID snippets, statuses and numbers |
 
-All three families are sourced from Fontsource variable packages and are licensed under the SIL Open Font License 1.1. The repository CSS retains font data and origin metadata rather than linking to live third-party font URLs.
+All three families are sourced from Fontsource variable packages and are licensed under the SIL Open Font License 1.1. The repository includes the three WOFF2 assets and pinned origin metadata rather than linking to live third-party font URLs. The panel's strict `Content-Security-Policy: default-src 'self'` allows these same-origin font requests; inline data fonts would be blocked.
 
 Source files and SHA256:
 - `@fontsource-variable/vazirmatn@5.2.8/files/vazirmatn-arabic-wght-normal.woff2` — `84a382e46c30fb4f73d0e3800c16d0af15888e2731e57fa5f93e2c29a2c6a957`
@@ -33,7 +33,7 @@ The bundle reserves Arabic/Persian shaping glyphs and zero-width joiners to Vazi
 
 ## Safety / rollback
 
-Only the final two linked CSS assets and `index.html` change. No app JS, Hub/Node, client, Xray, database, WARP, Direct/Tunnel/SWAP or accounting code changes. Remove those last two stylesheet links or restore the backed-up HTML to return to V3. This is a static-only deployment and must not restart Xray.
+The final two linked CSS assets, three self-hosted WOFF2 files under `web/fonts/` and `index.html` change. No app JS, Hub/Node, client, Xray, database, WARP, Direct/Tunnel/SWAP or accounting code changes. Remove those last two stylesheet links or restore the backed-up HTML to return to V3. This is a static-only deployment and must not restart Xray.
 
 ## Acceptance
 
