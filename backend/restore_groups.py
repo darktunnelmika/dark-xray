@@ -68,7 +68,7 @@ class RestoreGroupsMixin:
             db.execute('''CREATE TRIGGER restore_local_usage_v1
                 AFTER UPDATE OF up,down ON core_clients
                 WHEN (NEW.up<>OLD.up OR NEW.down<>OLD.down) AND
-                     EXISTS(SELECT 1 FROM restore_subscriptions WHERE core_email=NEW.email AND promoted_at=0)
+                     EXISTS(SELECT 1 FROM restore_subscriptions WHERE core_email=NEW.email AND promoted_at=0 AND deleted_at=0 AND deleted_at=0)
                 BEGIN
                     INSERT INTO restore_usage(restore_id,scope,up,down,raw_up,raw_down,updated_at,activity_at)
                     SELECT id,'local',
