@@ -1,0 +1,662 @@
+/* DARK XRAY / OBSIDIAN PULSE V3
+ * Entirely presentation: re-skin existing DOM, never modify app state, routes,
+ * authorization, visibility, forms, assignments, Xray or client accounting.
+ * Loaded LAST so removing this one link restores Classic Gangster V2 immediately.
+ * Atmosphere: luminous midnight / deep slate / electric teal / iris-blue.
+ */
+
+body.skin-cyber-classic {
+  --pulse-bg:#111725;
+  --pulse-shell:#1a2333;
+  --pulse-panel:#202d40;
+  --pulse-panel-glow:#283a51;
+  --pulse-ink:#f2fbff;
+  --pulse-muted:#abc4d5;
+  --pulse-faint:#8097b1;
+  --pulse-edge:rgba(137,204,236,.22);
+  --pulse-edge-hot:rgba(101,236,219,.52);
+  --pulse-turquoise:#76f0df;
+  --pulse-mint:#79f6b9;
+  --pulse-iris:#a59aff;
+  --pulse-coral:#ff8fae;
+  --pulse-amber:#ffd38e;
+  --pulse-shadow:0 11px 27px rgba(3,9,24,.19);
+  --pulse-ease:cubic-bezier(.22,1,.36,1);
+
+  --classic-green:var(--pulse-mint);
+  --classic-green-2:#b8ffdf;
+  --classic-line:var(--pulse-edge);
+  --classic-line-soft:rgba(137,204,236,.12);
+  --classic-panel:var(--pulse-panel);
+  --classic-panel-2:var(--pulse-panel-glow);
+  --classic-black:var(--pulse-bg);
+  --classic-black-2:var(--pulse-shell);
+  --bg:var(--pulse-bg);
+  --panel:var(--pulse-panel);
+  --panel2:var(--pulse-panel-glow);
+  --border:#3a536a;
+  --text:var(--pulse-ink);
+  --muted:var(--pulse-muted);
+  --faint:var(--pulse-faint);
+  --green:var(--pulse-mint);
+  --cyan:var(--pulse-turquoise);
+  --purple:var(--pulse-iris);
+  --red:var(--pulse-coral);
+  --amber:var(--pulse-amber);
+  --radius:18px;
+  background:
+    radial-gradient(ellipse 780px 540px at 98% -12%,rgba(107,127,250,.21),transparent 68%),
+    radial-gradient(ellipse 760px 640px at -10% 64%,rgba(56,206,209,.105),transparent 71%),
+    radial-gradient(ellipse 650px 500px at 95% 104%,rgba(115,205,160,.11),transparent 76%),
+    linear-gradient(143deg,#171d2d,#111725 56%,#182238) !important;
+  color:var(--pulse-ink);
+  -webkit-font-smoothing:antialiased;
+}
+body.skin-cyber-classic:before {
+  background-image:
+    linear-gradient(rgba(155,222,232,.010) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(155,222,232,.010) 1px,transparent 1px) !important;
+  background-size:58px 58px !important;
+  opacity:.45 !important;
+}
+body.skin-cyber-classic:after {opacity:0 !important}
+body.skin-cyber-classic ::selection {background:#81f6de;color:#152438}
+body.skin-cyber-classic ::-webkit-scrollbar-track {background:#172336}
+body.skin-cyber-classic ::-webkit-scrollbar-thumb {
+  border-radius:9px;background:#385d71;border-color:#182438;
+}
+
+/* Fluid, compact navigation. Never change sidebar overflow or JS control IDs. */
+body.skin-cyber-classic .sidebar {
+  background:
+    radial-gradient(ellipse at 0 4%,rgba(115,145,244,.11),transparent 65%),
+    linear-gradient(180deg,#1e2739,#151e2e) !important;
+  border-color:rgba(153,207,234,.18) !important;
+  box-shadow:11px 0 35px rgba(0,5,19,.20),inset -1px 0 rgba(154,226,255,.04) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .sidebar {
+  box-shadow:-11px 0 35px rgba(0,5,19,.20),inset 1px 0 rgba(154,226,255,.04) !important;
+}
+body.skin-cyber-classic .brand {
+  border-color:rgba(160,198,249,.24) !important;
+}
+body.skin-cyber-classic .brand-mark {
+  border:1px solid rgba(145,241,220,.60) !important;
+  border-radius:15px !important;
+  clip-path:none !important;
+  background:linear-gradient(138deg,#3e647b,#25445d) !important;
+  box-shadow:0 5px 19px rgba(34,193,206,.13) !important;
+  color:#b7ffeb !important;
+  filter:none !important;
+}
+body.skin-cyber-classic .brand-name,
+body.skin-cyber-classic .brand-name span {
+  text-shadow:none !important;
+}
+body.skin-cyber-classic .brand-name {color:#fff !important;letter-spacing:.035em}
+body.skin-cyber-classic .brand-name span {color:#84f4db !important}
+body.skin-cyber-classic .brand-sub,
+body.skin-cyber-classic .eyebrow,
+body.skin-cyber-classic .code-caption {color:#9ec2de !important}
+body.skin-cyber-classic .nav-section-label,
+body.skin-cyber-classic .nav-label {color:#9badd9 !important}
+body.skin-cyber-classic .nav-btn {
+  min-height:41px;
+  padding-inline:12px;
+  border:1px solid transparent !important;
+  border-radius:13px !important;
+  background:transparent !important;
+  color:#b5cfdd;
+  font-size:12px;
+  font-weight:580;
+  text-shadow:none;
+  box-shadow:none !important;
+  transition:background-color .18s var(--pulse-ease),border-color .18s var(--pulse-ease),
+             color .18s var(--pulse-ease),box-shadow .18s var(--pulse-ease);
+}
+body.skin-cyber-classic .nav-btn:hover {
+  color:#fcffff !important;
+  background:rgba(116,190,228,.14) !important;
+  border-color:rgba(156,212,244,.14) !important;
+  transform:none;
+}
+body.skin-cyber-classic .nav-btn.active {
+  border-color:rgba(111,237,215,.34) !important;
+  background:linear-gradient(95deg,rgba(76,185,213,.29),rgba(114,139,238,.18)) !important;
+  color:#f9ffff !important;
+  box-shadow:inset 3px 0 0 #79f3de,0 3px 14px rgba(11,20,45,.12) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .nav-btn.active {
+  background:linear-gradient(265deg,rgba(76,185,213,.29),rgba(114,139,238,.18)) !important;
+  box-shadow:inset -3px 0 0 #79f3de,0 3px 14px rgba(11,20,45,.12) !important;
+}
+body.skin-cyber-classic .nav-count {
+  border-radius:9px;
+  background:rgba(109,175,221,.17) !important;
+  color:#c1e9fb;
+  border-color:rgba(130,204,243,.16);
+}
+body.skin-cyber-classic .topbar {
+  background:rgba(26,37,55,.94) !important;
+  border-color:rgba(161,203,239,.21) !important;
+  box-shadow:0 8px 19px rgba(1,8,27,.16) !important;
+  backdrop-filter:blur(14px);
+}
+body.skin-cyber-classic .breadcrumb {color:#bdd5e8}
+body.skin-cyber-classic .breadcrumb b,
+body.skin-cyber-classic .breadcrumb strong {color:#fff !important}
+body.skin-cyber-classic .page-heading h1 {
+  color:#fff !important;
+  letter-spacing:-.035em;
+  font-weight:800;
+  text-shadow:0 6px 21px rgba(64,186,225,.08) !important;
+}
+body.skin-cyber-classic .page-heading .eyebrow,
+body.skin-cyber-classic .section-tag {
+  color:#9eafff !important;
+  letter-spacing:.10em;
+}
+body.skin-cyber-classic .page-heading p {color:#b7d0e2 !important}
+
+/* Soft raised surfaces replace heavy square boxes. No changes to grid geometry. */
+body.skin-cyber-classic .panel,
+body.skin-cyber-classic .service-tile,
+body.skin-cyber-classic .reseller-mini,
+body.skin-cyber-classic .system-bottom,
+body.skin-cyber-classic .swap-card,
+body.skin-cyber-classic .nv2-node,
+body.skin-cyber-classic .dr-group,
+body.skin-cyber-classic .ov4-commandbar,
+body.skin-cyber-classic .ov4-resource,
+body.skin-cyber-classic .ov4-card,
+body.skin-cyber-classic .ov4-telemetry-strip,
+body.skin-cyber-classic .ov4-summary-grid,
+body.skin-cyber-classic .ov4-management-grid .up-dashboard-compact-inner {
+  border:1px solid var(--pulse-edge) !important;
+  border-radius:19px !important;
+  background:linear-gradient(145deg,rgba(42,58,78,.98),rgba(27,39,57,.98)) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.075),var(--pulse-shadow) !important;
+}
+body.skin-cyber-classic .panel:before,
+body.skin-cyber-classic .swap-card:before,
+body.skin-cyber-classic .ov4-card:before,
+body.skin-cyber-classic .ov4-resource:before {
+  background:linear-gradient(90deg,rgba(135,251,224,.72),rgba(169,153,255,.05)) !important;
+  opacity:.56;
+  box-shadow:none !important;
+}
+body.skin-cyber-classic .panel:after {display:none !important}
+body.skin-cyber-classic .panel:hover,
+body.skin-cyber-classic .swap-card:hover,
+body.skin-cyber-classic .nv2-node:hover {
+  border-color:rgba(137,226,230,.44) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.085),0 14px 28px rgba(1,8,30,.22) !important;
+}
+body.skin-cyber-classic .panel-head,
+body.skin-cyber-classic .swap-card-head,
+body.skin-cyber-classic .dialog-head {
+  border-color:rgba(170,208,237,.13) !important;
+  background:linear-gradient(95deg,rgba(112,152,232,.08),transparent 74%) !important;
+}
+html[dir="rtl"] body.skin-cyber-classic .panel-head,
+html[dir="rtl"] body.skin-cyber-classic .dialog-head {
+  background:linear-gradient(265deg,rgba(112,152,232,.08),transparent 74%) !important;
+}
+body.skin-cyber-classic .metric-number,
+body.skin-cyber-classic .kpi-value,
+body.skin-cyber-classic .ov4-resource-value,
+body.skin-cyber-classic .ov4-connection-total b {
+  color:#f8ffff !important;
+  text-shadow:none !important;
+}
+body.skin-cyber-classic .kpi,
+body.skin-cyber-classic .resource-card {
+  background:linear-gradient(145deg,#344657,#203149) !important;
+}
+body.skin-cyber-classic .ov4 {--ov4-radius:17px}
+body.skin-cyber-classic .ov4-action,
+body.skin-cyber-classic .ov4-small-button {
+  color:#dff5ff !important;
+  background:#30445d !important;
+  border-color:rgba(156,210,236,.31) !important;
+  border-radius:12px !important;
+}
+body.skin-cyber-classic .ov4-action:first-child {
+  background:linear-gradient(120deg,#326a78,#3c537b) !important;
+  color:#d7ffff !important;
+  border-color:rgba(125,241,226,.42) !important;
+}
+body.skin-cyber-classic .ov4-action.danger {
+  background:rgba(136,48,81,.34) !important;
+  border-color:rgba(255,143,174,.43) !important;
+  color:#ffc9d6 !important;
+}
+
+/* A clear, modern button system with rounded surfaces and an actual accent. */
+body.skin-cyber-classic .btn,
+body.skin-cyber-classic .icon-btn,
+body.skin-cyber-classic .search-btn {
+  color:#e7f6fd !important;
+  background:linear-gradient(135deg,#354a64,#293b53) !important;
+  border:1px solid rgba(158,212,246,.33) !important;
+  border-radius:13px !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.11),0 3px 9px rgba(4,13,29,.12) !important;
+  font-weight:650;
+  transition:background-color .18s var(--pulse-ease),border-color .18s var(--pulse-ease),
+             box-shadow .18s var(--pulse-ease),filter .18s var(--pulse-ease);
+}
+body.skin-cyber-classic .btn:hover:not(:disabled),
+body.skin-cyber-classic .icon-btn:hover:not(:disabled),
+body.skin-cyber-classic .search-btn:hover:not(:disabled) {
+  color:#fff !important;
+  background:linear-gradient(135deg,#466481,#36516d) !important;
+  border-color:rgba(145,241,229,.71) !important;
+  box-shadow:0 7px 18px rgba(17,32,58,.24) !important;
+  transform:none;
+}
+body.skin-cyber-classic .btn-primary,
+body.skin-cyber-classic .btn.primary,
+body.skin-cyber-classic .btn-primary:hover:not(:disabled),
+body.skin-cyber-classic .btn.primary:hover:not(:disabled) {
+  color:#102232 !important;
+  background:linear-gradient(125deg,#b3fff0,#78e9db 50%,#91b4ff 100%) !important;
+  border-color:rgba(199,255,249,.83) !important;
+  box-shadow:0 6px 19px rgba(72,198,216,.21),inset 0 1px rgba(255,255,255,.43) !important;
+  font-weight:800;
+}
+body.skin-cyber-classic .btn.outline,
+body.skin-cyber-classic .btn.flat {
+  color:#b5faff !important;
+  background:rgba(94,182,221,.12) !important;
+  border-color:rgba(126,227,228,.35) !important;
+}
+body.skin-cyber-classic .btn.danger,
+body.skin-cyber-classic .btn-danger {
+  color:#ffd9df !important;
+  background:linear-gradient(135deg,#6b3750,#4a2d43) !important;
+  border-color:rgba(255,143,174,.43) !important;
+  box-shadow:none !important;
+}
+body.skin-cyber-classic .btn:disabled,
+body.skin-cyber-classic .icon-btn:disabled {
+  opacity:.51;
+  cursor:not-allowed;
+}
+
+/* Input, tab, status and modal language. Never touch native switch controls. */
+body.skin-cyber-classic .field-input,
+body.skin-cyber-classic input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=range]):not([type=color]):not([type=file]),
+body.skin-cyber-classic textarea,
+body.skin-cyber-classic select,
+body.skin-cyber-classic .select-small {
+  color:#f3fbff !important;
+  background:#1d2c40 !important;
+  border:1px solid rgba(154,203,236,.31) !important;
+  border-radius:12px !important;
+  box-shadow:inset 0 2px 5px rgba(1,9,25,.12) !important;
+}
+body.skin-cyber-classic .field-input::placeholder,
+body.skin-cyber-classic input::placeholder,
+body.skin-cyber-classic textarea::placeholder {
+  color:#90adbf;
+}
+body.skin-cyber-classic :is(button,a,input,textarea,select,summary,[tabindex]):focus-visible {
+  outline:2px solid #b2fff0 !important;
+  outline-offset:3px;
+}
+body.skin-cyber-classic .tag,
+body.skin-cyber-classic .pill,
+body.skin-cyber-classic .ov4-status-pill {
+  border-radius:11px !important;
+  color:#d5fcf4;
+  background:rgba(99,178,207,.16);
+  border-color:rgba(144,214,230,.28);
+}
+body.skin-cyber-classic .tag.green,
+body.skin-cyber-classic .pill.green {
+  color:#bcffdd;
+  background:rgba(69,206,152,.17);
+  border-color:rgba(115,242,180,.35);
+}
+body.skin-cyber-classic .tag.red,
+body.skin-cyber-classic .pill.red {
+  color:#ffbdce;
+  background:rgba(216,87,129,.16);
+  border-color:rgba(255,143,174,.40);
+}
+body.skin-cyber-classic .tag.amber,
+body.skin-cyber-classic .pill.amber {
+  color:#ffe3b8;
+  background:rgba(232,170,79,.17);
+  border-color:rgba(255,211,142,.43);
+}
+body.skin-cyber-classic .notice {
+  border-radius:13px !important;
+  background:rgba(65,100,125,.28) !important;
+  color:#cce2f0;
+  border-color:rgba(145,206,237,.25) !important;
+}
+body.skin-cyber-classic .notice.warning {
+  background:rgba(119,83,42,.28) !important;
+  color:#ffe4b6 !important;
+  border-color:rgba(255,211,142,.48) !important;
+}
+body.skin-cyber-classic .notice.error {
+  background:rgba(130,47,84,.31) !important;
+  color:#ffcadb !important;
+  border-color:rgba(255,143,174,.46) !important;
+}
+body.skin-cyber-classic table th {
+  color:#c1def4 !important;
+  background:#243348 !important;
+  border-color:rgba(146,210,235,.18) !important;
+}
+body.skin-cyber-classic table td {color:#e1eff8}
+body.skin-cyber-classic table tbody tr:hover {
+  background:rgba(142,197,235,.095) !important;
+}
+body.skin-cyber-classic .cv4-row,
+body.skin-cyber-classic .iv3-row {
+  border-radius:14px !important;
+  background:linear-gradient(135deg,#26354a,#1a283c) !important;
+  border-color:rgba(143,205,235,.23) !important;
+}
+body.skin-cyber-classic .overlay {
+  background:rgba(10,15,30,.72) !important;
+  backdrop-filter:blur(9px);
+}
+body.skin-cyber-classic .dialog,
+body.skin-cyber-classic .nr-dialog {
+  color:var(--pulse-ink);
+  border-radius:21px !important;
+  border:1px solid rgba(151,210,245,.35) !important;
+  background:linear-gradient(148deg,#29374e,#192638) !important;
+  box-shadow:0 28px 66px rgba(0,7,27,.45),0 0 23px rgba(101,213,244,.085) !important;
+}
+body.skin-cyber-classic .dialog-head,
+body.skin-cyber-classic .dialog-foot,
+body.skin-cyber-classic .nr-dialog>header,
+body.skin-cyber-classic .nr-dialog>footer {
+  background:rgba(37,52,76,.90) !important;
+  border-color:rgba(162,214,240,.18) !important;
+}
+body.skin-cyber-classic .terminal,
+body.skin-cyber-classic .json-box {
+  border-radius:13px !important;
+  background:#1c2b3b !important;
+  color:#c1ffee !important;
+}
+
+/* Inbound editor: slim and airy, not a slab. Form semantics remain untouched. */
+body.skin-cyber-classic .iv3-drawer {
+  background:linear-gradient(154deg,#233149,#172335 83%) !important;
+  border-inline-start:1px solid rgba(149,214,235,.31) !important;
+  box-shadow:-18px 0 45px rgba(2,7,25,.37) !important;
+}
+html[dir=rtl] body.skin-cyber-classic .iv3-drawer {
+  box-shadow:18px 0 45px rgba(2,7,25,.37) !important;
+}
+body.skin-cyber-classic .iv3-drawer header {
+  background:linear-gradient(100deg,#344969,#23334e) !important;
+  border-bottom-color:rgba(156,213,242,.20) !important;
+}
+body.skin-cyber-classic .iv3-drawer header span {
+  color:#b8a9ff;
+}
+body.skin-cyber-classic .iv3-tabs {
+  background:#25354d !important;
+  border-color:rgba(144,209,234,.20) !important;
+}
+body.skin-cyber-classic .iv3-tab-heading {
+  color:#b9b0ff;
+}
+body.skin-cyber-classic .iv3-tab-buttons button {
+  background:#344a65;
+  border-color:rgba(160,207,232,.24);
+  border-radius:12px;
+  color:#dceef7;
+}
+body.skin-cyber-classic .iv3-tab-buttons button.active {
+  background:linear-gradient(120deg,#b4fff1,#95b7ff) !important;
+  color:#183047 !important;
+  border-color:#d1fff9 !important;
+  box-shadow:0 4px 12px rgba(111,203,237,.15) !important;
+}
+body.skin-cyber-classic .iv3-tab-more {
+  border-color:rgba(165,154,255,.29) !important;
+  background:#2a3a52 !important;
+  border-radius:12px !important;
+}
+body.skin-cyber-classic .iv3-tab-more summary {
+  color:#d6ceff;
+}
+body.skin-cyber-classic .iv3-drawer [data-v3-pane].active {
+  border-radius:17px !important;
+  border:1px solid rgba(150,202,235,.16) !important;
+  background:rgba(43,61,85,.52) !important;
+}
+body.skin-cyber-classic .iv3-section-title {
+  border-color:rgba(160,204,235,.21) !important;
+}
+body.skin-cyber-classic .iv3-section-title b {color:#f3fbff !important}
+body.skin-cyber-classic .iv3-field>span {color:#e1eef9 !important}
+body.skin-cyber-classic .iv3-field>small {color:#a8c2d4 !important}
+body.skin-cyber-classic .iv3-segments button,
+body.skin-cyber-classic .iv3-chips button {
+  color:#e2eff9;
+  border:1px solid rgba(143,204,237,.32);
+  border-radius:11px;
+  background:#344962;
+}
+body.skin-cyber-classic .iv3-segments button.active,
+body.skin-cyber-classic .iv3-chips button.active {
+  background:#355d67;
+  color:#cafff3;
+  border-color:rgba(121,246,185,.67);
+}
+body.skin-cyber-classic .iv3-drawer footer {
+  background:#24344c !important;
+  border-color:rgba(158,211,241,.24) !important;
+}
+
+/* Deployment Targets: light, compact, capsule-shaped instead of big square
+ * multi-layer slabs. Keep the SAME two-column grid and every existing input. */
+body.skin-cyber-classic #iv3-editor .iv3-deploy {
+  padding:12px !important;
+  margin-top:8px;
+  border-radius:17px !important;
+  border:1px solid rgba(138,211,234,.25) !important;
+  background:linear-gradient(130deg,rgba(59,82,112,.64),rgba(36,56,79,.77)) !important;
+  box-shadow:inset 0 1px rgba(255,255,255,.055) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact {
+  margin-bottom:10px;
+  padding-bottom:9px;
+  gap:3px;
+  border-color:rgba(158,212,235,.16);
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact b {
+  font-size:13px;
+  color:#f2fdff;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy .iv3-section-title.compact small {
+  color:#bdd2e1;
+  font-size:10px;
+  line-height:1.5;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-grid {gap:8px}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card {
+  overflow:hidden;
+  border:1px solid rgba(151,206,233,.23) !important;
+  border-radius:16px !important;
+  background:linear-gradient(135deg,#2c3e56,#24354b) !important;
+  box-shadow:0 3px 10px rgba(6,15,32,.12) !important;
+  transition:border-color .18s var(--pulse-ease);
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card:hover {
+  border-color:rgba(127,240,223,.58) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected {
+  border-color:rgba(121,246,185,.58) !important;
+  box-shadow:0 4px 14px rgba(6,15,32,.17) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card > .iv3-deploy-target {
+  min-height:48px !important;
+  padding:8px 11px !important;
+  gap:8px;
+  border:0 !important;
+  border-radius:0 !important;
+  border-bottom:1px solid rgba(153,207,236,.12) !important;
+  background:linear-gradient(105deg,#344b62,#2b3f58) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.selected > .iv3-deploy-target,
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card > .iv3-deploy-target:has(input:checked) {
+  background:linear-gradient(105deg,#35636a,#2f4b60) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target b {
+  font-size:12px;
+  line-height:1.3;
+  color:#f7fffd !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target small {
+  color:#c2d8e7 !important;
+  font-size:9px;
+  margin-top:2px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target > i {
+  width:15px;
+  height:15px;
+  flex:0 0 15px;
+  border-radius:50%;
+  border-color:#a3bed2;
+  background:#1b2d42;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-target:has(input:checked)>i {
+  border-color:#c0ffe4;
+  background:#7af4c9;
+  box-shadow:inset 0 0 0 3px #285e62,0 0 8px rgba(119,246,213,.12);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-route {
+  gap:6px;
+  padding:8px 11px 10px !important;
+  border-color:transparent !important;
+  background:rgba(33,53,73,.69) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-card.tunnel-on .iv3-tunnel-route {
+  background:rgba(39,81,93,.43) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head>span {
+  color:#b6e7fd;
+  font-size:9px;
+  letter-spacing:.025em;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head>b {
+  border-radius:10px;
+  font-size:9px;
+  padding:3px 7px;
+  max-width:58%;
+  border-color:rgba(157,214,239,.25);
+  background:rgba(45,67,91,.68);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head>b.ok {
+  color:#baffdb;
+  border-color:rgba(115,246,185,.43);
+  background:rgba(47,155,123,.23);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head>b.warn {
+  color:#ffe4b1;
+  border-color:rgba(255,211,142,.43);
+  background:rgba(154,109,56,.26);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-head>b.bad {
+  color:#ffd0dd;
+  border-color:rgba(255,143,174,.43);
+  background:rgba(169,64,110,.27);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-controls {gap:7px}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle {
+  min-height:37px;
+  padding:6px 8px;
+  gap:7px;
+  border:1px solid rgba(143,204,229,.23);
+  border-radius:19px;
+  background:rgba(64,84,113,.56);
+  color:#e3f2fd;
+  font-size:10px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle:has(input:checked) {
+  color:#c6fff2;
+  background:rgba(48,120,117,.37);
+  border-color:rgba(121,246,185,.41);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-toggle > i {
+  border-radius:99px;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port {
+  font-size:9px;
+  color:#c2dfeb;
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-port > input {
+  height:37px;
+  min-height:37px;
+  border-radius:12px !important;
+  border:1px solid rgba(156,209,238,.40) !important;
+  color:#f9fffd !important;
+  background:#263a52 !important;
+  font-size:12px !important;
+  font-variant-numeric:tabular-nums;
+  box-shadow:inset 0 1px 3px rgba(2,9,27,.13);
+}
+body.skin-cyber-classic #iv3-editor .iv3-tunnel-route>small {
+  color:#a8c5d7;
+  font-size:9px;
+  line-height:1.45;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route {
+  padding:8px 11px 10px;
+  border-color:rgba(165,154,255,.24) !important;
+  background:linear-gradient(140deg,rgba(76,75,135,.26),rgba(39,52,82,.47)) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .iv3-tunnel-head>span {
+  color:#cbbfff;
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .iv3-tunnel-toggle {
+  border-radius:19px;
+  background:rgba(91,86,151,.25);
+  border-color:rgba(165,154,255,.27);
+}
+body.skin-cyber-classic #iv3-editor .iv3-swap-route .btn {
+  min-height:37px;
+  border-radius:18px !important;
+  color:#e9e1ff !important;
+  background:linear-gradient(120deg,#55527e,#414d73) !important;
+  border-color:rgba(165,154,255,.47) !important;
+}
+body.skin-cyber-classic #iv3-editor .iv3-deploy-empty {color:#bdd6e6}
+
+/* Existing mobile contracts control columns; only tune sizes, not structure. */
+@media(max-width:760px) {
+  body.skin-cyber-classic .panel,
+  body.skin-cyber-classic .ov4-card,
+  body.skin-cyber-classic .ov4-resource,
+  body.skin-cyber-classic .nv2-node {border-radius:16px !important}
+  body.skin-cyber-classic .dialog {border-radius:19px 19px 0 0 !important}
+  body.skin-cyber-classic .nav-btn {min-height:44px}
+  body.skin-cyber-classic .iv3-drawer {width:100vw;max-width:100vw}
+  body.skin-cyber-classic #iv3-editor .iv3-deploy {padding:10px !important}
+}
+@media(max-width:390px) {
+  body.skin-cyber-classic #iv3-editor .iv3-deploy-grid {gap:7px}
+  body.skin-cyber-classic #iv3-editor .iv3-tunnel-controls {gap:6px}
+  body.skin-cyber-classic #iv3-editor .iv3-deploy-card>.iv3-deploy-target {padding:8px 9px !important}
+  body.skin-cyber-classic #iv3-editor .iv3-tunnel-route,
+  body.skin-cyber-classic #iv3-editor .iv3-swap-route {padding:8px 9px !important}
+}
+@media(prefers-reduced-motion:reduce) {
+  body.skin-cyber-classic .nav-btn,
+  body.skin-cyber-classic .btn,
+  body.skin-cyber-classic #iv3-editor .iv3-deploy-card {transition:none !important}
+}
+body.skin-cyber-classic.dark-reduced-motion .nav-btn,
+body.skin-cyber-classic.dark-reduced-motion .btn,
+body.skin-cyber-classic.dark-reduced-motion #iv3-editor .iv3-deploy-card {transition:none !important}
