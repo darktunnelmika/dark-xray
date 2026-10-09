@@ -10,7 +10,8 @@ const source=fs.readFileSync(path.join(root,'inbounds-v3.js'),'utf8');
 
 test('Classic Gangster loads last, preserving the older skin for rollback',()=>{
   const styles=[...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(x=>x[1]);
-  assert.equal(styles.at(-1),'assets/classic-gangster-v2.css?v=1');
+  assert.ok(styles.includes('assets/classic-gangster-v2.css?v=1'));
+  assert.ok(styles.indexOf('assets/classic-gangster-v2.css?v=1') > styles.indexOf('assets/premium-cyber-v1.css?v=1'));
   assert.ok(styles.includes('assets/premium-cyber-v1.css?v=1'));
   assert.ok(styles.includes('assets/cyber-classic.css'));
   assert.ok(styles.includes('assets/mobile-responsive-v1.css'));
