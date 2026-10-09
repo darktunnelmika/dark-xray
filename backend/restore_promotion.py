@@ -42,6 +42,7 @@ class RestorePromotionMixin:
             profile=self.store.db.execute("SELECT allowed,prefix,max_client_ips,max_client_hwid FROM owner_profiles WHERE id=?",(owner_id,)).fetchone()
             core=self.store.db.execute("SELECT body FROM core_clients WHERE email=?",(row['core_email'],)).fetchone() if row else None
         if not row:raise PolicyError('Restore user not found')
+        if float(row['deleted_at'] or 0)>0:raise PolicyError('Archived Restore user cannot be promoted')
         if float(row['promoted_at'] or 0)>0:raise PolicyError('Restore user was already promoted')
         if not account or account['role']!='reseller' or account['disabled']:raise PolicyError('Representative is unavailable')
         if not profile:raise PolicyError('Representative profile is unavailable')
@@ -113,7 +114,7 @@ class RestorePromotionMixin:
         try:
             with self.store.transaction() as db:
                 db.execute("""UPDATE restore_subscriptions SET promoted_owner=?,promoted_at=?,updated_at=?
-                  WHERE id=? AND promoted_at=0""",(owner_id,now,now,restore_id))
+                  WHERE id=? AND promoted_at=0 AND deleted_at=0""",(owner_id,now,now,restore_id))
                 if db.execute("SELECT changes()").fetchone()[0]!=1:
                     raise PolicyError('Restore promotion state changed')
                 db.execute("INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)",

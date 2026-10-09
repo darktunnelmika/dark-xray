@@ -79,3 +79,12 @@ test('Restore detail opens legacy metadata instead of expanding every list row',
  assert.match(source,/DARK USAGE/);
  assert.match(source,/TARGETS/);
 });
+
+
+test('Restore UI exposes finished-user archive with explicit history preservation',()=>{
+ const src=fs.readFileSync(path.join(__dirname,'..','web','dark-restore.js'),'utf8');
+ assert.match(src,/drarchivefinished/);
+ assert.match(src,/archive-finished/);
+ assert.match(src,/history preserved|مصرف حفظ/);
+ assert.match(src,/archived_clients/);
+});

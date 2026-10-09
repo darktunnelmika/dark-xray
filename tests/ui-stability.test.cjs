@@ -46,3 +46,16 @@ test('page navigation starts at top and does not refocus a stale control',async(
  const next=t.byId.search;assert.equal(next.focused,false);
  assert.equal(t.scroll.left,0);assert.equal(t.scroll.top,0);assert.equal(t.scroll.behavior,'auto');
 });
+
+
+test('shell persists current page and makes the entire sidebar nav reachable',()=>{
+ const live=fs.readFileSync(path.join(__dirname,'..','web','live.js'),'utf8');
+ const css=fs.readFileSync(path.join(__dirname,'..','web','style.css'),'utf8');
+ assert.match(live,/LAST_PAGE_KEY='dark_last_page'/);
+ assert.match(live,/darkSession\.setItem\(LAST_PAGE_KEY,page\)/);
+ assert.match(live,/const saved=darkSession\.getItem\(LAST_PAGE_KEY\)\|\|'dashboard'/);
+ assert.match(live,/DOMContentLoaded/);
+ assert.match(live,/complete script graph is registered/);
+ assert.match(css,/\.sidebar>nav\{[^}]*overflow-y:auto/);
+ assert.match(css,/\.sidebar>\.side-bottom\{[^}]*flex:0 0 auto/);
+});

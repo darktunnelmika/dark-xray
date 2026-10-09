@@ -121,6 +121,61 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         if protos=={'shadowsocks'}:body['password']=password
         return body
 
+    def archive_summary(self)->dict:
+        now=int(time.time())
+        with self.store.lock:
+            archived=int(self.store.db.execute('SELECT COUNT(*) FROM restore_subscriptions WHERE deleted_at>0').fetchone()[0])
+            finished=int(self.store.db.execute('''SELECT COUNT(*) FROM restore_subscriptions r
+                LEFT JOIN (SELECT restore_id,SUM(up+down) used FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id
+                WHERE r.deleted_at=0 AND r.promoted_at=0 AND (
+                  (r.legacy_expire>0 AND r.legacy_expire<=?) OR
+                  (r.legacy_total>0 AND r.legacy_upload+r.legacy_download+COALESCE(u.used,0)>=r.legacy_total)
+                )''',(now,)).fetchone()[0])
+        return {'finished':finished,'archived':archived}
+
+    def archive_user(self,restore_id:str,*,reason:str='manual',apply_runtime:bool=True,collect:bool=True)->dict:
+        now=time.time()
+        with self._import_lock,self.engine.lock:
+            with self.store.lock:
+                r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
+            if not r:raise HTTPException(404,'Restore subscription not found')
+            if float(r['deleted_at'] or 0)>0:
+                return {'archived':True,'id':restore_id,'already_archived':True}
+            if float(r['promoted_at'] or 0)>0:
+                raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
+            if collect and self.engine.running:
+                self.engine.collect_stats(force=True,strict=True)
+            usage=self.usage(restore_id);dark_used=int(usage['up'])+int(usage['down'])
+            with self.store.lock:
+                core=self.store.db.execute('SELECT 1 FROM core_clients WHERE email=?',(r['core_email'],)).fetchone()
+            if core:self.engine.delete(str(r['core_email']))
+            with self.store.transaction() as db:
+                changed=db.execute('''UPDATE restore_subscriptions
+                    SET deleted_at=?,deleted_reason=?,enabled=0,updated_at=?
+                    WHERE id=? AND deleted_at=0''',(now,str(reason)[:80],now,restore_id))
+                if changed.rowcount!=1:raise HTTPException(409,'Restore archive state changed; retry')
+                db.execute('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
+                           (restore_id,'restore.archived',json.dumps({'reason':reason,'dark_used':dark_used}),now))
+            if apply_runtime and self.engine.running:self.engine.apply(start=True)
+        return {'archived':True,'id':restore_id,'historical_dark_used':dark_used}
+
+    def archive_finished(self)->dict:
+        now=int(time.time())
+        with self.store.lock:
+            ids=[str(r[0]) for r in self.store.db.execute('''SELECT r.id FROM restore_subscriptions r
+                LEFT JOIN (SELECT restore_id,SUM(up+down) used FROM restore_usage GROUP BY restore_id) u ON u.restore_id=r.id
+                WHERE r.deleted_at=0 AND r.promoted_at=0 AND (
+                  (r.legacy_expire>0 AND r.legacy_expire<=?) OR
+                  (r.legacy_total>0 AND r.legacy_upload+r.legacy_download+COALESCE(u.used,0)>=r.legacy_total)
+                ) ORDER BY r.created_at,r.id''',(now,))]
+        if not ids:return {'archived':0,'ids':[],'history_preserved':True}
+        if self.engine.running:self.engine.collect_stats(force=True,strict=True)
+        done=[]
+        for rid in ids:
+            self.archive_user(rid,reason='finished',apply_runtime=False,collect=False);done.append(rid)
+        if self.engine.running:self.engine.apply(start=True)
+        return {'archived':len(done),'ids':done,'history_preserved':True}
+
     def ensure_domain(self,domain:str,acme_email:str=''):
         now=time.time()
         with self.store.transaction() as db:
@@ -139,10 +194,10 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         host=(host_header or '').split(':',1)[0].lower().rstrip('.')
         with self.store.lock:
             row=self.store.db.execute("""SELECT id,public_token FROM restore_subscriptions
-              WHERE legacy_host=? AND legacy_path=? AND legacy_query=?""",(host,path,query)).fetchone()
+              WHERE deleted_at=0 AND legacy_host=? AND legacy_path=? AND legacy_query=?""",(host,path,query)).fetchone()
             if not row and query:
                 row=self.store.db.execute("""SELECT id,public_token FROM restore_subscriptions
-                  WHERE legacy_host=? AND legacy_path=? AND legacy_query=''""",(host,path)).fetchone()
+                  WHERE deleted_at=0 AND legacy_host=? AND legacy_path=? AND legacy_query=''""",(host,path)).fetchone()
         return dict(row) if row else None
 
     def _runtime_ready(self,inbound_ids:list[int],node_ids:list[str],*,node_mode:str='selected',include_local:bool=True)->dict[str,set[int]]:
@@ -152,6 +207,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
     def subscription(self,token:str,fmt:str,*,record_access:bool=True)->tuple[bytes,dict]:
         with self.store.lock:r=self.store.db.execute('SELECT * FROM restore_subscriptions WHERE public_token=?',(token,)).fetchone()
         if not r:raise HTTPException(404,'Restore subscription not found')
+        if float(r['deleted_at'] or 0)>0:raise HTTPException(410,'Restore subscription was archived')
         if float(r['promoted_at'] or 0)>0:raise HTTPException(410,'Restore subscription was promoted to a native client')
         self.require_eligible(r)
         now=time.time()
@@ -176,7 +232,8 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
     @app.get('/api/dark-restore')
     def list_restore(groupId:str='',p=Depends(owner)):
         return {'items':restore.rows(groupId or None),'groups':restore.groups(),
-                'domains':restore.domains(),'usage_scope':'since_migration'}
+                'domains':restore.domains(),'usage_scope':'since_migration',
+                'archive':restore.archive_summary()}
 
     @app.post('/api/dark-restore/import')
     def import_restore(body:RestoreImportBody,p=Depends(owner)):
@@ -194,17 +251,17 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
         audit(p.actor,p.actor.id,'dark_restore.mapping',restore_id,'targets changed')
         return result
 
+    @app.post('/api/dark-restore/archive-finished')
+    def archive_finished_restore(p=Depends(owner)):
+        writable();result=restore.archive_finished()
+        audit(p.actor,p.actor.id,'dark_restore.archive_finished',str(result['archived']),'history preserved')
+        return result
+
     @app.delete('/api/dark-restore/{restore_id}')
     def delete_restore(restore_id:str,p=Depends(owner)):
-        writable()
-        with restore.store.lock:r=restore.store.db.execute('SELECT core_email,promoted_at FROM restore_subscriptions WHERE id=?',(restore_id,)).fetchone()
-        if not r:raise HTTPException(404,'Restore subscription not found')
-        if float(r['promoted_at'] or 0)>0:raise HTTPException(409,'Promoted Restore users must be managed from native Clients')
-        restore.engine.delete(r['core_email'])
-        with restore.store.transaction() as db:db.execute('DELETE FROM restore_subscriptions WHERE id=?',(restore_id,))
-        restore.engine.apply(start=restore.engine.running)
-        audit(p.actor,p.actor.id,'dark_restore.delete',restore_id,'restore user deleted')
-        return {'deleted':True}
+        writable();result=restore.archive_user(restore_id,reason='manual')
+        audit(p.actor,p.actor.id,'dark_restore.archive',restore_id,'soft delete; history preserved')
+        return result
 
     @app.put('/api/dark-restore/domains/{domain}')
     def save_domain(domain:str,body:RestoreDomainBody,p=Depends(owner)):
@@ -222,7 +279,7 @@ def install_dark_restore(app,restore,current,owner,writable,audit):
         with restore.store.lock:
             promoted=restore.store.db.execute("""SELECT r.promoted_at,m.public_token
               FROM restore_subscriptions r LEFT JOIN managed_clients m ON m.email=r.core_email AND m.state!='deleted'
-              WHERE r.public_token=?""",(token,)).fetchone()
+              WHERE r.public_token=? AND r.deleted_at=0""",(token,)).fetchone()
         if promoted and float(promoted['promoted_at'] or 0)>0:
             native_token=str(promoted['public_token'] or '')
             if not native_token:raise HTTPException(409,'Promoted native subscription is unavailable')

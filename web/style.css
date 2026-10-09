@@ -35,3 +35,7 @@
  .content{overflow-x:hidden}
  html.dark-mobile-menu-open,html.dark-mobile-menu-open body{overflow:hidden}
 }
+
+/* Stable sidebar contract: all menu entries are reachable immediately without a first click. */
+.sidebar>nav{display:grid;gap:5px;align-content:start;min-height:0;flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding-inline:2px;scrollbar-width:thin}.sidebar>.side-bottom{flex:0 0 auto;margin-top:0}.sidebar>.brand,.sidebar>.nav-section-label{flex:0 0 auto}
+@media(max-width:760px){.sidebar>nav{overscroll-behavior:contain;padding-bottom:8px}.sidebar{overflow:hidden}}

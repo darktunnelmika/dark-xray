@@ -95,7 +95,7 @@ class RestoreSafetyMixin:
             SELECT r.id,CASE WHEN r.scan_status='verified' THEN ? ELSE 'review' END,r.created_at,
                 CASE WHEN COALESCE(json_extract(c.body,'$.enable'),1) THEN 1 ELSE 0 END,
                 CASE WHEN COALESCE(json_extract(c.body,'$.enable'),1) THEN 0 ELSE 1 END
-            FROM restore_subscriptions r LEFT JOIN core_clients c ON c.email=r.core_email''', (state,))
+            FROM restore_subscriptions r LEFT JOIN core_clients c ON c.email=r.core_email WHERE r.deleted_at=0''', (state,))
 
     def reconcile_safety(self, records=None):
         return reconcile(self, decision, records)
@@ -173,6 +173,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['deleted_at'] or 0)>0:
+                raise HTTPException(410, 'Archived Restore user is read-only')
             if float(r['promoted_at'] or 0)>0:
                 raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()
@@ -200,6 +202,8 @@ class RestoreSafetyMixin:
             r = db.execute('SELECT * FROM restore_subscriptions WHERE id=?', (restore_id,)).fetchone()
             if not r:
                 raise HTTPException(404, 'Restore user not found')
+            if float(r['deleted_at'] or 0)>0:
+                raise HTTPException(410, 'Archived Restore user is read-only')
             if float(r['promoted_at'] or 0)>0:
                 raise HTTPException(409, 'Promoted Restore users are managed from native Clients')
             s = db.execute('SELECT * FROM restore_safety WHERE restore_id=?', (restore_id,)).fetchone()

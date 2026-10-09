@@ -238,3 +238,13 @@ test('Representative quick create offers random/manual naming; unlimited IP stay
   assert.match(src,/Unlimited IP/);
   assert.match(src,/zero\.disabled=pm!=='limited'/);
 });
+
+
+test('Clients group workspace persists across refresh and group cards open filtered clients',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'..','web','clients-v4.js'),'utf8');
+  assert.match(src,/CV4_STATE_KEY='dark_clients_v4_state'/);
+  assert.match(src,/persistCv4/);
+  assert.match(src,/cv4groupopen/);
+  assert.match(src,/state\.cv4\.view='clients'/);
+  assert.match(src,/state\.cv4\.group=groupKey/);
+});

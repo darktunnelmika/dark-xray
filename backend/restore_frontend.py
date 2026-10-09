@@ -23,7 +23,7 @@ def inspect_domain(restore,domain:str)->dict:
     _,domain,_,_=restore._safe_url('https://'+domain.strip().lower().rstrip('.')+'/')
     restore.ensure_domain(domain)
     with restore.store.lock:
-        urls=[row[0] for row in restore.store.db.execute('SELECT legacy_url FROM restore_subscriptions WHERE legacy_host=?',(domain,))]
+        urls=[row[0] for row in restore.store.db.execute('SELECT legacy_url FROM restore_subscriptions WHERE legacy_host=? AND deleted_at=0',(domain,))]
     endpoint_set=set()
     for value in urls:
         u=urlsplit(value)
