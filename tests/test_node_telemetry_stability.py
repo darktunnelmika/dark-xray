@@ -125,3 +125,18 @@ def test_deployment_readiness_is_not_revoked_by_first_two_timeouts(nodes):
     node.update(data_address="203.0.113.9", failover_enabled=True)
     assert NodeRegistry._assignment_state(node, healthy)["deployment_state"] == "deployed"
     assert NodeRegistry._assignment_state(node, healthy)["failover_reason"] == "node_offline"
+
+
+def test_runtime_failures_never_remove_persisted_inbound_assignments(nodes):
+    registry,store=nodes
+    with store.transaction() as db:
+        db.execute("INSERT INTO remote_node_inbounds(node_id,local_inbound_id,remote_inbound_id,updated_at,last_sync,last_error) VALUES('n1',17,7,?,?,?)",
+                   (time.time(),time.time(),""))
+    before=registry.assignments("n1")
+    assert len(before)==1 and before[0]["remote_inbound_id"]==7
+    for attempt in range(3):
+        registry._request_failed("n1","Node connection failed: Timeout")
+        assert registry.assignments("n1")==before
+        assert registry.list()[0]["enabled"]==1
+    registry._request_ok("n1",20)
+    assert registry.assignments("n1")==before
