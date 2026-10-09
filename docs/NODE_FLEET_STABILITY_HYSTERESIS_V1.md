@@ -14,7 +14,7 @@ Nodes were alternating between LIVE and STALE on the owner page despite Xray and
 ## What does NOT change
 No Node, client, UUID, inbound association, subscription, traffic ledger, Direct/Tunnel/SWAP mapping, agent binary, or Watchdog service setting is deleted or altered.
 
-## QA
+- The real two-Node data-plane test now checks a short management timeout leaves the subscription route and both customer connections intact; a third consecutive failure suppresses only that Node's advertised link, not its stored assignment or the other Node's Xray.\n\n## QA
 - New Python regressions for transient and confirmed outage, fatal TLS/auth/identity, 45-second threshold, persisted assignment retention, strict lease issuance under applied/pending/broken state.
 - Node.js source contract checks keep both UIs consistent.
 - Existing Hub lease, parallel monitor and Node API tests must continue to pass.
