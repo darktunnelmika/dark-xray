@@ -48,7 +48,6 @@ class RestoreGroupsMixin:
             if 'archived_reason' not in cols:
                 db.execute("ALTER TABLE restore_subscriptions ADD COLUMN archived_reason TEXT NOT NULL DEFAULT ''")
             db.execute('CREATE INDEX IF NOT EXISTS restore_by_group ON restore_subscriptions(group_id,created_at)')
-            db.execute('CREATE INDEX IF NOT EXISTS restore_by_group_archive ON restore_subscriptions(group_id,archived_at,created_at)')
             db.execute('''CREATE TABLE IF NOT EXISTS restore_usage(
                 restore_id TEXT NOT NULL,scope TEXT NOT NULL,
                 up INTEGER NOT NULL DEFAULT 0,down INTEGER NOT NULL DEFAULT 0,
@@ -183,9 +182,12 @@ class RestoreGroupsMixin:
             raise PolicyError('Select 1..2000 Restore users')
         marks = ','.join('?' for _ in ids); now = time.time()
         with self.store.transaction() as db:
-            rows = list(db.execute('SELECT id,group_id FROM restore_subscriptions WHERE archived_at=0 AND id IN (' + marks + ')', ids))
-            if len(rows) != len(ids):
-                raise HTTPException(409, 'A selected Restore user is archived or no longer active')
+            all_rows = list(db.execute('SELECT id,group_id,archived_at FROM restore_subscriptions WHERE id IN (' + marks + ')', ids))
+            if len(all_rows) != len(ids):
+                raise HTTPException(404, 'A selected Restore user no longer exists')
+            if any(float(r['archived_at'] or 0)>0 for r in all_rows):
+                raise HTTPException(409, 'Archived Restore history is read-only')
+            rows = all_rows
             db.execute('UPDATE restore_subscriptions SET group_id=?,updated_at=? WHERE id IN (' + marks + ')', (group_id, now, *ids))
             db.executemany('INSERT INTO restore_events(restore_id,event,detail,at) VALUES(?,?,?,?)',
                            [(r['id'], 'group.changed', json.dumps({'from':r['group_id'],'to':group_id}), now) for r in rows if r['group_id'] != group_id])
