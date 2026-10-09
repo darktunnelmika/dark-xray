@@ -134,18 +134,19 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 actionGradient:getComputedStyle(document.querySelector('.ov4-action')).backgroundImage,
                 actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor,
                 fontFamily:getComputedStyle(document.body).fontFamily,
+                carbon:getComputedStyle(document.body).getPropertyValue('--carbon-bg').trim(),
                 graphite:getComputedStyle(document.body).getPropertyValue('--ge-back').trim()
             })""")
             assert skin['green']=='#19ff86',skin
             assert skin['overviewRadius'] in ('17px','17px 17px 17px 17px'),skin
             assert skin['overviewAccent']=='rgb(25, 255, 134)',skin
-            assert '25, 255, 134' in skin['overviewBorder'],skin
-            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg'] in ('rgb(20, 48, 36)','rgb(28, 70, 48)'),skin
+            assert '131, 157, 139' in skin['overviewBorder'],skin
+            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg'] in ('rgb(39, 48, 44)','rgb(38, 60, 45)'),skin
             assert 'linear-gradient' in skin['overviewBg'],skin
-            assert skin['graphite']=='#000604' and 'DX UI' in skin['fontFamily'],skin
+            assert skin['graphite']=='#080b0a' and skin['carbon']=='#080b0a' and 'DX UI' in skin['fontFamily'],skin
             fonts_ready=page.evaluate('''async()=>{await document.fonts.load('600 14px "DX UI"','سلام');await document.fonts.load('600 14px "DX UI"','DARK');await document.fonts.load('600 14px "DX Mono"','443');return {persian:document.fonts.check('600 14px "DX UI"','سلام'),english:document.fonts.check('600 14px "DX UI"','DARK'),mono:document.fonts.check('600 14px "DX Mono"','443')}}''')
             assert all(fonts_ready.values()),fonts_ready
-            mark('real browser restores original neon-green/black palette with unchanged V4 Persian/Latin/mono fonts')
+            mark('real browser uses neutral DARK CARBON surfaces, neon accents and unchanged V4 fonts')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
@@ -230,7 +231,12 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             assert 36<=deployment['portHeight']<=40,deployment
             assert deployment['localName']=='deployLocal',deployment
             assert deployment['portName']=='tunnelPort',deployment
-            mark('Deployment Targets preserve their compact layout under Graphite Eclipse V4')
+            carbon_layout=page.evaluate('''()=>{const x=document.querySelector('#iv3-editor .iv3-deploy-card');const h=document.querySelector('#iv3-editor .iv3-deploy-card>.iv3-deploy-target');const p=document.querySelector('#iv3-editor .iv3-tunnel-port input');const grid=document.querySelector('#iv3-editor .iv3-deploy-grid');return {card:getComputedStyle(x).backgroundColor,header:getComputedStyle(h).backgroundColor,port:getComputedStyle(p).backgroundColor,alignment:getComputedStyle(grid).alignItems}}''')
+            assert carbon_layout['card']=='rgb(32, 38, 36)',carbon_layout
+            assert carbon_layout['header']=='rgb(43, 51, 48)',carbon_layout
+            assert carbon_layout['port']=='rgb(12, 19, 16)',carbon_layout
+            assert carbon_layout['alignment']=='start',carbon_layout
+            mark('Deployment Targets use compact neutral carbon cards and unchanged form controls')
             # Core controls stay prominent. Advanced controls are discoverable
             # and use the unchanged inbound tab actions.
             assert form.locator('.iv3-tab-group [data-v3-action=tab]').count()==3
