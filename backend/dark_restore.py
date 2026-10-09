@@ -185,7 +185,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
             return True,'quota_exhausted'
         return False,''
 
-    def archive_restore(self, restore_id:str, *, require_finished:bool=False)->dict:
+    def archive_restore(self, restore_id:str, *, require_finished:bool=False, snapshot:bool=True)->dict:
         """Remove an explicitly selected Restore user from active runtime only.
 
         Subscription identity, group membership, events and restore_usage remain
@@ -209,9 +209,10 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         reason=reason or 'owner_requested'
 
         # Capture local cumulative counters before deleting the live Core row.
-        # Existing remote-node counters are already durable in restore_usage and
-        # are never removed by archive.
-        self.engine.collect_stats(force=True,strict=True)
+        # Bulk cleanup snapshots once before its loop; single archive snapshots here.
+        # Existing remote-node counters are already durable in restore_usage.
+        if snapshot:
+            self.engine.collect_stats(force=True,strict=True)
         core_deleted=False
         try:
             self.engine.delete(str(row['core_email']))
@@ -256,7 +257,7 @@ class DarkRestore(RestorePromotionMixin,RestoreSafetyMixin,RestoreTargetsMixin,R
         archived=[];failed=[]
         for rid in ids:
             try:
-                result=self.archive_restore(rid,require_finished=True)
+                result=self.archive_restore(rid,require_finished=True,snapshot=False)
                 archived.append(result)
             except HTTPException as ex:
                 if ex.status_code==409 and 'still active' in str(ex.detail):
