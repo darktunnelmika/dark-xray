@@ -81,9 +81,25 @@ def renew_accounting_lease(nodes, manager, engine, node_id, traffic, desired_pro
         with nodes.installations.operation(node_id):
             verify_hub_accounting_policy(nodes, manager, engine, node_id)
             state = desired_provider(node_id)
-            nodes.sync_desired_state(node_id, state, legacy_bundles=sync_provider(node_id))
             current = nodes.desired_state(node_id, include_payload=False)
-            if current.get('pending') or current.get('last_error') or current['revision'] != state['revision']:
+            # The monitor already applied the current desired state BEFORE this
+            # accounted checkpoint. Never resend an identical full Node config
+            # every five seconds: under load it can starve the next lease on
+            # this Node and needlessly restart Xray. A genuinely changed,
+            # pending or failed state MUST still be applied and acknowledged
+            # before any new lease is issued.
+            if (current.get('pending') or current.get('last_error') or
+                    current.get('revision') != state['revision'] or
+                    current.get('hash') != state['hash'] or
+                    current.get('applied_revision') != state['revision'] or
+                    current.get('applied_hash') != state['hash']):
+                nodes.sync_desired_state(node_id, state, legacy_bundles=sync_provider(node_id))
+                current = nodes.desired_state(node_id, include_payload=False)
+            if (current.get('pending') or current.get('last_error') or
+                    current.get('revision') != state['revision'] or
+                    current.get('hash') != state['hash'] or
+                    current.get('applied_revision') != state['revision'] or
+                    current.get('applied_hash') != state['hash']):
                 raise PolicyError('Node has not acknowledged current quota/configuration')
             command = nodes.commands.status(node_id)
             body = {'challenge': challenge, 'revision': state['revision'], 'hash': state['hash'],
