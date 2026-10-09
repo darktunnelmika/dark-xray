@@ -81,8 +81,8 @@ def test_generated_node_failover_never_inherits_hub_email(env,monkeypatch):
  assert response.status_code==200,response.text
  body=response.json()
  assert 'sub-v2' in body['engine']['links'][0]['remark']
- assert len(body['failover'])==1
- remote=body['failover'][0]
+ assert len(body['engine']['failover'])==1
+ remote=body['engine']['failover'][0]
  assert remote['remark']=='🇩🇪 Germany ⚡ مستقیم'
  assert 'sub-v2' not in remote['remark']
  from urllib.parse import unquote,urlsplit
