@@ -19,7 +19,7 @@ const names={
  starting:['Start pending; target may already be running','شروع در انتظار؛ هدف ممکن است روشن شده باشد'],
  stopping:['Stop pending; target may still be running','توقف در انتظار؛ هدف ممکن است هنوز روشن باشد'],
  paused:['Stop confirmed; review again before starting','توقف تأیید شد؛ پیش از شروع بازبینی کن'],
- activated:['Activation receipt saved','رسید فعال‌سازی ثبت شد'],cancelled:['Candidate discarded; reinstall or reset before reuse','هدف کنار گذاشته شد؛ استفاده مجدد نیاز به نصب یا بازنشانی دارد']
+ activated:['Replacement completed','جایگزینی تکمیل شد'],cancelled:['Candidate discarded; reinstall or reset before reuse','هدف کنار گذاشته شد؛ استفاده مجدد نیاز به نصب یا بازنشانی دارد']
 };
 const consent={
  acceptUnconfirmedOldServer:['I understand the old VPS has not been confirmed stopped. I must retire it separately.','می‌دانم توقف VPS قبلی تأیید نشده و باید آن را جداگانه بازنشسته کنم.'],
@@ -106,8 +106,17 @@ function paint(s){
  if(failure)body+=`<p class="notice warning">${L('Not confirmed. Diagnostic code:','تأیید نشده. کد تشخیصی:')} <bdi>${esc(failure)}</bdi></p>`;
  if(s.error)body+=`<p class="notice warning" role="alert">${esc(s.error)}</p>`;
  if(a&&(a.source_current===false||a.phase==='committed'&&a.binding_current!==true))body+=`<p class="notice warning">${L('The installation changed. Old confirmations cannot be reused.','هویت نصب تغییر کرده؛ تأییدهای قدیمی قابل استفاده نیستند.')}</p>`;
- if(s.activation?.activation_completed===true)body+=`<p>${s.activation.service_activated===true?L('The latest saved observation confirms activation; this is not a live WAN test.','آخرین مشاهدهٔ ذخیره‌شده فعال‌سازی را تأیید می‌کند؛ این تست زندهٔ شبکه نیست.'):L('Activation was completed earlier, but current service readiness is not confirmed. This receipt will not re-enable the node.','فعال‌سازی قبلاً تمام شده، اما آماده‌بودن فعلی سرویس تأیید نیست. این رسید نود را دوباره فعال نمی‌کند.')}</p>`;
- if(actions.includes('prepare'))body+=`<section><h3>${L('Prepare a new server','آماده‌سازی سرور جدید')}</h3><p>${L('Run install-node.sh on the new VPS and enter its Pair Code. Do not add it as an unrelated node first.','روی VPS جدید install-node.sh را اجرا و کد اتصالش را وارد کن؛ ابتدا آن را به‌عنوان نود جدا اضافه نکن.')}</p><label for="nr-code">${L('Pair Code (sensitive)','کد اتصال (محرمانه)')}</label><textarea id="nr-code" dir="ltr" autocomplete="off" spellcheck="false" maxlength="4096" rows="3" placeholder="DXN1.…"></textarea>${buttonFor('prepare','Prepare candidate','آماده‌سازی هدف')}</section>`;
+ if(s.activation?.activation_completed===true)body+=`<section class="nr-completed" role="status">
+ <h3>${L('Replacement successfully completed','جایگزینی با موفقیت تکمیل شد')}</h3>
+ <p>${L('The new Node binding was saved and activated. Users and recorded usage remain on the Hub. No additional Pair Code or Prepare step is needed.','اتصال نود جدید ثبت و فعال شده است. کاربران و مصرف ثبت‌شده در هاب حفظ شده‌اند. نیازی به کد اتصال یا آماده‌سازی دوباره نیست.')}</p>
+ <p>${s.activation.service_activated===true?
+ L('The latest saved Node observation confirms it is running. This is not an external connection test.','آخرین وضعیت ثبت‌شده نشان می‌دهد نود در حال اجراست. این نتیجه تست اتصال کاربران از اینترنت نیست.'):
+ L('The latest saved Node health has not confirmed current readiness yet. The replacement is still completed; check Nodes or refresh saved status. Do not repeat the replacement.','آخرین وضعیت ذخیره‌شده هنوز سلامت فعلی نود را تأیید نکرده است. خود جایگزینی تکمیل شده؛ وضعیت نودها را بررسی کن یا وضعیت ذخیره‌شده را تازه کن. جایگزینی را تکرار نکن.')}</p>
+ <p>${L('You can close this window and manage the Node normally.','می‌توانی این پنجره را ببندی و نود را مثل همیشه مدیریت کنی.')}</p></section>`;
+ if(actions.includes('prepare'))body+=`${s.activation?.activation_completed===true?
+ '<details class="nr-future-replacement"><summary>'+L('Replace this Node again with a different VPS','جایگزینی دوباره این نود با سرور دیگر')+'</summary>': ''}
+ <section><h3>${L('Prepare a new server','آماده‌سازی سرور جدید')}</h3><p>${L('Only use this for a different, fresh replacement VPS. Never reuse the completed Pair Code.','این گزینه فقط برای جایگزینی با سرور جدید دیگری است. از کد اتصال مصرف‌شده دوباره استفاده نکن.')}</p><p>${L('Run install-node.sh on the new VPS and enter its Pair Code. Do not add it as an unrelated node first.','روی VPS جدید install-node.sh را اجرا و کد اتصالش را وارد کن؛ ابتدا آن را به‌عنوان نود جدا اضافه نکن.')}</p><label for="nr-code">${L('Pair Code (sensitive)','کد اتصال (محرمانه)')}</label><textarea id="nr-code" dir="ltr" autocomplete="off" spellcheck="false" maxlength="4096" rows="3" placeholder="DXN1.…"></textarea>${buttonFor('prepare','Prepare candidate','آماده‌سازی هدف')}</section>
+ ${s.activation?.activation_completed===true?'</details>':''}`;
  if(actions.includes('retry'))body+=buttonFor('retry','Retry the saved preparation','ادامهٔ آماده‌سازی ذخیره‌شده');
  if(actions.includes('commit'))body+=`<section><h3>${L('Save the replacement binding','ثبت سرور جایگزین')}</h3><p>${L('This retires the old binding but leaves the replacement disabled. It is not customer service activation.','ارتباط مدیریتی قبلی بازنشسته می‌شود ولی جایگزین غیرفعال می‌ماند؛ این فعال‌سازی سرویس مشتری نیست.')}</p>${checks(commitKeys)}${buttonFor('commit','Confirm replacement binding','تأیید ثبت جایگزینی',commitKeys)}</section>`;
  if(actions.includes('stage'))body+=`<section>${buttonFor('review','Check Direct and continue','بررسی مستقیم و ادامه')} ${buttonFor('stage','Recheck stopped setup','بررسی دوبارهٔ تنظیمات خاموش')}</section>`;

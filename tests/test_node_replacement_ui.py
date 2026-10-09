@@ -156,6 +156,31 @@ def test_browser_full_replacement_flow_with_explicit_consents_and_preserved_usag
     assert len(env['posts'])==count
 
 
+
+def test_completed_receipt_does_not_prompt_pairing_when_live_health_is_stale(browser_env):
+    env=browser_env;page=enter(env)
+    ready_ui(page);start_ui(page)
+    expected_posts=len(env['posts'])
+    assert env['reg'].get(NODE)['enabled'] and env['target'].running
+    with env['reg'].store.transaction() as db:
+        db.execute('UPDATE remote_nodes SET last_seen=0 WHERE id=?',(NODE,))
+    do(page,'refresh','activated')
+    expect(page.locator('.nr-completed')).to_be_visible()
+    expect(page.locator('.nr-future-replacement')).to_be_visible()
+    assert not page.locator('.nr-dialog [data-nr=prepare]').is_visible()
+    assert 'not confirmed current readiness' in page.locator('.nr-completed').inner_text()
+    assert len(env['posts'])==expected_posts
+    # Changing the cached observation never changes the durable Start receipt.
+    from time import time
+    with env['reg'].store.transaction() as db:
+        db.execute('UPDATE remote_nodes SET last_seen=? WHERE id=?',(time(),NODE))
+    do(page,'refresh','activated')
+    assert 'latest saved Node observation confirms' in page.locator('.nr-completed').inner_text()
+    assert not page.locator('.nr-dialog [data-nr=prepare]').is_visible()
+    assert len(env['posts'])==expected_posts
+    assert env['target'].running and env['reg'].get(NODE)['enabled']
+
+
 def test_browser_resumes_lost_start_reply_after_reload_without_new_command(browser_env,monkeypatch):
     env=browser_env;page=enter(env);ready_ui(page)
     def lose(response):
