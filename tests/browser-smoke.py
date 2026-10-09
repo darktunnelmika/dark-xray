@@ -132,15 +132,20 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 overviewRadius:getComputedStyle(document.querySelector('.ov4-card')).borderRadius,
                 overviewAccent:getComputedStyle(document.querySelector('.ov4-spark polyline')).stroke,
                 actionGradient:getComputedStyle(document.querySelector('.ov4-action')).backgroundImage,
-                actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor
+                actionBg:getComputedStyle(document.querySelector('.ov4-action')).backgroundColor,
+                fontFamily:getComputedStyle(document.body).fontFamily,
+                graphite:getComputedStyle(document.body).getPropertyValue('--ge-back').trim()
             })""")
-            assert skin['green']=='#79f6b9',skin
-            assert skin['overviewRadius'] in ('19px','19px 19px 19px 19px'),skin
-            assert skin['overviewAccent']=='rgb(121, 246, 185)',skin
-            assert '137, 204, 236' in skin['overviewBorder'],skin
-            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg']=='rgb(48, 68, 93)',skin
+            assert skin['green']=='#7af0c0',skin
+            assert skin['overviewRadius'] in ('17px','17px 17px 17px 17px'),skin
+            assert skin['overviewAccent']=='rgb(122, 240, 192)',skin
+            assert '173, 201, 190' in skin['overviewBorder'],skin
+            assert 'linear-gradient' in skin['actionGradient'] or skin['actionBg']=='rgb(60, 72, 71)',skin
             assert 'linear-gradient' in skin['overviewBg'],skin
-            mark('real browser login, Obsidian Pulse V3 bright palette and floating Overview V4')
+            assert skin['graphite']=='#171a1b' and 'DX UI' in skin['fontFamily'],skin
+            fonts_ready=page.evaluate('''async()=>{await document.fonts.load('600 14px "DX UI"','سلام');await document.fonts.load('600 14px "DX UI"','DARK');await document.fonts.load('600 14px "DX Mono"','443');return {persian:document.fonts.check('600 14px "DX UI"','سلام'),english:document.fonts.check('600 14px "DX UI"','DARK'),mono:document.fonts.check('600 14px "DX Mono"','443')}}''')
+            assert all(fonts_ready.values()),fonts_ready
+            mark('real browser uses Graphite Eclipse neutral carbon palette and locally embedded Persian/Latin/mono fonts')
 
             assert page.locator('.ov4-resource').count()==4
             assert page.locator('.ov4-traffic-card').count()==1
@@ -219,13 +224,13 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
                 portName:port?.name||''
               };
             }""")
-            assert deployment['cardRadius']=='16px',deployment
-            assert deployment['sectionRadius']=='17px',deployment
+            assert deployment['cardRadius']=='14px',deployment
+            assert deployment['sectionRadius']=='15px',deployment
             assert deployment['titleSize']>=12,deployment
             assert 36<=deployment['portHeight']<=40,deployment
             assert deployment['localName']=='deployLocal',deployment
             assert deployment['portName']=='tunnelPort',deployment
-            mark('Deployment Targets are slimmer floating pills without changes to their field names')
+            mark('Deployment Targets preserve their compact layout under Graphite Eclipse V4')
             # Core controls stay prominent. Advanced controls are discoverable
             # and use the unchanged inbound tab actions.
             assert form.locator('.iv3-tab-group [data-v3-action=tab]').count()==3

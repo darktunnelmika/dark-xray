@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
 """Best-effort pre-publication checks. Not a complete secret scanner or audit."""
 from pathlib import Path
+import hashlib
 import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SKIP = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules"}
+
+# Public OFL assets are permitted ONLY at these exact paths and cryptographic
+# digests. Unreviewed font binaries remain prohibited, as do runtime/secrets.
+# License files are mandatory. Do not relax the global binary extension ban.
+APPROVED_PUBLIC_FONTS = {
+    "web/fonts/vazirmatn-arabic-variable.woff2": (
+        "84a382e46c30fb4f73d0e3800c16d0af15888e2731e57fa5f93e2c29a2c6a957",
+        "web/fonts/licenses/vazirmatn-OFL.txt",
+    ),
+    "web/fonts/manrope-latin-variable.woff2": (
+        "a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972",
+        "web/fonts/licenses/manrope-OFL.txt",
+    ),
+    "web/fonts/jetbrains-mono-latin-variable.woff2": (
+        "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e",
+        "web/fonts/licenses/jetbrains-mono-OFL.txt",
+    ),
+}
+
 PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----"),
     "GitHub token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{60,}"),
@@ -33,9 +53,20 @@ def main() -> int:
         if not path.is_file():
             continue
         count += 1
+        if path.suffix in {".ttf", ".otf", ".woff", ".woff2"}:
+            approved = APPROVED_PUBLIC_FONTS.get(rel.as_posix())
+            if (
+                approved is None
+                or not (ROOT / approved[1]).is_file()
+                or path.stat().st_size > 200_000
+                or hashlib.sha256(path.read_bytes()).hexdigest() != approved[0]
+            ):
+                errors.append(f"unapproved public font or missing OFL license: {rel}")
+            # Approved files are verified by digest, not a UTF-8 regex scan.
+            continue
         if path.name in {"config.json", ".env", "credentials.json", "auth.json"} or (
             path.name.startswith(".env.") and path.name != ".env.example"
-        ) or path.suffix in {".key", ".pem", ".p12", ".pfx", ".db", ".sqlite", ".sqlite3", ".ttf", ".otf", ".woff", ".woff2"}:
+        ) or path.suffix in {".key", ".pem", ".p12", ".pfx", ".db", ".sqlite", ".sqlite3"}:
             errors.append(f"private/runtime/font file must not be published: {rel}")
         if any(part in {"data", "runtime", "backups"} for part in rel.parts[:-1]):
             errors.append(f"runtime file must not be published: {rel}")

@@ -9,7 +9,8 @@ const inbound=fs.readFileSync(path.join(dir,'inbounds-v3.js'),'utf8');
 
 test('Obsidian Pulse is a reversible last-in-cascade presentation layer',()=>{
   const links=[...index.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(m=>m[1]);
-  assert.equal(links.at(-1),'assets/obsidian-pulse-v3.css?v=1');
+  assert.ok(links.includes('assets/obsidian-pulse-v3.css?v=1'));
+  assert.ok(links.indexOf('assets/obsidian-pulse-v3.css?v=1') > links.indexOf('assets/inbound-deployment-visual-v1.css?v=1'));
   for(const old of ['assets/cyber-classic.css','assets/premium-cyber-v1.css?v=1',
     'assets/classic-gangster-v2.css?v=1','assets/inbound-deployment-visual-v1.css?v=1'])
     assert.ok(links.indexOf(old)>=0&&links.indexOf(old)<links.length-1,old);
