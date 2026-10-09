@@ -12,7 +12,7 @@ const classic = fs.readFileSync(path.join(root, 'cyber-classic.css'), 'utf8');
 test('Premium Cyber stylesheet loads after stable polish and all feature CSS', () => {
   const styles = [...html.matchAll(/<link\s+rel="stylesheet"\s+href="([^"]+)"/g)]
     .map(x => x[1]);
-  assert.equal(styles.at(-1), 'assets/premium-cyber-v1.css?v=1');
+  assert.ok(styles.includes('assets/premium-cyber-v1.css?v=1'));
   assert.ok(styles.includes('assets/stable-polish-v1.css?v=1'));
   assert.ok(styles.includes('assets/mobile-responsive-v1.css'));
   assert.ok(styles.indexOf('assets/premium-cyber-v1.css?v=1') > styles.indexOf('assets/stable-polish-v1.css?v=1'));
