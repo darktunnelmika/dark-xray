@@ -1,5 +1,9 @@
 # 0.10.1 — تثبیت DARK SWAP و جمع‌بندی Stable
 
+- ناوبری پنل پایدار شد: آیتم‌های انتهای منو از اولین Render دیده می‌شوند، منو اسکرول می‌شود و Refresh همان Workspace را حفظ می‌کند.
+- Clients / Groups در ورود و Refresh دیتای تازه می‌گیرند و تب Groups بین Refreshها حفظ می‌شود.
+- DARK Restore برای کلاینت‌های منقضی/حجم‌تمام‌شده «حذف امن» دارد: سرویس Active آرشیو می‌شود ولی رکورد، گروه و تمام مصرف DARK حفظ می‌شوند و مجموع ترافیک گروه کاهش نمی‌یابد.
+- Archive و Promotion سریال شدند و کاربر Archiveشده دیگر در Mapping، Safety، Promotion یا Node accounting فعال دخالت نمی‌کند.
 - تغییر نام دستی مسیر DARK SWAP بدون قطع data-plane یا ری‌استارت Xray؛ نام مسیر در کارت و ساب خواناتر شده است.
 - حسابداری SWAP به‌صورت مقصد-محور قفل شد: مشتری روی Destination حساب می‌شود و Relay هیچ شمارندهٔ مصنوعی مشتری ندارد؛ regression جلوگیری از double-count اضافه شد.
 - پوستهٔ Stable Polish روی Cyber Classic اضافه شد؛ منطق، مجوزها و هندسهٔ responsive دست‌نخورده مانده‌اند.
