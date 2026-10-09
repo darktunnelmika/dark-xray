@@ -98,7 +98,7 @@ def test_three_probe_windows_then_stale_but_not_deleted(nodes):
         db.execute("UPDATE remote_nodes SET last_seen=? WHERE id='n1'", (now - 185,))
     row = registry.list()[0]
     assert row["telemetry_state"] == "offline" and row["online"] is False
-    assert registry.get("n1")["enabled"] is True
+    assert bool(registry.get("n1")["enabled"]) is True
 
 
 def test_deployment_readiness_is_not_revoked_by_first_two_timeouts(nodes):
