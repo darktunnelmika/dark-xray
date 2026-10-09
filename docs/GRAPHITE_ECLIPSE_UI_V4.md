@@ -14,7 +14,7 @@ The stylesheet `web/graphite-eclipse-fontfaces-v4.css` references same-origin va
 | English/Latin | Manrope variable | Modern English headings, labels and controls |
 | Technical | JetBrains Mono variable | IPs, ports, UUID snippets, statuses and numbers |
 
-All three families are sourced from Fontsource variable packages and are licensed under the SIL Open Font License 1.1. The repository includes the three WOFF2 assets and pinned origin metadata rather than linking to live third-party font URLs. The panel's strict `Content-Security-Policy: default-src 'self'` allows these same-origin font requests; inline data fonts would be blocked.
+All three families are sourced from Fontsource variable packages and are licensed under the SIL Open Font License 1.1. Complete individual SIL OFL texts and copyright attributions are included in `web/fonts/licenses/` for redistribution compliance. The repository includes the three WOFF2 assets and pinned origin metadata rather than linking to live third-party font URLs. The panel's strict `Content-Security-Policy: default-src 'self'` allows these same-origin font requests; inline data fonts would be blocked.
 
 Source files and SHA256:
 - `@fontsource-variable/vazirmatn@5.2.8/files/vazirmatn-arabic-wght-normal.woff2` — `84a382e46c30fb4f73d0e3800c16d0af15888e2731e57fa5f93e2c29a2c6a957`
