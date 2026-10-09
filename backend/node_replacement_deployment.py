@@ -70,7 +70,8 @@ class ReplacementDeployment:
             ('inbounds', 'SELECT id,body FROM core_inbounds ORDER BY id', ()),
             ('clients', 'SELECT email,body,inbounds FROM core_clients ORDER BY email', ()),
             ('sections', 'SELECT name,body FROM core_sections ORDER BY name', ()),
-            ('policy', 'SELECT * FROM clients ORDER BY id', ()),
+            # Usage counters change continually while accounting runs. Capture policy, not metering.
+            ('policy', 'SELECT id,owner,limit_ip,quota_bytes,manual,expires_at,global_ip_block,global_device_block FROM clients ORDER BY id', ()),
             ('owners', 'SELECT * FROM owners ORDER BY id', ()),
             ('assignments', 'SELECT local_inbound_id FROM remote_node_inbounds WHERE node_id=? '
                             'ORDER BY local_inbound_id', (node_id,)),
