@@ -57,6 +57,67 @@ def test_review_does_not_start_or_modify_addresses(hub,tmp_path,monkeypatch):
         assert token.token not in json.dumps(result)
 
 
+
+def test_verified_cutover_replaces_old_multihost_tunnel_with_direct_and_preserves_clients(hub,tmp_path,monkeypatch):
+    reg,owner,engine=hub;inbound=seed_account(reg,owner,engine)
+    runtime='node:'+NODE
+    original_hosts=engine.section('hosts')
+    original_hosts[0].update(endpointType='tunnel',address='203.0.113.11',port=24544,
+                             addresses=['203.0.113.11','203.0.113.12'],remark='Old tunnel')
+    original_hosts.append({'inboundId':inbound,'runtime':'local','address':'local.example.test',
+                           'port':24543,'endpointType':'direct','remark':'Local','enable':True})
+    engine.save_section('hosts',original_hosts)
+    ib=engine.inbound(inbound)
+    ib['panelMeta']={'tunnelPorts':{runtime:24544,'local':24545}}
+    engine.save_inbound(ib,inbound)
+    with candidate(tmp_path/'target') as (target,rt,client,_):
+        http_transport(reg,client,monkeypatch)
+        receipt=resolve(owner,prepare(owner))
+        r=review(owner,receipt)
+        changes={x['action'] for x in r['endpoints']['planned_direct_host_changes']}
+        assert {'tunnel_to_direct','clear_retired_tunnel_port'} <= changes
+        assert engine.section('hosts')==original_hosts
+        assert not target.running
+        before={t:sql_rows(reg,t) for t in ('clients','core_clients','traffic_ledger')}
+        result=activate(owner,receipt,r)
+        assert result['activation_completed'] and result['service_activated']
+        hosts=engine.section('hosts')
+        direct=[h for h in hosts if h.get('runtime')==runtime]
+        assert len(direct)==1 and direct[0]['endpointType']=='direct'
+        assert direct[0]['address']=='new-turkey.example.test' and direct[0]['port']==24543
+        assert direct[0]['enable'] and 'addresses' not in direct[0]
+        assert hosts[1]==original_hosts[1]  # Other runtimes are untouched.
+        ports=engine.inbound(inbound)['panelMeta']['tunnelPorts']
+        assert runtime not in ports and ports['local']==24545
+        assert before=={t:sql_rows(reg,t) for t in before}
+
+
+def test_failed_activation_does_not_change_tunnel_host_before_verified_receipt(hub,tmp_path,monkeypatch):
+    reg,owner,engine=hub;seed_account(reg,owner,engine)
+    old=engine.section('hosts')
+    old[0].update(endpointType='tunnel',port=24544,address='203.0.113.11',
+                  addresses=['203.0.113.11','203.0.113.12'])
+    engine.save_section('hosts',old)
+    with candidate(tmp_path/'target') as (target,rt,client,_):
+        http_transport(reg,client,monkeypatch)
+        receipt=resolve(owner,prepare(owner));r=review(owner,receipt)
+        original=node_module.node_https_request
+        def lost(origin,cred,path,*args,**kwargs):
+            reply=original(origin,cred,path,*args,**kwargs)
+            if path=='/node/api/v1/control/activate':
+                raise OSError('Simulated lost Start receipt')
+            return reply
+        with monkeypatch.context() as patch:
+            patch.setattr(node_module,'node_https_request',lost)
+            result=activate(owner,receipt,r)
+        assert result['phase']=='starting' and not reg.get(NODE)['enabled']
+        assert engine.section('hosts')==old
+        assert target.running
+        retry=activate(owner,receipt,r)
+        assert retry['activation_completed']
+        assert engine.section('hosts')[0]['endpointType']=='direct'
+
+
 def test_activation_enables_after_exact_ack_and_preserves_master_accounts(hub,tmp_path,monkeypatch):
     reg,owner,engine=hub;seed_account(reg,owner,engine)
     with candidate(tmp_path/'target') as (eng,rt,client,token):
