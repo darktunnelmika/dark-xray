@@ -196,6 +196,10 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             page.locator('[data-act="cv4view"][data-view="groups"].active').wait_for(state='visible',timeout=10000)
             page.locator('.cv4-group-grid').wait_for(state='visible',timeout=10000)
             mark('hard refresh preserves Clients and Groups workspace state')
+            # Return the QA harness to Clients for later create/edit scenarios;
+            # persistence itself has already been proven above.
+            page.locator('[data-act="cv4view"][data-view="clients"]').click()
+            page.locator('.cv4-console').wait_for(state='visible',timeout=10000)
             visit(page,'dashboard')
 
             # Every owner workspace must render without leaving a busy/blank content surface.
