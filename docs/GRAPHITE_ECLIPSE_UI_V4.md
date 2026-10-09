@@ -21,6 +21,8 @@ Source files and SHA256:
 - `@fontsource-variable/manrope@5.2.8/files/manrope-latin-wght-normal.woff2` — `a30ddcd349703aff7464c34bef3fffdff405ee50c113440d7c8693c02d210972`
 - `@fontsource-variable/jetbrains-mono@5.2.8/files/jetbrains-mono-latin-wght-normal.woff2` — `18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e`
 
+The repository hygiene gate accepts only the three exact WOFF2 paths with pinned SHA256 digests and accompanying SIL OFL license files. All other font binaries and private/runtime files remain prohibited. `tests/test_repo_font_allowlist.py` verifies rejection of tampered and unlicensed files.
+
 The bundle reserves Arabic/Persian shaping glyphs and zero-width joiners to Vazirmatn, falling back to Manrope for Latin. All are loaded with `font-display:swap`. Existing UI fonts remain fallbacks during font loading.
 
 ## Design colors
