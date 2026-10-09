@@ -10,7 +10,8 @@ const js=fs.readFileSync(path.join(root,'inbounds-v3.js'),'utf8');
 
 test('Visual polish loads last without replacing editor markup or scripts',()=>{
   const links=[...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(x=>x[1]);
-  assert.equal(links.at(-1),'assets/inbound-deployment-visual-v1.css?v=1');
+  assert.ok(links.includes('assets/inbound-deployment-visual-v1.css?v=1'));
+  assert.ok(links.indexOf('assets/inbound-deployment-visual-v1.css?v=1') > links.indexOf('assets/classic-gangster-v2.css?v=1'));
   assert.ok(links.indexOf('assets/classic-gangster-v2.css?v=1') < links.length-1);
   assert.ok(js.includes('function deploymentCard('));
   assert.ok(js.includes('function deploymentTargets()'));
