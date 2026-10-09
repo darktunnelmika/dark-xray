@@ -98,25 +98,33 @@ function paint(s){
  const a=s.doc?.attempt,p=phase(s),actions=allowed(s),pair=names[p]||['Unrecognized state; refresh only','وضعیت ناشناخته؛ فقط تازه‌سازی'];
  const step=p==='none'?0:['pending','rotating','prepared','cancelling'].includes(p)?1:['committing','committed'].includes(p)?2:['staging','staged'].includes(p)?3:p==='activated'?5:4;
  const labels=[['Select target','انتخاب هدف'],['Prepare','آماده‌سازی'],['Save binding','ثبت جایگزینی'],['Stage stopped','استقرار خاموش'],['Review / Start','بازبینی و شروع'],['Receipt','رسید']];
- let body=`<ol class="nr-steps">${labels.map((x,i)=>`<li ${i===step?'aria-current="step"':''}>${i+1}. ${L(...x)}</li>`).join('')}</ol>
- <div class="notice warning">${L('Users and recorded usage stay on the Hub. Closing this window does not cancel, stop, or roll back an operation. DNS, tunnels and the old VPS are not changed here.','کاربران و مصرف ثبت‌شده در پنل می‌مانند. بستن این پنجره عملیات را لغو، متوقف یا برگردان نمی‌کند. DNS، تانل و VPS قبلی اینجا تغییر نمی‌کنند.')}</div>
+ const completed=p==='activated'&&s.activation?.activation_completed===true;
+ let body=completed?
+ `<section class="nr-new-primary"><h3>${L('Replace this Node with a new server','جایگزینی این نود با سرور جدید')}</h3>
+ <p>${L('Enter the Pair Code from a different freshly installed VPS to start a new replacement. The existing Node remains active until the new replacement is explicitly reviewed and confirmed.','برای شروع جایگزینی جدید، کد اتصال یک سرور تازه‌نصب‌شدهٔ دیگر را وارد کن. نود فعلی تا زمانی که جایگزینی جدید را بررسی و تأیید نکنی فعال می‌ماند.')}</p></section>`:
+ `<ol class="nr-steps">${labels.map((x,i)=>`<li ${i===step?'aria-current="step"':''}>${i+1}. ${L(...x)}</li>`).join('')}</ol>
+ <div class="notice warning">${L('Users and recorded usage stay on the Hub. Closing this window does not cancel, stop, or roll back an operation. DNS, tunnels and the old VPS are not changed here.','کاربران و مصرف ثبت‌شده در پنل می‌مانند. بستن این پنجره عملیات را لغو، متوقف یا برنمی‌گرداند. DNS، تانل و VPS قبلی اینجا تغییر نمی‌کنند.')}</div>
  <p role="status" aria-live="polite" data-nr-phase="${esc(p)}"><strong>${s.doc?esc(L(...pair)):L('Status unavailable','وضعیت در دسترس نیست')}</strong></p>`;
- if(a)body+=`<dl class="nr-meta"><dt>${L('Attempt','عملیات')}</dt><dd><bdi>${esc(a.attempt_id)}</bdi></dd><dt>${L('Candidate HTTPS','آدرس مدیریتی هدف')}</dt><dd><bdi>${esc(a.target_origin)}</bdi></dd><dt>${L('Customer address','آدرس مشتری')}</dt><dd><bdi>${esc(a.data_address)}</bdi></dd></dl>`;
+ if(a&&!completed)body+=`<dl class="nr-meta"><dt>${L('Attempt','عملیات')}</dt><dd><bdi>${esc(a.attempt_id)}</bdi></dd><dt>${L('Candidate HTTPS','آدرس مدیریتی هدف')}</dt><dd><bdi>${esc(a.target_origin)}</bdi></dd><dt>${L('Customer address','آدرس مشتری')}</dt><dd><bdi>${esc(a.data_address)}</bdi></dd></dl>`;
  const failure=s.activation?.last_error||s.deployment?.last_error||a?.last_error;
  if(failure)body+=`<p class="notice warning">${L('Not confirmed. Diagnostic code:','تأیید نشده. کد تشخیصی:')} <bdi>${esc(failure)}</bdi></p>`;
  if(s.error)body+=`<p class="notice warning" role="alert">${esc(s.error)}</p>`;
  if(a&&(a.source_current===false||a.phase==='committed'&&a.binding_current!==true))body+=`<p class="notice warning">${L('The installation changed. Old confirmations cannot be reused.','هویت نصب تغییر کرده؛ تأییدهای قدیمی قابل استفاده نیستند.')}</p>`;
- if(s.activation?.activation_completed===true)body+=`<section class="nr-completed" role="status">
- <h3>${L('Replacement successfully completed','جایگزینی با موفقیت تکمیل شد')}</h3>
- <p>${L('The new Node binding was saved and activated. Users and recorded usage remain on the Hub. No additional Pair Code or Prepare step is needed.','اتصال نود جدید ثبت و فعال شده است. کاربران و مصرف ثبت‌شده در هاب حفظ شده‌اند. نیازی به کد اتصال یا آماده‌سازی دوباره نیست.')}</p>
+ if(actions.includes('prepare'))body+=`<section class="nr-prepare"><h3>${L('Prepare new server','آماده‌سازی سرور جدید')}</h3>
+ <p>${L('Run install-node.sh on the NEW VPS, then paste its fresh Pair Code. Do not re-use an old consumed Pair Code or add it as a separate Node first.','روی سرور جدید install-node.sh را اجرا کن و کد اتصال تازهٔ آن را وارد کن. کد مصرف‌شدهٔ قبلی را دوباره استفاده نکن و سرور را اول به‌صورت نود جداگانه اضافه نکن.')}</p>
+ <label for="nr-code">${L('New Pair Code (sensitive)','کد اتصال جدید (محرمانه)')}</label>
+ <textarea id="nr-code" dir="ltr" autocomplete="off" spellcheck="false" maxlength="4096" rows="3" placeholder="DXN1.…"></textarea>
+ ${buttonFor('prepare',completed?'Begin new replacement':'Prepare candidate',completed?'شروع جایگزینی جدید':'آماده‌سازی هدف')}</section>`;
+ if(completed)body+=`<details class="nr-previous-receipt"><summary>${L('Previous replacement receipt (history)','رسید جایگزینی قبلی (سابقه)')}</summary>
+ <section class="nr-completed">
+ <h3>${L('Previous replacement was completed','جایگزینی قبلی تکمیل شده')}</h3>
+ <p>${L('Attempt','عملیات')}: <bdi>${esc(a.attempt_id)}</bdi></p>
+ <p>${L('Previous destination','مقصد قبلی')}: <bdi>${esc(a.target_origin)}</bdi></p>
  <p>${s.activation.service_activated===true?
- L('The latest saved Node observation confirms it is running. This is not an external connection test.','آخرین وضعیت ثبت‌شده نشان می‌دهد نود در حال اجراست. این نتیجه تست اتصال کاربران از اینترنت نیست.'):
- L('The latest saved Node health has not confirmed current readiness yet. The replacement is still completed; check Nodes or refresh saved status. Do not repeat the replacement.','آخرین وضعیت ذخیره‌شده هنوز سلامت فعلی نود را تأیید نکرده است. خود جایگزینی تکمیل شده؛ وضعیت نودها را بررسی کن یا وضعیت ذخیره‌شده را تازه کن. جایگزینی را تکرار نکن.')}</p>
- <p>${L('You can close this window and manage the Node normally.','می‌توانی این پنجره را ببندی و نود را مثل همیشه مدیریت کنی.')}</p></section>`;
- if(actions.includes('prepare'))body+=`${s.activation?.activation_completed===true?
- '<details class="nr-future-replacement"><summary>'+L('Replace this Node again with a different VPS','جایگزینی دوباره این نود با سرور دیگر')+'</summary>': ''}
- <section><h3>${L('Prepare a new server','آماده‌سازی سرور جدید')}</h3><p>${L('Only use this for a different, fresh replacement VPS. Never reuse the completed Pair Code.','این گزینه فقط برای جایگزینی با سرور جدید دیگری است. از کد اتصال مصرف‌شده دوباره استفاده نکن.')}</p><p>${L('Run install-node.sh on the new VPS and enter its Pair Code. Do not add it as an unrelated node first.','روی VPS جدید install-node.sh را اجرا و کد اتصالش را وارد کن؛ ابتدا آن را به‌عنوان نود جدا اضافه نکن.')}</p><label for="nr-code">${L('Pair Code (sensitive)','کد اتصال (محرمانه)')}</label><textarea id="nr-code" dir="ltr" autocomplete="off" spellcheck="false" maxlength="4096" rows="3" placeholder="DXN1.…"></textarea>${buttonFor('prepare','Prepare candidate','آماده‌سازی هدف')}</section>
- ${s.activation?.activation_completed===true?'</details>':''}`;
+ L('Last saved Node observation was running (not a WAN test).','آخرین وضعیت ثبت‌شدهٔ نود فعال بوده (تست اینترنت نیست).'):
+ L('Last saved readiness was not confirmed; check Nodes for current health.','سلامت لحظه‌ای در آخرین گزارش تأیید نشده؛ وضعیت فعلی را در Nodes ببین.')}</p>
+ <p>${L('The completed attempt is historical; use the new Pair Code field above to replace again.','این عملیات قبلی صرفاً سابقه است؛ برای جایگزینی دوباره از کد جدید در بالا استفاده کن.')}</p>
+ </section></details>`;
  if(actions.includes('retry'))body+=buttonFor('retry','Retry the saved preparation','ادامهٔ آماده‌سازی ذخیره‌شده');
  if(actions.includes('commit'))body+=`<section><h3>${L('Save the replacement binding','ثبت سرور جایگزین')}</h3><p>${L('This retires the old binding but leaves the replacement disabled. It is not customer service activation.','ارتباط مدیریتی قبلی بازنشسته می‌شود ولی جایگزین غیرفعال می‌ماند؛ این فعال‌سازی سرویس مشتری نیست.')}</p>${checks(commitKeys)}${buttonFor('commit','Confirm replacement binding','تأیید ثبت جایگزینی',commitKeys)}</section>`;
  if(actions.includes('stage'))body+=`<section>${buttonFor('review','Check Direct and continue','بررسی مستقیم و ادامه')} ${buttonFor('stage','Recheck stopped setup','بررسی دوبارهٔ تنظیمات خاموش')}</section>`;
