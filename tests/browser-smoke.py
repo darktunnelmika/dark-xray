@@ -202,6 +202,29 @@ with tempfile.TemporaryDirectory(prefix='dark-browser-082-') as d:
             visit(page,'inbounds')
             page.locator('[data-v3-action="new"]').click()
             form=page.locator('#iv3-editor');form.wait_for(state='visible',timeout=10000)
+            # Deployment visual skin must make the existing Node/Tunnel
+            # controls readable without changing their values or availability.
+            deployment=page.evaluate("""()=>{
+              const box=document.querySelector('#iv3-editor .iv3-deploy');
+              const card=box?.querySelector('.iv3-deploy-card');
+              const title=box?.querySelector('.iv3-deploy-target b');
+              const port=box?.querySelector('.iv3-tunnel-port input');
+              return {
+                cardRadius:card?getComputedStyle(card).borderRadius:'',
+                sectionRadius:box?getComputedStyle(box).borderRadius:'',
+                titleSize:title?parseFloat(getComputedStyle(title).fontSize):0,
+                portHeight:port?parseFloat(getComputedStyle(port).height):0,
+                localName:box?.querySelector('input[name="deployLocal"]')?.name||'',
+                portName:port?.name||''
+              };
+            }""")
+            assert deployment['cardRadius']=='12px',deployment
+            assert deployment['sectionRadius']=='14px',deployment
+            assert deployment['titleSize']>=13,deployment
+            assert deployment['portHeight']>=44,deployment
+            assert deployment['localName']=='deployLocal',deployment
+            assert deployment['portName']=='tunnelPort',deployment
+            mark('Deployment Targets cards/ports are readable without changing their form fields')
             # Core controls stay prominent. Advanced controls are discoverable
             # and use the unchanged inbound tab actions.
             assert form.locator('.iv3-tab-group [data-v3-action=tab]').count()==3
