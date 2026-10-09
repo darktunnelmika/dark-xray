@@ -109,7 +109,7 @@ function assignmentChip(a){
  return `<span class="nv4-assignment ${reasonClass(a.failover_reason)}"><b>${e(name)}</b><small>${e(a.deployment_state||'pending')} · ${e(reasonLabel(a.failover_reason))}</small></span>`;
 }
 function controlBanner(n){
- const c=n.control||{};if(!c.persisted)return '';
+ const c=n.control||{};if(!c.persisted||(!c.pending&&!c.last_error))return '';
  const action=String(c.action||'').toUpperCase(),phase=c.pending?L('COMMAND PENDING','فرمان در انتظار'):L('LAST COMMAND ACKNOWLEDGED','آخرین فرمان تأیید شده');
  const hint=c.pending?L('Saved on the Hub; not confirmed as executed. Disabled nodes wait until enabled.','در Hub ذخیره شده؛ اجرای آن هنوز تأیید نشده است. نود غیرفعال تا فعال‌سازی مجدد منتظر می‌ماند.'):L('This is a command receipt, not a live health check.','این وضعیت، رسید فرمان است؛ نه بررسی زندهٔ سلامت.');
  return `<div class="notice ${c.pending?'warning':''}" data-node-control="${c.pending?'pending':'acknowledged'}"><b>${e(phase)} · ${e(action)} · r${e(c.revision)}</b><p>${e(hint)}</p>${c.last_error?`<div class="nv2-error">${e(c.last_error)}</div>`:''}</div>`;
@@ -147,8 +147,8 @@ function nodeCard(n){
   ${healthMetric(L('Connections','اتصال‌ها'),nv6Live(n,conn.open,v=>fa(Number(v)||0)))}
   ${healthMetric(L('Clients','کاربران'),fresh?fa(Number(h.managed_clients||0)):'—')}
  </div>
- <div class="nv6-secondary"><span>Agent: <b>${fresh?e(h.version||h.installed_source?.version||'—'):'—'}</b></span><span>Xray: <b>${fresh?e(core.version||'—'):'—'}</b></span><span>${e(L('Traffic tracked','ترافیک ثبت‌شده'))}: <b>${e(bytes(Number(n.traffic_current_bytes||0)))}</b></span><span>${e(L('Inbounds','اینباندها'))}: <b>${e(assigned.length)}</b></span><span>${e(L('Deployment','استقرار'))}: <b>${e(desiredLabel)}</b></span></div>
- <div class="notice ${fresh?'':'warning'}"><small>${e(L('Hub protection (fresh report only)','محافظ هاب (فقط گزارش تازه)'))}: <b>${e(leaseLabel)}</b></small></div>
+ <div class="nv6-secondary"><span>Agent: <b>${fresh?e(h.version||h.installed_source?.version||'—'):'—'}</b></span><span>Xray: <b>${fresh?e(core.version||'—'):'—'}</b></span><span>${e(L('Traffic tracked','ترافیک ثبت‌شده'))}: <b>${e(bytes(Number(n.traffic_current_bytes||0)))}</b></span><span>${e(L('Inbounds','اینباندها'))}: <b>${e(assigned.length)}</b></span><span>${e(L('Deployment','استقرار'))}: <b>${e(desiredLabel)}</b></span>${fresh&&lease?.required===true&&lease.valid===true?`<span>${e(L('Hub protection','محافظ هاب'))}: <b>${e(L('Active','فعال'))}</b></span>`:''}</div>
+ ${fresh&&lease?.required===true&&lease.valid===true?'':`<div class="notice warning" data-node-lease-warning><small>${e(L('Hub protection (fresh report only)','محافظ هاب (فقط گزارش تازه)'))}: <b>${e(leaseLabel)}</b></small></div>`}
  ${controlBanner(n)}
  ${assigned.length?`<div class="nv2-assigned"><span>${L('DEPLOYED / ASSIGNED','تخصیص اینباند')}</span><div>${assigned.map(x=>`<span class="nv4-assignment ${pending?'warn':'ready'}"><b>${e(x)}</b></span>`).join('')}</div></div>`:''}
  ${n.last_error?`<div class="nv2-error">${e(n.last_error)}</div>`:''}${desired.last_error?`<div class="nv2-error">${e(desired.last_error)}</div>`:''}
