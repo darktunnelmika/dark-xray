@@ -861,13 +861,22 @@ class LeaseGuard:
                 return
         if not self.engine.lock.acquire(timeout=.1):
             if lease.required and not lease.allowed:
-                # Expired authority with an unresponsive engine must fail
-                # closed immediately at the systemd cgroup boundary.
-                self.last_error = 'lease_expired_engine_busy'
-                try:
-                    self.watchdog.trigger()
-                except Exception as exc:
-                    self.last_error += ': ' + type(exc).__name__
+                # An expired lease must fence customer traffic, not the control
+                # plane itself. If Xray is already stopped there is no data
+                # plane authority left to revoke; keep the Agent alive so the
+                # Hub can renew the lease and recover cleanly.
+                if self.engine.running:
+                    self.last_error = 'lease_expired_engine_busy_core_running'
+                    try:
+                        self.watchdog.trigger()
+                    except Exception as exc:
+                        self.last_error += ': ' + type(exc).__name__
+                else:
+                    self.last_error = 'lease_expired_engine_busy_core_stopped'
+                    try:
+                        self.watchdog.notify()
+                    except Exception as exc:
+                        self.last_error += ': ' + type(exc).__name__
             else:
                 self.last_error = 'engine_busy_with_valid_lease'
             return
@@ -890,7 +899,10 @@ class LeaseGuard:
             self.last_error = ''
         except Exception as exc:
             self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]
-            if lease.required and not lease.allowed:
+            # Fail closed only when an expired lease can still carry traffic.
+            # Killing an Agent whose Xray child is already stopped causes a
+            # permanent watchdog restart loop and prevents lease recovery.
+            if lease.required and not lease.allowed and self.engine.running:
                 try:
                     self.watchdog.trigger()
                 except Exception:
