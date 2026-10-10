@@ -11,6 +11,7 @@ SERVICE=Path('/etc/systemd/system/dark-xray-node.service')
 GUARD_SERVICE=Path('/etc/systemd/system/dark-xray-node-guard.service')
 UPDATE_SERVICE=Path('/etc/systemd/system/dark-xray-node-update.service')
 WRAPPER=Path('/usr/local/bin/darknode')
+LOGROTATE=Path('/etc/logrotate.d/dark-xray-node-runtime')
 
 def run(args,**kw):return subprocess.run([str(x) for x in args],check=True,**kw)
 
@@ -20,6 +21,20 @@ def core_is_usable(core:Path,version:str)->bool:
     try:r=subprocess.run([str(xray),'version'],capture_output=True,text=True,timeout=10,check=False)
     except Exception:return False
     return r.returncode==0 and version.lstrip('v') in (r.stdout or '')
+
+def install_logrotate():
+    raw="""/var/lib/dark-xray-node/runtime/access.log /var/lib/dark-xray-node/runtime/error.log {
+    size 50M
+    rotate 5
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+"""
+    LOGROTATE.write_text(raw,encoding='utf-8')
+    os.chmod(LOGROTATE,0o644)
 
 def safe_name(value:str)->str:
     value=re.sub(r'[^A-Za-z0-9_.-]+','-',str(value or '').strip()).strip('-_.')
@@ -171,6 +186,7 @@ exec "$PY" "$MANAGER" "$@"
     pair_path=DATA/'pair.json';pair_path.write_text(json.dumps(pair_doc,indent=2)+'\n')
     os.chmod(pair_path,0o600);os.chown(pair_path,account.pw_uid,account.pw_gid)
 
+    install_logrotate()
     service_import_probe(APP/'.venv/bin/python',APP/'backend')
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node-update.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',

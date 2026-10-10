@@ -5,7 +5,7 @@ import argparse,contextlib,fcntl,http.client,json,os,pwd,re,shutil,socket,sqlite
 from pathlib import Path
 from urllib.parse import urlsplit
 
-APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node');WRAPPER=Path('/usr/local/bin/darknode')
+APP=Path('/opt/dark-xray-node');CONF=Path('/etc/dark-xray-node');DATA=Path('/var/lib/dark-xray-node');WRAPPER=Path('/usr/local/bin/darknode');LOGROTATE=Path('/etc/logrotate.d/dark-xray-node-runtime')
 REPO='https://github.com/darktunnelmika/dark-xray.git'
 SHA_RE=re.compile(r'[0-9a-f]{40}')
 BACKEND=('node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','unlimited_credit.py','guard_bridge.py','guardd.py','reality_scan.py','outbound_probe.py','warp_paths.py','traffic_matrix.py','node_updated.py','update_bridge.py')
@@ -214,6 +214,19 @@ def install_units():
     run(['systemctl','daemon-reload'],timeout=20)
 
 
+def install_logrotate():
+    raw=b'''/var/lib/dark-xray-node/runtime/access.log /var/lib/dark-xray-node/runtime/error.log {
+    size 50M
+    rotate 5
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+'''
+    atomic_bytes(LOGROTATE,raw,0o644,0,0)
+
 def install_wrapper():
     if WRAPPER.is_symlink():raise RuntimeError('Unsafe darknode wrapper destination')
     raw=b'''#!/usr/bin/env bash
@@ -274,7 +287,7 @@ def _activate_preflighted(src:Path,new_venv:Path,commit:str,version:str,ref:str,
         os.rename(old_venv,saved_venv);moved_venv=True
         os.rename(new_venv,old_venv)
         service_import_probe(old_venv/'bin/python',APP/'backend')
-        install_units();install_wrapper()
+        install_units();install_wrapper();install_logrotate()
         run(['systemctl','restart','dark-xray-node-guard.service'],timeout=30)
         run(['systemctl','start','dark-xray-node.service'],timeout=30)
         health_probe(expected_version=version)
@@ -296,6 +309,7 @@ def _activate_preflighted(src:Path,new_venv:Path,commit:str,version:str,ref:str,
         attempt('source-identity',lambda:atomic_bytes(meta,meta_bytes,0o640,meta_info.st_uid,meta_info.st_gid))
         attempt('units',install_units)
         attempt('wrapper',install_wrapper)
+        attempt('logrotate',install_logrotate)
         attempt('guard',lambda:run(['systemctl','restart','dark-xray-node-guard.service'],timeout=30))
         attempt('start',lambda:run(['systemctl','start','dark-xray-node.service'],timeout=30))
         attempt('health',lambda:health_probe(expected_version=previous['version']))

@@ -54,7 +54,7 @@ SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2;exit}' || true)"; SSH_P
 printf '\nInstalling prerequisites...\n'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -q git curl python3 python3-venv ca-certificates certbot nftables iproute2 >/dev/null
+apt-get install -y -q git curl python3 python3-venv ca-certificates certbot nftables iproute2 logrotate >/dev/null
 
 PYTHON_BIN=python3
 PYVER="$($PYTHON_BIN -c 'import sys;print(".".join(map(str,sys.version_info[:3])))')"
