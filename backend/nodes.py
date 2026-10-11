@@ -474,7 +474,13 @@ class NodeRegistry:
             if stored:
                 item['started_at']=float(stored['first_seen']);item['last_observed_at']=float(stored['last_seen'])
             elif code=='telemetry_stale':
-                item['started_at']=float(node.get('last_seen') or now)+45.0;item['last_observed_at']=now
+                # The last lease/traffic HTTP ACK can be seconds old even
+                # while the last real CPU/RAM probe is hours old. Date the
+                # stale warning from the actual metric sample, not from the
+                # refreshed connectivity timestamp.
+                sample_at=node.get('health_sample_at')
+                item['started_at']=float(sample_at or node.get('last_seen') or now)+45.0
+                item['last_observed_at']=now
             elif code in {'telemetry_offline','node_error'}:
                 item['started_at']=float(node.get('last_offline_at') or node.get('last_seen') or now);item['last_observed_at']=now
             else:
