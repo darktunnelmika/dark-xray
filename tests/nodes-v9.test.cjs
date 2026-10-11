@@ -43,5 +43,5 @@ test('Nodes LIVE requires fresh system metrics independent of transport lease AC
   assert.ok(cards.includes(token),'missing Node card sample guard: '+token);
  for(const token of ['health_sample_state','health_sample_age_seconds'])
   assert.ok(detail.includes(token),'missing Node detail sample guard: '+token);
- assert.ok(cards.includes('n.telemetry_state'),'Network status remains independent from CPU sample');
+ assert.ok(cards.includes('n?.telemetry_state'),'Legacy connectivity status remains independent of CPU sample');
 });
