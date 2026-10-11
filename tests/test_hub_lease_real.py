@@ -195,10 +195,23 @@ def test_real_wall_clock_lease_expiry_and_recovery(real_fleet):
             assert 45<elapsed<70,elapsed
             for node,s in zip(f.agents,sockets):
                 health,_=f.reg._request(node.id,'/node/api/health')
-                assert health['hub_lease']['state']=='expired'
+                # Early fail-closed safety Stop can happen while the old lease
+                # still has up to 10 seconds of unused authority. No customer
+                # traffic may continue just because the lease says "active".
+                assert health['hub_lease']['state'] in ('active','expired')
+                assert health['core']['state']=='stopped'
                 try:s.sendall(b'AFTER');assert s.recv(64)==b''
                 except (ConnectionResetError,BrokenPipeError):pass
             for client in f.clients:transfer(client.port,f.target,allowed=False)
+            # The immutable 60s grant must expire on its original deadline;
+            # an early stopped core never extends or silently renews it.
+            while (any(n.runtime.hub_lease.allowed for n in f.agents)
+                   and time.monotonic()<deadline):
+                time.sleep(.1)
+            for node in f.agents:
+                health,_=f.reg._request(node.id,'/node/api/health')
+                assert health['hub_lease']['state']=='expired'
+                assert health['core']['state']=='stopped'
         for node in f.agents:assert grant(f,node)['valid']
         for client in f.clients:transfer(client.port,f.target)
         f.evidence.update(wall_clock_expiry=True,elapsed_seconds=elapsed,management_survived=True)
