@@ -42,15 +42,26 @@ def test_database_preflight_rejects_non_sqlite(tmp_path):
     with pytest.raises(SystemExit,match='cannot be opened'):UPDATE.database_preflight(bad)
 
 
-def test_doctor_gate_requires_config_db_and_panel_route(monkeypatch):
-    state={'checks':{'configuration':'ok','database':'ok','panel_route':{'ok':True,'ui_status':200,'asset_status':200}}}
-    class CP:
-        returncode=0
-        @property
-        def stdout(self):return json.dumps(state)
-    monkeypatch.setattr(UPDATE.subprocess,'run',lambda *a,**k:CP())
+def fast_fixture(tmp_path,monkeypatch):
+    conf=tmp_path/'etc';conf.mkdir()
+    (conf/'config.json').write_text(json.dumps({'public_origin':'http://127.0.0.1:2087','bind_port':2087,'panel_path':'/'}))
+    db=tmp_path/'live.sqlite3'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE core_clients(email TEXT PRIMARY KEY)')
+    monkeypatch.setattr(UPDATE,'CONF',conf)
+    monkeypatch.setattr(UPDATE,'DB',db)
+    return conf,db
+
+
+def test_doctor_gate_requires_config_db_and_panel_route(tmp_path,monkeypatch):
+    _conf,db=fast_fixture(tmp_path,monkeypatch)
+    route={'ok':True,'ui_status':200,'asset_status':200,'probe':'legacy-compat'}
+    monkeypatch.setattr(UPDATE,'_compat_panel_route',lambda:route)
     assert UPDATE._doctor_once()[0] is True
-    state['checks']['panel_route']['asset_status']=404;state['checks']['panel_route']['ok']=False
+    route['asset_status']=404;route['ok']=False
+    assert UPDATE._doctor_once()[0] is False
+    route.update(ok=True,asset_status=200)
+    db.unlink()
     assert UPDATE._doctor_once()[0] is False
 
 
@@ -61,26 +72,20 @@ def test_source_version_is_strict(tmp_path):
     with pytest.raises(SystemExit,match='malformed'):UPDATE.source_version(tmp_path)
 
 
-def test_legacy_doctor_without_panel_route_uses_strict_compat_probe(monkeypatch):
-    state={'checks':{'configuration':'ok','database':'ok'}}
-    class CP:
-        returncode=0
-        @property
-        def stdout(self):return json.dumps(state)
-    monkeypatch.setattr(UPDATE.subprocess,'run',lambda *a,**k:CP())
-    monkeypatch.setattr(UPDATE,'_compat_panel_route',lambda:{'ok':True,'ui_status':200,'asset_status':200,'probe':'legacy-compat'})
+def test_old_full_doctor_not_invoked_by_bounded_health(tmp_path,monkeypatch):
+    fast_fixture(tmp_path,monkeypatch)
+    monkeypatch.setattr(UPDATE.subprocess,'run',
+                        lambda *a,**kw:pytest.fail('full Doctor child must not block update probe'))
+    monkeypatch.setattr(UPDATE,'_compat_panel_route',
+                        lambda:{'ok':True,'ui_status':200,'asset_status':200,'probe':'legacy-compat'})
     ok,detail=UPDATE._doctor_once()
-    assert ok is True and 'legacy-compat' in detail
+    assert ok is True and 'db=readable-schema' in detail
 
 
-def test_legacy_doctor_compat_probe_remains_fail_closed(monkeypatch):
-    state={'checks':{'configuration':'ok','database':'ok'}}
-    class CP:
-        returncode=0
-        @property
-        def stdout(self):return json.dumps(state)
-    monkeypatch.setattr(UPDATE.subprocess,'run',lambda *a,**k:CP())
-    monkeypatch.setattr(UPDATE,'_compat_panel_route',lambda:{'ok':False,'ui_status':200,'asset_status':404,'probe':'legacy-compat'})
+def test_legacy_doctor_compat_probe_remains_fail_closed(tmp_path,monkeypatch):
+    fast_fixture(tmp_path,monkeypatch)
+    monkeypatch.setattr(UPDATE,'_compat_panel_route',
+                        lambda:{'ok':False,'ui_status':200,'asset_status':404,'probe':'legacy-compat'})
     assert UPDATE._doctor_once()[0] is False
 
 
