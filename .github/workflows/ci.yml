@@ -39,7 +39,8 @@ jobs:
           grep -q '\[100/100\]' /tmp/dark-installer-smoke.txt
           grep -q 'Installer runtime self-test passed' /tmp/dark-installer-smoke.txt
           grep -q 'DARK_XRAY_REF' install-online.sh
-          grep -q 'restoring previous DARK XRAY source' tools/update.py
+          grep -q 'restoring previous source only' tools/update.py
+          grep -q 'usage_database_preserved=True' tools/update.py
           grep -q 'backend/owner_recovery.py' darkxray
           grep -q 'account)' darkxray
           grep -q 'tools/check.py' darkxray
