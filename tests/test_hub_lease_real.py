@@ -263,4 +263,4 @@ def test_real_expired_challenge_recovers_with_metered_snapshot_without_xray_rest
     assert node.engine.running and node.engine.process.pid==core_pid
     assert node.runtime.hub_lease.status()['trips']==0
     assert usage(f)==before
-    assert f.reg.list()[0]['enabled'] is True
+    assert f.reg.list()[0]['enabled']
