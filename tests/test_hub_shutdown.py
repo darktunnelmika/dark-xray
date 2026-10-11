@@ -67,7 +67,9 @@ def test_held_http_stream_does_not_block_uvicorn_lifespan_teardown(tmp_path):
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=9)
         elapsed = time.monotonic() - started
-        assert proc.returncode == 0, proc.returncode
+        # Uvicorn 0.48 deliberately re-raises the captured SIGTERM AFTER
+        # the ASGI lifespan has closed; this is a clean systemd stop, not SIGKILL.
+        assert proc.returncode in (0, -signal.SIGTERM), proc.returncode
         assert elapsed < 8.0, elapsed
         assert marker.read_text() == 'lifespan-closed\n'
     finally:
