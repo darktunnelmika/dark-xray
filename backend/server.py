@@ -2801,6 +2801,20 @@ def _read_password(prompt:str,repeat:str,*,stdin_mode:bool=False)->str:
     return first
 
 
+# Avoid keeping systemd shutdown blocked by an indefinitely open HTTP
+# subscription stream. The separate lifespan teardown remains responsible for
+# Node workers and the final Xray accounting checkpoint.
+HUB_HTTP_DRAIN_SECONDS = 10.0
+
+
+def _hub_uvicorn_options(config:Config,host:str,port:int)->dict:
+    return {'host':host,'port':port,'proxy_headers':False,'access_log':False,
+            'workers':1,'ws':'none',
+            'ssl_certfile':config.tls_certificate or None,
+            'ssl_keyfile':config.tls_private_key or None,
+            'timeout_graceful_shutdown':HUB_HTTP_DRAIN_SECONDS}
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config',type=Path,default=Path('./config.json'))
@@ -2855,7 +2869,7 @@ def main():
         with store.lock:
             if not store.db.execute('SELECT 1 FROM api_admins').fetchone():raise PolicyError('Initialize the owner first')
         import uvicorn
-        uvicorn.run(make_app(manager,auth),host=args.host,port=args.port,proxy_headers=False,access_log=False,workers=1,ws='none',ssl_certfile=config.tls_certificate or None,ssl_keyfile=config.tls_private_key or None)
+        uvicorn.run(make_app(manager,auth),**_hub_uvicorn_options(config,args.host,args.port))
     except (PolicyError,ValueError,CoreError) as e:raise SystemExit(str(e))
     finally:manager.close();engine.close();store.close();lockfile.close()
 
