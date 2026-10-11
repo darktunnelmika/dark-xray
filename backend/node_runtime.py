@@ -23,6 +23,10 @@ from guard_bridge import BrokerClient
 
 STATE_SECTIONS=('outbounds','routing','dns','policy','observatory','ipguard')
 
+# Reserve enough wall-clock time to checkpoint and stop customer Xray before
+# the OS watchdog can reach its bounded fail-closed deadline.
+LEASE_EARLY_FENCE_SECONDS = 10.0
+
 
 class NodeRuntime:
     def __init__(self,store:Store,engine:CoreEngine,scope:str):
@@ -70,7 +74,7 @@ class NodeRuntime:
         if not isinstance(self.installation_id,str) or not re.fullmatch(r'[0-9a-f]{32}',self.installation_id):
             raise PolicyError('Invalid persisted Node installation identity')
         self.hub_lease=HubLease(store,self.scope,required=engine.config.hub_lease_required)
-        self.engine.start_guard=lambda:self.hub_lease.allowed
+        self.engine.start_guard=lambda:self.hub_lease.allowed and not self.hub_lease.trip_recorded
         self.engine.wants_running=self.control_status()['effective_running']
 
     def control_status(self)->dict:
@@ -80,7 +84,7 @@ class NodeRuntime:
                 (self.scope,)).fetchone()
         desired=bool(row['desired_running']) if row else bool(self.engine.config.core_autostart)
         paused=bool(row['manual_stop']) if row else False
-        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused and self.hub_lease.allowed,
+        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused and self.hub_lease.allowed and not self.hub_lease.trip_recorded,
                 'persisted':row is not None,'updated_at':float(row['updated_at']) if row else 0.0}
 
     def _write_control(self,db,desired:bool,paused:bool)->None:
@@ -186,7 +190,7 @@ class NodeRuntime:
             # restart. Maintenance retries the safe stop later.
             self.engine.wants_running=False
             return self.engine.command('stop')
-        if not self.hub_lease.allowed:raise CoreError('Waiting for Hub accounting lease before Start/Restart',status=503)
+        if not (self.hub_lease.allowed and not self.hub_lease.trip_recorded):raise CoreError('Waiting for Hub accounting lease before Start/Restart',status=503)
         with self.store.transaction() as db:self._write_control(db,True,False)
         try:return self.engine.command(action)
         except Exception:
@@ -206,17 +210,27 @@ class NodeRuntime:
             elif not wanted and self.engine.running:self.engine.command('stop')
             return wanted
 
-    def pause_expired_lease(self):
-        # Lease expiry is NOT a manual Stop. Keep intent for acknowledged recovery.
+    def pause_expired_lease(self, *, early_fence_seconds:float=0.0):
+        # A near-expiry early safety Stop is NOT a manual Stop. Preserve Hub
+        # intent and identities for recovery, and recheck the lease here
+        # because a new authenticated grant may have arrived while waiting for
+        # the engine lock.
         with self.engine.lock:
-            if self.hub_lease.allowed:return
+            lease=self.hub_lease
+            if not lease.required:return
+            with lease.lock:
+                remaining=lease.deadline-lease.clock()
+            if remaining>0 and (early_fence_seconds<=0 or remaining>early_fence_seconds):
+                return
             self.engine.wants_running=False
             if not self.engine.running:return
-            error=''
+            error=('Proactive lease safety Stop before expiration; awaiting Hub renewal'
+                   if remaining>0 else '')
             try:self.engine.collect_stats(force=True,strict=True)
-            except Exception as exc:error='Final lease-expiry traffic snapshot failed: '+str(exc)
+            except Exception as exc:
+                error=(error+'; ' if error else '')+'Final lease-expiry traffic snapshot failed: '+str(exc)
             finally:
-                # A broken stats API must never grant unlimited unpaid traffic.
+                # An unhealthy stats API must never permit unmetered traffic.
                 self.engine._stop_child();self.engine.applied_hash=''
             self.hub_lease.record_trip(error)
 
@@ -829,7 +843,12 @@ class SystemdWatchdog:
             # Otherwise an old subsecond timer can be sent after a fresh grant.
             with lease.lock:
                 remaining = lease.deadline - lease.clock()
-                if remaining <= 1.0:
+                # Production evidence: a 1.006-second remainder programmed
+                # a 6-ms systemd watchdog and SIGKILLed healthy Agents. Never
+                # publish an unserviceable short timer. The independent guard
+                # safely stops Xray when the lease enters this final window,
+                # then can keep the stopped Agent alive without authority.
+                if remaining <= LEASE_EARLY_FENCE_SECONDS:
                     return False
                 return self._notify_seconds(min(self.seconds, remaining - 1.0))
         # An unbounded keepalive is only safe for a confirmed stopped Xray,
@@ -851,11 +870,17 @@ class LeaseGuard:
 
     def tick(self):
         lease = self.runtime.hub_lease
-        # Continue watchdog keepalives for the ENTIRE valid accounting lease.
-        # Cutting them off WatchdogSec+2 before expiry restarted Xray even
-        # when the Hub was merely late in renewing an otherwise valid grant.
+        # A valid Hub grant is checked independently of the engine lock.
+        # When a renewal has not arrived by the last ten seconds, stop the
+        # customer process while an OS-watchdog safety window still exists.
+        # This is an early, fail-closed fence, never a lease extension.
+        near_expiry = False
+        if (lease.required and lease.allowed and self.engine.running and
+                hasattr(lease,'clock') and hasattr(lease,'deadline')):
+            with lease.lock:
+                near_expiry = lease.deadline-lease.clock() <= LEASE_EARLY_FENCE_SECONDS
         fed = False
-        if lease.allowed:
+        if lease.allowed and not near_expiry:
             try:
                 fed = bool(self.watchdog.notify(lease=lease))
             except Exception as exc:
@@ -885,19 +910,23 @@ class LeaseGuard:
         try:
             if lease.required and not lease.allowed:
                 self.runtime.pause_expired_lease()
+            elif near_expiry and lease.allowed and self.engine.running:
+                # The runtime rechecks the current lease under engine.lock;
+                # a new grant wins, otherwise checkpoint and fence early.
+                self.runtime.pause_expired_lease(early_fence_seconds=LEASE_EARLY_FENCE_SECONDS)
             # Recheck under the engine lock: renewal/expiration may race
             # the first keepalive; never feed while expired Xray is running.
             if lease.required and not lease.allowed and self.engine.running:
                 self.last_error = 'lease_expired_core_still_running'
                 self.watchdog.trigger()
                 return
-            # After a confirmed Stop it is safe to keep the Agent alive even
-            # without a valid lease, allowing clean recovery without SIGKILL.
-            # Do not duplicate a valid-lease heartbeat from the same tick.
-            if not fed:
-                # An unbounded keepalive is safe ONLY after Xray is stopped.
-                # Near expiry, never undo the bounded timer set above.
-                self.watchdog.notify(lease=lease if self.engine.running else None)
+            # After a confirmed Stop, clear the previously contracted OS
+            # timer and keep the management Agent alive for Hub recovery.
+            # Never do this while customer Xray remains running.
+            if not self.engine.running:
+                self.watchdog.notify()
+            elif not fed:
+                self.watchdog.notify(lease=lease)
             self.last_error = ''
         except Exception as exc:
             self.last_error = type(exc).__name__ + ': ' + str(exc)[:400]

@@ -9,7 +9,7 @@ from dark_policy import Store
 from node_runtime import HubLease, SystemdWatchdog, LeaseGuard
 
 
-@pytest.mark.parametrize('remaining,expected', [(59.0, 30000000), (25.0, 24000000), (4.0, 3000000), (1.5, 500000)])
+@pytest.mark.parametrize('remaining,expected', [(59.0, 30000000), (25.0, 24000000), (12.0, 11000000), (11.0, 10000000)])
 def test_watchdog_budget_never_outlives_valid_lease(tmp_path, monkeypatch, remaining, expected):
     path = str(tmp_path / 'notify.sock')
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver:
@@ -27,7 +27,7 @@ def test_watchdog_budget_never_outlives_valid_lease(tmp_path, monkeypatch, remai
         assert expected / 1000000 < remaining
 
 
-@pytest.mark.parametrize('remaining', [1.0, .5, 0.0, -1.0])
+@pytest.mark.parametrize('remaining', [10.0, 9.99, 4.0, 1.006, 1.0, .5, 0.0, -1.0])
 def test_no_unbounded_keepalive_near_or_after_expiry(monkeypatch, remaining):
     watchdog = SystemdWatchdog()
     watchdog.enabled = True
@@ -88,7 +88,7 @@ def test_guard_poll_frequency_outpaces_contracted_watchdog():
 def test_old_notification_cannot_override_new_grant_timer():
     clock = [100.0]
     lease = SimpleNamespace(required=True, lock=threading.RLock(),
-                            deadline=106.0, clock=lambda: clock[0])
+                            deadline=120.0, clock=lambda: clock[0])
     watchdog = SystemdWatchdog()
     watchdog.enabled = True
     watchdog.seconds = 30.0
@@ -122,5 +122,5 @@ def test_old_notification_cannot_override_new_grant_timer():
         first.join(2)
         second.join(2)
     assert second_done.is_set()
-    assert messages == [b'WATCHDOG_USEC=5000000\nWATCHDOG=1',
+    assert messages == [b'WATCHDOG_USEC=19000000\nWATCHDOG=1',
                         b'WATCHDOG_USEC=30000000\nWATCHDOG=1']
