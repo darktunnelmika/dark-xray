@@ -35,3 +35,13 @@ test('Nodes V9 mobile polish keeps actions and detail grids responsive',()=>{
  for(const token of ['@media(max-width:650px)','nv2-actions','nv9-ops-panel','dialog:has(.nv8-detail)','nv7-fleet-alerts'])
   assert.ok(css.includes(token),token);
 });
+
+test('Nodes LIVE requires fresh system metrics independent of transport lease ACK',()=>{
+ const cards=fs.readFileSync(path.join(__dirname,'..','web','nodes-v2.js'),'utf8');
+ const detail=fs.readFileSync(path.join(__dirname,'..','web','nodes-detail-v8.js'),'utf8');
+ for(const token of ['health_sample_state','health_sample_age_seconds','nv6SampleState','nv6SampleAge'])
+  assert.ok(cards.includes(token),'missing Node card sample guard: '+token);
+ for(const token of ['health_sample_state','health_sample_age_seconds'])
+  assert.ok(detail.includes(token),'missing Node detail sample guard: '+token);
+ assert.ok(cards.includes('n.telemetry_state'),'Network status remains independent from CPU sample');
+});
