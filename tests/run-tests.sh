@@ -81,6 +81,7 @@ python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-
 python -m pytest tests/test_update_transaction.py -q --junitxml=qa/junit/update-transaction.xml
 python -m pytest tests/test_node_update_preserve_accounting.py -q --junitxml=qa/junit/node-preserve-accounting.xml
 python -m pytest tests/test_hub_shutdown.py -q --junitxml=qa/junit/hub-shutdown.xml
+python -m pytest tests/test_lease_challenge_freshness.py -q --junitxml=qa/junit/lease-challenge-freshness.xml
 python -m pytest tests/test_hub_runtime_log_rotation.py -q --junitxml=qa/junit/hub-runtime-logs.xml
 python -m pytest tests/test_node_runtime_log_rotation.py -q --junitxml=qa/junit/node-log-rotation.xml
 python -m pytest tests/test_update_broker.py -q --junitxml=qa/junit/update-broker.xml

@@ -1024,12 +1024,15 @@ class NodeRegistry:
 
     @installation_operation
     def sync_traffic(self,node_id:str)->dict:
+        # Conservative age bound: this challenge is minted AFTER this GET starts.
+        challenge_requested_at=time.monotonic()
         doc,ms=self._request(node_id,'/node/api/mirrors/traffic',timeout=12.0)
         if not isinstance(doc,dict) or not isinstance(doc.get('items'),list):
             self._request_failed(node_id,'Invalid node traffic response');raise PolicyError('Invalid node traffic response')
         result=self.apply_traffic_snapshot(node_id,doc['items'],captured_at=time.time(),
                                           initialize_absent=isinstance(doc.get('accountingLease'),str))
-        return {'latency_ms':ms,**result,'accounting_lease':doc.get('accountingLease')}
+        return {'latency_ms':ms,**result,'accounting_lease':doc.get('accountingLease'),
+                'accounting_challenge_requested_at':challenge_requested_at}
 
 
 

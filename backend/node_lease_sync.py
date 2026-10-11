@@ -1,5 +1,14 @@
 """Grant a Node lease only after durable traffic import and fresh policy apply."""
+import logging
+import math
+import time
+
 from dark_policy import PolicyError
+
+# A 30-second Node token must leave 12s for an authenticated ACK (10s timeout).
+CHALLENGE_ACK_MAX_AGE_SECONDS=18.0
+MAX_CHALLENGE_REFRESHES=2
+logger=logging.getLogger(__name__)
 
 
 def verify_hub_accounting_policy(nodes, manager, engine, node_id):
@@ -72,39 +81,92 @@ def grant_stopped_replacement_lease(nodes, manager, engine, node_id, traffic,
     return doc['lease']
 
 
+def _challenge_hub_age(snapshot:dict)->float|None:
+    """Safe upper bound since authenticated GET began, using local monotonic clock.
+
+    Legacy callers without timing metadata keep the original strict grant path.
+    """
+    issued=snapshot.get('accounting_challenge_requested_at')
+    if type(issued) not in (int,float) or not math.isfinite(issued):
+        return None
+    age=time.monotonic()-issued
+    if age<0:raise PolicyError('Accounting lease monotonic challenge clock invalid')
+    return age
+
+
 def renew_accounting_lease(nodes, manager, engine, node_id, traffic, desired_provider, sync_provider):
-    challenge = traffic.get('accounting_lease')
+    challenge=traffic.get('accounting_lease')
     if not challenge:
         return {'supported': False}
-    require_accounted_snapshot(nodes, manager, node_id, traffic)
+    require_accounted_snapshot(nodes,manager,node_id,traffic)
     try:
         with nodes.installations.operation(node_id):
-            verify_hub_accounting_policy(nodes, manager, engine, node_id)
-            state = desired_provider(node_id)
-            current = nodes.desired_state(node_id, include_payload=False)
-            def acknowledged(snapshot):
-                return (not snapshot.get('pending') and not snapshot.get('last_error') and
-                        snapshot.get('revision') == state['revision'] and
-                        snapshot.get('hash') == state['hash'] and
-                        snapshot.get('applied_revision') == state['revision'] and
-                        snapshot.get('applied_hash') == state['hash'])
-            # Skip repeated full apply ONLY after the monitor has already
-            # durably confirmed matching desired/applied revision+hash.
-            # Current Hub accounting, quota and policy checks still run first.
-            if not acknowledged(current):
-                nodes.sync_desired_state(node_id, state, legacy_bundles=sync_provider(node_id))
-                current = nodes.desired_state(node_id, include_payload=False)
-            if not acknowledged(current):
-                raise PolicyError('Node has not acknowledged current quota/configuration')
-            command = nodes.commands.status(node_id)
-            body = {'challenge': challenge, 'revision': state['revision'], 'hash': state['hash'],
-                    'controlRevision': int(command.get('revision', 0))}
-            doc, _ms = nodes._request(node_id, '/node/api/v1/accounting/lease', 'POST', body, 10.0)
-            if not isinstance(doc, dict) or not doc.get('lease', {}).get('valid'):
-                raise PolicyError('Node did not acknowledge a valid accounting lease')
-            return doc['lease']
+            policy_start=time.monotonic()
+            verify_hub_accounting_policy(nodes,manager,engine,node_id)
+            policy_seconds=time.monotonic()-policy_start
+
+            def verified_state():
+                state=desired_provider(node_id)
+                current=nodes.desired_state(node_id,include_payload=False)
+                def acknowledged(row):
+                    return (not row.get('pending') and not row.get('last_error') and
+                            row.get('revision')==state['revision'] and
+                            row.get('hash')==state['hash'] and
+                            row.get('applied_revision')==state['revision'] and
+                            row.get('applied_hash')==state['hash'])
+                if not acknowledged(current):
+                    nodes.sync_desired_state(node_id,state,legacy_bundles=sync_provider(node_id))
+                    current=nodes.desired_state(node_id,include_payload=False)
+                if not acknowledged(current):
+                    raise PolicyError('Node has not acknowledged current quota/configuration')
+                command=nodes.commands.status(node_id)
+                return state,int(command.get('revision',0))
+
+            state,revision=verified_state()
+            refreshes=0
+            while True:
+                age=_challenge_hub_age(traffic)
+                stale=(age is not None and age>CHALLENGE_ACK_MAX_AGE_SECONDS)
+                if stale and refreshes>=MAX_CHALLENGE_REFRESHES:
+                    raise PolicyError('Accounting lease challenge remained too old after bounded refresh')
+                if stale:
+                    reason='slow-pregrant'
+                else:
+                    reason=''
+                    body={'challenge':traffic['accounting_lease'],
+                          'revision':state['revision'],'hash':state['hash'],
+                          'controlRevision':revision}
+                    try:
+                        doc,_ms=nodes._request(node_id,'/node/api/v1/accounting/lease','POST',body,10.0)
+                    except PolicyError as exc:
+                        # No automatic retry for auth/TLS, identity, policy,
+                        # configuration or control failures.
+                        retry=(getattr(exc,'status',None)==409 and
+                               str(exc)=='Node HTTP 409: Accounting lease challenge is expired, stale or unknown')
+                        if not retry or refreshes>=MAX_CHALLENGE_REFRESHES:
+                            raise
+                        reason='node-rejected-old-challenge'
+                    else:
+                        if not isinstance(doc,dict) or not doc.get('lease',{}).get('valid'):
+                            raise PolicyError('Node did not acknowledge a valid accounting lease')
+                        return doc['lease']
+                refreshes+=1
+                logger.warning('Node accounted lease challenge refresh: node=%s reason=%s age_s=%s policy_s=%.2f attempt=%d',
+                               node_id,reason,round(age,1) if age is not None else 'unknown',
+                               policy_seconds,refreshes)
+                # Reissue token only with a fully authenticated fresh traffic
+                # checkpoint committed to the native/Restore ledgers first.
+                traffic=nodes.sync_traffic(node_id)
+                if not traffic.get('accounting_lease'):
+                    raise PolicyError('Fresh accounted Node challenge missing')
+                require_accounted_snapshot(nodes,manager,node_id,traffic)
+                # New usage can cross a quota limit. Re-run strict accounting
+                # policy and any changed desired-state acknowledgement.
+                if traffic.get('charged_bytes'):
+                    verify_hub_accounting_policy(nodes,manager,engine,node_id)
+                state,revision=verified_state()
     except Exception as exc:
-        raise PolicyError('Accounting lease withheld: ' + str(exc)[:350]) from exc
+        raise PolicyError('Accounting lease withheld: '+str(exc)[:350]) from exc
 
 
 def require_accounted_snapshot(nodes, manager, node_id, traffic):

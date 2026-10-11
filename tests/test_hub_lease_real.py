@@ -243,3 +243,24 @@ def test_real_restore_and_native_share_lease_without_bypassing_quota(real_fleet,
         for node in f.agents:grant(f,node)
         assert r.restore.usage(r.rid)==before,'Restore was charged twice on repeated snapshots'
         f.evidence.update(mixed_restore_native_lease=True,restore_quota_before_recovery=True)
+
+
+def test_real_expired_challenge_recovers_with_metered_snapshot_without_xray_restart(real_fleet):
+    """Actual pinned HTTPS + real Xray; mocked monotonic time ONLY on isolated Nodes.
+
+    The first token expires under the Node's original 30s challenge deadline.
+    The HUB must import another full traffic snapshot, not grant on an old
+    token, and leave owned Xray, mirror identities and accumulated usage alone.
+    """
+    f=real_fleet;clocks=arm(f);node=f.agents[0]
+    core_pid=node.engine.process.pid
+    before=usage(f)
+    old=f.reg.sync_traffic(node.id)
+    assert old.get('accounting_lease')
+    clocks[0][0]+=31.25
+    recovered=f.http.app.state.renew_node_lease(node.id,old)
+    assert recovered['valid']
+    assert node.engine.running and node.engine.process.pid==core_pid
+    assert node.runtime.hub_lease.status()['trips']==0
+    assert usage(f)==before
+    assert f.reg.list()[0]['enabled']
