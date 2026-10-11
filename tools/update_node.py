@@ -10,7 +10,8 @@ REPO='https://github.com/darktunnelmika/dark-xray.git'
 SHA_RE=re.compile(r'[0-9a-f]{40}')
 BACKEND=('node_agent.py','node_runtime.py','node_recovery_protocol.py','core.py','dark_policy.py','unlimited_credit.py','guard_bridge.py','guardd.py','reality_scan.py','outbound_probe.py','warp_paths.py','traffic_matrix.py','node_updated.py','update_bridge.py')
 TOOLS=('fetch-core.py','import-core.py','update_node.py','node_manager.py')
-DEPLOY=('dark-xray-node.service','dark-xray-node-guard.service','dark-xray-node-update.service')
+DEPLOY=('dark-xray-node.service','dark-xray-node-guard.service','dark-xray-node-update.service',
+        'dark-xray-node-runtime-rotate.service','dark-xray-node-runtime-rotate.timer')
 ROOT_FILES=('requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md')
 SOURCE_FILES=tuple('backend/'+x for x in BACKEND)+tuple('tools/'+x for x in TOOLS)+tuple('deploy/'+x for x in DEPLOY)+ROOT_FILES
 
@@ -226,6 +227,8 @@ def install_logrotate():
 }
 '''
     atomic_bytes(LOGROTATE,raw,0o644,0,0)
+    # Timer is independent of the Agent and customer data plane.
+    run(['systemctl','enable','--now','dark-xray-node-runtime-rotate.timer'],timeout=20)
 
 def install_wrapper():
     if WRAPPER.is_symlink():raise RuntimeError('Unsafe darknode wrapper destination')
