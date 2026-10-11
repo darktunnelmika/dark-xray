@@ -259,7 +259,7 @@ def test_real_expired_challenge_recovers_with_metered_snapshot_without_xray_rest
     assert old.get('accounting_lease')
     clocks[0][0]+=31.25
     recovered=f.http.app.state.renew_node_lease(node.id,old)
-    assert recovered['valid'] is True
+    assert recovered['valid']
     assert node.engine.running and node.engine.process.pid==core_pid
     assert node.runtime.hub_lease.status()['trips']==0
     assert usage(f)==before
