@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Rollback-safe DARK XRAY source updater.
 
-The updater validates the candidate before downtime, checks the live installation,
-creates independent source + SQLite rollback snapshots, then activates the new
-source. A successful systemd restart is not enough: the local Doctor must also
-confirm configuration, SQLite integrity, panel route and a real web asset.
+The updater validates the candidate and snapshots the SQLite database with
+full integrity checks *while HUB remains live*, then stops the service only for
+the source swap. After restart a bounded local route/asset/schema probe
+determines availability; exhaustive Doctor checks remain separately available.
 
 If activation fails, only the previous source is restored before attempting
 service reactivation. Never automatically restore an older usage database over
@@ -292,17 +292,34 @@ def _compat_panel_route()->dict:
 
 
 def _doctor_once()->tuple[bool,str]:
-    cp=subprocess.run([APP/'.venv/bin/python',APP/'tools/doctor.py','--config',CONF/'config.json','--data',DATA],capture_output=True,text=True,check=False,timeout=15)
-    if cp.returncode:return False,'doctor exit '+str(cp.returncode)
-    try:doc=json.loads(cp.stdout);checks=doc.get('checks',{})
-    except Exception:return False,'doctor returned invalid JSON'
-    route=checks.get('panel_route') if isinstance(checks.get('panel_route'),dict) else {}
-    if not route and checks.get('configuration')=='ok' and checks.get('database')=='ok':
-        try:route=_compat_panel_route()
-        except Exception as ex:route={'ok':False,'probe':'legacy-compat','error':type(ex).__name__+': '+str(ex)[:180]}
-    ok=checks.get('configuration')=='ok' and checks.get('database')=='ok' and route.get('ok') is True
-    detail='config='+str(checks.get('configuration'))+', db='+str(checks.get('database'))+', panel='+str(route)
-    return ok,detail
+    """Bounded release probe, distinct from the exhaustive operator Doctor.
+
+    The updater performs a full SQLite quick_check before activation AND
+    verifies its complete independent backup while the old Hub is running.
+    Repeating a whole 1+ GiB quick_check during each restart can exceed both
+    the systemd service startup window and the Hub's 60s Node lease budget.
+    Here, confirm the *live* SQLite header/schema is readable, and HTTP UI +
+    web asset both return 200. Full Doctor remains an explicit operation.
+    This works before AND after upgrading an old installed Doctor binary.
+    """
+    try:
+        if CONF.is_symlink() or DB.is_symlink() or not (CONF/'config.json').is_file() or not DB.is_file():
+            return False,'configuration or database missing/unsafe'
+        cfg=json.loads((CONF/'config.json').read_text(encoding='utf-8'))
+        if not isinstance(cfg,dict):
+            return False,'configuration is not an object'
+        with sqlite3.connect(DB.resolve().as_uri()+'?mode=ro',uri=True,timeout=3) as db:
+            db.execute('PRAGMA query_only=ON')
+            # No full table scan: this is an availability probe, not the
+            # independently verified full database-integrity preflight.
+            exists=db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='core_clients' LIMIT 1").fetchone()
+            if exists is None:
+                return False,'live DB is missing its Core client schema'
+        route=_compat_panel_route()
+        ok=route.get('ok') is True and route.get('ui_status')==200 and route.get('asset_status')==200
+        return ok,'config=ok, db=readable-schema, panel='+str(route)
+    except (OSError,ValueError,sqlite3.Error,RuntimeError,KeyError,TypeError) as ex:
+        return False,'bounded probe failed: '+type(ex).__name__+': '+str(ex)[:200]
 
 
 def require_live_panel(timeout:float=10.0):
@@ -417,17 +434,31 @@ def main():
         source_backup=backups/f'pre-update-source-{stamp}.tar.gz';db_backup=backups/f'pre-update-db-{stamp}.sqlite3'
         _status('running','snapshot_source',60,'Creating rollback source snapshot')
         source_snapshot(source_backup);print('Rollback source snapshot:',source_backup)
-        guard_was_active=quiet(['systemctl','is-active','--quiet','dark-xray-guard.service']).returncode==0
-        quiet(['systemctl','stop','dark-xray.service'])
+        # Snapshot and its exhaustive quick_check are performed *online*.
+        # sqlite3.backup provides a consistent transaction while the panel
+        # continues to meter clients and renew Node leases. Source-only
+        # automatic rollback will NEVER replace current live usage with this
+        # earlier emergency image.
+        _status('running','snapshot_database',68,'Creating and integrity-checking independent SQLite backup while Hub remains live')
         try:
-            # Capture SQLite after the old service has flushed traffic and closed the DB.
-            _status('running','snapshot_database',68,'Stopping panel briefly and creating SQLite rollback snapshot')
-            database_preflight(DB);database_snapshot(db_backup);print('Rollback database snapshot:',db_backup)
+            database_snapshot(db_backup)
+            print('Independently verified online SQLite emergency backup:',db_backup)
         except Exception as ex:
-            # Source is still untouched here; restore availability immediately.
-            try:activate()
-            except Exception as restart_ex:raise SystemExit('Database snapshot failed and current panel could not be reactivated: '+str(restart_ex)) from ex
-            raise SystemExit('Database snapshot failed; current version was reactivated without changing source') from ex
+            # Crucially: the panel has not been stopped and no source changed.
+            raise SystemExit('Online SQLite backup validation failed; running HUB untouched: '+type(ex).__name__) from ex
+        guard_was_active=quiet(['systemctl','is-active','--quiet','dark-xray-guard.service']).returncode==0
+        _status('running','activation_cutover',72,'Validated backup complete; stopping Hub only for source swap')
+        try:
+            run(['systemctl','stop','dark-xray.service'])
+        except Exception as ex:
+            # No source was changed. Never leave the old HUB stopped on a
+            # systemd stop error or unclean shutdown timeout.
+            try:
+                run(['systemctl','start','dark-xray.service'])
+                require_live_panel(20.0)
+            except Exception as restart_ex:
+                raise SystemExit('CRITICAL: stop failed and existing HUB could not be restored: '+type(restart_ex).__name__) from ex
+            raise SystemExit('HUB cutover refused: stop failed; original service restarted with no source/database changes') from ex
         try:
             _status('running','apply_source',76,'Applying verified DARK source and runtime files')
             copy_source(src);install_runtime_files()
@@ -440,7 +471,7 @@ def main():
             raise SystemExit('Update failed; previous source restored; newer live usage database preserved')
         _source_info(candidate,candidate_version,UPDATE_REF)
         _status('success','complete',100,'DARK XRAY updated successfully; local health checks passed',finished_at=time.time(),installed={'commit':candidate,'version':candidate_version,'ref':UPDATE_REF},rollback_ok=None)
-        print('DARK XRAY updated successfully.');print('Installed source:',candidate);print('Local panel route/asset Doctor probe: passed');print('Run: darkxray')
+        print('DARK XRAY updated successfully.');print('Installed source:',candidate);print('Bounded local route/asset/database probe: passed');print('Run: darkxray')
     finally:
         shutil.rmtree(preflight,ignore_errors=True)
         if temp:shutil.rmtree(temp,ignore_errors=True)
