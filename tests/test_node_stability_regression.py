@@ -182,6 +182,7 @@ def test_valid_accounting_heartbeat_cannot_relabel_old_cpu_as_live(tmp_path, mon
         assert stale['health_sample_age_seconds'] >= 90
         assert stale['operational_health']['state'] == 'warning'
         assert stale['operational_health']['alerts'][0]['code'] == 'telemetry_stale'
+        assert stale['operational_health']['alerts'][0]['started_at'] < time.time()-45
         assignments = stale['assignments']
 
         # A genuine new /health probe and metric checkpoint restore LIVE.
