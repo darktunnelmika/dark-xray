@@ -74,7 +74,7 @@ class NodeRuntime:
         if not isinstance(self.installation_id,str) or not re.fullmatch(r'[0-9a-f]{32}',self.installation_id):
             raise PolicyError('Invalid persisted Node installation identity')
         self.hub_lease=HubLease(store,self.scope,required=engine.config.hub_lease_required)
-        self.engine.start_guard=lambda:self.hub_lease.allowed
+        self.engine.start_guard=lambda:self.hub_lease.allowed and not self.hub_lease.trip_recorded
         self.engine.wants_running=self.control_status()['effective_running']
 
     def control_status(self)->dict:
@@ -84,7 +84,7 @@ class NodeRuntime:
                 (self.scope,)).fetchone()
         desired=bool(row['desired_running']) if row else bool(self.engine.config.core_autostart)
         paused=bool(row['manual_stop']) if row else False
-        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused and self.hub_lease.allowed,
+        return {'desired_running':desired,'manual_stop':paused,'effective_running':desired and not paused and self.hub_lease.allowed and not self.hub_lease.trip_recorded,
                 'persisted':row is not None,'updated_at':float(row['updated_at']) if row else 0.0}
 
     def _write_control(self,db,desired:bool,paused:bool)->None:
@@ -190,7 +190,7 @@ class NodeRuntime:
             # restart. Maintenance retries the safe stop later.
             self.engine.wants_running=False
             return self.engine.command('stop')
-        if not self.hub_lease.allowed:raise CoreError('Waiting for Hub accounting lease before Start/Restart',status=503)
+        if not (self.hub_lease.allowed and not self.hub_lease.trip_recorded):raise CoreError('Waiting for Hub accounting lease before Start/Restart',status=503)
         with self.store.transaction() as db:self._write_control(db,True,False)
         try:return self.engine.command(action)
         except Exception:
