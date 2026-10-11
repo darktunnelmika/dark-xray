@@ -1385,6 +1385,22 @@ class NodeRegistry:
         return {'nodes':len(results),'items':results,'reset':True}
 
 
+    @staticmethod
+    def _monitor_desired_already_applied(state:dict,durable:dict,command:dict)->bool:
+        """Skip repeated expensive Node Apply ONLY for one exact durable ACK.
+
+        A pending control (including Start/Stop/Restart), policy drift, failed
+        apply or missing ACK always takes the original full-sync path.
+        """
+        return (not command.get('pending') and
+                type(state.get('revision')) is int and state['revision']>0 and
+                bool(state.get('hash')) and
+                not durable.get('pending') and not durable.get('last_error') and
+                durable.get('revision')==state['revision'] and
+                durable.get('hash')==state['hash'] and
+                durable.get('applied_revision')==state['revision'] and
+                durable.get('applied_hash')==state['hash'])
+
     def start(self,*,interval:float=60.0,initial_delay:float=5.0,sync_provider=None,desired_provider=None,traffic_callback=None,security_callback=None,lease_callback=None):
         import logging
         import math
@@ -1439,14 +1455,25 @@ class NodeRegistry:
                     if traffic_callback is not None and traffic.get('charged_bytes'):
                         step('policy',traffic_callback,node_id,traffic)
                     if not accounting_first:security()
+                    config_reapplied=False
                     if desired_provider is not None:
-                        bundles=step('bundles',sync_provider,node_id) if sync_provider is not None else None
                         state=step('desired',desired_provider,node_id)
-                        step('apply',self.sync_desired_state,node_id,state,legacy_bundles=bundles)
+                        durable=step('desired_ack',self.desired_state,node_id,include_payload=False)
+                        if self._monitor_desired_already_applied(state,durable,command):
+                            # The initial durable metered snapshot is enough:
+                            # no changed Node config/new mirror needs a second
+                            # checkpoint. The strict Lease policy still runs.
+                            record(identical_apply_skipped=True)
+                        else:
+                            bundles=step('bundles',sync_provider,node_id) if sync_provider is not None else None
+                            step('apply',self.sync_desired_state,node_id,state,legacy_bundles=bundles)
+                            config_reapplied=True
+                            record(identical_apply_skipped=False)
                     elif sync_provider is not None:
                         bundles=step('bundles',sync_provider,node_id)
                         step('apply',self.sync_mirrors,node_id,bundles)
-                    if desired_provider is not None or sync_provider is not None:
+                        config_reapplied=True
+                    if config_reapplied:
                         traffic=step('post_traffic',self.sync_traffic,node_id)
                         if traffic_callback is not None and traffic.get('charged_bytes'):
                             step('post_policy',traffic_callback,node_id,traffic)
