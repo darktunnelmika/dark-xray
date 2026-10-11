@@ -20,12 +20,14 @@ function nv6Num(value){const n=Number(value);return Number.isFinite(n)?n:null;}
 function nv6Pct(value){const n=nv6Num(value);return n===null?'—':Math.max(0,Math.min(100,n)).toFixed(n>=10?0:1)+'%';}
 function nv6Duration(value){let s=Math.max(0,Number(value)||0);if(s<60)return Math.floor(s)+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d '+Math.floor((s%86400)/3600)+'h';}
 function nv6Rate(value){const n=nv6Num(value);return n===null?'—':bytes(Math.max(0,n))+'/s';}
-function nv6Fresh(n){return n&&n.telemetry_state==='fresh'&&Number(n.telemetry_age_seconds)<=NV6_FRESH_SECONDS;}
+function nv6SampleState(n){return n?.health_sample_state||n?.telemetry_state||'offline';}
+function nv6SampleAge(n){return n?.health_sample_age_seconds??n?.telemetry_age_seconds;}
+function nv6Fresh(n){return n&&nv6SampleState(n)==='fresh'&&Number(nv6SampleAge(n))<=NV6_FRESH_SECONDS;}
 function nv6Live(n,value,formatter=v=>String(v)){return nv6Fresh(n)&&value!==undefined&&value!==null?formatter(value):'—';}
 function nv6TelemetryLabel(n){
  if(!n.enabled)return L('Disabled','غیرفعال');
- if(n.telemetry_state==='fresh')return L('LIVE','زنده');
- if(n.telemetry_state==='stale')return L('STALE','قدیمی');
+ if(nv6SampleState(n)==='fresh')return L('LIVE','زنده');
+ if(nv6SampleState(n)==='stale')return L('STALE','قدیمی');
  return L('OFFLINE','آفلاین');
 }
 const nv7AlertLabels={
@@ -77,7 +79,7 @@ function nv6Patch(nodes){
    if(next)current.replaceWith(next);
   }
  }
- const fresh=nodes.filter(n=>n.telemetry_state==='fresh').length,stale=nodes.filter(n=>n.telemetry_state==='stale').length,offline=nodes.filter(n=>n.telemetry_state==='offline').length,pending=nodes.filter(n=>n.desired_state?.pending||n.control?.pending).length;
+ const fresh=nodes.filter(n=>nv6SampleState(n)==='fresh').length,stale=nodes.filter(n=>nv6SampleState(n)==='stale').length,offline=nodes.filter(n=>nv6SampleState(n)==='offline').length,pending=nodes.filter(n=>n.desired_state?.pending||n.control?.pending).length;
  const warning=nodes.filter(n=>nv7Ops(n).state==='warning').length,critical=nodes.filter(n=>nv7Ops(n).state==='critical').length;
  for(const [key,value] of Object.entries({nodes:nodes.length,fresh,stale,offline,warning,critical,pending})){const el=document.querySelector('[data-nv6-summary="'+key+'"]');if(el)el.textContent=fa(value);}
  const banner=document.getElementById('nv7-fleet-health');if(banner)banner.innerHTML=nv7FleetAlerts(nodes);
@@ -128,12 +130,12 @@ function controlMessage(r,action){
 }
 function nodeCard(n){
  const h=n.health||{},core=h.core||{},sys=h.system||{},fresh=nv6Fresh(n),ops=nv7Ops(n);
- const status=!n.enabled?'disabled':n.telemetry_state==='fresh'?'online':n.telemetry_state==='stale'?'stale':n.last_error?'error':'offline';
+ const sampleState=nv6SampleState(n),status=!n.enabled?'disabled':sampleState==='fresh'?'online':sampleState==='stale'?'stale':n.last_error?'error':'offline';
  const desired=n.desired_state||{},assigned=assignedNames(n),pending=!!desired.pending;
  const memPct=sys.memory?.percent??sys.memory_percent,diskPct=sys.disk?.percent??sys.disk_percent,net=sys.network||{},conn=sys.connections||{};
  const lease=h.hub_lease,leaseLabel=!fresh?L('No fresh report','گزارش تازه ندارد'):!lease?L('Agent update required','نیازمند آپدیت نود'):!lease.required?L('Awaiting activation','در انتظار فعال‌سازی'):lease.valid?L('Active · 60s limit','فعال · مهلت ۶۰ ثانیه'):L('Blocked · awaiting Hub','متوقف · در انتظار هاب');
  const desiredLabel=desired.last_error?L('ERROR','خطا'):pending?L('PENDING r','در انتظار r')+String(desired.revision||0):desired.revision?L('SYNCED','همگام'):L('NOT DEPLOYED','مستقر نشده');
- const age=n.telemetry_age_seconds===null||n.telemetry_age_seconds===undefined?'—':nv6Duration(n.telemetry_age_seconds);
+ const sampleAge=nv6SampleAge(n),age=sampleAge===null||sampleAge===undefined?'—':nv6Duration(sampleAge);
  return `<article class="panel nv2-node nv6-node nv7-${e(ops.state||'disabled')} ${fresh?'nv6-fresh':'nv6-not-fresh'}" data-nv6-node="${e(n.id)}"><div class="nv2-head"><div><h3>${e(n.name)}</h3><small>${e(n.origin)} · ${e(n.data_address||'—')}</small></div><div class="nv2-status ${status}"><i></i><b>${e(nv6TelemetryLabel(n))}</b></div></div>
  ${nv7HealthPanel(n)}
  <div class="nv6-live-strip"><span>${e(L('Last report','آخرین گزارش'))}: <b>${e(age)}</b></span><span>${e(L('Latency','تأخیر'))}: <b>${fresh&&n.last_latency_ms?e(n.last_latency_ms)+' ms':'—'}</b></span><span>Xray: <b>${fresh?e(core.state||'—'):'—'}</b></span></div>
@@ -181,7 +183,7 @@ function inboundOrchestration(row){
 async function nodesPage(){
  let d=await loadNodes(),errs='';
  if(d.nodeError)errs+=`<div class="notice error">${L('Node registry could not be loaded: ','فهرست نودها دریافت نشد: ')}${e(d.nodeError)}</div>`;
- const fresh=d.nodes.filter(x=>x.telemetry_state==='fresh').length,stale=d.nodes.filter(x=>x.telemetry_state==='stale').length,offline=d.nodes.filter(x=>x.telemetry_state==='offline').length,pending=d.nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
+ const fresh=d.nodes.filter(x=>nv6SampleState(x)==='fresh').length,stale=d.nodes.filter(x=>nv6SampleState(x)==='stale').length,offline=d.nodes.filter(x=>nv6SampleState(x)==='offline').length,pending=d.nodes.filter(x=>x.desired_state?.pending||x.control?.pending).length;
  const warning=d.nodes.filter(x=>nv7Ops(x).state==='warning').length,critical=d.nodes.filter(x=>nv7Ops(x).state==='critical').length;
  return heading(L('Nodes','نودها'),L('Live fleet resources, health score, capacity and remote operations from the Hub.','منابع زنده، امتیاز سلامت، ظرفیت و عملیات راه‌دور از داخل Hub.'),button(L('Add Node','افزودن نود'),'nv2new','plus','',true))+
  `<div class="nv2">${errs}<section class="nv5-fleet-head nv6-fleet-head nv7-fleet-head"><div><div><small>${L('Nodes','نودها')}</small><b data-nv6-summary="nodes">${fa(d.nodes.length)}</b></div><div><small>${L('Live','زنده')}</small><b data-nv6-summary="fresh">${fa(fresh)}</b></div><div><small>${L('Stale','قدیمی')}</small><b data-nv6-summary="stale">${fa(stale)}</b></div><div><small>${L('Offline','آفلاین')}</small><b data-nv6-summary="offline">${fa(offline)}</b></div><div><small>${L('Warnings','هشدار')}</small><b data-nv6-summary="warning">${fa(warning)}</b></div><div><small>${L('Critical','بحرانی')}</small><b data-nv6-summary="critical">${fa(critical)}</b></div><div><small>${L('Pending','در انتظار')}</small><b data-nv6-summary="pending">${fa(pending)}</b></div></div><p>${L('Health and capacity use fresh CPU/RAM/load plus Xray, disk, Hub lease and accounting state. Stale data is never treated as live. Tunnel health is intentionally excluded.','سلامت و ظرفیت از CPU/RAM/Load تازه به‌همراه وضعیت Xray، دیسک، مجوز Hub و حسابداری ساخته می‌شوند. داده قدیمی هرگز زنده حساب نمی‌شود. سلامت Tunnel عمداً خارج است.')}</p></section><div id="nv7-fleet-health">${nv7FleetAlerts(d.nodes)}</div>
