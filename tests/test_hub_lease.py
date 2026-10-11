@@ -299,6 +299,41 @@ def test_rejected_challenge_never_rearms_watchdog(tmp_path):
         assert response.status_code==409
         watcher.notify.assert_not_called()
 
+
+def test_valid_lease_near_expiry_stops_xray_without_killing_agent(tmp_path):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine));grant(f)
+        guard=f.app.state.lease_guard;watcher=guard.watchdog
+        watcher.notify=Mock(return_value=True)
+        watcher.trigger=Mock()
+        f.clock[0]=150.1  # Still valid, 9.9s before hard 60s grant expiry.
+        guard.tick()
+        assert not f.engine.running
+        assert f.runtime.hub_lease.allowed  # The grant was not prolonged.
+        assert not f.runtime.control_status()['manual_stop']
+        assert f.runtime.hub_lease.status()['trips']==1
+        assert 'Proactive lease safety Stop' in f.runtime.hub_lease.status()['last_error']
+        watcher.notify.assert_called_once_with()
+        watcher.trigger.assert_not_called()
+        restored=grant(f)
+        assert restored['lease']['valid'] and f.engine.running
+        assert f.runtime.hub_lease.deadline==210.1
+
+
+def test_new_grant_before_early_fence_preserves_running_xray(tmp_path):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine));grant(f)
+        old_pid=f.engine.process.pid
+        f.clock[0]=149.9 # 10.1s left, not yet inside early fence.
+        f.app.state.lease_guard.tick()
+        assert f.engine.running and f.engine.process.pid==old_pid
+        grant(f) # A real authenticated renewal extends authority.
+        f.clock[0]=150.2
+        f.app.state.lease_guard.tick()
+        assert f.engine.running and f.engine.process.pid==old_pid
+        assert f.runtime.hub_lease.status()['trips']==0
+
+
 def test_quota_metadata_only_revision_reuses_exact_running_validation(tmp_path,monkeypatch):
     with guarded_agent(tmp_path/'node') as f:
         body=payload(f.engine);post_state(f.api,body);grant(f)
