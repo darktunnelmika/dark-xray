@@ -315,6 +315,16 @@ def test_valid_lease_near_expiry_stops_xray_without_killing_agent(tmp_path):
         assert 'Proactive lease safety Stop' in f.runtime.hub_lease.status()['last_error']
         watcher.notify.assert_called_once_with()
         watcher.trigger.assert_not_called()
+        # A still-active OLD grant is no longer permitted to auto-restart
+        # Xray after the early safety fence. This is independent of the
+        # ordinary startup path and also covers background EngineLoop.flush.
+        assert f.runtime.hub_lease.allowed
+        assert f.runtime.control_status()['effective_running'] is False
+        assert f.runtime.reconcile_control() is False
+        f.engine.flush()
+        assert not f.engine.running
+        with pytest.raises(CoreError):
+            f.engine.command('start')
         restored=grant(f)
         assert restored['lease']['valid'] and f.engine.running
         assert f.runtime.hub_lease.deadline==210.1
