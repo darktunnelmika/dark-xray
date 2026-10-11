@@ -79,6 +79,7 @@ python -m pytest tests/test_sync_redaction.py -q --junitxml=qa/junit/sync-redact
 python -m pytest tests/test_backup_hardening.py -q --junitxml=qa/junit/backup-hardening.xml
 python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
 python -m pytest tests/test_update_transaction.py -q --junitxml=qa/junit/update-transaction.xml
+python -m pytest tests/test_node_update_preserve_accounting.py -q --junitxml=qa/junit/node-preserve-accounting.xml
 python -m pytest tests/test_hub_shutdown.py -q --junitxml=qa/junit/hub-shutdown.xml
 python -m pytest tests/test_hub_runtime_log_rotation.py -q --junitxml=qa/junit/hub-runtime-logs.xml
 python -m pytest tests/test_node_runtime_log_rotation.py -q --junitxml=qa/junit/node-log-rotation.xml

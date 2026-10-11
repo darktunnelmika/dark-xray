@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import io
+import tarfile
 import sqlite3
 from pathlib import Path
 
@@ -123,3 +125,31 @@ def test_status_clears_stale_error_on_successful_rollback(tmp_path,monkeypatch):
     doc=json.loads(status.read_text())
     assert doc['state']=='rolled_back' and doc['rollback_ok'] is True
     assert 'error' not in doc
+
+
+
+@pytest.mark.parametrize('reactivation_ok',[True,False])
+def test_automatic_source_rollback_never_overwrites_newer_live_usage(tmp_path,monkeypatch,reactivation_ok):
+    app=tmp_path/'app';app.mkdir()
+    (app/'VERSION').write_text('candidate')
+    live=tmp_path/'live.sqlite3';older=tmp_path/'pre-update.sqlite3'
+    make_db(live,'newer-metered-bytes')
+    make_db(older,'older-metered-bytes')
+    archive=tmp_path/'source.tar.gz'
+    with tarfile.open(archive,'w:gz') as tf:
+        data=b'previous-source\n';member=tarfile.TarInfo('VERSION')
+        member.size=len(data);tf.addfile(member,io.BytesIO(data))
+    monkeypatch.setattr(UPDATE,'APP',app)
+    monkeypatch.setattr(UPDATE,'quiet',lambda *a,**kw:None)
+    monkeypatch.setattr(UPDATE,'install_runtime_files',lambda:None)
+    monkeypatch.setattr(UPDATE,'normalize_source_permissions',lambda *a:None)
+    monkeypatch.setattr(UPDATE,'restore_database',lambda *a:pytest.fail('automatic rollback replaced live usage!'))
+    monkeypatch.setattr(UPDATE,'reactivate_previous_panel',
+        (lambda:None) if reactivation_ok else (lambda: (_ for _ in ()).throw(RuntimeError('old core rejected new database schema'))))
+    states=[]
+    monkeypatch.setattr(UPDATE,'_status',lambda state,*a,**kw:states.append((state,kw)))
+    assert UPDATE.rollback(archive,older,False) is reactivation_ok
+    assert (app/'VERSION').read_text()=='previous-source\n'
+    assert value(live)=='newer-metered-bytes'
+    assert value(older)=='older-metered-bytes'
+    assert states[-1][1]['usage_database_preserved'] is True

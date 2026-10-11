@@ -303,14 +303,14 @@ def test_node_update_failure_before_venv_switch_never_deletes_old_environment(tm
     def broken_copy(_src):raise OSError('injected copy failure before venv rename')
     monkeypatch.setattr(updater,'copy_source',broken_copy)
     monkeypatch.setattr(updater,'health_probe',lambda **kwargs:{'service':'DARK XRAY NODE'})
-    with pytest.raises(RuntimeError,match='database restored'):
+    with pytest.raises(RuntimeError,match='LIVE accounting database preserved'):
         updater.activate_candidate(src,venv,'b'*40,'0.9.0-rc8','b'*40,transaction)
     executable=app/'.venv/bin/python'
     assert executable.read_text()=='old-interpreter' and executable.stat().st_mode&0o111
     assert updater.current_source()['commit']=='a'*40
 
 
-def test_node_update_failed_health_restores_source_database_and_venv(tmp_path,monkeypatch):
+def test_node_update_failed_health_restores_source_venv_but_preserves_newer_database(tmp_path,monkeypatch):
     import sqlite3
     updater,app,data,src,venv,transaction,calls=update_fixture(tmp_path,monkeypatch)
     def health(**kwargs):
@@ -321,13 +321,13 @@ def test_node_update_failed_health_restores_source_database_and_venv(tmp_path,mo
             raise RuntimeError('injected post-start health failure')
         return {'service':'DARK XRAY NODE'}
     monkeypatch.setattr(updater,'health_probe',health)
-    with pytest.raises(RuntimeError,match='database restored'):
+    with pytest.raises(RuntimeError,match='LIVE accounting database preserved'):
         updater.activate_candidate(src,venv,'b'*40,'0.9.0-rc8','b'*40,transaction)
     assert (app/'VERSION').read_text()=='0.9.0-rc7'
     assert (app/'.venv/bin/python').read_text()=='old-interpreter'
     with contextlib.closing(sqlite3.connect(data/'node.sqlite3')) as db, db:
-        assert db.execute('SELECT value FROM retained').fetchone()[0]=='before-update'
-        assert not db.execute("SELECT name FROM sqlite_master WHERE name='injected_new_schema'").fetchone()
+        assert db.execute('SELECT value FROM retained').fetchone()[0]=='new-generation'
+        assert db.execute("SELECT name FROM sqlite_master WHERE name='injected_new_schema'").fetchone()
         assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
     assert updater.current_source()['commit']=='a'*40
 

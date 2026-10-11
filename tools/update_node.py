@@ -308,7 +308,10 @@ def _activate_preflighted(src:Path,new_venv:Path,commit:str,version:str,ref:str,
                 os.rename(saved_venv,old_venv)
             attempt('venv',recover_venv)
         # A failure before the rename must NEVER delete the only usable venv.
-        if database_info is not None:attempt('database',lambda:restore_database(database,database_info))
+        # Snapshot stays available for explicit emergency recovery only.
+        # New Agent may have accounted newer bytes before activation failed;
+        # NEVER silently roll back customer usage with stale Node SQLite.
+        # We restore source/env/identity but leave LIVE accounting untouched.
         attempt('source-identity',lambda:atomic_bytes(meta,meta_bytes,0o640,meta_info.st_uid,meta_info.st_gid))
         attempt('units',install_units)
         attempt('wrapper',install_wrapper)
@@ -317,7 +320,7 @@ def _activate_preflighted(src:Path,new_venv:Path,commit:str,version:str,ref:str,
         attempt('start',lambda:run(['systemctl','start','dark-xray-node.service'],timeout=30))
         attempt('health',lambda:health_probe(expected_version=previous['version']))
         if errors:raise RuntimeError('Node update failed; rollback incomplete: '+','.join(errors)) from cause
-        raise RuntimeError('Node update failed; previous source, environment and database restored') from cause
+        raise RuntimeError('Node update failed; previous source and environment restored; LIVE accounting database preserved') from cause
     shutil.rmtree(saved_venv,ignore_errors=True)
     return {'updated':True,'commit':commit,'version':version,'rollback':str(transaction)}
 

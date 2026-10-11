@@ -175,7 +175,7 @@ def main():
                     updater.activate_candidate(ROOT,venv,a.expected_commit,version,'ci-node-update',second)
                     raise RuntimeError('Injected failure was not propagated')
                 except RuntimeError as exc:
-                    require('previous source, environment and database restored' in str(exc),'Rollback did not complete')
+                    require('previous source and environment restored; LIVE accounting database preserved' in str(exc),'Rollback did not complete')
                 finally:updater.health_probe=real_probe
                 require(injected,'Fault injection did not execute')
                 wait_health(a.expected_commit,running=False)
@@ -183,12 +183,12 @@ def main():
                 proxy_request(proxy_port,target.server_port)
                 with sqlite3.connect(DATA/'node.sqlite3') as db:
                     require(db.execute('PRAGMA quick_check').fetchone()[0]=='ok','Rollback SQLite is corrupt')
-                    require(not db.execute("SELECT 1 FROM sqlite_master WHERE name='ci_new_schema_probe'").fetchone(),'Candidate schema was not rolled back')
+                    require(db.execute("SELECT 1 FROM sqlite_master WHERE name='ci_new_schema_probe'").fetchone(),'Candidate schema probe was unexpectedly deleted')
                 state=agent_request('/node/api/v1/state')
                 require(state.get('appliedRevision')==1 and state.get('appliedHash')==digest,'Deployment state was lost during update')
                 metadata=(DATA/'installed-source.json').stat()
                 require(metadata.st_gid==pwd.getpwnam('darkxray').pw_gid and metadata.st_mode&0o777==0o640,'Agent source readability was lost')
-                report['checks'].extend(['injected failure restores source, environment and SQLite',
+                report['checks'].extend(['injected failure restores source/env without deleting newer SQLite',
                                          'real VLESS traffic after rollback','revision and source metadata preserved'])
         # Disposable fixed-identity CI Node only. Suspend the entire Agent,
         # not just an HTTP route; systemd must reap its owned Xray cgroup.

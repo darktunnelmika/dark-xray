@@ -6,8 +6,9 @@ creates independent source + SQLite rollback snapshots, then activates the new
 source. A successful systemd restart is not enough: the local Doctor must also
 confirm configuration, SQLite integrity, panel route and a real web asset.
 
-If activation fails after the new code has touched the database, both source and
-database are restored before the previous service is reactivated.
+If activation fails, only the previous source is restored before attempting
+service reactivation. Never automatically restore an older usage database over
+a live database that may contain newer metered customer traffic.
 """
 from __future__ import annotations
 import argparse,json,os,re,shutil,socket,sqlite3,ssl,subprocess,sys,tarfile,tempfile,time,uuid
@@ -349,8 +350,11 @@ def reactivate_previous_panel(timeout:float=120.0):
 
 
 def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
-    _status('rolling_back','rollback',88,'Activation failed; restoring previous DARK XRAY source and database')
-    print('Update activation failed; restoring previous DARK XRAY source + database...',file=sys.stderr)
+    # New startup/traffic may already have written newer metered bytes to
+    # live SQLite. A rollback MUST NOT replace those counters with this
+    # transaction's older emergency snapshot, even if code activation failed.
+    _status('rolling_back','rollback',88,'Activation failed; restoring previous source while preserving live usage database',usage_database_preserved=True)
+    print('Update activation failed; restoring previous source only (LIVE usage DB preserved).',file=sys.stderr)
     quiet(['systemctl','stop','dark-xray.service'])
     try:
         clear_installed_source()
@@ -360,13 +364,14 @@ def rollback(source_backup:Path,db_backup:Path,guard_was_active:bool)->bool:
                 if APP.resolve() not in target.parents and target!=APP.resolve():raise RuntimeError('Unsafe rollback archive member')
             tf.extractall(APP,filter='data')
         normalize_source_permissions(APP)
-        restore_database(db_backup)
+        # The independent db_backup is retained for manual, audited recovery
+        # only. It must never be automatically activated after any writes.
         install_runtime_files();reactivate_previous_panel()
         if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
-        _status('rolled_back','rollback',100,'Update failed; previous DARK XRAY source and database were restored successfully',finished_at=time.time(),rollback_ok=True)
-        print('Previous DARK XRAY source and database restored; panel route is healthy.',file=sys.stderr);return True
+        _status('rolled_back','rollback',100,'Update failed; previous source restored; live usage database preserved',finished_at=time.time(),rollback_ok=True,usage_database_preserved=True)
+        print('Previous DARK XRAY source restored; LIVE usage database preserved and panel route healthy.',file=sys.stderr);return True
     except Exception as ex:
-        _status('failed','rollback_failed',100,'CRITICAL: automatic rollback could not reactivate the previous installation',finished_at=time.time(),rollback_ok=False,error=type(ex).__name__+': '+str(ex)[:300])
+        _status('failed','rollback_failed',100,'CRITICAL: source rollback could not reactivate old code; live usage DB was NOT replaced. Manual review required.',finished_at=time.time(),rollback_ok=False,usage_database_preserved=True,error=type(ex).__name__+': '+str(ex)[:300])
         print('CRITICAL: rollback could not reactivate previous installation: '+type(ex).__name__+': '+str(ex)[:300],file=sys.stderr)
         quiet(['systemctl','status','dark-xray.service','--no-pager','-l']);return False
 
@@ -431,8 +436,8 @@ def main():
             if guard_was_active:run(['systemctl','restart','dark-xray-guard.service'])
         except Exception:
             ok=rollback(source_backup,db_backup,guard_was_active)
-            if not ok:raise SystemExit('Update failed and automatic source/database rollback also failed; inspect systemd and rollback snapshots')
-            raise SystemExit('Update failed; previous source + database were restored successfully')
+            if not ok:raise SystemExit('Update failed; previous source could not be reactivated. Live usage DB preserved; manually inspect source backup and systemd. DO NOT overwrite live database.')
+            raise SystemExit('Update failed; previous source restored; newer live usage database preserved')
         _source_info(candidate,candidate_version,UPDATE_REF)
         _status('success','complete',100,'DARK XRAY updated successfully; local health checks passed',finished_at=time.time(),installed={'commit':candidate,'version':candidate_version,'ref':UPDATE_REF},rollback_ok=None)
         print('DARK XRAY updated successfully.');print('Installed source:',candidate);print('Local panel route/asset Doctor probe: passed');print('Run: darkxray')
