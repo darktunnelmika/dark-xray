@@ -81,9 +81,20 @@ def renew_accounting_lease(nodes, manager, engine, node_id, traffic, desired_pro
         with nodes.installations.operation(node_id):
             verify_hub_accounting_policy(nodes, manager, engine, node_id)
             state = desired_provider(node_id)
-            nodes.sync_desired_state(node_id, state, legacy_bundles=sync_provider(node_id))
             current = nodes.desired_state(node_id, include_payload=False)
-            if current.get('pending') or current.get('last_error') or current['revision'] != state['revision']:
+            def acknowledged(snapshot):
+                return (not snapshot.get('pending') and not snapshot.get('last_error') and
+                        snapshot.get('revision') == state['revision'] and
+                        snapshot.get('hash') == state['hash'] and
+                        snapshot.get('applied_revision') == state['revision'] and
+                        snapshot.get('applied_hash') == state['hash'])
+            # Skip repeated full apply ONLY after the monitor has already
+            # durably confirmed matching desired/applied revision+hash.
+            # Current Hub accounting, quota and policy checks still run first.
+            if not acknowledged(current):
+                nodes.sync_desired_state(node_id, state, legacy_bundles=sync_provider(node_id))
+                current = nodes.desired_state(node_id, include_payload=False)
+            if not acknowledged(current):
                 raise PolicyError('Node has not acknowledged current quota/configuration')
             command = nodes.commands.status(node_id)
             body = {'challenge': challenge, 'revision': state['revision'], 'hash': state['hash'],
