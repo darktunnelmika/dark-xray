@@ -501,7 +501,33 @@ class NodeRegistry:
             stable=self._transport_stable(r)
             r['telemetry_state']='fresh' if r['enabled'] and age is not None and age<=45 and stable else ('stale' if r['enabled'] and age is not None and age<180 else 'offline')
             r['online']=bool(r['enabled'] and r['last_seen'] and age is not None and age<180 and stable)
-            r['operational_health']=self._operations_health(r)
+            # Transport reachability and the last genuine system/CPU/Xray
+            # health sample are NOT the same clock. Every successful traffic,
+            # control or lease request refreshes last_seen, even if /health
+            # probes have stopped working. Do not display old CPU/RAM as LIVE.
+            # Read the indexed Hub-side telemetry table only; no extra Node
+            # HTTPS requests, no schema migration, no routing/lease changes.
+            with self.store.lock:
+                sample_at=self.store.db.execute(
+                    'SELECT MAX(captured_at) FROM remote_node_metrics WHERE node_id=?',
+                    (r['id'],)).fetchone()[0]
+            sample_age=max(0.0,now-float(sample_at)) if sample_at is not None else None
+            r['health_sample_at']=float(sample_at) if sample_at is not None else None
+            r['health_sample_age_seconds']=round(sample_age,1) if sample_age is not None else None
+            # For upgraded installations without any retained metrics, keep
+            # the legacy classification until their first successful probe.
+            sample_state=(None if sample_age is None else
+                          'disabled' if not r['enabled'] else
+                          'offline' if not r['online'] else
+                          'fresh' if r['telemetry_state']=='fresh' and sample_age<=45 else
+                          'stale')
+            r['health_sample_state']=sample_state
+            # Health/capacity alerts also require real fresh samples. Keep
+            # network routing based on separately validated last_seen/Lease.
+            operations_node=r if sample_state is None else {
+                **r,'telemetry_state':sample_state,
+                'telemetry_age_seconds':max(sample_age,age or 0.0)}
+            r['operational_health']=self._operations_health(operations_node)
             r['operational_health']['alerts']=self._annotate_alert_times(r,r['operational_health'].get('alerts',[]),now)
             with self.store.lock:
                 ds=self.store.db.execute('SELECT revision,desired_hash,updated_at,applied_revision,applied_hash,applied_at,last_error FROM remote_node_desired_state WHERE node_id=?',(r['id'],)).fetchone()
