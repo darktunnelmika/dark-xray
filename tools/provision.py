@@ -56,7 +56,7 @@ def main():
     if Path('/usr/local/bin/darkxray').exists():raise SystemExit('An existing darkxray command was found; nothing overwritten')
     if a.port in [22,10085,*a.ssh_port]:raise SystemExit('Panel port overlaps SSH or the core API')
     bootstrap_password=owner_password()
-    if a.install_os_packages:run(['apt-get','update']);run(['apt-get','install','-y','python3-venv','ca-certificates'])
+    if a.install_os_packages:run(['apt-get','update']);run(['apt-get','install','-y','python3-venv','ca-certificates','logrotate'])
     try:account=pwd.getpwnam('darkxray')
     except KeyError:run(['useradd','--system','--home-dir',str(DATA),'--shell','/usr/sbin/nologin','darkxray']);account=pwd.getpwnam('darkxray')
     if account.pw_uid==0:raise SystemExit('Service account must not be root')
@@ -106,6 +106,7 @@ exec /opt/dark-xray/darkxray "$@"
                  'version':(APP/'VERSION').read_text(encoding='utf-8').strip(),'ref':'fresh-install','installed_at':time.time()}
     source_path=DATA/'installed-source.json';source_path.write_text(json.dumps(source_info,indent=2)+'\n',encoding='utf-8')
     os.chmod(source_path,0o640);os.chown(source_path,0,account.pw_gid)
+    run([sys.executable,APP/'tools/install_hub_logrotate.py'])
     run(['systemctl','daemon-reload'])
     run(['systemctl','enable','--now','dark-xray-update.service'])
     run(['systemctl','enable','--now','dark-xray.service'])

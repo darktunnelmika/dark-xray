@@ -1,0 +1,11 @@
+[Unit]
+Description=DARK XRAY HUB runtime log rotation every 15 minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/15:00
+AccuracySec=1min
+Persistent=true
+Unit=dark-xray-runtime-rotate.service
+
+[Install]
+WantedBy=timers.target

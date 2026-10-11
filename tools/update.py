@@ -244,6 +244,9 @@ def install_runtime_files():
         # one-time bootstrap from older RC builds.
         quiet(['systemctl','disable','--now','dark-xray-update.service'])
         installed_update_unit.unlink(missing_ok=True)
+    # Optional standalone log rotation; no service or customer DB restart.
+    rotation=APP/'tools/install_hub_logrotate.py'
+    if rotation.is_file():run([sys.executable,rotation])
     write_wrapper();run(['systemctl','daemon-reload']);run(['systemctl','enable','dark-xray.service'])
     if update_unit.is_file() and not update_unit.is_symlink():
         # --now on an already-active broker is a no-op; on the first CLI
