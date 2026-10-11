@@ -156,3 +156,54 @@ def test_security_error_is_immediate_and_not_cleared_by_a_timeout(tmp_path, monk
     finally:
         registry.close()
         store.close()
+
+
+def test_valid_accounting_heartbeat_cannot_relabel_old_cpu_as_live(tmp_path, monkeypatch):
+    """A transport OK / lease ACK proves reachability, not recent CPU/RAM."""
+    import time
+    import nodes as nodes_module
+    monkeypatch.setattr(nodes_module.socket, 'getaddrinfo',
+                        lambda *args, **kwargs: [(2, 1, 6, '', ('93.184.216.34', 443))])
+    store = Store(tmp_path/'telemetry-separation.sqlite3')
+    registry = NodeRegistry(store, Auth(store, tmp_path/'key').cipher)
+    try:
+        registry.put('health', 'Health', 'https://health.example',
+                     'dkn_'+'H'*60, True)
+        old_at = time.time()-95
+        with store.transaction() as db:
+            db.execute('INSERT INTO remote_node_metrics(node_id,captured_at) VALUES(?,?)',
+                       ('health', old_at))
+        for _ in range(6):
+            registry._request_ok('health', 5)
+        stale = registry.list()[0]
+        assert stale['online'] is True
+        assert stale['telemetry_state'] == 'fresh'  # Real control-plane is OK.
+        assert stale['health_sample_state'] == 'stale'
+        assert stale['health_sample_age_seconds'] >= 90
+        assert stale['operational_health']['state'] == 'warning'
+        assert stale['operational_health']['alerts'][0]['code'] == 'telemetry_stale'
+        assignments = stale['assignments']
+
+        # A genuine new /health probe and metric checkpoint restore LIVE.
+        with store.transaction() as db:
+            db.execute('INSERT INTO remote_node_metrics(node_id,captured_at) VALUES(?,?)',
+                       ('health', time.time()))
+        fresh = registry.list()[0]
+        assert fresh['online'] is True
+        assert fresh['health_sample_state'] == 'fresh'
+        assert fresh['health_sample_age_seconds'] < 3
+        assert fresh['assignments'] == assignments
+
+        # The routing hysteresis still applies independently of the display.
+        registry._request_failed('health', 'Node connection failed: TimeoutError')
+        once = registry.list()[0]
+        assert once['online'] and once['health_sample_state'] == 'fresh'
+        registry._request_failed('health', 'Node connection failed: TimeoutError')
+        assert registry.list()[0]['online']
+        registry._request_failed('health', 'Node connection failed: TimeoutError')
+        offline = registry.list()[0]
+        assert not offline['online'] and offline['health_sample_state'] == 'offline'
+        assert offline['assignments'] == assignments
+    finally:
+        registry.close()
+        store.close()
