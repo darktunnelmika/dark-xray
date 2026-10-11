@@ -463,6 +463,13 @@ def make_agent_app(engine:CoreEngine,store:Store,token:AgentToken,node_id:str,*,
             if runtime.control_status()['effective_running'] and (not engine.running or
                     engine.config_hash(engine.build_config()) != engine.applied_hash):
                 engine.command('start')
+            # Re-arm PID 1 at the exact authenticated ACK boundary. Otherwise
+            # a prior near-expiry notification can time out before the safety
+            # loop's next scheduled heartbeat, despite this fresh Hub grant.
+            try:
+                lease_guard.watchdog.notify(lease=runtime.hub_lease)
+            except OSError as exc:
+                lease_guard.last_error = 'Watchdog notification failed: ' + type(exc).__name__
             return {'lease':result,'engine':engine.runtime_state()}
         except (PolicyError,CoreError) as exc:raise HTTPException(409,str(exc))
 
