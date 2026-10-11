@@ -242,7 +242,7 @@ def test_busy_engine_preserves_valid_grant_but_fences_on_actual_expiry(tmp_path)
             assert watcher.notify.call_count>count and f.engine.running
             f.clock[0]=161;guard.tick()
             watcher.trigger.assert_called_once()
-            assert guard.last_error=='lease_expired_engine_busy'
+            assert guard.last_error=='lease_expired_engine_busy_core_running'
             assert f.runtime.hub_lease.deadline==160
         finally:release.set();thread.join(2)
         guard.tick();assert not f.engine.running
@@ -272,6 +272,33 @@ def test_healthy_lease_renewal_does_not_reapply_running_core(tmp_path,monkeypatc
         command.assert_not_called();assert f.engine.process.pid==pid
 
 
+
+def test_new_grant_rearms_a_contracted_watchdog_synchronously(tmp_path):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine));grant(f)
+        old_pid=f.engine.process.pid
+        f.clock[0]=158.5
+        watcher=f.app.state.lease_guard.watchdog
+        watcher.notify=Mock(return_value=True)
+        receipt=grant(f)
+        assert receipt['lease']['valid']
+        assert receipt['lease']['remaining_seconds']>=59
+        watcher.notify.assert_called_once_with(lease=f.runtime.hub_lease)
+        assert f.engine.process.pid==old_pid
+
+
+def test_rejected_challenge_never_rearms_watchdog(tmp_path):
+    with guarded_agent(tmp_path/'node') as f:
+        post_state(f.api,payload(f.engine))
+        watcher=f.app.state.lease_guard.watchdog
+        watcher.notify=Mock(return_value=True)
+        state=f.runtime.status()
+        response=f.api.post('/node/api/v1/accounting/lease',json={
+            'challenge':'0'*64,'revision':state['appliedRevision'],
+            'hash':state['appliedHash'],'controlRevision':f.runtime.command_status()['revision']})
+        assert response.status_code==409
+        watcher.notify.assert_not_called()
+
 def test_quota_metadata_only_revision_reuses_exact_running_validation(tmp_path,monkeypatch):
     with guarded_agent(tmp_path/'node') as f:
         body=payload(f.engine);post_state(f.api,body);grant(f)
@@ -296,7 +323,9 @@ def test_offline_other_node_delete_error_does_not_poison_healthy_node_lease():
         installations=SimpleNamespace(operation=lambda _node:contextlib.nullcontext()),
         _allowed_traffic_clients=lambda _node:{'alice'},
         sync_desired_state=Mock(),
-        desired_state=Mock(return_value={'pending':False,'last_error':'','revision':7}),
+        desired_state=Mock(return_value={
+            'pending':False,'last_error':'','revision':7,'hash':'a'*64,
+            'applied_revision':7,'applied_hash':'a'*64}),
         commands=SimpleNamespace(status=Mock(return_value={'revision':0})),
         _request=Mock(return_value=({'lease':{'valid':True,'remaining_seconds':60}},1)),
     )

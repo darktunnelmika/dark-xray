@@ -811,28 +811,30 @@ class SystemdWatchdog:
             sock.sendto(payload, address)
         return True
 
-    def notify(self, *, lease=None):
-        # Never renew the OS watchdog beyond metered authority. A frozen
-        # interpreter cannot send WATCHDOG=trigger at expiry; PID 1 must
-        # already have a bounded deadline. WATCHDOG_USEC is updated together
-        # with the keepalive (systemd >= 233; supported installer targets).
-        if not self.enabled:
-            return False
-        seconds = self.seconds
-        if lease is not None and lease.required:
-            with lease.lock:
-                remaining = lease.deadline - lease.clock()
-            # Cover notification delivery/scheduling; never send zero, which
-            # would disable systemd's watchdog. No new authority is created.
-            if remaining <= 1.0:
-                return False
-            seconds = min(seconds, remaining - 1.0)
+    def _notify_seconds(self, seconds):
         usec = max(1, int(seconds * 1000000))
         payload = ('WATCHDOG_USEC=' + str(usec) + '\nWATCHDOG=1').encode('ascii')
         if self._send(payload):
             self.last_notify = time.monotonic()
             return True
         return False
+
+    def notify(self, *, lease=None):
+        # PID 1's deadline must remain shorter than the actually granted
+        # accounting lease, even if the interpreter becomes frozen.
+        if not self.enabled:
+            return False
+        if lease is not None and lease.required:
+            # Serialize the timer update with the SAME lock as HubLease.renew.
+            # Otherwise an old subsecond timer can be sent after a fresh grant.
+            with lease.lock:
+                remaining = lease.deadline - lease.clock()
+                if remaining <= 1.0:
+                    return False
+                return self._notify_seconds(min(self.seconds, remaining - 1.0))
+        # An unbounded keepalive is only safe for a confirmed stopped Xray,
+        # enforced by LeaseGuard for an expired accounting lease.
+        return self._notify_seconds(self.seconds)
 
     def trigger(self):
         # Explicitly fail the unit and its owned Xray cgroup when an expired
@@ -910,6 +912,16 @@ class LeaseGuard:
         finally:
             self.engine.lock.release()
 
+    def _poll_delay(self):
+        # A one-second sleep cannot service a contracted subsecond watchdog.
+        # Check faster only close to expiry; NEVER extend the lease deadline.
+        lease = self.runtime.hub_lease
+        if not lease.required or not self.engine.running:
+            return 1.0
+        with lease.lock:
+            remaining = lease.deadline - lease.clock()
+        return min(1.0, max(0.02, (remaining - 1.0) / 4.0))
+
     def start(self):
         if self.thread and self.thread.is_alive():
             return
@@ -917,7 +929,7 @@ class LeaseGuard:
         def run():
             while not self.stop.is_set():
                 self.tick()
-                self.stop.wait(1.0)
+                self.stop.wait(self._poll_delay())
         self.thread = threading.Thread(target=run, name='dark-node-lease-guard', daemon=True)
         self.thread.start()
 

@@ -66,7 +66,7 @@ def test_expired_lease_with_busy_engine_triggers_cgroup_fence():
     safety.tick()
     safety.watchdog.notify.assert_not_called()
     safety.watchdog.trigger.assert_called_once()
-    assert safety.last_error == 'lease_expired_engine_busy'
+    assert safety.last_error == 'lease_expired_engine_busy_core_running'
 
 
 def test_expired_lease_with_stop_confirmed_keeps_agent_alive():

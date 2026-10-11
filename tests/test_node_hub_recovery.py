@@ -278,6 +278,9 @@ def update_fixture(tmp_path,monkeypatch):
     # enforces root:root ownership, so do not let this fixture touch /usr/local.
     monkeypatch.setattr(updater,'install_units',lambda:None)
     monkeypatch.setattr(updater,'install_wrapper',lambda:None)
+    # This unprivileged rollback fixture may not write root-owned /etc.
+    # The logrotate installer is tested separately on a disposable root host.
+    monkeypatch.setattr(updater,'install_logrotate',lambda:None)
     # This transaction fixture has text placeholders, not executable Python.
     # Real identity-switching preflight is covered by test_node_update_permissions.
     monkeypatch.setattr(updater,'service_import_probe',lambda *args:None)
