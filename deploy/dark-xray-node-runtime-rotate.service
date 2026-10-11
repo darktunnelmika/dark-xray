@@ -1,0 +1,11 @@
+[Unit]
+Description=DARK XRAY Node bounded runtime log rotation
+ConditionPathExists=/etc/logrotate.d/dark-xray-node-runtime
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate /etc/logrotate.d/dark-xray-node-runtime
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=15min
+NoNewPrivileges=true

@@ -93,6 +93,8 @@ def main():
     shutil.copy2(ROOT/'deploy'/'dark-xray-node.service',APP/'deploy'/'dark-xray-node.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-guard.service',APP/'deploy'/'dark-xray-node-guard.service')
     shutil.copy2(ROOT/'deploy'/'dark-xray-node-update.service',APP/'deploy'/'dark-xray-node-update.service')
+    for name in ('dark-xray-node-runtime-rotate.service','dark-xray-node-runtime-rotate.timer'):
+        shutil.copy2(ROOT/'deploy'/name,APP/'deploy'/name)
     for name in ['requirements-node.txt','VERSION','LICENSE','THIRD-PARTY-NOTICES.md']:
         shutil.copy2(ROOT/name,APP/name)
     run([sys.executable,'-m','venv',APP/'.venv'])
@@ -159,6 +161,9 @@ def main():
     shutil.copy2(APP/'deploy'/'dark-xray-node-guard.service',GUARD_SERVICE)
     shutil.copy2(APP/'deploy'/'dark-xray-node-update.service',UPDATE_SERVICE)
     os.chmod(SERVICE,0o644);os.chmod(GUARD_SERVICE,0o644);os.chmod(UPDATE_SERVICE,0o644)
+    for name in ('dark-xray-node-runtime-rotate.service','dark-xray-node-runtime-rotate.timer'):
+        target=Path('/etc/systemd/system')/name
+        shutil.copy2(APP/'deploy'/name,target);os.chmod(target,0o644)
     WRAPPER.write_text("""#!/usr/bin/env bash
 set -Eeuo pipefail
 PY=/opt/dark-xray-node/.venv/bin/python
@@ -189,6 +194,7 @@ exec "$PY" "$MANAGER" "$@"
     install_logrotate()
     service_import_probe(APP/'.venv/bin/python',APP/'backend')
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','dark-xray-node-guard.service']);run(['systemctl','enable','--now','dark-xray-node-update.service']);run(['systemctl','enable','--now','dark-xray-node.service'])
+    run(['systemctl','enable','--now','dark-xray-node-runtime-rotate.timer'])
     print(json.dumps({'installed':True,'agent_only':True,'service':'dark-xray-node.service',
                       'origin':cfg['public_origin'],'nodeId':node_id,'pairCode':pair_code,'directSourceVerified':bool(a.verified_direct_sources)},indent=2))
 if __name__=='__main__':main()
