@@ -27,7 +27,8 @@ No network firewall or service unit is weakened.
   listener/TLS/proxy settings.
 - A real disposable Uvicorn child holds an HTTP streaming response indefinitely.
   SIGTERM must cancel the stuck HTTP request, run the FastAPI lifespan cleanup,
-  and exit normally, not require systemd SIGKILL.
+  and finish lifespan teardown. Uvicorn 0.48 deliberately re-raises the
+  original SIGTERM after cleanup; this is not a SIGKILL.
 - Existing real-Xray, update-rollback, database integrity, node security and
   strict source checksum tests are still mandatory.
 
