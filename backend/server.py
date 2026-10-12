@@ -47,6 +47,7 @@ from nodes import NodeRegistry,token_digest
 from node_relay import NodeRelay
 from node_port_swap import NodePortSwap
 from update_bridge import UpdateBrokerClient,UpdateBrokerError
+from dashboard_read_model import DashboardReadModel,DashboardUnavailable
 
 ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
@@ -487,6 +488,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     app.state.replacements=replacements
     app.state.renew_node_lease=renew_node_lease
     app.state.manager=manager;app.state.auth=auth;app.state.engine=engine;app.state.nodes=nodes;app.state.license=license_client
+    # Read-only, per-principal report cache. No ledger scans or Node HTTPS calls.
+    app.state.dashboard_read_model=DashboardReadModel(store.path)
     from dark_restore import DarkRestore
     dark_restore=DarkRestore(store,engine,nodes,manager)
     app.state.dark_restore=dark_restore
@@ -2095,6 +2098,17 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def unmanaged(p:Principal=Depends(owner)):
         with store.lock:managed={r[0] for r in store.db.execute('SELECT email FROM managed_clients')}
         return [{'email':r['email'],'inboundIds':r.get('inboundIds',[]),'enable':r.get('enable',False)} for r in engine.clients() if r['email'] not in managed and not str(r['email']).endswith('@dark.restore')]
+    @app.get('/api/dashboard/summary')
+    def dashboard_summary(p:Principal=Depends(current)):
+        if p.actor.role=='reseller':
+            p.actor.require('clients','read',p.actor.id)
+        elif p.actor.role!='owner':
+            raise HTTPException(403,'Dashboard summary is not available for this role')
+        try:
+            return app.state.dashboard_read_model.get(role=p.actor.role,account=p.actor.id)
+        except DashboardUnavailable:
+            raise HTTPException(503,'Dashboard summary temporarily unavailable')
+
     @app.get('/api/system')
     def system(p:Principal=Depends(current),live_only:bool=False):
         p.actor.require('system','read')
