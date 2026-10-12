@@ -30,6 +30,9 @@ only after the network finished.
 - Back off expensive Owner metadata on Clients (5 minutes when a valid value
   was observed, 90 seconds after timeout). Explicit Representatives and Finance
   pages always refetch their authoritative summaries.
+- Start initial session probe only after the full deferred script graph has
+  registered its last FastPath and UI-Stability wrappers. This removes the race
+  where an early /api/me response invoked the legacy eager six-API loader.
 - Persist chosen sidebar page *before* starting network I/O. Repeated clicks
   on the same in-progress destination do not duplicate hydration.
 - Fence late Dashboard and UI-Stability renderers so only the finished route

@@ -157,6 +157,7 @@ def test_real_chromium_dashboard_navigation_mobile_and_language():
                 first_paint = time.monotonic() - started_at
                 assert first_paint < 6, f"dashboard too slow: {first_paint:.2f}s"
                 assert calls["/api/owners"] == calls["/api/resellers"] == 0
+                assert calls["/api/clients"] == 0, "Legacy eager loader raced FastPath at boot"
                 for route in ("nodes", "clients", "inbounds", "sync", "dashboard"):
                     page.evaluate("(route) => { void go(route); }", route)
                     ready_page(page, route)
