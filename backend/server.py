@@ -2099,7 +2099,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     def system(p:Principal=Depends(current),live_only:bool=False):
         p.actor.require('system','read')
         return {'source':'DARK local host + Xray-core','sample':False,
-                'engine':engine.system(live_only=live_only)}
+                'engine':engine.system(live_only=True) if live_only else engine.system()}
     @app.get('/api/gateway-system')
     def gateway_system(p:Principal=Depends(owner)):
         mem=psutil.virtual_memory();disk=psutil.disk_usage('/');swap=psutil.swap_memory()
