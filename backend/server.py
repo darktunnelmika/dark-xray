@@ -2096,9 +2096,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         with store.lock:managed={r[0] for r in store.db.execute('SELECT email FROM managed_clients')}
         return [{'email':r['email'],'inboundIds':r.get('inboundIds',[]),'enable':r.get('enable',False)} for r in engine.clients() if r['email'] not in managed and not str(r['email']).endswith('@dark.restore')]
     @app.get('/api/system')
-    def system(p:Principal=Depends(current)):
+    def system(p:Principal=Depends(current),live_only:bool=False):
         p.actor.require('system','read')
-        return {'source':'DARK local host + Xray-core','sample':False,'engine':engine.system()}
+        return {'source':'DARK local host + Xray-core','sample':False,
+                'engine':engine.system(live_only=live_only)}
     @app.get('/api/gateway-system')
     def gateway_system(p:Principal=Depends(owner)):
         mem=psutil.virtual_memory();disk=psutil.disk_usage('/');swap=psutil.swap_memory()
