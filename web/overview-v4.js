@@ -6,17 +6,18 @@ const baseDashboard=dashboard,baseLoad=load,baseRunAction=runAction;
 const L=(en,fa)=>((localStorage.getItem('dark_lang')||'en')==='fa'?fa:en);
 state.ov4=state.ov4||{history:{cpu:[],mem:[],swap:[],disk:[],up:[],down:[],tcp:[],udp:[]},max:60};
 
-function number(v,fallback=0){v=Number(v);return Number.isFinite(v)?v:fallback;}
-function pct(v){if(!v||!number(v.total))return 0;return Math.max(0,Math.min(100,100*number(v.current??v.used)/number(v.total)));}
+function number(v,fallback=0){if(v===null||v===undefined||v==='')return fallback;v=Number(v);return Number.isFinite(v)?v:fallback;}
+function pct(v){if(!v||!Number.isFinite(Number(v.total))||Number(v.total)<=0)return null;const used=v.current??v.used;return used===null||used===undefined?null:Math.max(0,Math.min(100,100*number(used)/Number(v.total)));}
 function avg(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
 function peak(a){return a.length?Math.max(...a):0;}
-function push(name,value){let a=state.ov4.history[name];a.push(number(value));if(a.length>state.ov4.max)a.splice(0,a.length-state.ov4.max);}
+function push(name,value){if(value===null||value===undefined||value==='')return;const v=Number(value);if(!Number.isFinite(v))return;let a=state.ov4.history[name];a.push(v);if(a.length>state.ov4.max)a.splice(0,a.length-state.ov4.max);}
 function sample(){
  const n=state.system?.engine;if(!n)return;
  push('cpu',n.cpu);push('mem',pct(n.mem));push('swap',pct(n.swap));push('disk',pct(n.disk));
  push('up',n.netIO?.up);push('down',n.netIO?.down);
- push('tcp',n.connections?.tcp);push('udp',n.connections?.udp);
+ if(n.connections?.available!==false){push('tcp',n.connections?.tcp);push('udp',n.connections?.udp);}
 }
+state.ov4.capture=sample;
 load=async function(){await baseLoad();if(state.page==='dashboard'&&state.system?.engine)sample();};
 
 function linePoints(values,w,h,maxValue=null){
@@ -24,18 +25,22 @@ function linePoints(values,w,h,maxValue=null){
  return a.map((v,i)=>`${(i*w/den).toFixed(1)},${(h-(Math.max(0,number(v))/max)*(h-4)-2).toFixed(1)}`).join(' ');
 }
 function spark(values,max=100){return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
-function fmtRate(v){return bytes(number(v))+'/s';}
+function fmtRate(v){return v===null||v===undefined||v===''?'—':bytes(number(v))+'/s';}
 function fmtPercent(v){
+ if(v===null||v===undefined||v==='')return '—';
  v=Number(v);
  if(!Number.isFinite(v))return '—';
  if(v===0)return '0.0';
  if(v>0&&v<0.1)return '<0.1';
  return v.toFixed(1);
 }
-function fmtUptime(sec){sec=Math.max(0,number(sec));let d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+'d ':'')+h+'h '+m+'m';}
+function fmtUptime(sec){if(sec===null||sec===undefined||sec==='')return '—';sec=Math.max(0,number(sec));let d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);return (d?d+'d ':'')+h+'h '+m+'m';}
+function sourceReady(key,maxAge){const f=state.dashboardFast;return !f||!!(f.last[key]&&f.status[key]!=='error'&&Date.now()-f.last[key]<maxAge);}
+function hostEngine(){return sourceReady('system',40000)?state.system?.engine||{}:{};}
+function sourcePending(key){const f=state.dashboardFast;return f&&f.status[key]==='error'?L('Telemetry unavailable','دریافت آمار ناموفق'):L('Waiting for a recent sample','در انتظار نمونه جدید');}
 
 function commandBar(){
- const n=state.system?.engine||{},core=state.ov2?.core||state.sync?.runtime||{},running=core.state==='running'||n.xray?.state==='running';
+ const n=hostEngine(),core=state.ov2?.core||state.sync?.runtime||{},running=core.state==='running'||n.xray?.state==='running';
  const up=state.updateCenter?.status||{},cand=up.candidate||{},update=cand.update_available;
  let left=`<div class="ov4-status-pill ${running?'good':'bad'}"><i></i><span>Xray · ${e(running?L('Running','در حال اجرا'):L('Stopped','متوقف'))}</span><b>${e(n.xray?.version||state.sync?.engine_version||'—')}</b></div>`;
  left+=`<div class="ov4-status-pill ${update?'warn':'good'}"><i></i><span>${update?L('Update available','آپدیت موجود'):L('Build current','نسخه به‌روز')}</span><b>${e(cand.version||state.me?.version||'')}</b></div>`;
@@ -59,7 +64,7 @@ function resourceCard(key,label,value,detail,history,extra=''){
  </article>`;
 }
 function resourceRow(){
- const n=state.system?.engine||{},h=state.ov4.history,ci=n.cpuInfo||{},freq=number(ci.mhz);
+ const n=hostEngine(),h=state.ov4.history,ci=n.cpuInfo||{},freq=number(ci.mhz);
  return `<section class="ov4-resource-grid">
  ${resourceCard('cpu','CPU',fmtPercent(n.cpu),`${ci.physical||'—'} ${L('Cores','هسته')} / ${ci.logical||'—'}T${freq?' · '+(freq/1000).toFixed(2)+' GHz':''}`,h.cpu)}
  ${resourceCard('ram','RAM',fmtPercent(pct(n.mem)),`${bytes(n.mem?.current)} / ${bytes(n.mem?.total)}`,h.mem)}
@@ -69,7 +74,7 @@ function resourceRow(){
 }
 
 function trafficChart(){
- const n=state.system?.engine||{},h=state.ov4.history,max=Math.max(1,...h.up,...h.down),w=900,hgt=250;
+ const n=hostEngine(),h=state.ov4.history,max=Math.max(1,...h.up,...h.down),w=900,hgt=250;
  const up=linePoints(h.up,w,hgt,max),down=linePoints(h.down,w,hgt,max);
  const upAvg=avg(h.up),downAvg=avg(h.down);
  return `<article class="ov4-card ov4-traffic-card" id="ov4-traffic">
@@ -84,7 +89,7 @@ function trafficChart(){
  </article>`;
 }
 function connectionCard(){
- const n=state.system?.engine||{},c=n.connections||{},h=state.ov4.history,max=Math.max(1,...h.tcp,...h.udp);
+ const n=hostEngine(),c=n.connections||{},h=state.ov4.history,max=Math.max(1,...h.tcp,...h.udp);
  return `<article class="ov4-card ov4-connections"><header class="ov4-card-head"><div><span>${L('CONNECTION STATS','وضعیت اتصال')}</span><small>${c.available===false?L('System socket enumeration unavailable','شمارش سوکت در دسترس نیست'):L('Host inet sockets','سوکت‌های میزبان')}</small></div></header>
  <div class="ov4-connection-total"><b>${c.available===false?'—':fa(c.open||0)}</b><span>${L('open sockets','سوکت باز')}</span></div>
  <div class="ov4-connection-legend"><span class="tcp"><i></i>TCP <b>${c.available===false?'—':fa(c.tcp||0)}</b></span><span class="udp"><i></i>UDP <b>${c.available===false?'—':fa(c.udp||0)}</b></span></div>
@@ -92,7 +97,7 @@ function connectionCard(){
  </article>`;
 }
 function telemetryStrip(){
- const n=state.system?.engine||{},addresses=(n.addresses||[]).slice(0,3);
+ const n=hostEngine(),addresses=(n.addresses||[]).slice(0,3);
  return `<section class="ov4-telemetry-strip">
  <div><span>${icon('activity')} ${L('UPTIME','آپ‌تایم')}</span><section><p><small>XRAY</small><b>${fmtUptime(n.xray?.uptime)}</b></p><p><small>OS</small><b>${fmtUptime(n.uptime)}</b></p></section></div>
  <div><span>${icon('server')} ${L('PANEL','پنل')}</span><section><p><small>RAM</small><b>${bytes(n.panel?.mem)}</b></p><p><small>${L('THREADS','تردها')}</small><b>${fa(n.panel?.threads||0)}</b></p></section></div>
