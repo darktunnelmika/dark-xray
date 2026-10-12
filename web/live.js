@@ -52,7 +52,7 @@ const labelState={applied:'ذخیره‌شده در DARK',pending:'در صف',er
 const reasons={client_manual:'قطع دستی مشتری',owner_manual:'قطع دستی نماینده',client_quota:'اتمام حجم مشتری',expired:'منقضی',owner_account_disabled:'حساب نماینده غیرفعال',engine_manual_or_external_disable:'قطع دستی در موتور محلی'};
 function toast(text,error=false){let el=document.createElement('div');el.className='toast'+(error?' error':'');el.innerHTML=icon(error?'alert':'check')+`<span>${e(text)}</span>`;$('#toasts').append(el);setTimeout(()=>el.remove(),6500);}
 function errText(x){if(typeof x==='string')return x;if(Array.isArray(x))return x.map(v=>`${v.loc?.join('.')||''}: ${v.msg||JSON.stringify(v)}`).join(' / ');return JSON.stringify(x);}
-async function api(path,method='GET',body){const headers={Accept:'application/json'};if(body!==undefined)headers['Content-Type']='application/json';if(method!=='GET')headers['X-Dark-CSRF']=state.me?.csrf||'';let res;try{res=await fetch(appUrl(path),{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});}catch{throw Error('ارتباط با سرویس DARK برقرار نیست.');}let data=await res.json().catch(()=>({detail:'پاسخ نامعتبر سرور'}));if(!res.ok){if(res.status===401&&path!=='/api/auth/login'){state.me=null;loginPage();}throw Error(errText(data.detail||data.msg||`HTTP ${res.status}`));}return data;}
+async function api(path,method='GET',body,options={}){const headers={Accept:'application/json'};if(body!==undefined)headers['Content-Type']='application/json';if(method!=='GET')headers['X-Dark-CSRF']=state.me?.csrf||'';let res;try{res=await fetch(appUrl(path),{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body),cache:'no-store',signal:options.signal});}catch{throw Error('ارتباط با سرویس DARK برقرار نیست.');}let data=await res.json().catch(()=>({detail:'پاسخ نامعتبر سرور'}));if(!res.ok){if(res.status===401&&path!=='/api/auth/login'){state.me=null;loginPage();}throw Error(errText(data.detail||data.msg||`HTTP ${res.status}`));}return data;}
 
 async function downloadFullBackup(passphrase){
  const headers={'Content-Type':'application/json','X-Dark-CSRF':state.me?.csrf||''};
@@ -206,7 +206,9 @@ function loginPage(){state.clients=[];state.owners=[];state.resellers=[];state.i
 // Defer extensions (Restore/SWAP/etc.) execute before DOMContentLoaded. Rebuild once
 // after the complete script graph is registered so the first sidebar is never partial.
 window.addEventListener('DOMContentLoaded',()=>{if(state.me){shell();renderPage().catch(ex=>toast(ex.message,true));}},{once:true});
-setInterval(()=>{if(state.me&&!document.hidden&&!$('#overlay').classList.contains('show')&&!enginePages[state.page])refresh();},12000);
+// The Dashboard has its own independent bounded telemetry sampler.
+// Background page refreshes must not flood the HUB with repeated list requests.
+setInterval(()=>{if(state.me&&!state.busy&&!document.hidden&&!$('#overlay').classList.contains('show')&&!enginePages[state.page])void refresh();},45000);
 
 function area(label,name,value,rows=7){return `<label class="span-2">${e(label)}<textarea class="field-input" dir="ltr" style="font-family:monospace;min-height:${rows*21}px" name="${e(name)}">${e(JSON.stringify(value,null,2))}</textarea></label>`;}
 async function sectionForm(section){
