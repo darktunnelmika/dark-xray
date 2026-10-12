@@ -43,7 +43,7 @@ const date=t=>{if(!t)return '—';const lang=(localStorage.getItem('dark_lang')|
 function bytes(v){if(v===undefined||v===null)return '—';v=Number(v);if(!Number.isFinite(v))return '—';let u=0;while(v>=1024&&u<4){v/=1024;u++;}return `${v.toFixed(u?1:0)} ${['B','KiB','MiB','GiB','TiB'][u]}`;}
 const LAST_PAGE_KEY='dark_last_page';
 const darkSession=globalThis.sessionStorage||{getItem:()=>null,setItem:()=>{}};
-const state={me:null,page:darkSession.getItem(LAST_PAGE_KEY)||'dashboard',clients:[],owners:[],resellers:[],inbounds:[],sync:null,system:null,errors:{},expanded:new Set(),selected:new Set(),search:'',busy:false,history:[],renderSeq:0};
+const state={me:null,page:darkSession.getItem(LAST_PAGE_KEY)||'dashboard',clients:[],owners:[],resellers:[],inbounds:[],sync:null,system:null,errors:{},fetched:{},expanded:new Set(),selected:new Set(),search:'',busy:false,history:[],renderSeq:0};
 const can=(key,owner=state.me?.id)=>state.me?.role==='owner'||state.me?.permissions?.[key]==='all'||(state.me?.permissions?.[key]==='own'&&owner===state.me?.id);
 const isOwner=()=>state.me?.role==='owner';
 const uiLang=()=>localStorage.getItem('dark_lang')||'en';
@@ -70,7 +70,47 @@ function heading(title,sub,actions=''){const pageLabel=navItems().find(n=>n[0]==
 function button(text,act,ic='plus',extra='',primary=false){return `<button type="button" class="btn ${primary?'btn-primary':''}" data-act="${act}" ${extra}>${icon(ic)}${text}</button>`;}
 function empty(text){return `<div class="empty-state">${icon('info')}<p>${text}</p></div>`;}
 function notices(){return Object.entries(state.errors).map(([k,v])=>`<div class="notice error"><b>${e(k)}</b> — ${e(v)}<br>اطلاعات این بخش دریافت نشده؛ با دادهٔ نمونه جایگزین نشده است.</div>`).join('');}
-async function load(){if(!state.me)return;const specs=[['clients','/api/clients'],['inbounds','/api/inbounds'],['owners','/api/owners'],['sync','/api/sync']];if(isOwner())specs.push(['resellers','/api/resellers']);if(can('system.read'))specs.push(['system','/api/system']);await Promise.all(specs.map(async([key,path])=>{try{state[key]=await api(path);delete state.errors[key];}catch(ex){state.errors[key]=ex.message;if(key!=='sync')state[key]=key==='system'?null:[];}}));if(state.system?.engine){let n=state.system.engine;let v=Number(n.cpu);if(Number.isFinite(v)){state.history.push(v);state.history=state.history.slice(-60);}}}
+// Only collect the data required for the visible workspace. This preserves
+// specialized load() wrappers (including Client Groups) and prevents costly
+// Representative ledgers from blocking unrelated menus and refreshes.
+function pageResources(page){
+ const pages={
+  dashboard:['clients','inbounds','sync','system'],
+  clients:['clients','inbounds','owners','sync'],
+  inbounds:['inbounds','clients','sync'],
+  resellers:['resellers','owners','inbounds'],
+  finance:['resellers','owners'],
+  nodes:['inbounds'],sync:['sync'],account:[],darkrestore:['inbounds'],
+  telegram:['inbounds'],xray:['inbounds','sync'],hosts:['inbounds'],
+  outbounds:[],routing:[],settings:[],logs:[],backup:[],update:[]
+ };
+ return pages[page]||['inbounds','clients','sync'];
+}
+async function load(){
+ if(!state.me)return;
+ const page=state.page;
+ const paths={clients:'/api/clients',inbounds:'/api/inbounds',owners:'/api/owners',
+              sync:'/api/sync',resellers:'/api/resellers',system:'/api/system'};
+ const wanted=pageResources(page)
+   .filter(key=>key!=='resellers'||isOwner())
+   .filter(key=>key!=='system'||can('system.read'));
+ await Promise.all(wanted.map(async key=>{
+  try{
+   const data=await api(paths[key]);
+   if(!state.me||state.page!==page)return;
+   state[key]=data;state.fetched[key]=true;delete state.errors[key];
+  }catch(ex){
+   if(!state.me||state.page!==page)return;
+   state.errors[key]=ex.message;
+   // Do not turn a previously verified set into an invented empty list.
+   if(!state.fetched[key]&&key!=='sync')state[key]=key==='system'?null:[];
+  }
+ }));
+ if(page==='dashboard'&&state.system?.engine){
+  const cpu=Number(state.system.engine.cpu);
+  if(Number.isFinite(cpu)){state.history.push(cpu);state.history=state.history.slice(-60);}
+ }
+}
 async function refresh(){
  if(state.busy){
   await new Promise(resolve=>{
