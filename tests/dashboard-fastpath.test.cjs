@@ -13,6 +13,8 @@ function runtime(onRequest, role='owner') {
   const calls = [];
   let normalLoads = 0;
   let captures = 0;
+  let renders = 0;
+  const content = {innerHTML: ''};
   const state = {
     me: {id: 'test-owner', role}, page: 'dashboard', busy: false,
     errors: {}, clients: [], inbounds: [], owners: [], resellers: [],
@@ -28,14 +30,17 @@ function runtime(onRequest, role='owner') {
     api: path=>{calls.push(path);return onRequest(path);},
     isOwner: ()=>state.me?.role==='owner',
     can: ()=>true,
-    renderPage: async()=>{},
+    go: async page=>{state.page=page;content.innerHTML='base render';},
+    document: {getElementById: id=>id==='content'?content:null},
+    localStorage: {getItem:()=> 'en'},
+    renderPage: async()=>{renders++;content.innerHTML='verified render';},
     // Short timers make the critical-budget and coalescing tests deterministic.
     setTimeout: (fn,ms)=>setTimeout(fn,Math.min(ms, 12)),
     clearTimeout
   };
   vm.createContext(ctx);
   vm.runInContext(source,ctx,{filename:'dashboard-fastpath-v1.js'});
-  return {ctx,state,calls,normalLoads:()=>normalLoads,captures:()=>captures};
+  return {ctx,state,content,calls,normalLoads:()=>normalLoads,captures:()=>captures,renders:()=>renders};
 }
 
 test('Fastpath mounts after all existing dashboard and UI-stability wrappers',()=>{
@@ -103,4 +108,39 @@ test('Missing and stale telemetry never becomes invented zero or a healthy node'
   assert.match(overview,/health_sample_state==='fresh'/);
   assert.match(overview,/Waiting for two real network samples/);
   assert.match(overview,/Runtime telemetry unavailable/);
+});
+
+test('Navigation from fast Dashboard hydrates real client data before normal UI is released', async()=>{
+  const pending=new Promise(()=>{});
+  const t=runtime(p=>{
+    if(p.startsWith('/api/system?'))return {engine:{cpu:14}};
+    if(p==='/api/clients')return [{email:'real-client',client:{enable:true}}];
+    if(p==='/api/inbounds')return [{id:1,remark:'production'}];
+    if(p==='/api/owners')return [{id:'test-owner'}];
+    return pending;
+  });
+  await t.ctx.load();
+  assert.ok(!t.calls.includes('/api/clients'));
+  await t.ctx.go('clients');
+  assert.equal(t.state.page,'clients');
+  assert.equal(t.state.clients[0].email,'real-client');
+  assert.equal(t.state.inbounds[0].id,1);
+  assert.equal(t.state.owners[0].id,'test-owner');
+  assert.equal(t.content.innerHTML,'verified render');
+  assert.equal(t.renders(),1);
+  assert.ok(t.calls.includes('/api/clients'));
+});
+
+test('Navigation failure is explicit instead of showing an empty verified client list',async()=>{
+  const pending=new Promise(()=>{});
+  const t=runtime(p=>{
+    if(p.startsWith('/api/system?'))return {engine:{cpu:12}};
+    if(p==='/api/clients')throw new Error('Unable to query client registry');
+    if(p==='/api/inbounds'||p==='/api/owners')return [];
+    return pending;
+  });
+  await t.ctx.load();
+  await t.ctx.go('clients');
+  assert.equal(t.state.errors.clients,'Unable to query client registry');
+  assert.equal(t.content.innerHTML,'verified render');
 });
