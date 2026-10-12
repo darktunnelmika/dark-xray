@@ -57,7 +57,7 @@ jobs:
             tools/menu.py tools/update.py tools/provision.py tools/provision_node.py tools/update_node.py tools/settings_apply.py tools/runtime_stage.py tools/doctor.py tools/check.py tools/vps-verify.py tools/node-wan-gate.py tools/production-gate.py tools/target-vps-gate.py tools/load-scale-gate.py tools/smoke-real.py \
             tests/browser-smoke.py tests/test_production_gate.py tests/kernel-firewall-smoke.py tests/load-scale-smoke.py tests/test_node_agent_architecture.py tests/test_node_hub_recovery.py tests/verify-node-install.py \
             backend/server.py backend/auth.py backend/policy_auth.py backend/core.py backend/node_agent.py backend/node_runtime.py backend/node_updated.py \
-            backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py
+            backend/manager.py backend/reality_scan.py backend/nodes.py backend/owner_recovery.py backend/dashboard_read_model.py
           grep -q "report={'version':VERSION" tools/smoke-real.py
           grep -q 'DARK-XRAY-REAL-E2E-{VERSION}' tools/smoke-real.py
           ! grep -q "'version':'0.6.0'" tools/smoke-real.py
@@ -80,7 +80,7 @@ jobs:
           for js in \
             web/i18n-en.js web/form-models.js web/inbounds-models.js web/inbounds-v3.js \
             web/settings-v2.js web/clients-v2.js web/finance-v2.js web/ui-stability.js web/xray-v2.js web/hosts-v2.js \
-            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/dashboard-fastpath-v1.js web/xray-guided-v3.js web/traffic-engine-v4.js; do node --check "$js"; done
+            web/ops-v2.js web/nodes-v2.js web/overview-v4.js web/dashboard-fastpath-v2.js web/xray-guided-v3.js web/traffic-engine-v4.js; do node --check "$js"; done
           grep -q '<html lang="en" dir="ltr">' web/index.html
           grep -q 'body class="skin-cyber-classic"' web/index.html
           grep -q 'assets/cyber-classic.css' web/index.html
@@ -102,7 +102,7 @@ jobs:
           grep -q 'DarkXrayGuidedV3' web/xray-guided-v3.js
           grep -q 'assets/xray-guided-v3.js' web/index.html
           grep -q 'assets/xray-guided-v3.css' web/index.html
-          grep -q 'assets/dashboard-fastpath-v1.js' web/index.html
+          grep -q 'assets/dashboard-fastpath-v2.js' web/index.html
           grep -q 'ov4-resource-grid' web/overview-v4.js
           grep -q 'connections' backend/core.py
           grep -q 'panel' backend/core.py
