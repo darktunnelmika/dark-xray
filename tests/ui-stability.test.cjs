@@ -55,7 +55,9 @@ test('shell persists current page and makes the entire sidebar nav reachable',()
  assert.match(live,/darkSession\.setItem\(LAST_PAGE_KEY,page\)/);
  assert.match(live,/const saved=darkSession\.getItem\(LAST_PAGE_KEY\)\|\|'dashboard'/);
  assert.match(live,/DOMContentLoaded/);
- assert.match(live,/complete script graph is registered/);
+ // Authentication and page requests must wait for all deferred wrappers.
+ assert.match(live,/window\.addEventListener\('DOMContentLoaded',\(\)=>\{void bootstrapPanel\(\);\},\{once:true\}\)/);
+ assert.doesNotMatch(live,/\(async\(\)=>\{try\{state\.me=await api/);
  assert.match(css,/\.sidebar>nav\{[^}]*overflow-y:auto/);
  assert.match(css,/\.sidebar>\.side-bottom\{[^}]*flex:0 0 auto/);
 });
