@@ -24,7 +24,7 @@ function linePoints(values,w,h,maxValue=null){
  const a=(values&&values.length?values:[0]).slice(-60),max=Math.max(1,maxValue||Math.max(...a,1)),den=Math.max(1,a.length-1);
  return a.map((v,i)=>`${(i*w/den).toFixed(1)},${(h-(Math.max(0,number(v))/max)*(h-4)-2).toFixed(1)}`).join(' ');
 }
-function spark(values,max=100){return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
+function spark(values,max=100){if(!values||values.length<2)return `<div class="ov4-spark-empty">${L('Awaiting samples','در انتظار نمونه')}</div>`;return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
 function fmtRate(v){return v===null||v===undefined||v===''?'—':bytes(number(v))+'/s';}
 function fmtPercent(v){
  if(v===null||v===undefined||v==='')return '—';
@@ -61,7 +61,7 @@ function resourceCard(key,label,value,detail,history,extra=''){
    <header><span>${icon(key==='cpu'?'activity':key==='ram'?'server':key==='swap'?'refresh':'database')}${label}</span></header>
    <div class="ov4-resource-value">${e(value)}${value==='—'?'':'<small>%</small>'}</div>
    <div class="ov4-resource-detail">${e(detail)}</div>
-   <div class="ov4-resource-meta"><span>AVG ${e(fmtPercent(avg(history)))}%</span><span>PEAK ${e(fmtPercent(peak(history)))}%</span></div>
+   <div class="ov4-resource-meta"><span>AVG ${history.length?e(fmtPercent(avg(history)))+'%':'—'}</span><span>PEAK ${history.length?e(fmtPercent(peak(history)))+'%':'—'}</span></div>
    ${spark(history,100)}${extra}
  </article>`;
 }
@@ -95,7 +95,7 @@ function connectionCard(){
  return `<article class="ov4-card ov4-connections"><header class="ov4-card-head"><div><span>${L('CONNECTION STATS','وضعیت اتصال')}</span><small>${available?c.source==='linux-sockstat'?L('Linux kernel in-use TCP/UDP sockets','سوکت‌های TCP/UDP درحال استفاده لینوکس'):L('Host inet sockets','سوکت‌های میزبان'):L('Socket counts unavailable','شمارش سوکت نامشخص است')}</small></div></header>
  <div class="ov4-connection-total"><b>${available?fa(c.open||0):'—'}</b><span>${L('open sockets','سوکت باز')}</span></div>
  <div class="ov4-connection-legend"><span class="tcp"><i></i>TCP <b>${available?fa(c.tcp||0):'—'}</b></span><span class="udp"><i></i>UDP <b>${available?fa(c.udp||0):'—'}</b></span></div>
- <div class="ov4-connection-chart"><svg viewBox="0 0 420 165" preserveAspectRatio="none"><path class="grid" d="M0 40H420M0 80H420M0 120H420"/><polyline class="tcp" points="${linePoints(h.tcp,420,165,max)}"/><polyline class="udp" points="${linePoints(h.udp,420,165,max)}"/></svg></div>
+ <div class="ov4-connection-chart">${h.tcp.length>1||h.udp.length>1?`<svg viewBox="0 0 420 165" preserveAspectRatio="none"><path class="grid" d="M0 40H420M0 80H420M0 120H420"/><polyline class="tcp" points="${linePoints(h.tcp,420,165,max)}"/><polyline class="udp" points="${linePoints(h.udp,420,165,max)}"/></svg>`:`<div class="ov4-chart-empty">${L('Awaiting socket samples','در انتظار نمونه اتصال‌ها')}</div>`}</div>
  </article>`;
 }
 function telemetryStrip(){
