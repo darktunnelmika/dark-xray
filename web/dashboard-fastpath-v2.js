@@ -218,15 +218,24 @@ if(previousGo){
     // The existing shell is rendered immediately. A visible loading state
     // replaces any misleading empty list until actual page data arrives.
     const target=document.getElementById('content');
-    if(target&&requiredPageKeys(page).length){
-      target.innerHTML='<div class="notice" role="status">'+
+    const pending=requiredPageKeys(page).length>0;
+    // Keep the actual workspace shell visible, but mark it busy until its
+    // backing data is fresh. Do not replace a rendered page with a fake
+    // "empty" placeholder that looks like a finished workspace.
+    if(target&&pending){
+      target.setAttribute?.('aria-busy','true');
+      target.insertAdjacentHTML?.('afterbegin','<div class="notice" role="status">'+
         (localStorage.getItem('dark_lang')==='fa'?
-         'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>';
+         'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>');
     }
-    // Fresh navigation must never reuse recent Sync/Client data after external
-    // changes. Avoid a duplicate fetch only if the base go() already loaded it.
-    if(box.pageLoadVersion===loadMarker)await hydratePage(page,{fresh:true});
-    if(same(box)&&state.page===page&&seq===box.navigation)await renderPage();
+    try{
+      // Re-entering Sync/Clients after an external change must reload state.
+      // Avoid a second fetch only if the base go() already hydrated the page.
+      if(box.pageLoadVersion===loadMarker)await hydratePage(page,{fresh:true});
+      if(same(box)&&state.page===page&&seq===box.navigation)await renderPage();
+    }finally{
+      document.getElementById('content')?.removeAttribute?.('aria-busy');
+    }
   };
 }
 // Only real active dashboards are polled, with a bounded independent queue.
