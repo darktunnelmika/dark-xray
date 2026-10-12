@@ -78,23 +78,23 @@ function resourceRow(){
 function trafficChart(){
  const n=hostEngine(),h=state.ov4.history,max=Math.max(1,...h.up,...h.down),w=900,hgt=250;
  const up=linePoints(h.up,w,hgt,max),down=linePoints(h.down,w,hgt,max);
- const upAvg=avg(h.up),downAvg=avg(h.down);
+ const upAvg=avg(h.up),downAvg=avg(h.down),hasSamples=h.up.length>1||h.down.length>1;
  return `<article class="ov4-card ov4-traffic-card" id="ov4-traffic">
  <header class="ov4-card-head"><div><span>${L('OVERALL SPEED','سرعت کلی')}</span><small>${L('Live interface rate · real samples only','نرخ زنده اینترفیس · فقط نمونه واقعی')}</small></div>
  <div class="ov4-live-rates"><b class="up">↑ ${fmtRate(n.netIO?.up)}</b><b class="down">↓ ${fmtRate(n.netIO?.down)}</b></div></header>
- <div class="ov4-chart-wrap"><svg viewBox="0 0 ${w} ${hgt}" preserveAspectRatio="none" aria-label="Network traffic chart">
+ <div class="ov4-chart-wrap">${hasSamples?`<svg viewBox="0 0 ${w} ${hgt}" preserveAspectRatio="none" aria-label="Network traffic chart">
  <defs><linearGradient id="ov4UpFill" x1="0" y1="0" x2="0" y2="1"><stop class="ov4-up-stop" offset="0" stop-opacity=".24"/><stop class="ov4-up-stop" offset="1" stop-opacity="0"/></linearGradient><linearGradient id="ov4DownFill" x1="0" y1="0" x2="0" y2="1"><stop class="ov4-down-stop" offset="0" stop-opacity=".12"/><stop class="ov4-down-stop" offset="1" stop-opacity="0"/></linearGradient></defs>
  <path class="grid" d="M0 50H900M0 100H900M0 150H900M0 200H900"/>
  <polygon class="area up" points="0,250 ${up} 900,250"/><polygon class="area down" points="0,250 ${down} 900,250"/>
- <polyline class="line up" points="${up}"/><polyline class="line down" points="${down}"/></svg></div>
- <footer class="ov4-traffic-foot"><div><span>${L('SENT','ارسال')}</span><b>${bytes(n.netTraffic?.sent)}</b></div><div><span>${L('RECEIVED','دریافت')}</span><b>${bytes(n.netTraffic?.recv)}</b></div><div><span>${L('AVG OVER WINDOW','میانگین بازه')}</span><b>↑ ${fmtRate(upAvg)} · ↓ ${fmtRate(downAvg)}</b></div></footer>
+ <polyline class="line up" points="${up}"/><polyline class="line down" points="${down}"/></svg>`:`<div class="ov4-chart-empty">${L('Waiting for two real network samples','در انتظار دو نمونه واقعی ترافیک')}</div>`}</div>
+ <footer class="ov4-traffic-foot"><div><span>${L('SENT','ارسال')}</span><b>${bytes(n.netTraffic?.sent)}</b></div><div><span>${L('RECEIVED','دریافت')}</span><b>${bytes(n.netTraffic?.recv)}</b></div><div><span>${L('AVG OVER WINDOW','میانگین بازه')}</span><b>↑ ${h.up.length?fmtRate(upAvg):'—'} · ↓ ${h.down.length?fmtRate(downAvg):'—'}</b></div></footer>
  </article>`;
 }
 function connectionCard(){
- const n=hostEngine(),c=n.connections||{},h=state.ov4.history,max=Math.max(1,...h.tcp,...h.udp);
- return `<article class="ov4-card ov4-connections"><header class="ov4-card-head"><div><span>${L('CONNECTION STATS','وضعیت اتصال')}</span><small>${c.available===false?L('System socket enumeration unavailable','شمارش سوکت در دسترس نیست'):L('Host inet sockets','سوکت‌های میزبان')}</small></div></header>
- <div class="ov4-connection-total"><b>${c.available===false?'—':fa(c.open||0)}</b><span>${L('open sockets','سوکت باز')}</span></div>
- <div class="ov4-connection-legend"><span class="tcp"><i></i>TCP <b>${c.available===false?'—':fa(c.tcp||0)}</b></span><span class="udp"><i></i>UDP <b>${c.available===false?'—':fa(c.udp||0)}</b></span></div>
+ const n=hostEngine(),c=n.connections||{},h=state.ov4.history,max=Math.max(1,...h.tcp,...h.udp),available=c.available===true;
+ return `<article class="ov4-card ov4-connections"><header class="ov4-card-head"><div><span>${L('CONNECTION STATS','وضعیت اتصال')}</span><small>${available?c.source==='linux-sockstat'?L('Linux kernel in-use TCP/UDP sockets','سوکت‌های TCP/UDP درحال استفاده لینوکس'):L('Host inet sockets','سوکت‌های میزبان'):L('Socket counts unavailable','شمارش سوکت نامشخص است')}</small></div></header>
+ <div class="ov4-connection-total"><b>${available?fa(c.open||0):'—'}</b><span>${L('open sockets','سوکت باز')}</span></div>
+ <div class="ov4-connection-legend"><span class="tcp"><i></i>TCP <b>${available?fa(c.tcp||0):'—'}</b></span><span class="udp"><i></i>UDP <b>${available?fa(c.udp||0):'—'}</b></span></div>
  <div class="ov4-connection-chart"><svg viewBox="0 0 420 165" preserveAspectRatio="none"><path class="grid" d="M0 40H420M0 80H420M0 120H420"/><polyline class="tcp" points="${linePoints(h.tcp,420,165,max)}"/><polyline class="udp" points="${linePoints(h.udp,420,165,max)}"/></svg></div>
  </article>`;
 }
