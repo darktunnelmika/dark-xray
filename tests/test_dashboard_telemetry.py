@@ -3,7 +3,7 @@ import socket
 
 import psutil
 
-from dashboard_telemetry import host_socket_counts
+from core import host_socket_counts
 from core import Config, CoreEngine
 from dark_policy import Store
 
