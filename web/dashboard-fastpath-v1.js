@@ -5,7 +5,7 @@
 (function(){
 'use strict';
 if(typeof load!=='function'||typeof api!=='function'||typeof state==='undefined')return;
-const standardLoad=load,MAX_BACKGROUND=2,CRITICAL_BUDGET_MS=1800;
+const standardLoad=load,MAX_BACKGROUND=2,MAX_INFLIGHT=4,CRITICAL_BUDGET_MS=1800,BACKGROUND_SOFT_BUDGET_MS=6000;
 const sources=[
   {key:'operations',path:'/api/operations/overview',ttl:20000,when:()=>isOwner()},
   {key:'nodes',path:'/api/nodes',ttl:25000,when:()=>isOwner()},
@@ -97,11 +97,17 @@ function request(box,source){
 }
 function pump(box){
   if(!valid(box)){box.queue.length=0;box.queued.clear();return;}
-  while(box.active<MAX_BACKGROUND&&box.queue.length){
+  // A hung read must not starve the remaining cards, but never allow an
+  // unbounded burst of in-flight requests against an overloaded HUB.
+  while(box.active<MAX_BACKGROUND&&box.queue.length&&
+        Object.keys(box.inflight).length<MAX_INFLIGHT){
     const source=box.queue.shift();
     box.queued.delete(source.key);
     ++box.active;
-    request(box,source).finally(()=>{--box.active;pump(box);});
+    let released=false;
+    const release=()=>{if(released)return;released=true;--box.active;pump(box);};
+    const timer=setTimeout(release,BACKGROUND_SOFT_BUDGET_MS);
+    request(box,source).finally(()=>{clearTimeout(timer);release();pump(box);});
   }
 }
 function schedule(box){
