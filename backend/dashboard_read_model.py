@@ -87,7 +87,7 @@ class DashboardReadModel:
             query = """SELECT c.owner,c.manual,c.expires_at,c.quota_bytes,c.used_bytes,
                               c.global_ip_block,c.global_device_block,
                               o.manual AS owner_manual,o.account_disabled,
-                              m.external_disabled
+                              m.external_disabled,m.expected_enable
                        FROM clients c
                        LEFT JOIN owners o ON o.id=c.owner
                        LEFT JOIN managed_clients m ON m.email=c.id"""
@@ -107,7 +107,7 @@ class DashboardReadModel:
                     bool(row['manual']) or bool(row['owner_manual']) or
                     row['owner_manual'] is None or bool(row['account_disabled']) or
                     bool(row['global_ip_block']) or bool(row['global_device_block']) or
-                    bool(row['external_disabled']) or
+                    bool(row['external_disabled']) or row['expected_enable'] == 0 or
                     (int(row['expires_at'] or 0) > 0 and int(row['expires_at']) <= now) or
                     (quota > 0 and used >= quota))
                 if disallowed:
@@ -131,14 +131,15 @@ class DashboardReadModel:
                                    if json.loads(x['body']).get('enable', True) is not False)
                 }
                 reps = db.execute("""
-                    SELECT a.disabled,o.manual,o.account_disabled
-                    FROM api_admins a
-                    LEFT JOIN owners o ON o.id=a.id
-                    WHERE a.role='reseller'
+                    SELECT a.role,a.disabled,o.manual,o.account_disabled
+                    FROM owner_profiles p
+                    LEFT JOIN api_admins a ON a.id=p.id
+                    LEFT JOIN owners o ON o.id=p.id
+                    WHERE p.id NOT IN (SELECT id FROM api_admins WHERE role='owner')
                 """).fetchall()
                 representatives = {
                     'total': len(reps),
-                    'enabled': sum(1 for x in reps if x['manual'] is not None and
+                    'enabled': sum(1 for x in reps if x['role']=='reseller' and x['manual'] is not None and
                                    not x['manual'] and not x['account_disabled'] and
                                    not x['disabled'])
                 }
