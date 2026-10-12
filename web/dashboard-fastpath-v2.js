@@ -8,7 +8,7 @@ if(typeof load!=='function'||typeof api!=='function'||typeof state==='undefined'
 const previousGo=typeof go==='function'?go:null;
 const MAX_CONCURRENT=3,DEFAULT_TIMEOUT=3500;
 const sources=[
-  {key:'summary',path:'/api/dashboard/summary',ttl:12000,timeout:1800,when:()=>true},
+  {key:'summary',path:'/api/dashboard/summary',ttl:12000,timeout:1800,when:()=>isOwner()||state.me?.role==='reseller'},
   {key:'system',path:'/api/system?live_only=true',ttl:12000,timeout:2500,when:()=>can('system.read')},
   {key:'nodes',path:'/api/nodes',ttl:30000,timeout:4000,when:()=>isOwner()},
   {key:'operations',path:'/api/operations/overview',ttl:40000,timeout:4000,when:()=>isOwner()},
@@ -222,8 +222,14 @@ if(previousGo){
         (localStorage.getItem('dark_lang')==='fa'?
          'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>';
     }
-    await hydratePage(page,{fresh:true});
+    await hydratePage(page,{fresh:false});
     if(same(box)&&state.page===page&&seq===box.navigation)await renderPage();
   };
 }
+// Only real active dashboards are polled, with a bounded independent queue.
+setInterval(()=>{
+  const box=state.dashboardFast;
+  if(!visible(box)||document.hidden||document.getElementById('overlay')?.classList.contains('show'))return;
+  dashboardLoad();
+},12000);
 })();
