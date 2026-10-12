@@ -30,6 +30,8 @@ def env(tmp_path):
     manager.owner_put(OWNER, 'dark', name='Main', allowed=[])
     manager.owner_put(OWNER, 'seller', name='Seller', allowed=[])
     auth.admin_create(OWNER, 'seller', 'SellerPass88', 'reseller', DEFAULTS['reseller'])
+    # make_app initializes the NodeRegistry schema used by this fixture.
+    app = make_app(manager, auth, background=False)
     with store.transaction() as db:
         db.executemany(
             'INSERT INTO clients (id,owner,quota_bytes,used_bytes,manual,expires_at) VALUES (?,?,?,?,?,?)',
@@ -39,9 +41,8 @@ def env(tmp_path):
              ('rep-1','seller',0,375,0,0)])
         db.execute('INSERT INTO core_inbounds(body) VALUES(?)',
                    (json.dumps({'remark':'Test','enable':True}),))
-        db.execute('INSERT INTO remote_nodes (id,name,origin,token_enc,enabled,last_seen) VALUES (?,?,?,?,?,?)',
-                   ('test-node','Test Node','https://node.example.test','x',1,time.time()))
-    app = make_app(manager, auth, background=False)
+        db.execute('INSERT INTO remote_nodes (id,name,origin,token_enc,enabled,created_at,updated_at,last_seen) VALUES (?,?,?,?,?,?,?,?)',
+                   ('test-node','Test Node','https://node.example.test','x',1,time.time(),time.time(),time.time()))
     try:
         yield store, app
     finally:
