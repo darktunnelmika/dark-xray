@@ -137,7 +137,7 @@ function nodeCard(){
 }
 
 function backupCard(){
- const b=state.ov2?.backup||{};
+ const b=sourceReady('backup',180000)?state.ov2?.backup||{}:{};
  return `<article class="ov4-card ov4-backup-card"><header class="ov4-card-head"><div><span>${L('BACKUP & RECOVERY','بکاپ و بازیابی')}</span><small>${L('Rollback-safe operations','عملیات امن با قابلیت بازگشت')}</small></div><button class="ov4-link" data-act="ov4backup">${L('Open','بازکردن')} →</button></header>
  <div class="ov4-backup-main"><div><span>${L('Database snapshot','اسنپ‌شات دیتابیس')}</span><b>${b.database_bytes===undefined?'—':bytes(b.database_bytes)}</b></div><div><span>${L('Managed clients','کاربران')}</span><b>${b.managed_clients===undefined?'—':fa(b.managed_clients)}</b></div></div>
  <div class="ov4-safe"><i></i><span>${!sourceReady('backup',180000)?sourcePending('backup'):b.restore_isolated===true?L('Isolated restore enforced','بازیابی ایزوله اجباری است'):L('Restore isolation unavailable','ایزوله‌سازی بازیابی در دسترس نیست')}</span></div>
@@ -152,7 +152,7 @@ function repsCard(){
 }
 
 function healthCard(){
- const core=state.ov2?.core||state.sync?.runtime||{},nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),offline=enabled.filter(n=>!n.online),errors=enabled.filter(n=>n.last_error),bans=state.ov2?.ip?.bans?.length||0,up=state.updateCenter||{},rows=[];
+ const core=sourceReady('core',50000)?state.ov2?.core||{}:sourceReady('sync',45000)?state.sync?.runtime||{}:{},nodes=sourceReady('nodes',45000)?state.ov2?.nodes||[]:[],enabled=nodes.filter(n=>n.enabled),offline=enabled.filter(n=>!n.online),errors=enabled.filter(n=>n.last_error),bans=sourceReady('ip',180000)?state.ov2?.ip?.bans?.length||0:0,up=state.updateCenter||{},rows=[];
  const add=(kind,title,detail)=>rows.push({kind,title,detail});
  if(core.last_error)add('bad',L('Runtime error','خطای محیط اجرا'),core.last_error);
  if(core.dirty)add('warn',L('Config pending apply','کانفیگ در انتظار اعمال'),L('Saved state differs from running Xray.','وضعیت ذخیره‌شده با Xray در حال اجرا متفاوت است.'));
