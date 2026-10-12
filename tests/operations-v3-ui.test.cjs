@@ -33,9 +33,19 @@ test('refresh failure discards former good observation',async()=>{
 test('disabled retired nodes cannot raise active dashboard sync alerts',()=>{
  const source=fs.readFileSync('web/overview-v4.js','utf8');
  const code=source.slice(source.indexOf('function healthCard(){'),source.indexOf('const activityScopes='));
- const ctx={state:{ov2:{core:{state:'running'},nodes:[{name:'Retired',enabled:false,last_error:'old failure'}]}},L:(en)=>en,e:x=>x,fa:x=>x};
- vm.runInNewContext(code,ctx);const html=ctx.healthCard();
- assert.doesNotMatch(html,/Node sync errors|Retired/);assert.match(html,/All monitored systems nominal/);
+ const ctx={state:{ov2:{core:{state:'running'},nodes:[{name:'Retired',enabled:false,last_error:'old failure'}]}},
+   L:(en)=>en,e:x=>x,fa:x=>x,
+   sourceReady:()=>true,sourcePending:()=> 'awaiting a real sample',
+   coreState:()=> 'running'};
+ vm.runInNewContext(code,ctx);
+ const html=ctx.healthCard();
+ assert.doesNotMatch(html,/Node sync errors|Retired/);
+ assert.match(html,/All monitored systems nominal/);
+ // Missing telemetry is UNKNOWN, never a healthy signal or an alarm from disabled Nodes.
+ ctx.sourceReady=()=>false;
+ const stale=ctx.healthCard();
+ assert.match(stale,/Node snapshot unavailable/);
+ assert.doesNotMatch(stale,/All monitored systems nominal/);
  assert.doesNotMatch(source,/errors=nodes\.filter/);
 });
 
