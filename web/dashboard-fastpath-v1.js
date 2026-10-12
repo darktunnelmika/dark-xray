@@ -5,7 +5,7 @@
 (function(){
 'use strict';
 if(typeof load!=='function'||typeof api!=='function'||typeof state==='undefined')return;
-const standardLoad=load,MAX_BACKGROUND=2,MAX_INFLIGHT=4,CRITICAL_BUDGET_MS=1800,BACKGROUND_SOFT_BUDGET_MS=6000;
+const standardLoad=load,standardGo=typeof go==='function'?go:null,MAX_BACKGROUND=2,MAX_INFLIGHT=4,CRITICAL_BUDGET_MS=1800,BACKGROUND_SOFT_BUDGET_MS=6000;
 const sources=[
   {key:'operations',path:'/api/operations/overview',ttl:20000,when:()=>isOwner()},
   {key:'nodes',path:'/api/nodes',ttl:25000,when:()=>isOwner()},
@@ -21,7 +21,8 @@ const sources=[
   {key:'ip',path:'/api/ip/events',ttl:90000,when:()=>can('clients.ip')}
 ];
 const systemSource={key:'system',path:'/api/system?live_only=true',ttl:11000};
-function valid(box){return !!state.me&&state.me===box.identity&&state.page==='dashboard';}
+function sameSession(box){return !!box&&!!state.me&&state.me===box.identity;}
+function valid(box){return sameSession(box)&&state.page==='dashboard';}
 function ensure(){
   if(state.dashboardFast?.identity===state.me)return state.dashboardFast;
   const old=state.dashboardFast;
@@ -41,7 +42,7 @@ function ensure(){
   return box;
 }
 function record(box,key,value){
-  if(!valid(box))return;
+  if(!sameSession(box))return;
   if(key==='system'){
     if(!value||!value.engine)throw Error('Host telemetry unavailable');
     state.system=value;delete state.errors.system;
@@ -71,18 +72,18 @@ function rerender(box){
     try{await renderPage();}catch(_ex){}
   },140);
 }
-function request(box,source){
-  if(!valid(box))return Promise.resolve();
+function request(box,source,force=false){
+  if(!sameSession(box))return Promise.resolve();
   const key=source.key,now=Date.now();
   if(box.inflight[key])return box.inflight[key];
-  if(box.attempts[key]&&now-box.attempts[key]<source.ttl)return Promise.resolve();
+  if(!force&&box.attempts[key]&&now-box.attempts[key]<source.ttl)return Promise.resolve();
   box.attempts[key]=now;box.status[key]='loading';
   const task=Promise.resolve().then(()=>api(source.path)).then(value=>{
-    if(!valid(box))return;
+    if(!sameSession(box))return;
     record(box,key,value);
     box.last[key]=Date.now();box.status[key]='ready';delete box.errors[key];
   }).catch(ex=>{
-    if(!valid(box))return;
+    if(!sameSession(box))return;
     box.status[key]='error';
     box.errors[key]=String(ex?.message||ex).slice(0,180);
     if(key==='system'){state.system=null;state.errors.system=box.errors[key];}
@@ -130,4 +131,31 @@ load=async function(){
   if(can('system.read'))await deadline(request(box,systemSource));
   if(valid(box))schedule(box);
 };
+// Dashboard hydration is intentionally lazy. Protect existing data pages when
+// an operator navigates there before the initial read-only lists have arrived.
+if(standardGo){
+  const required={
+    clients:['clients','inbounds','owners'],
+    inbounds:['inbounds','clients','sync'],
+    resellers:['resellers','owners','clients'],
+    sync:['sync']
+  };
+  const byKey=Object.fromEntries(sources.map(s=>[s.key,s]));
+  go=async function(page){
+    const box=state.dashboardFast;
+    const keys=sameSession(box)?(required[page]||[]).filter(k=>{
+      const s=byKey[k];
+      return s&&s.when()&&(!box.last[k]||box.status[k]==='error'||Date.now()-box.last[k]>s.ttl);
+    }):[];
+    await standardGo(page);
+    if(!keys.length||!sameSession(box)||state.page!==page)return;
+    const content=typeof document==='undefined'?null:document.getElementById('content');
+    if(content)content.innerHTML='<div class="notice">'+(localStorage.getItem('dark_lang')==='fa'?
+      'در حال دریافت فهرست واقعی این بخش…':'Loading verified page data…')+'</div>';
+    await Promise.allSettled(keys.map(k=>request(box,byKey[k],true)));
+    if(!sameSession(box)||state.page!==page)return;
+    for(const k of keys)if(box.status[k]==='error')state.errors[k]=box.errors[k];
+    await renderPage();
+  };
+}
 })();
