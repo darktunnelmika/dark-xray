@@ -24,6 +24,7 @@ import threading
 import time
 import uuid
 import psutil
+from dashboard_telemetry import host_socket_counts
 from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line
 from reality_scan import reality_target_policy
 from traffic_matrix import compile_rules as compile_matrix_rules, POLICIES as MATRIX_POLICIES
@@ -1156,7 +1157,7 @@ class CoreEngine:
         self._cpu_value=round(float(psutil.cpu_percent(interval=.2)),1);self._cpu_sample_at=time.monotonic()
         return self._cpu_value
 
-    def system(self)->dict:
+    def system(self, *, live_only:bool=False)->dict:
         vm=psutil.virtual_memory();disk=psutil.disk_usage(self.runtime);swap=psutil.swap_memory();net=psutil.net_io_counters()
         now=time.monotonic();rates={}
         if self._net_sample:
@@ -1174,14 +1175,7 @@ class CoreEngine:
         physical=psutil.cpu_count(logical=False) or 0;logical=psutil.cpu_count(logical=True) or 0
         freq=psutil.cpu_freq()
         cpu_info={'physical':int(physical),'logical':int(logical),'mhz':round(float(freq.current),1) if freq and freq.current else 0.0}
-        conn={'open':0,'tcp':0,'udp':0,'available':True}
-        try:
-            for row in psutil.net_connections(kind='inet'):
-                if row.type==socket.SOCK_STREAM:conn['tcp']+=1
-                elif row.type==socket.SOCK_DGRAM:conn['udp']+=1
-            conn['open']=conn['tcp']+conn['udp']
-        except (psutil.AccessDenied,psutil.Error,OSError):
-            conn={'open':0,'tcp':0,'udp':0,'available':False}
+        conn=host_socket_counts()
         addresses=[]
         try:
             for name,rows in psutil.net_if_addrs().items():
@@ -1196,6 +1190,11 @@ class CoreEngine:
                     if len(addresses)>=16:break
                 if len(addresses)>=16:break
         except (psutil.Error,OSError):pass
+        # Chart telemetry must not rebuild and hash the entire live Xray
+        # config every 12 seconds. The full runtime snapshot is unchanged.
+        runtime=(self.runtime_state() if not live_only else {
+            'state':'running' if self.running else 'stopped',
+            'running':bool(self.running),'dirty':None,'telemetry_only':True})
         return {'cpu':self._host_cpu_percent(now),'cpuInfo':cpu_info,
                 'mem':{'current':vm.used,'total':vm.total},
                 'disk':{'current':disk.used,'total':disk.total,'free':disk.free},
@@ -1206,7 +1205,7 @@ class CoreEngine:
                 'panel':{'mem':panel_mem,'threads':panel_threads,'pid':os.getpid()},
                 'xray':{'state':'running' if self.running else 'stopped','version':self.version,'mem':core_mem,
                         'uptime':int(time.time()-self.last_start) if self.running and self.last_start else 0},
-                'runtime':self.runtime_state()}
+                'runtime':runtime}
 
     def _guard_policy_revision_key(self):
         with self.store.lock:
