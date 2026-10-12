@@ -136,3 +136,20 @@ test('rendered summary is sourced from FastPath, not loaded client arrays',()=>{
  assert.match(overview,/sourceReady\('nodes',45000\)/);
  assert.doesNotMatch(overview,/const clients=state\.clients\|\|\[\]/);
 });
+
+test('re-entering Sync fetches fresh drift instead of reusing a short-lived cache',async()=>{
+ let version=0;
+ const t=runtime(uri=>{
+  if(uri==='/api/dashboard/summary')return brief;
+  if(uri.startsWith('/api/system?'))return sample();
+  if(uri==='/api/sync')return {items:[{email:'a',reason_code:++version===1?'clean':'external_disabled'}]};
+  return [];
+ });
+ await t.ctx.load();
+ await t.ctx.go('sync');
+ assert.equal(t.state.sync.items[0].reason_code,'clean');
+ await t.ctx.go('dashboard');
+ await t.ctx.go('sync');
+ assert.equal(t.state.sync.items[0].reason_code,'external_disabled');
+ assert.equal(t.calls.filter(c=>c.uri==='/api/sync').length,2);
+});
