@@ -24,7 +24,7 @@ function linePoints(values,w,h,maxValue=null){
  const a=(values&&values.length?values:[0]).slice(-60),max=Math.max(1,maxValue||Math.max(...a,1)),den=Math.max(1,a.length-1);
  return a.map((v,i)=>`${(i*w/den).toFixed(1)},${(h-(Math.max(0,number(v))/max)*(h-4)-2).toFixed(1)}`).join(' ');
 }
-function spark(values,max=100){if(!values||values.length<2)return `<div class="ov4-spark-empty">${L('Awaiting samples','در انتظار نمونه')}</div>`;return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
+function spark(values,max=100){if(!values||values.length<2)return '<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points=""/></svg>';return `<svg class="ov4-spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><polyline points="${linePoints(values,120,32,max)}"/></svg>`;}
 function fmtRate(v){return v===null||v===undefined||v===''?'—':bytes(number(v))+'/s';}
 function fmtPercent(v){
  if(v===null||v===undefined||v==='')return '—';
