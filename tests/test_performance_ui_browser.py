@@ -128,8 +128,13 @@ def get_browser(play):
     # Production diagnostic host and GitHub CI store Playwright in different
     # cache locations. Use the installed Playwright browser on CI.
     options = {"headless": True, "args": ["--no-sandbox"]}
-    if Path(CHROME).is_file():
-        options["executable_path"] = CHROME
+    # GitHub CI runs as a non-root user. Probing a root-only fallback path
+    # raises PermissionError; simply use CI's Playwright-managed browser.
+    try:
+        if Path(CHROME).is_file():
+            options["executable_path"] = CHROME
+    except (PermissionError, OSError):
+        pass
     return play.chromium.launch(**options)
 
 
