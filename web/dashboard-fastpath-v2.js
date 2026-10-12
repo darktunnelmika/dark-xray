@@ -155,36 +155,34 @@ if(previousGo){
   go=async function(page){
     if(!state.me)return previousGo(page);
     const box=ensure();
-    box.navigation++;
-    const seq=box.navigation,oldPage=state.page,loadMarker=box.pageLoadVersion;
+    const ticket=++box.navigation,oldPage=state.page;
     if(oldPage==='dashboard'&&page!=='dashboard'){
       for(const ctl of Object.values(box.controllers))ctl.abort();
       box.queue=[];box.queued.clear();
     }
-    await previousGo(page);
     if(page==='dashboard'){
-      void dashboardLoad();
+      await previousGo(page);
+      if(same(box)&&state.page==='dashboard')void dashboardLoad();
       return;
     }
-    if(!same(box)||state.page!==page||seq!==box.navigation)return;
-    // The existing shell is rendered immediately. A visible loading state
-    // replaces any misleading empty list until actual page data arrives.
+    // Change the shell immediately, but keep the workspace noninteractive
+    // until its specialized loaders finish. The old implementation rendered a
+    // partly populated page and then replaced it again while operators typed.
+    state.page=page;
+    if(typeof setMobileMenu==='function')setMobileMenu(false);
+    if(typeof shell==='function')shell();
     const target=document.getElementById('content');
-    const pending=typeof pageResources==='function'?pageResources(page).length>0:page!=='account';
-    // Keep the actual workspace shell visible, but mark it busy until its
-    // backing data is fresh. Do not replace a rendered page with a fake
-    // "empty" placeholder that looks like a finished workspace.
-    if(target&&pending){
+    if(target){
       target.setAttribute?.('aria-busy','true');
-      target.insertAdjacentHTML?.('afterbegin','<div class="notice" role="status">'+
+      target.innerHTML='<div class="notice" role="status">'+
         (localStorage.getItem('dark_lang')==='fa'?
-         'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>');
+         'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>';
     }
     try{
-      // Re-entering Sync/Clients needs fresh data, but the full loader stack
-      // must remain intact (Groups, Operations, Update Center and future wrappers).
-      if(box.pageLoadVersion===loadMarker)await load();
-      if(same(box)&&state.page===page&&seq===box.navigation)await renderPage();
+      await load(); // all original load wrappers, e.g. Client Groups
+      if(!same(box)||state.page!==page||ticket!==box.navigation)return;
+      // Render exactly once, with fresh data and current navigation ownership.
+      await previousGo(page);
     }finally{
       document.getElementById('content')?.removeAttribute?.('aria-busy');
     }
