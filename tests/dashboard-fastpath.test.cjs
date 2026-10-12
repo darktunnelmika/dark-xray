@@ -143,7 +143,7 @@ test('failed page fetch shows an error rather than an invented empty list',async
   if(uri==='/api/dashboard/summary')return brief;
   if(uri.startsWith('/api/system?'))return sample();
   if(uri==='/api/clients')throw new Error('Client DB unavailable');
-  if(['/api/inbounds','/api/owners','/api/sync'].includes(uri))return [];
+  if(['/api/inbounds','/api/owners','/api/sync','/api/groups'].includes(uri))return [];
   return never;
  });
  await t.ctx.load();
