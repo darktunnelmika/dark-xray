@@ -70,7 +70,10 @@ function allowed(s){
   if(!s.activation||p==='paused')out.push('stage','review');
   if(s.review?.review_ready===true||p==='starting'&&hashOK(s.doc.activation_resume?.review_hash))out.push('start');
   if(['starting','stopping'].includes(p))out.push('pause');
-  if(s.activation?.activation_completed===true)out.push('prepare');
+  if(s.activation?.activation_completed===true){
+   out.push('replace-again');
+   if(s.replaceAgain===true)out.push('prepare');
+  }
  }
  return out;
 }
@@ -100,8 +103,10 @@ function paint(s){
  const labels=[['Select target','انتخاب هدف'],['Prepare','آماده‌سازی'],['Save binding','ثبت جایگزینی'],['Stage stopped','استقرار خاموش'],['Review / Start','بازبینی و شروع'],['Receipt','رسید']];
  const completed=p==='activated'&&s.activation?.activation_completed===true;
  let body=completed?
- `<section class="nr-new-primary" data-nr-phase="${esc(p)}"><h3>${L('Replace this Node with a new server','جایگزینی این نود با سرور جدید')}</h3>
- <p>${L('Enter the Pair Code from a different freshly installed VPS to start a new replacement. The existing Node remains active until the new replacement is explicitly reviewed and confirmed.','برای شروع جایگزینی جدید، کد اتصال یک سرور تازه‌نصب‌شدهٔ دیگر را وارد کن. نود فعلی تا زمانی که جایگزینی جدید را بررسی و تأیید نکنی فعال می‌ماند.')}</p></section>`:
+ `<section class="nr-completed-primary" data-nr-phase="${esc(p)}" role="status" aria-live="polite"><h3>${L('✓ Server replacement completed','✓ جایگزینی سرور با موفقیت انجام شد')}</h3>
+ <p>${L('This Node has been activated on the replacement server. No Pair Code or additional replacement step is required.','این نود روی سرور جایگزین فعال شده است. هیچ Pair Code یا مرحلهٔ دیگری برای این انتقال لازم نیست.')}</p>
+ <p><strong>${L('Replacement address','آدرس سرور جایگزین')}:</strong> <bdi>${esc(a?.target_origin)}</bdi></p>
+ <p>${L('The receipt confirms the completed handoff; use the Nodes page to check live connection and traffic health.','رسید زیر تکمیل انتقال را تأیید می‌کند؛ سلامت لحظه‌ای اتصال و ترافیک را از صفحهٔ نودها بررسی کن.')}</p></section>`:
  `<ol class="nr-steps">${labels.map((x,i)=>`<li ${i===step?'aria-current="step"':''}>${i+1}. ${L(...x)}</li>`).join('')}</ol>
  <div class="notice warning">${L('Users and recorded usage stay on the Hub. Closing this window does not cancel, stop, or roll back an operation. DNS, tunnels and the old VPS are not changed here.','کاربران و مصرف ثبت‌شده در پنل می‌مانند. بستن این پنجره عملیات را لغو، متوقف یا برنمی‌گرداند. DNS، تانل و VPS قبلی اینجا تغییر نمی‌کنند.')}</div>
  <p role="status" aria-live="polite" data-nr-phase="${esc(p)}"><strong>${s.doc?esc(L(...pair)):L('Status unavailable','وضعیت در دسترس نیست')}</strong></p>`;
@@ -115,16 +120,18 @@ function paint(s){
  <label for="nr-code">${L('New Pair Code (sensitive)','کد اتصال جدید (محرمانه)')}</label>
  <textarea id="nr-code" dir="ltr" autocomplete="off" spellcheck="false" maxlength="4096" rows="3" placeholder="DXN1.…"></textarea>
  ${buttonFor('prepare',completed?'Begin new replacement':'Prepare candidate',completed?'شروع جایگزینی جدید':'آماده‌سازی هدف')}</section>`;
- if(completed)body+=`<details class="nr-previous-receipt"><summary>${L('Previous replacement receipt (history)','رسید جایگزینی قبلی (سابقه)')}</summary>
+ if(completed)body+=`<details class="nr-previous-receipt" open><summary>${L('Completed replacement receipt','رسید جایگزینی انجام‌شده')}</summary>
  <section class="nr-completed">
- <h3>${L('Previous replacement was completed','جایگزینی قبلی تکمیل شده')}</h3>
+ <h3>${L('Replacement confirmed','انتقال تأیید شده')}</h3>
  <p>${L('Attempt','عملیات')}: <bdi>${esc(a.attempt_id)}</bdi></p>
- <p>${L('Previous destination','مقصد قبلی')}: <bdi>${esc(a.target_origin)}</bdi></p>
+ <p>${L('New destination','مقصد جدید')}: <bdi>${esc(a.target_origin)}</bdi></p>
  <p>${s.activation.service_activated===true?
  L('Last saved Node observation was running (not a WAN test).','آخرین وضعیت ثبت‌شدهٔ نود فعال بوده (تست اینترنت نیست).'):
  L('Last saved readiness was not confirmed; check Nodes for current health.','سلامت لحظه‌ای در آخرین گزارش تأیید نشده؛ وضعیت فعلی را در Nodes ببین.')}</p>
- <p>${L('The completed attempt is historical; use the new Pair Code field above to replace again.','این عملیات قبلی صرفاً سابقه است؛ برای جایگزینی دوباره از کد جدید در بالا استفاده کن.')}</p>
- </section></details>`;
+ <p>${L('This transfer is complete. Its Pair Code was already consumed; it must not be entered again.','این انتقال کامل شده و کد اتصال قبلی مصرف شده است؛ آن را دوباره وارد نکن.')}</p>
+ </section></details>
+ ${actions.includes('replace-again')?`<section class="nr-replace-next"><p>${L('Only if you buy another server later, begin a separate replacement. The active Node will not be stopped by opening the form.','فقط اگر بعداً سرور دیگری خریدی، انتقال جدید را جداگانه شروع کن. بازکردن فرم، نود فعال را متوقف نمی‌کند.')}</p>
+ <button type="button" class="btn" data-nr="replace-again" aria-expanded="${s.replaceAgain===true}">${s.replaceAgain===true?L('Hide new replacement form','بستن فرم جایگزینی جدید'):L('Replace again with another server','جایگزینی مجدد با سرور دیگر')}</button></section>`:''}`;
  if(actions.includes('retry'))body+=buttonFor('retry','Retry the saved preparation','ادامهٔ آماده‌سازی ذخیره‌شده');
  if(actions.includes('commit'))body+=`<section><h3>${L('Save the replacement binding','ثبت سرور جایگزین')}</h3><p>${L('This retires the old binding but leaves the replacement disabled. It is not customer service activation.','ارتباط مدیریتی قبلی بازنشسته می‌شود ولی جایگزین غیرفعال می‌ماند؛ این فعال‌سازی سرویس مشتری نیست.')}</p>${checks(commitKeys)}${buttonFor('commit','Confirm replacement binding','تأیید ثبت جایگزینی',commitKeys)}</section>`;
  if(actions.includes('stage'))body+=`<section>${buttonFor('review','Check Direct and continue','بررسی مستقیم و ادامه')} ${buttonFor('stage','Recheck stopped setup','بررسی دوبارهٔ تنظیمات خاموش')}</section>`;
@@ -154,10 +161,14 @@ async function read(s){
 function ambiguous(){return L('The result is not confirmed. Refresh saved status before another action; do not assume the request failed or repeat setup.','نتیجه تأیید نیست. پیش از اقدام بعدی وضعیت ذخیره‌شده را تازه‌سازی کن؛ شکست عملیات یا نیاز به راه‌اندازی مجدد را فرض نکن.');}
 async function perform(s,action){
  if(!authorized(s)||s.busy||!allowed(s).includes(action))return;
+ if(action==='replace-again'){
+  s.replaceAgain=!s.replaceAgain;s.error='';paint(s);
+  return;  // UI-only disclosure; never issue an API POST or consume a Pair Code.
+ }
  const a=s.doc?.attempt,path=a?s.url+'/'+a.attempt_id:s.url;
  let suffix=action,body={},post=true;
  const checked=k=>s.box.querySelector(`[name="${k}"]`)?.checked===true;
- if(action==='refresh'){post=false;}
+ if(action==='refresh'){post=false;s.replaceAgain=false;}
  else if(action==='prepare'){
   const code=s.box.querySelector('#nr-code')?.value.trim()||'';
   if(!/^DXN1\.[A-Za-z0-9_-]{1,3800}$/.test(code)){s.error=L('Enter a valid DXN1 Pair Code.','یک کد اتصال معتبر DXN1 وارد کن.');paint(s);return;}
@@ -198,7 +209,7 @@ async function open(id,trigger){
  const box=document.createElement('dialog');box.className='nr-dialog';box.setAttribute('aria-labelledby','nr-title');box.dir=(localStorage.getItem('dark_lang')||'en')==='fa'?'rtl':'ltr';
  box.innerHTML=`<header><div><small>DARK XRAY</small><h2 id="nr-title">${L('Replace node server','جایگزینی سرور نود')} · <bdi>${esc(id)}</bdi></h2></div><button type="button" class="btn" data-nr-close>${L('Close','بستن')}</button></header><div class="nr-body"></div><footer><button type="button" class="btn" data-nr="refresh">${L('Refresh saved status','تازه‌سازی وضعیت ذخیره‌شده')}</button><small>${L('No automatic remote actions','بدون عملیات خودکار روی سرور')}</small></footer>`;
  document.body.append(box);
- const s={id,owner:state.me.id,url:'/api/nodes/'+enc(id)+'/replacement',box,body:box.querySelector('.nr-body'),live:true,busy:false,doc:null,review:null,deployment:null,activation:null,error:''};active=s;
+ const s={id,owner:state.me.id,url:'/api/nodes/'+enc(id)+'/replacement',box,body:box.querySelector('.nr-body'),live:true,busy:false,doc:null,review:null,deployment:null,activation:null,replaceAgain:false,error:''};active=s;
  box.addEventListener('close',()=>{s.live=false;s.review=null;s.doc=null;box.remove();if(trigger?.isConnected)trigger.focus();if(active===s)active=null;});
  box.querySelector('[data-nr-close]').onclick=()=>box.close();
  box.addEventListener('click',ev=>{const b=ev.target.closest('[data-nr]');if(b){ev.preventDefault();void perform(s,b.dataset.nr);}});
