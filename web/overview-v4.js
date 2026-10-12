@@ -38,12 +38,14 @@ function fmtUptime(sec){if(sec===null||sec===undefined||sec==='')return '—';se
 function sourceReady(key,maxAge){const f=state.dashboardFast;return !f||!!(f.last[key]&&f.status[key]!=='error'&&Date.now()-f.last[key]<maxAge);}
 function hostEngine(){return sourceReady('system',40000)?state.system?.engine||{}:{};}
 function sourcePending(key){const f=state.dashboardFast;return f&&f.status[key]==='error'?L('Telemetry unavailable','دریافت آمار ناموفق'):L('Waiting for a recent sample','در انتظار نمونه جدید');}
+function coreState(){return hostEngine().xray?.state||(sourceReady('core',50000)?state.ov2?.core?.state:null)||(sourceReady('sync',45000)?state.sync?.runtime?.state:null);}
+function sampleStatus(){const f=state.dashboardFast;if(!f)return '';const ok=sourceReady('system',40000),at=f.last.system,age=at?Math.max(0,Math.floor((Date.now()-at)/1000)):null;return `<div class="ov4-sample-status ${ok?'good':'warn'}"><i></i><span>${ok?L('LIVE HOST SAMPLE','نمونه زنده سرور'):sourcePending('system')}</span><b>${age===null?'—':age+'s '+L('ago','قبل')}</b></div>`;}
 
 function commandBar(){
- const n=hostEngine(),core=state.ov2?.core||state.sync?.runtime||{},running=core.state==='running'||n.xray?.state==='running';
+ const n=hostEngine(),status=coreState(),running=status==='running',unknown=status!=='running'&&status!=='stopped';
  const up=state.updateCenter?.status||{},cand=up.candidate||{},update=cand.update_available;
- let left=`<div class="ov4-status-pill ${running?'good':'bad'}"><i></i><span>Xray · ${e(running?L('Running','در حال اجرا'):L('Stopped','متوقف'))}</span><b>${e(n.xray?.version||state.sync?.engine_version||'—')}</b></div>`;
- left+=`<div class="ov4-status-pill ${update?'warn':'good'}"><i></i><span>${update?L('Update available','آپدیت موجود'):L('Build current','نسخه به‌روز')}</span><b>${e(cand.version||state.me?.version||'')}</b></div>`;
+ let left=`<div class="ov4-status-pill ${unknown?'warn':running?'good':'bad'}"><i></i><span>Xray · ${e(unknown?L('Unknown','نامشخص'):running?L('Running','در حال اجرا'):L('Stopped','متوقف'))}</span><b>${e(n.xray?.version||state.sync?.engine_version||'—')}</b></div>`;
+ left+=`<div class="ov4-status-pill ${!sourceReady('update',120000)?'warn':update?'warn':'good'}"><i></i><span>${!sourceReady('update',120000)?L('Update status pending','وضعیت آپدیت نامشخص'):update?L('Update available','آپدیت موجود'):L('Build current','نسخه به‌روز')}</span><b>${e(cand.version||state.me?.version||'')}</b></div>`;
  if(!isOwner())return `<section class="ov4-commandbar"><div class="ov4-command-status">${left}</div></section>`;
  const action=(name,label,ic,danger=false)=>`<button class="ov4-action ${danger?'danger':''}" data-act="${name}">${icon(ic)}<span>${label}</span></button>`;
  return `<section class="ov4-commandbar"><div class="ov4-command-status">${left}</div><div class="ov4-command-actions">
@@ -101,7 +103,7 @@ function telemetryStrip(){
  return `<section class="ov4-telemetry-strip">
  <div><span>${icon('activity')} ${L('UPTIME','آپ‌تایم')}</span><section><p><small>XRAY</small><b>${fmtUptime(n.xray?.uptime)}</b></p><p><small>OS</small><b>${fmtUptime(n.uptime)}</b></p></section></div>
  <div><span>${icon('server')} ${L('PANEL','پنل')}</span><section><p><small>RAM</small><b>${bytes(n.panel?.mem)}</b></p><p><small>${L('THREADS','تردها')}</small><b>${fa(n.panel?.threads||0)}</b></p></section></div>
- <div class="ov4-addresses"><span>${icon('globe')} IP ADDRESSES</span><section>${addresses.length?addresses.map(a=>`<p><small>${e(a.interface)}</small><b class="mono">${e(a.address)}</b></p>`).join(''):`<p><b class="muted">${L('No non-loopback address reported','آدرس غیرلوپ‌بک گزارش نشده')}</b></p>`}</section></div>
+ <div class="ov4-addresses"><span>${icon('globe')} IP ADDRESSES</span><section>${!sourceReady('system',40000)?`<p><b class="muted">${sourcePending('system')}</b></p>`:addresses.length?addresses.map(a=>`<p><small>${e(a.interface)}</small><b class="mono">${e(a.address)}</b></p>`).join(''):`<p><b class="muted">${L('No non-loopback address reported','آدرس غیرلوپ‌بک گزارش نشده')}</b></p>`}</section></div>
  </section>`;
 }
 
@@ -138,7 +140,7 @@ function backupCard(){
  const b=state.ov2?.backup||{};
  return `<article class="ov4-card ov4-backup-card"><header class="ov4-card-head"><div><span>${L('BACKUP & RECOVERY','بکاپ و بازیابی')}</span><small>${L('Rollback-safe operations','عملیات امن با قابلیت بازگشت')}</small></div><button class="ov4-link" data-act="ov4backup">${L('Open','بازکردن')} →</button></header>
  <div class="ov4-backup-main"><div><span>${L('Database snapshot','اسنپ‌شات دیتابیس')}</span><b>${b.database_bytes===undefined?'—':bytes(b.database_bytes)}</b></div><div><span>${L('Managed clients','کاربران')}</span><b>${b.managed_clients===undefined?'—':fa(b.managed_clients)}</b></div></div>
- <div class="ov4-safe"><i></i><span>${b.restore_isolated===false?L('Restore isolation unavailable','ایزوله‌سازی بازیابی در دسترس نیست'):L('Isolated restore enforced','بازیابی ایزوله اجباری است')}</span></div>
+ <div class="ov4-safe"><i></i><span>${!sourceReady('backup',180000)?sourcePending('backup'):b.restore_isolated===true?L('Isolated restore enforced','بازیابی ایزوله اجباری است'):L('Restore isolation unavailable','ایزوله‌سازی بازیابی در دسترس نیست')}</span></div>
  <div class="ov4-card-actions"><button class="ov4-small-button" data-act="backupfull">${icon('shield')}${L('Encrypted full backup','بکاپ کامل رمزدار')}</button><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('Verify / Restore','بررسی / بازیابی')}</button></div></article>`;
 }
 
@@ -146,7 +148,7 @@ function repsCard(){
  if(!isOwner())return '';
  const reps=state.resellers||[];
  return `<article class="ov4-card ov4-reps-card"><header class="ov4-card-head"><div><span>${L('REPRESENTATIVES','نمایندگان')}</span><small>${L('Unified representative accounts','حساب‌های یکپارچه نمایندگی')}</small></div><button class="ov4-link" data-act="ov4reps">${L('Manage','مدیریت')} →</button></header>
- <div class="ov4-reps-list">${reps.length?reps.slice(0,5).map(r=>`<div><i class="${r.enabled?'good':'off'}"></i><span><b>${e(r.name||r.id)}</b><small>${fa(r.client_count||0)} ${L('clients','کاربر')} · ${r.quota_bytes?bytes(r.quota_bytes):'∞'}</small></span><em>${r.enabled?L('Active','فعال'):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No representatives yet.','هنوز نماینده‌ای ساخته نشده است.')}</div>`}</div></article>`;
+ <div class="ov4-reps-list">${!sourceReady('resellers',180000)?`<div class="ov4-empty">${sourcePending('resellers')}</div>`:reps.length?reps.slice(0,5).map(r=>`<div><i class="${r.enabled?'good':'off'}"></i><span><b>${e(r.name||r.id)}</b><small>${fa(r.client_count||0)} ${L('clients','کاربر')} · ${r.quota_bytes?bytes(r.quota_bytes):'∞'}</small></span><em>${r.enabled?L('Active','فعال'):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No representatives yet.','هنوز نماینده‌ای ساخته نشده است.')}</div>`}</div></article>`;
 }
 
 function healthCard(){
@@ -158,7 +160,9 @@ function healthCard(){
  if(errors.length)add('warn',L('Node sync errors','خطای همگام‌سازی نود'),errors.map(n=>n.name||n.id).join(', '));
  if(bans)add('warn',L('IP Guard bans','بن‌های IP Guard'),fa(bans));
  if(up.error)add('bad',L('Update broker error','خطای Update Broker'),up.error);
- if(core.state!=='running')add('warn',L('Xray not running','Xray در حال اجرا نیست'),L('Review runtime state.','وضعیت اجرا را بررسی کن.'));
+ if(coreState()==='stopped')add('warn',L('Xray not running','Xray در حال اجرا نیست'),L('Review runtime state.','وضعیت اجرا را بررسی کن.'));
+ if(!coreState())add('warn',L('Runtime telemetry unavailable','وضعیت هسته نامشخص است'),L('A recent status sample has not arrived.','هنوز نمونه وضعیت تازه دریافت نشده است.'));
+ if(!sourceReady('nodes',45000))add('warn',L('Node snapshot unavailable','وضعیت نودها نامشخص است'),sourcePending('nodes'));
  if(globalThis.DarkOperationsV3?.attention?.())add('warn',L('Service status needs attention','وضعیت سرویس نیاز به بررسی دارد'),L('See Service status for details or unavailable telemetry.','جزئیات یا اطلاعات ناموجود را در وضعیت سرویس‌ها ببین.'));
  if(!rows.length)add('good',L('All monitored systems nominal','همه سیستم‌های مانیتورشده سالم هستند'),L('No active runtime, node or update alert.','هشدار فعالی برای محیط اجرا، نود یا آپدیت وجود ندارد.'));
  return `<article class="ov4-card ov4-health-card"><header class="ov4-card-head"><div><span>${L('HEALTH & ALERTS','سلامت و هشدارها')}</span><small>${L('Operational issues first','اولویت با مشکلات عملیاتی')}</small></div><button class="ov4-link" data-act="ov4doctor">Doctor →</button></header><div class="ov4-alert-list">${rows.slice(0,5).map(r=>`<div class="${r.kind}"><i></i><span><b>${e(r.title)}</b><small>${e(r.detail)}</small></span></div>`).join('')}</div></article>`;
@@ -189,13 +193,13 @@ function activityLabel(code){
 }
 function activityCard(){
  const rows=(state.ov2?.audit||[]).slice(0,7);
- return `<article class="ov4-card ov4-activity-card"><header class="ov4-card-head"><div><span>${L('RECENT ACTIVITY','فعالیت‌های اخیر')}</span><small>${L('Audit-backed events','رویدادهای مبتنی بر گزارش عملیات')}</small></div><button class="ov4-link" data-act="ov4history">${L('View all','همه')} →</button></header><div class="ov4-activity-list">${rows.length?rows.map(r=>`<div><time>${date(r.at)}</time><span>${e(r.actor)}</span><b title="${e(r.action)}">${e(activityLabel(r.action))}</b><em>${e(r.target)}</em></div>`).join(''):`<div class="ov4-empty">${L('No recent audit events.','رویداد اخیر وجود ندارد.')}</div>`}</div></article>`;
+ return `<article class="ov4-card ov4-activity-card"><header class="ov4-card-head"><div><span>${L('RECENT ACTIVITY','فعالیت‌های اخیر')}</span><small>${L('Audit-backed events','رویدادهای مبتنی بر گزارش عملیات')}</small></div><button class="ov4-link" data-act="ov4history">${L('View all','همه')} →</button></header><div class="ov4-activity-list">${!sourceReady('audit',180000)?`<div class="ov4-empty">${sourcePending('audit')}</div>`:rows.length?rows.map(r=>`<div><time>${date(r.at)}</time><span>${e(r.actor)}</span><b title="${e(r.action)}">${e(activityLabel(r.action))}</b><em>${e(r.target)}</em></div>`).join(''):`<div class="ov4-empty">${L('No recent audit events.','رویداد اخیر وجود ندارد.')}</div>`}</div></article>`;
 }
 
 dashboard=function(){
  if(!state.me)return baseDashboard();
  return heading(L('System Overview','نمای کلی سیستم'),L('Live host, Xray and DARK control-plane telemetry.','تله‌متری زندهٔ میزبان، Xray و لایهٔ کنترل DARK.'))+notices()+
- `<div class="ov4">${commandBar()}${resourceRow()}<section class="ov4-main-grid">${trafficChart()}${connectionCard()}</section>${telemetryStrip()}${darkSummary()}<section class="ov4-management-grid">${nodeCard()}<div id="dark-update-center-slot"></div></section>${globalThis.DarkOperationsV3?.render?.()||''}<section class="ov4-lower-grid">${backupCard()}${repsCard()}${healthCard()}${activityCard()}</section></div>`;
+ `<div class="ov4">${commandBar()}${sampleStatus()}${resourceRow()}<section class="ov4-main-grid">${trafficChart()}${connectionCard()}</section>${telemetryStrip()}${darkSummary()}<section class="ov4-management-grid">${nodeCard()}<div id="dark-update-center-slot"></div></section>${globalThis.DarkOperationsV3?.render?.()||''}<section class="ov4-lower-grid">${backupCard()}${repsCard()}${healthCard()}${activityCard()}</section></div>`;
 };
 
 runAction=async function(act,el){
