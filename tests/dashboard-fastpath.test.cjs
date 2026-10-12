@@ -47,7 +47,7 @@ function runtime(reply,role='owner'){
  const ctx={state,api:invoke,pageResources:page=>baseResources[page]||[],
    can:()=>true,isOwner:()=>state.me?.role==='owner',
    load:originalLoad,
-   go:async page=>{state.page=page;content.innerHTML='legacy shell';},
+   go:async page=>{state.page=page;content.innerHTML='legacy shell';await ctx.renderPage();},
    renderPage:async()=>{rendered.push(state.page);content.innerHTML='page rendered';},
    setTimeout:(fn,ms)=>setTimeout(fn,Math.min(ms,50)),clearTimeout,
    setInterval:(fn,ms)=>{intervals.push({fn,ms});return 1;},
@@ -134,6 +134,7 @@ test('navigation loads only required target page data before verified render',as
  assert.equal(t.state.groups[0].name,'canary-group');
  assert.ok(t.legacyLoads()>0,'original specialized loader must execute');
  assert.equal(t.content.innerHTML,'page rendered');
+ assert.equal(t.rendered.filter(p=>p==='clients').length,1,'no late second render');
  assert.ok(!t.calls.some(x=>x.uri==='/api/resellers'));
 });
 
@@ -193,7 +194,7 @@ test('workspace remains marked busy while page hydration is pending',async()=>{
  await sleep(5);
  assert.equal(t.content.busy,true);
  assert.match(t.content.innerHTML,/Loading current page data/);
- assert.match(t.content.innerHTML,/legacy shell/);
+ assert.doesNotMatch(t.content.innerHTML,/page rendered/);
  resolveClients([{email:'actual'}]);
  await nav;
  assert.equal(t.content.busy,false);
