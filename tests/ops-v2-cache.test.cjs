@@ -58,11 +58,11 @@ test('dashboard fetches operational sources in addition to the base load',async(
  assert.equal(ctx.state.ov2.overviewOwner,'dark');
 });
 
-test('entering dashboard triggers an immediate fresh load instead of waiting for timer',async()=>{
+test('entering dashboard delegates telemetry refresh without duplicating full API loads',async()=>{
  const {ctx,events}=context();
  ctx.state.me={id:'dark',role:'owner',permissions:{}};
  await ctx.go('dashboard');
- assert.deepEqual(events,['baseGo:dashboard','refresh']);
+ assert.deepEqual(events,['baseGo:dashboard']);
 });
 
 
