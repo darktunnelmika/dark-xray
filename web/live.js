@@ -43,7 +43,7 @@ const date=t=>{if(!t)return '—';const lang=(localStorage.getItem('dark_lang')|
 function bytes(v){if(v===undefined||v===null)return '—';v=Number(v);if(!Number.isFinite(v))return '—';let u=0;while(v>=1024&&u<4){v/=1024;u++;}return `${v.toFixed(u?1:0)} ${['B','KiB','MiB','GiB','TiB'][u]}`;}
 const LAST_PAGE_KEY='dark_last_page';
 const darkSession=globalThis.sessionStorage||{getItem:()=>null,setItem:()=>{}};
-const state={me:null,page:darkSession.getItem(LAST_PAGE_KEY)||'dashboard',clients:[],owners:[],resellers:[],inbounds:[],sync:null,system:null,errors:{},expanded:new Set(),selected:new Set(),search:'',busy:false,history:[],renderSeq:0};
+const state={me:null,page:darkSession.getItem(LAST_PAGE_KEY)||'dashboard',clients:[],owners:[],resellers:[],inbounds:[],sync:null,system:null,errors:{},fetched:{},expanded:new Set(),selected:new Set(),search:'',busy:false,history:[],renderSeq:0};
 const can=(key,owner=state.me?.id)=>state.me?.role==='owner'||state.me?.permissions?.[key]==='all'||(state.me?.permissions?.[key]==='own'&&owner===state.me?.id);
 const isOwner=()=>state.me?.role==='owner';
 const uiLang=()=>localStorage.getItem('dark_lang')||'en';
@@ -70,7 +70,54 @@ function heading(title,sub,actions=''){const pageLabel=navItems().find(n=>n[0]==
 function button(text,act,ic='plus',extra='',primary=false){return `<button type="button" class="btn ${primary?'btn-primary':''}" data-act="${act}" ${extra}>${icon(ic)}${text}</button>`;}
 function empty(text){return `<div class="empty-state">${icon('info')}<p>${text}</p></div>`;}
 function notices(){return Object.entries(state.errors).map(([k,v])=>`<div class="notice error"><b>${e(k)}</b> — ${e(v)}<br>اطلاعات این بخش دریافت نشده؛ با دادهٔ نمونه جایگزین نشده است.</div>`).join('');}
-async function load(){if(!state.me)return;const specs=[['clients','/api/clients'],['inbounds','/api/inbounds'],['owners','/api/owners'],['sync','/api/sync']];if(isOwner())specs.push(['resellers','/api/resellers']);if(can('system.read'))specs.push(['system','/api/system']);await Promise.all(specs.map(async([key,path])=>{try{state[key]=await api(path);delete state.errors[key];}catch(ex){state.errors[key]=ex.message;if(key!=='sync')state[key]=key==='system'?null:[];}}));if(state.system?.engine){let n=state.system.engine;let v=Number(n.cpu);if(Number.isFinite(v)){state.history.push(v);state.history=state.history.slice(-60);}}}
+// Fetch only the resources needed for the visible page. Large immutable
+// traffic ledgers make owner/reseller summaries expensive; awaiting them on
+// every login, Node page and 12s refresh blocks otherwise healthy navigation.
+function pageResources(page){
+ const select={
+  dashboard:['clients','inbounds','sync','system'],
+  clients:['clients','inbounds','owners','sync'],
+  inbounds:['inbounds','clients','sync'],
+  resellers:['resellers','owners','inbounds'],
+  finance:['resellers','owners'],
+  nodes:['inbounds'],
+  sync:['sync'],
+  account:[],
+  darkrestore:['inbounds'],
+  telegram:['inbounds'],
+  xray:['inbounds','sync'],
+  hosts:['inbounds'],
+  outbounds:[],
+  routing:[],
+  settings:[],
+  logs:[],
+  backup:[],
+ };
+ return select[page]||['inbounds','clients','sync'];
+}
+async function load(){
+ if(!state.me)return;
+ const page=state.page;
+ const paths={clients:'/api/clients',inbounds:'/api/inbounds',owners:'/api/owners',
+              sync:'/api/sync',resellers:'/api/resellers',system:'/api/system'};
+ const wanted=pageResources(page).filter(key=>key!=='resellers'||isOwner()).filter(key=>key!=='system'||can('system.read'));
+ await Promise.all(wanted.map(async key=>{
+  try{
+   const data=await api(paths[key]);
+   if(!state.me)return;
+   state[key]=data;state.fetched[key]=true;delete state.errors[key];
+  }catch(ex){
+   if(!state.me)return;
+   state.errors[key]=ex.message;
+   // Unavailable data stays visibly unavailable, never fabricated as success.
+   if(!state.fetched[key]&&key!=='sync')state[key]=key==='system'?null:[];
+  }
+ }));
+ if(page==='dashboard'&&state.system?.engine){
+  const v=Number(state.system.engine.cpu);
+  if(Number.isFinite(v)){state.history.push(v);state.history=state.history.slice(-60);}
+ }
+}
 async function refresh(){
  if(state.busy){
   await new Promise(resolve=>{
@@ -141,7 +188,13 @@ async function renderPage(){
  const support=state.me?.ui?.support_url||'';
  content.innerHTML=html+`<footer><span>DARK API · DARK DATABASE · Xray-core${support?` · <a href="${e(support)}" target="_blank" rel="noopener noreferrer">Support</a>`:''}</span><span class="mono">${e(state.me?.version||'DARK')} </span></footer>`;
 }
-async function go(page){setMobileMenu(false);state.page=page;darkSession.setItem(LAST_PAGE_KEY,page);state.search='';state.selected.clear();shell();await renderPage();}
+async function go(page){setMobileMenu(false);state.page=page;darkSession.setItem(LAST_PAGE_KEY,page);
+ state.search='';state.selected.clear();shell();
+ const seq=++state.renderSeq,content=$('#content');
+ if(content)content.innerHTML='<div class="notice" role="status" aria-live="polite">'+uiText('Loading this section…','در حال دریافت اطلاعات همین بخش…')+'</div>';
+ await load();
+ if(state.page===page&&state.renderSeq===seq)await renderPage();
+}
 function closeDialog(){const o=$('#overlay');o.classList.remove('show');o.style.display='none';o.innerHTML='';}
 function dialog(title,body,onSubmit=null,label='ذخیره'){const o=$('#overlay');o.innerHTML=`<div class="dialog" role="dialog" aria-modal="true" aria-label="${e(title)}"><form id="dialog-form"><header class="dialog-head"><h2>${e(title)}</h2><button type="button" class="icon-btn" data-act="close">${icon('close')}</button></header><div class="dialog-body">${body}<div class="form-error" id="form-error"></div></div><footer class="dialog-foot"><button type="button" class="btn" data-act="close">بستن</button>${onSubmit?`<button class="btn btn-primary" type="submit" id="submit-dialog">${e(label)}</button>`:''}</footer></form></div>`;o.style.display='flex';o.classList.add('show');if(onSubmit)$('#dialog-form').addEventListener('submit',async ev=>{ev.preventDefault();const b=$('#submit-dialog');b.disabled=true;$('#form-error').textContent='';try{await onSubmit(new FormData(ev.target),ev.target);}catch(ex){if($('#form-error'))$('#form-error').textContent=ex.message;else toast(ex.message,true);}finally{if(b.isConnected)b.disabled=false;}});setTimeout(()=>o.querySelector('input,select,button')?.focus(),20);}
 function field(label,name,value='',type='text',attrs=''){return `<label>${label}<input class="field-input" name="${name}" type="${type}" value="${e(value)}" ${attrs}></label>`;}
@@ -206,7 +259,10 @@ function loginPage(){state.clients=[];state.owners=[];state.resellers=[];state.i
 // Defer extensions (Restore/SWAP/etc.) execute before DOMContentLoaded. Rebuild once
 // after the complete script graph is registered so the first sidebar is never partial.
 window.addEventListener('DOMContentLoaded',()=>{if(state.me){shell();renderPage().catch(ex=>toast(ex.message,true));}},{once:true});
-setInterval(()=>{if(state.me&&!document.hidden&&!$('#overlay').classList.contains('show')&&!enginePages[state.page])refresh();},12000);
+// Fleet telemetry has its own timer. Never continuously fetch all owner
+// ledgers while browsing menus; coalesce UI polling to visible data only.
+setInterval(()=>{if(state.me&&!state.busy&&!document.hidden&&!$('#overlay').classList.contains('show')
+ &&['dashboard','clients','inbounds'].includes(state.page))void refresh();},45000);
 
 function area(label,name,value,rows=7){return `<label class="span-2">${e(label)}<textarea class="field-input" dir="ltr" style="font-family:monospace;min-height:${rows*21}px" name="${e(name)}">${e(JSON.stringify(value,null,2))}</textarea></label>`;}
 async function sectionForm(section){

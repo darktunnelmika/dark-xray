@@ -110,7 +110,7 @@ function darkSummary(){
  ${item(L('BLOCKED','محدود'),fa(blocked),L('policy / quota','سیاست / سهمیه'),'ov4clients')}
  ${item(L('INBOUNDS','اینباندها'),fa(state.inbounds?.length||0),'Xray','ov4config')}
  ${item(L('NODES ONLINE','نود آنلاین'),`${online}/${enabled.length}`,L('multi-node','چندنودی'),'ov4nodes')}
- ${item(L('REPRESENTATIVES','نمایندگان'),fa(activeReps),`${reps.length} ${L('total','کل')}`,'ov4reps')}
+ ${item(L('REPRESENTATIVES','نمایندگان'),state.fetched?.resellers?fa(activeReps):'—',state.fetched?.resellers?`${reps.length} ${L('total','کل')}`:L('Load in Representatives','در صفحهٔ نمایندگان بارگذاری می‌شود'),'ov4reps')}
  ${item(L('XRAY MEMORY','حافظه Xray'),bytes(n.xray?.mem),e(n.xray?.state||'—'),'ov4metrics')}
  </section>`;
 }
@@ -135,7 +135,7 @@ function repsCard(){
  if(!isOwner())return '';
  const reps=state.resellers||[];
  return `<article class="ov4-card ov4-reps-card"><header class="ov4-card-head"><div><span>${L('REPRESENTATIVES','نمایندگان')}</span><small>${L('Unified representative accounts','حساب‌های یکپارچه نمایندگی')}</small></div><button class="ov4-link" data-act="ov4reps">${L('Manage','مدیریت')} →</button></header>
- <div class="ov4-reps-list">${reps.length?reps.slice(0,5).map(r=>`<div><i class="${r.enabled?'good':'off'}"></i><span><b>${e(r.name||r.id)}</b><small>${fa(r.client_count||0)} ${L('clients','کاربر')} · ${r.quota_bytes?bytes(r.quota_bytes):'∞'}</small></span><em>${r.enabled?L('Active','فعال'):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No representatives yet.','هنوز نماینده‌ای ساخته نشده است.')}</div>`}</div></article>`;
+ <div class="ov4-reps-list">${!state.fetched?.resellers?`<div class="ov4-empty">${L('Open Representatives to load current data.','برای بارگذاری دادهٔ فعلی، صفحهٔ نمایندگان را باز کن.')}</div>`:reps.length?reps.slice(0,5).map(r=>`<div><i class="${r.enabled?'good':'off'}"></i><span><b>${e(r.name||r.id)}</b><small>${fa(r.client_count||0)} ${L('clients','کاربر')} · ${r.quota_bytes?bytes(r.quota_bytes):'∞'}</small></span><em>${r.enabled?L('Active','فعال'):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No representatives yet.','هنوز نماینده‌ای ساخته نشده است.')}</div>`}</div></article>`;
 }
 
 function healthCard(){
