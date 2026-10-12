@@ -107,20 +107,46 @@ function telemetryStrip(){
  </section>`;
 }
 
+function currentSummary(){
+ const f=state.dashboardFast,snap=f?.summary;
+ if(!f||f.identity!==state.me||!snap?.read_only||!f.last.summary)return null;
+ const age=Math.max(0,(Date.now()-f.last.summary)/1000)+Number(snap.age_seconds||0);
+ if(!Number.isFinite(age)||age>90)return null;
+ return {doc:snap,age,stale:snap.freshness==='stale'||f.status.summary!=='ready'||age>30};
+}
 function darkSummary(){
- const clients=state.clients||[],active=clients.filter(x=>x.client?.enable!==false&&!x.block_reasons?.length).length,blocked=clients.filter(x=>x.block_reasons?.length).length;
- const nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online).length;
- const reps=state.resellers||[],activeReps=reps.filter(r=>r.enabled).length,n=hostEngine();
- const clientOk=sourceReady('clients',180000),nodeOk=sourceReady('nodes',45000),repOk=sourceReady('resellers',180000),inboundOk=sourceReady('inbounds',180000);
- const item=(label,value,sub,act='')=>`<button class="ov4-summary-item" ${act?`data-act="${act}"`:'disabled'}><span>${label}</span><b>${value}</b><small>${sub}</small></button>`;
+ const summary=currentSummary(),doc=summary?.doc||{},clients=doc.clients||{},ins=doc.inbounds||{},
+       reps=doc.representatives||{},beat=doc.nodes||{},n=hostEngine();
+ const nodes=state.ov2?.nodes||[],nodeOk=sourceReady('nodes',45000),
+       enabled=nodes.filter(x=>x.enabled),online=enabled.filter(x=>x.online).length;
+ const ready=!!summary;
+ const note=ready?(summary.stale?L('STALE · last verified snapshot','قدیمی · آخرین نمونه معتبر'):
+                             L('Current stored policy state','وضعیت فعلی سیاست ذخیره‌شده')):
+                             sourcePending('summary');
+ const item=(label,value,sub,act='')=>`<button class="ov4-summary-item" ${act?`data-act="${act}"`:'disabled'}><span>${label}</span><b>${e(value)}</b><small>${e(sub)}</small></button>`;
+ const total=ready?fa(clients.total):'—',blocked=ready?fa(clients.policy_blocked):'—';
+ const nodeLabel=nodeOk?L('NODES ONLINE','نودهای آنلاین'):L('RECENT HEARTBEATS','ضربان اخیر نودها');
+ const nodeValue=nodeOk?`${online}/${enabled.length}`:ready&&beat.enabled!==undefined?
+                   `${fa(beat.recent_heartbeat)}/${fa(beat.enabled)}`:'—';
+ const nodeNote=nodeOk?L('Confirmed Node registry','وضعیت تأییدشده نود'):
+                       ready?L('Heartbeat only · not traffic readiness','فقط سیگنال ارتباط · نه سلامت ترافیک'):sourcePending('nodes');
+ const historyLabel=ready&&summary.stale?L('STALE snapshot','نمونه قدیمی'):L('Stored counters, not lifetime ledger','شمارنده ذخیره‌شده، نه مصرف تاریخی');
  return `<section class="ov4-summary-grid">
- ${item(L('ACTIVE CLIENTS','کاربران فعال'),clientOk?fa(active):'—',clientOk?`${clients.length} ${L('total','کل')}`:sourcePending('clients'),'ov4clients')}
- ${item(L('BLOCKED','محدود'),clientOk?fa(blocked):'—',clientOk?L('policy / quota','سیاست / سهمیه'):sourcePending('clients'),'ov4clients')}
- ${item(L('INBOUNDS','اینباندها'),inboundOk?fa(state.inbounds?.length||0):'—','Xray','ov4config')}
- ${item(L('NODES ONLINE','نود آنلاین'),nodeOk?`${online}/${enabled.length}`:'—',nodeOk?L('multi-node','چندنودی'):sourcePending('nodes'),'ov4nodes')}
- ${item(L('REPRESENTATIVES','نمایندگان'),repOk?fa(activeReps):'—',repOk?`${reps.length} ${L('total','کل')}`:sourcePending('resellers'),'ov4reps')}
- ${item(L('XRAY MEMORY','حافظه Xray'),bytes(n.xray?.mem),e(n.xray?.state||'—'),'ov4metrics')}
- </section>`;
+ ${item(L('POLICY-ELIGIBLE CLIENTS','کاربران مجاز در سیاست'),ready?fa(clients.policy_eligible):'—',
+        ready?total+' '+L('total','کل'):note,'ov4clients')}
+ ${item(L('POLICY BLOCKED','محدودیت سیاست'),blocked,
+        ready?L('Stored policy/expiry/quota','سیاست/انقضا/حجم ذخیره‌شده'):note,'ov4clients')}
+ ${item(L('INBOUNDS','اینباندها'),ready&&ins.total!==undefined?fa(ins.total):'—',
+        ready?L('Stored Xray listeners','اینباندهای ثبت‌شده'):note,'ov4config')}
+ ${item(nodeLabel,nodeValue,nodeNote,'ov4nodes')}
+ ${item(L('REPRESENTATIVES','نمایندگان'),ready&&reps.enabled!==undefined?fa(reps.enabled):'—',
+        ready?fa(reps.total)+' '+L('total','کل'):note,'ov4reps')}
+ ${item(L('XRAY MEMORY','حافظه Xray'),bytes(n.xray?.mem),
+        sourceReady('system',40000)?e(n.xray?.state||'—'):sourcePending('system'),'ov4metrics')}
+ </section>
+ <div class="ov4-account-usage"><span>${L('CURRENT STORED CLIENT USAGE','مصرف فعلی ثبت‌شده کاربران')}</span>
+ <b>${ready?bytes(clients.current_stored_usage_bytes):'—'}</b>
+ <small>${e(historyLabel)} · ${e(note)}</small></div>`;
 }
 
 function nodeSample(n){
@@ -146,9 +172,12 @@ function backupCard(){
 
 function repsCard(){
  if(!isOwner())return '';
- const reps=state.resellers||[];
- return `<article class="ov4-card ov4-reps-card"><header class="ov4-card-head"><div><span>${L('REPRESENTATIVES','نمایندگان')}</span><small>${L('Unified representative accounts','حساب‌های یکپارچه نمایندگی')}</small></div><button class="ov4-link" data-act="ov4reps">${L('Manage','مدیریت')} →</button></header>
- <div class="ov4-reps-list">${!sourceReady('resellers',180000)?`<div class="ov4-empty">${sourcePending('resellers')}</div>`:reps.length?reps.slice(0,5).map(r=>`<div><i class="${r.enabled?'good':'off'}"></i><span><b>${e(r.name||r.id)}</b><small>${fa(r.client_count||0)} ${L('clients','کاربر')} · ${r.quota_bytes?bytes(r.quota_bytes):'∞'}</small></span><em>${r.enabled?L('Active','فعال'):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No representatives yet.','هنوز نماینده‌ای ساخته نشده است.')}</div>`}</div></article>`;
+ const summary=currentSummary(),count=summary?.doc?.representatives;
+ return `<article class="ov4-card ov4-reps-card"><header class="ov4-card-head"><div><span>${L('REPRESENTATIVES','نمایندگان')}</span><small>${L('Account summary is read-only; detailed credit history opens separately','خلاصه حساب فقط‌خواندنی است؛ جزئیات اعتبار در صفحه جداگانه')}</small></div><button class="ov4-link" data-act="ov4reps">${L('Manage','مدیریت')} →</button></header>
+ <div class="ov4-reps-list"><div><i class="${summary&&!summary.stale?'good':'off'}"></i>
+ <span><b>${count?fa(count.enabled)+' / '+fa(count.total):'—'}</b>
+ <small>${count?L('Enabled / total representatives','نمایندگان فعال / کل'):sourcePending('summary')}</small></span>
+ <em>${L('Details on Representatives page','جزئیات در صفحه نمایندگان')}</em></div></div></article>`;
 }
 
 function healthCard(){
