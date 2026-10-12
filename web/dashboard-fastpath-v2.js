@@ -5,7 +5,7 @@
 (function(){
 'use strict';
 if(typeof load!=='function'||typeof api!=='function'||typeof state==='undefined')return;
-const previousGo=typeof go==='function'?go:null;
+const previousLoad=load,previousGo=typeof go==='function'?go:null;
 const MAX_CONCURRENT=3,DEFAULT_TIMEOUT=3500;
 const sources=[
   {key:'summary',path:'/api/dashboard/summary',ttl:12000,timeout:1800,when:()=>isOwner()||state.me?.role==='reseller'},
@@ -20,27 +20,6 @@ const sources=[
   {key:'sync',path:'/api/sync',ttl:60000,timeout:4500,when:()=>true}
 ];
 // Dashboard never requests large /api/clients, /api/resellers or /api/owners.
-const pagePaths={
-  clients:'/api/clients',inbounds:'/api/inbounds',owners:'/api/owners',
-  sync:'/api/sync',resellers:'/api/resellers',system:'/api/system',
-  update:'/api/update/status'
-};
-const pageKeys={
-  clients:['clients','inbounds','owners','sync'],
-  inbounds:['inbounds','clients','sync'],
-  resellers:['resellers','owners','inbounds'],
-  finance:['resellers','owners'],
-  nodes:['inbounds'],
-  xray:['inbounds','sync'],
-  hosts:['inbounds'],
-  darkrestore:['inbounds'],
-  telegram:['inbounds'],
-  sync:['sync'],
-  update:['update'],
-  settings:[],account:[],outbounds:[],routing:[],backup:[],logs:[],
-  ipguard:[],traffic:[],operations:[],dashboard:[]
-};
-const pageRefreshLimit=10000;
 const now=()=>Date.now();
 const ownerIdentity=()=>state.me;
 const same=(box)=>!!box&&!!state.me&&box.identity===ownerIdentity();
@@ -164,40 +143,13 @@ function dashboardLoad(){
   // Never block first paint on any API, including system and summary.
   return Promise.resolve();
 }
-function requiredPageKeys(page){
-  const keys=pageKeys[page]||['inbounds','clients','sync'];
-  return keys.filter(key=>(key!=='resellers'||isOwner())&&
-    (key!=='system'||can('system.read')));
-}
-async function hydratePage(page,{fresh=false}={}){
-  if(!state.me||page==='dashboard')return;
-  const box=ensure(),identity=box.identity;
-  const keys=requiredPageKeys(page),navigation=box.navigation;
-  const stamp=now();
-  await Promise.allSettled(keys.map(async key=>{
-    const path=pagePaths[key];
-    if(!path)return;
-    if(!fresh&&box.pageLast[key]&&stamp-box.pageLast[key]<pageRefreshLimit)return;
-    const timeout=key==='resellers'?9000:6500;
-    try{
-      const {promise}=boundedRead(path,timeout);
-      const value=await promise;
-      if(state.me!==identity||state.page!==page||navigation!==box.navigation)return;
-      if(key==='update'){state.updateCenter.status=value;state.updateCenter.error='';}
-      else{state[key]=value;delete state.errors[key];}
-      box.pageLast[key]=now();
-    }catch(ex){
-      if(state.me!==identity||state.page!==page||navigation!==box.navigation)return;
-      state.errors[key]=String(ex?.message||ex).slice(0,160);
-      if(key==='update')state.updateCenter.error=state.errors[key];
-    }
-  }));
-}
+// Preserve every specialized loader installed by other workspace modules.
+// In particular, Clients V2 loads /api/groups and Update Center owns its state.
 load=async function(){
-  if(!state.me)return;
+  if(!state.me)return previousLoad();
   if(state.page==='dashboard')return dashboardLoad();
   const box=ensure();box.pageLoadVersion++;
-  return hydratePage(state.page,{fresh:true});
+  return previousLoad();
 };
 if(previousGo){
   go=async function(page){
@@ -218,7 +170,7 @@ if(previousGo){
     // The existing shell is rendered immediately. A visible loading state
     // replaces any misleading empty list until actual page data arrives.
     const target=document.getElementById('content');
-    const pending=requiredPageKeys(page).length>0;
+    const pending=typeof pageResources==='function'?pageResources(page).length>0:page!=='account';
     // Keep the actual workspace shell visible, but mark it busy until its
     // backing data is fresh. Do not replace a rendered page with a fake
     // "empty" placeholder that looks like a finished workspace.
@@ -229,9 +181,9 @@ if(previousGo){
          'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>');
     }
     try{
-      // Re-entering Sync/Clients after an external change must reload state.
-      // Avoid a second fetch only if the base go() already hydrated the page.
-      if(box.pageLoadVersion===loadMarker)await hydratePage(page,{fresh:true});
+      // Re-entering Sync/Clients needs fresh data, but the full loader stack
+      // must remain intact (Groups, Operations, Update Center and future wrappers).
+      if(box.pageLoadVersion===loadMarker)await load();
       if(same(box)&&state.page===page&&seq===box.navigation)await renderPage();
     }finally{
       document.getElementById('content')?.removeAttribute?.('aria-busy');
