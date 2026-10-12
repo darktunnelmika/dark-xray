@@ -282,3 +282,35 @@ body.skin-cyber-classic .ov4-small-button:hover{
  .ov4-activity-list>div{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
  .ov4-activity-list>div>*{min-width:0;overflow-wrap:anywhere}
 }
+
+/* Dashboard Fastpath: distinguish fresh observations from absent/stale data. */
+.ov4-sample-status{
+  display:flex;align-items:center;gap:8px;min-width:0;
+  color:var(--ov4-muted);font:10px var(--mono);padding:0 4px;
+}
+.ov4-sample-status i{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ov4-accent)}
+.ov4-sample-status.warn i{background:var(--ov4-warning)}
+.ov4-sample-status b{font-weight:500;margin-inline-start:auto;color:var(--ov4-faint)}
+.ov4-spark-empty{height:60px;display:flex;align-items:center;justify-content:center;font:9px var(--mono);color:var(--ov4-faint)}
+.ov4-chart-empty{
+  min-height:170px;display:flex;align-items:center;justify-content:center;
+  padding:20px;color:var(--ov4-faint);font:10px var(--mono);text-align:center;
+}
+.ov4-connection-chart .ov4-chart-empty{min-height:140px}
+@media(max-width:700px){
+  .ov4-sample-status{flex-wrap:wrap;font-size:9px}
+  .ov4-chart-empty{min-height:130px}
+}
+
+/* V2 current stored counters: neutral read-only scope, not a lifetime ledger. */
+.ov4-account-usage{
+  display:flex;align-items:center;flex-wrap:wrap;gap:8px 13px;
+  border:1px solid var(--ov4-border-soft);border-radius:var(--ov4-radius);
+  padding:9px 14px;background:var(--ov4-panel);min-width:0;
+}
+.ov4-account-usage span{font:10px var(--mono);color:var(--ov4-muted)}
+.ov4-account-usage b{font:600 13px var(--mono);color:var(--ov4-text);font-variant-numeric:tabular-nums}
+.ov4-account-usage small{font-size:10px;color:var(--ov4-faint)}
+@media(max-width:700px){
+ .ov4-account-usage{align-items:flex-start;flex-direction:column;gap:5px}
+}

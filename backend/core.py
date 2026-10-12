@@ -28,6 +28,50 @@ from dark_policy import Store, PolicyError, Policy, Guard, parse_access_line
 from reality_scan import reality_target_policy
 from traffic_matrix import compile_rules as compile_matrix_rules, POLICIES as MATRIX_POLICIES
 
+def host_socket_counts(paths=None) -> dict:
+    if paths is None:
+        paths = (Path('/proc/net/sockstat'), Path('/proc/net/sockstat6'))
+    counts = {'tcp': 0, 'udp': 0}
+    found = False
+    try:
+        for path in paths:
+            try:
+                # Kernel sockstat is tiny even for hosts with many connections.
+                lines = Path(path).read_text(encoding='ascii').splitlines()
+            except FileNotFoundError:
+                continue
+            for line in lines:
+                items = line.split()
+                if not items or items[0] not in ('TCP:', 'TCP6:', 'UDP:', 'UDP6:'):
+                    continue
+                fields = dict(zip(items[1::2], items[2::2]))
+                value = int(fields['inuse'])
+                if value < 0:
+                    raise ValueError('Negative kernel socket counter')
+                key = 'tcp' if items[0].startswith('TCP') else 'udp'
+                counts[key] += value
+                found = True
+        if found:
+            return {'open': counts['tcp'] + counts['udp'],
+                    'tcp': counts['tcp'], 'udp': counts['udp'],
+                    'available': True, 'source': 'linux-sockstat'}
+    except (OSError, ValueError, KeyError):
+        pass
+
+    try:
+        tcp = udp = 0
+        for row in psutil.net_connections(kind='inet'):
+            if row.type == socket.SOCK_STREAM:
+                tcp += 1
+            elif row.type == socket.SOCK_DGRAM:
+                udp += 1
+        return {'open': tcp + udp, 'tcp': tcp, 'udp': udp,
+                'available': True, 'source': 'psutil-enumeration'}
+    except (psutil.AccessDenied, psutil.Error, OSError):
+        return {'open': 0, 'tcp': 0, 'udp': 0,
+                'available': False, 'source': 'unavailable'}
+
+
 EMAIL_RE = re.compile(r'^[A-Za-z0-9_.@+-]{1,128}$')
 SUB_RE = re.compile(r'^[A-Za-z0-9_-]{16,128}$')
 TAG_RE = re.compile(r'^[A-Za-z0-9_.-]{1,128}$')
@@ -1156,7 +1200,7 @@ class CoreEngine:
         self._cpu_value=round(float(psutil.cpu_percent(interval=.2)),1);self._cpu_sample_at=time.monotonic()
         return self._cpu_value
 
-    def system(self)->dict:
+    def system(self, *, live_only:bool=False)->dict:
         vm=psutil.virtual_memory();disk=psutil.disk_usage(self.runtime);swap=psutil.swap_memory();net=psutil.net_io_counters()
         now=time.monotonic();rates={}
         if self._net_sample:
@@ -1174,14 +1218,7 @@ class CoreEngine:
         physical=psutil.cpu_count(logical=False) or 0;logical=psutil.cpu_count(logical=True) or 0
         freq=psutil.cpu_freq()
         cpu_info={'physical':int(physical),'logical':int(logical),'mhz':round(float(freq.current),1) if freq and freq.current else 0.0}
-        conn={'open':0,'tcp':0,'udp':0,'available':True}
-        try:
-            for row in psutil.net_connections(kind='inet'):
-                if row.type==socket.SOCK_STREAM:conn['tcp']+=1
-                elif row.type==socket.SOCK_DGRAM:conn['udp']+=1
-            conn['open']=conn['tcp']+conn['udp']
-        except (psutil.AccessDenied,psutil.Error,OSError):
-            conn={'open':0,'tcp':0,'udp':0,'available':False}
+        conn=host_socket_counts()
         addresses=[]
         try:
             for name,rows in psutil.net_if_addrs().items():
@@ -1196,6 +1233,10 @@ class CoreEngine:
                     if len(addresses)>=16:break
                 if len(addresses)>=16:break
         except (psutil.Error,OSError):pass
+        # Read-only Dashboard samples must not rebuild or hash live Xray config.
+        runtime=(self.runtime_state() if not live_only else {
+            'state':'running' if self.running else 'stopped',
+            'running':bool(self.running),'dirty':None,'telemetry_only':True})
         return {'cpu':self._host_cpu_percent(now),'cpuInfo':cpu_info,
                 'mem':{'current':vm.used,'total':vm.total},
                 'disk':{'current':disk.used,'total':disk.total,'free':disk.free},
@@ -1206,7 +1247,7 @@ class CoreEngine:
                 'panel':{'mem':panel_mem,'threads':panel_threads,'pid':os.getpid()},
                 'xray':{'state':'running' if self.running else 'stopped','version':self.version,'mem':core_mem,
                         'uptime':int(time.time()-self.last_start) if self.running and self.last_start else 0},
-                'runtime':self.runtime_state()}
+                'runtime':runtime}
 
     def _guard_policy_revision_key(self):
         with self.store.lock:

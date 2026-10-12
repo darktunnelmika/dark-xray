@@ -40,8 +40,10 @@ test('CPU telemetry uses a stable sample and formats zero consistently',()=>{
   assert.match(overview,/function fmtPercent/);
   assert.match(overview,/if\(v===0\)return '0\.0'/);
   assert.match(overview,/if\(v>0&&v<0\.1\)return '<0\.1'/);
-  assert.match(overview,/AVG \$\{e\(fmtPercent\(avg\(history\)\)\)\}%/);
-  assert.match(overview,/PEAK \$\{e\(fmtPercent\(peak\(history\)\)\)\}%/);
+  // A valid 0% sample must display 0.0%; an empty history must display '—',
+  // not invent a zero average/peak on a newly opened Dashboard.
+  assert.ok(overview.includes("AVG ${history.length?e(fmtPercent(avg(history)))+'%':'—'}"));
+  assert.ok(overview.includes("PEAK ${history.length?e(fmtPercent(peak(history)))+'%':'—'}"));
   assert.match(live,/Number\(n\.cpu\)===0\?'0\.0'/);
 });
 

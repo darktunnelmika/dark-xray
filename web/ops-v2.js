@@ -24,9 +24,9 @@ load=async function(){
  if(can('clients.ip'))jobs.push((async()=>{try{state.ov2.ip=await api('/api/ip/events');}catch{state.ov2.ip=null;}})());
  await Promise.all(jobs);
 };
-// `go()` renders immediately without loading. Refresh once when entering the
-// dashboard so heavy operational data is fresh instead of waiting for the timer.
-go=async function(page){await baseGo(page);if(page==='dashboard'&&state.me)await refresh();};
+// FastPath V2 performs independent read-only refreshes when Dashboard opens.
+// Do not synchronously issue a second full dashboard refresh from navigation.
+go=async function(page){return baseGo(page);};
 function kpi(label,value,sub=''){return `<div class="ov2-kpi"><small>${e(label)}</small><b>${e(value)}</b>${sub?`<span class="cv2-muted">${e(sub)}</span>`:''}</div>`;}
 function eventFeed(){let rows=(state.ov2.audit||[]).slice(0,8);return rows.length?`<div class="ov2-feed">${rows.map(r=>`<div class="ov2-event"><time>${date(r.at)}</time><span>${e(r.actor)}</span><b>${e(r.action)} · ${e(r.target)}</b></div>`).join('')}</div>`:empty(L('No recent audit events.','رویداد اخیر وجود ندارد.'));}
 
