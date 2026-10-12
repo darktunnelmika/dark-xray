@@ -26,9 +26,27 @@ function runtime(reply,role='owner'){
  const doc={hidden:false,activeElement:null,getElementById:id=>id==='content'?content:
    id==='overlay'?{classList:{contains:()=>false}}:null};
  let legacyLoads=0;
- const ctx={state,api:(uri,method,body,options)=>{calls.push({uri,method,body,options});return reply(uri,options);},
+ const invoke=(uri,method='GET',body,options)=>{calls.push({uri,method,body,options});return reply(uri,options);};
+ // Model the existing base + Clients V2 wrapper, not a replacement
+ // navigation loader. Future wrappers are preserved by FastPath.
+ const baseResources={clients:['clients','inbounds','owners','sync'],
+   inbounds:['inbounds','clients','sync'],resellers:['resellers','owners','inbounds'],
+   finance:['resellers','owners'],sync:['sync'],nodes:['inbounds']};
+ const originalLoad=async()=>{
+   legacyLoads++;
+   const keys=baseResources[state.page]||[];
+   await Promise.all(keys.map(async key=>{
+     try{state[key]=await invoke('/api/'+key);delete state.errors[key];}
+     catch(ex){state.errors[key]=String(ex?.message||ex);}
+   }));
+   if(state.page==='clients'){
+     try{state.groups=await invoke('/api/groups');delete state.errors.groups;}
+     catch(ex){state.errors.groups=String(ex?.message||ex);}
+   }
+ };
+ const ctx={state,api:invoke,pageResources:page=>baseResources[page]||[],
    can:()=>true,isOwner:()=>state.me?.role==='owner',
-   load:async()=>{legacyLoads++;},
+   load:originalLoad,
    go:async page=>{state.page=page;content.innerHTML='legacy shell';},
    renderPage:async()=>{rendered.push(state.page);content.innerHTML='page rendered';},
    setTimeout:(fn,ms)=>setTimeout(fn,Math.min(ms,50)),clearTimeout,
@@ -104,6 +122,7 @@ test('navigation loads only required target page data before verified render',as
   if(uri==='/api/inbounds')return [{id:10}];
   if(uri==='/api/owners')return [{id:'dark'}];
   if(uri==='/api/sync')return {last_poll:42};
+  if(uri==='/api/groups')return [{name:'canary-group',owner:'dark'}];
   return never;
  });
  await t.ctx.load();
@@ -112,6 +131,8 @@ test('navigation loads only required target page data before verified render',as
  assert.equal(t.state.clients[0].email,'visible-client');
  assert.equal(t.state.inbounds[0].id,10);
  assert.equal(t.state.owners[0].id,'dark');
+ assert.equal(t.state.groups[0].name,'canary-group');
+ assert.ok(t.legacyLoads()>0,'original specialized loader must execute');
  assert.equal(t.content.innerHTML,'page rendered');
  assert.ok(!t.calls.some(x=>x.uri==='/api/resellers'));
 });
@@ -177,4 +198,16 @@ test('workspace remains marked busy while page hydration is pending',async()=>{
  await nav;
  assert.equal(t.content.busy,false);
  assert.equal(t.content.innerHTML,'page rendered');
+});
+
+test('V2 preserves the complete existing loader stack on non-Dashboard pages',async()=>{
+ const t=runtime(uri=>uri==='/api/dashboard/summary'?brief:
+   uri.startsWith('/api/system?')?sample():uri==='/api/groups'?[{name:'preserved',owner:'dark'}]:[]);
+ await t.ctx.load();
+ assert.equal(t.legacyLoads(),0);
+ await t.ctx.go('clients');
+ assert.equal(t.legacyLoads(),1);
+ assert.equal(t.state.groups[0].name,'preserved');
+ assert.match(src,/const previousLoad=load/);
+ assert.match(src,/return previousLoad\(\)/);
 });
