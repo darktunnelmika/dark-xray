@@ -108,24 +108,30 @@ function telemetryStrip(){
 function darkSummary(){
  const clients=state.clients||[],active=clients.filter(x=>x.client?.enable!==false&&!x.block_reasons?.length).length,blocked=clients.filter(x=>x.block_reasons?.length).length;
  const nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online).length;
- const reps=state.resellers||[],activeReps=reps.filter(r=>r.enabled).length,n=state.system?.engine||{};
+ const reps=state.resellers||[],activeReps=reps.filter(r=>r.enabled).length,n=hostEngine();
+ const clientOk=sourceReady('clients',180000),nodeOk=sourceReady('nodes',45000),repOk=sourceReady('resellers',180000),inboundOk=sourceReady('inbounds',180000);
  const item=(label,value,sub,act='')=>`<button class="ov4-summary-item" ${act?`data-act="${act}"`:'disabled'}><span>${label}</span><b>${value}</b><small>${sub}</small></button>`;
  return `<section class="ov4-summary-grid">
- ${item(L('ACTIVE CLIENTS','کاربران فعال'),fa(active),`${clients.length} ${L('total','کل')}`,'ov4clients')}
- ${item(L('BLOCKED','محدود'),fa(blocked),L('policy / quota','سیاست / سهمیه'),'ov4clients')}
- ${item(L('INBOUNDS','اینباندها'),fa(state.inbounds?.length||0),'Xray','ov4config')}
- ${item(L('NODES ONLINE','نود آنلاین'),`${online}/${enabled.length}`,L('multi-node','چندنودی'),'ov4nodes')}
- ${item(L('REPRESENTATIVES','نمایندگان'),fa(activeReps),`${reps.length} ${L('total','کل')}`,'ov4reps')}
+ ${item(L('ACTIVE CLIENTS','کاربران فعال'),clientOk?fa(active):'—',clientOk?`${clients.length} ${L('total','کل')}`:sourcePending('clients'),'ov4clients')}
+ ${item(L('BLOCKED','محدود'),clientOk?fa(blocked):'—',clientOk?L('policy / quota','سیاست / سهمیه'):sourcePending('clients'),'ov4clients')}
+ ${item(L('INBOUNDS','اینباندها'),inboundOk?fa(state.inbounds?.length||0):'—','Xray','ov4config')}
+ ${item(L('NODES ONLINE','نود آنلاین'),nodeOk?`${online}/${enabled.length}`:'—',nodeOk?L('multi-node','چندنودی'):sourcePending('nodes'),'ov4nodes')}
+ ${item(L('REPRESENTATIVES','نمایندگان'),repOk?fa(activeReps):'—',repOk?`${reps.length} ${L('total','کل')}`:sourcePending('resellers'),'ov4reps')}
  ${item(L('XRAY MEMORY','حافظه Xray'),bytes(n.xray?.mem),e(n.xray?.state||'—'),'ov4metrics')}
  </section>`;
 }
 
+function nodeSample(n){
+ const h=n.health?.system||{},fresh=n.health_sample_state==='fresh';
+ const cpu=fresh?fmtPercent(h.cpu):'—',ram=fresh?fmtPercent(h.memory?.percent??h.memory_percent):'—';
+ return 'CPU '+cpu+(cpu==='—'?'':'%')+' · RAM '+ram+(ram==='—'?'':'%')+(fresh?'':' · '+L('sample stale/unknown','نمونه قدیمی/نامشخص'));
+}
 function nodeCard(){
  if(!isOwner())return '';
- const nodes=state.ov2?.nodes||[],enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online),offline=enabled.filter(n=>!n.online),errors=enabled.filter(n=>n.last_error||(n.assignments||[]).some(a=>a.last_error));
+ const nodes=state.ov2?.nodes||[],nodeOk=sourceReady('nodes',45000),enabled=nodes.filter(n=>n.enabled),online=enabled.filter(n=>n.online),offline=enabled.filter(n=>!n.online),errors=enabled.filter(n=>n.last_error||(n.assignments||[]).some(a=>a.last_error));
  return `<article class="ov4-card ov4-node-card"><header class="ov4-card-head"><div><span>${L('NODE FLEET','ناوگان نودها')}</span><small>${L('Remote DARK agents','عامل‌های راه‌دور DARK')}</small></div><button class="ov4-link" data-act="ov4nodes">${L('Manage','مدیریت')} →</button></header>
- <div class="ov4-node-kpis"><div><b class="good">${online.length}</b><span>${L('Online','آنلاین')}</span></div><div><b class="${offline.length?'bad':''}">${offline.length}</b><span>${L('Offline','آفلاین')}</span></div><div><b class="${errors.length?'warn':''}">${errors.length}</b><span>${L('Sync errors','خطای همگام‌سازی')}</span></div></div>
- <div class="ov4-node-list">${nodes.length?nodes.slice(0,5).map(n=>`<div><i class="${!n.enabled?'off':n.online?'good':'bad'}"></i><span><b>${e(n.name||n.id)}</b><small>${e((n.inboundIds||[]).length)} ${L('inbounds','اینباند')}${n.last_latency_ms?' · '+e(n.last_latency_ms)+' ms':''}</small></span><em>${n.enabled?(n.online?L('Online','آنلاین'):L('Offline','آفلاین')):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No remote nodes registered yet.','هنوز نودی ثبت نشده است.')}</div>`}</div></article>`;
+ <div class="ov4-node-kpis"><div><b class="good">${nodeOk?online.length:'—'}</b><span>${L('Online','آنلاین')}</span></div><div><b class="${nodeOk&&offline.length?'bad':''}">${nodeOk?offline.length:'—'}</b><span>${L('Offline','آفلاین')}</span></div><div><b class="${nodeOk&&errors.length?'warn':''}">${nodeOk?errors.length:'—'}</b><span>${L('Sync errors','خطای همگام‌سازی')}</span></div></div>
+ <div class="ov4-node-list">${!nodeOk?`<div class="ov4-empty">${sourcePending('nodes')}</div>`:nodes.length?nodes.slice(0,5).map(n=>`<div><i class="${!n.enabled?'off':n.online?'good':'bad'}"></i><span><b>${e(n.name||n.id)}</b><small>${e((n.inboundIds||[]).length)} ${L('inbounds','اینباند')}${n.last_latency_ms?' · '+e(n.last_latency_ms)+' ms':''}<br>${e(nodeSample(n))}</small></span><em>${n.enabled?(n.online?L('Online','آنلاین'):L('Offline','آفلاین')):L('Disabled','غیرفعال')}</em></div>`).join(''):`<div class="ov4-empty">${L('No remote nodes registered yet.','هنوز نودی ثبت نشده است.')}</div>`}</div></article>`;
 }
 
 function backupCard(){
