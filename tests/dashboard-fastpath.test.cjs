@@ -12,7 +12,10 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 function runtime(reply,role='owner'){
  const calls=[],rendered=[],intervals=[];
- const content={innerHTML:''};
+ const content={innerHTML:'',busy:false,
+   setAttribute(name,value){if(name==='aria-busy')this.busy=value==='true';},
+   removeAttribute(name){if(name==='aria-busy')this.busy=false;},
+   insertAdjacentHTML(_where,value){this.innerHTML=value+this.innerHTML;}};
  const state={me:{id:'dark',role},page:'dashboard',busy:false,
    system:null,sync:null,errors:{},clients:[],inbounds:[],resellers:[],owners:[],history:[],
    ov2:{nodes:[],overview:null,overviewOwner:'',overviewError:'',core:null,backup:null,audit:[],ip:null},
@@ -152,4 +155,26 @@ test('re-entering Sync fetches fresh drift instead of reusing a short-lived cach
  await t.ctx.go('sync');
  assert.equal(t.state.sync.items[0].reason_code,'external_disabled');
  assert.equal(t.calls.filter(c=>c.uri==='/api/sync').length,2);
+});
+
+test('workspace remains marked busy while page hydration is pending',async()=>{
+ let resolveClients;
+ const pendingClients=new Promise(r=>{resolveClients=r;});
+ const t=runtime(uri=>{
+  if(uri==='/api/dashboard/summary')return brief;
+  if(uri.startsWith('/api/system?'))return sample();
+  if(uri==='/api/clients')return pendingClients;
+  if(['/api/inbounds','/api/owners','/api/sync'].includes(uri))return [];
+  return [];
+ });
+ await t.ctx.load();
+ const nav=t.ctx.go('clients');
+ await sleep(5);
+ assert.equal(t.content.busy,true);
+ assert.match(t.content.innerHTML,/Loading current page data/);
+ assert.match(t.content.innerHTML,/legacy shell/);
+ resolveClients([{email:'actual'}]);
+ await nav;
+ assert.equal(t.content.busy,false);
+ assert.equal(t.content.innerHTML,'page rendered');
 });
