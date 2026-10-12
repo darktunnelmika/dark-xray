@@ -35,17 +35,21 @@ function restore(snap){
  requestAnimationFrame(()=>window.scrollTo({left:snap.x,top:snap.y,behavior:'auto'}));
 }
 renderPage=async function(){
+ // A late dashboard/widget redraw cannot replace the route's honest Loading
+ // state with an incomplete Clients/Finance page before hydration completes.
+ const pending=state?.dashboardFast;
+ if(pending?.pendingNavigationPage===state?.page&&!pending.allowRouteRender)return;
  const page=state?.page||'',samePage=page===renderedPage,snap=capture();
  const content=document.getElementById('content');
  if(content)content.setAttribute('aria-busy','true');
  try{return await baseRenderPage();}
  finally{
-  const next=document.getElementById('content');
-  if(next)next.removeAttribute('aria-busy');
-  const stillSame=state?.page===page;
+  const next=document.getElementById('content'),stillSame=state?.page===page;
+  // A stale render must never unmark the *new* route as ready.
+  if(stillSame&&next)next.removeAttribute('aria-busy');
   if(samePage&&stillSame)restore(snap);
-  else requestAnimationFrame(()=>window.scrollTo({left:0,top:0,behavior:'auto'}));
-  renderedPage=state?.page||page;
+  else if(stillSame)requestAnimationFrame(()=>window.scrollTo({left:0,top:0,behavior:'auto'}));
+  if(stillSame)renderedPage=page;
  }
 };
 refresh=async function(){

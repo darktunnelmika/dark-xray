@@ -155,7 +155,10 @@ if(previousGo){
   go=async function(page){
     if(!state.me)return previousGo(page);
     const box=ensure();
+    // A second tap on an already hydrating route must not duplicate API work.
+    if(box.pendingNavigationPage===page)return;
     const ticket=++box.navigation,oldPage=state.page;
+    if(oldPage!==page&&typeof abortPageReads==='function')abortPageReads();
     if(oldPage==='dashboard'&&page!=='dashboard'){
       for(const ctl of Object.values(box.controllers))ctl.abort();
       box.queue=[];box.queued.clear();
@@ -169,6 +172,11 @@ if(previousGo){
     // until its specialized loaders finish. The old implementation rendered a
     // partly populated page and then replaced it again while operators typed.
     state.page=page;
+    // Record navigation before any network request; refreshing midway must
+    // reopen the chosen page rather than silently returning to Dashboard.
+    if(typeof darkSession!=='undefined'&&typeof LAST_PAGE_KEY!=='undefined')
+      darkSession.setItem(LAST_PAGE_KEY,page);
+    box.pendingNavigationPage=page;
     if(typeof setMobileMenu==='function')setMobileMenu(false);
     if(typeof shell==='function')shell();
     const target=document.getElementById('content');
@@ -182,9 +190,14 @@ if(previousGo){
       await load(); // all original load wrappers, e.g. Client Groups
       if(!same(box)||state.page!==page||ticket!==box.navigation)return;
       // Render exactly once, with fresh data and current navigation ownership.
-      await previousGo(page);
+      box.allowRouteRender=true;
+      try{await previousGo(page);}
+      finally{box.allowRouteRender=false;}
     }finally{
-      document.getElementById('content')?.removeAttribute?.('aria-busy');
+      if(box.navigation===ticket){
+        box.pendingNavigationPage=null;
+        document.getElementById('content')?.removeAttribute?.('aria-busy');
+      }
     }
   };
 }

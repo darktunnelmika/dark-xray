@@ -54,6 +54,37 @@ function toast(text,error=false){let el=document.createElement('div');el.classNa
 function errText(x){if(typeof x==='string')return x;if(Array.isArray(x))return x.map(v=>`${v.loc?.join('.')||''}: ${v.msg||JSON.stringify(v)}`).join(' / ');return JSON.stringify(x);}
 async function api(path,method='GET',body,options={}){const headers={Accept:'application/json'};if(body!==undefined)headers['Content-Type']='application/json';if(method!=='GET')headers['X-Dark-CSRF']=state.me?.csrf||'';let res;try{res=await fetch(appUrl(path),{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body),cache:'no-store',signal:options.signal});}catch{throw Error('ارتباط با سرویس DARK برقرار نیست.');}let data=await res.json().catch(()=>({detail:'پاسخ نامعتبر سرور'}));if(!res.ok){if(res.status===401&&path!=='/api/auth/login'){state.me=null;loginPage();}throw Error(errText(data.detail||data.msg||`HTTP ${res.status}`));}return data;}
 
+// A slow *read-only* page resource must never trap navigation for minutes.
+const pageReadControllers=new Set();
+const pageReadInFlight=new Map();
+function abortPageReads(){
+ state.pageLoadSerial=(state.pageLoadSerial||0)+1;
+ for(const controller of pageReadControllers)controller.abort();
+ pageReadControllers.clear();
+ pageReadInFlight.clear();
+}
+async function boundedPageGet(path,waitMs=5500){
+ const previous=pageReadInFlight.get(path);
+ if(previous&&previous.page===state.page&&previous.account===state.me)
+  return previous.promise;
+ const controller=new AbortController(),page=state.page,account=state.me;
+ pageReadControllers.add(controller);
+ let timedOut=false;
+ const promise=(async()=>{
+  const timer=setTimeout(()=>{timedOut=true;controller.abort();},waitMs);
+  try{return await api(path,'GET',undefined,{signal:controller.signal});}
+  catch(ex){
+   if(timedOut)throw Error(uiText(
+    'Request timed out. Existing records were not modified; retry the page.',
+    'مهلت دریافت اطلاعات تمام شد. داده‌ها تغییر نکردند؛ صفحه را دوباره بارگذاری کن.'));
+   throw ex;
+  }finally{clearTimeout(timer);pageReadControllers.delete(controller);}
+ })();
+ pageReadInFlight.set(path,{page,account,promise});
+ try{return await promise;}
+ finally{if(pageReadInFlight.get(path)?.promise===promise)pageReadInFlight.delete(path);}
+}
+
 async function downloadFullBackup(passphrase){
  const headers={'Content-Type':'application/json','X-Dark-CSRF':state.me?.csrf||''};
  const res=await fetch(appUrl('/api/backup/full'),{method:'POST',headers,credentials:'same-origin',cache:'no-store',body:JSON.stringify({passphrase})});
@@ -88,24 +119,47 @@ function pageResources(page){
 }
 async function load(){
  if(!state.me)return;
- const page=state.page;
+ const page=state.page,account=state.me;
+ const serial=state.pageLoadSerial=(state.pageLoadSerial||0)+1;
+ if(state.resourceReadIdentity!==account){
+  state.resourceReadIdentity=account;
+  state.fetched={};state.resourceReadAt=Object.create(null);
+  state.resourceAttemptAt=Object.create(null);
+ }
  const paths={clients:'/api/clients',inbounds:'/api/inbounds',owners:'/api/owners',
               sync:'/api/sync',resellers:'/api/resellers',system:'/api/system'};
+ const now=Date.now();
  const wanted=pageResources(page)
    .filter(key=>key!=='resellers'||isOwner())
-   .filter(key=>key!=='system'||can('system.read'));
+   .filter(key=>key!=='system'||can('system.read'))
+   // Owner ledgers can have millions of events. Keep Client filtering metadata
+   // cached; the Representatives/Finance pages still read it explicitly.
+   .filter(key=>key!=='owners'||page!=='clients'||
+     !state.resourceAttemptAt.owners||
+     now-state.resourceAttemptAt.owners>
+       (state.fetched.owners?300000:90000));
  await Promise.all(wanted.map(async key=>{
+  const attempted=Date.now();
+  state.resourceAttemptAt[key]=attempted;
   try{
-   const data=await api(paths[key]);
-   if(!state.me||state.page!==page)return;
-   state[key]=data;state.fetched[key]=true;delete state.errors[key];
+   const data=await boundedPageGet(paths[key],
+     key==='owners'||key==='resellers'?6000:5000);
+   if(state.me!==account||state.page!==page||state.pageLoadSerial!==serial)return;
+   state[key]=data;state.fetched[key]=true;
+   state.resourceReadAt[key]=Date.now();delete state.errors[key];
   }catch(ex){
-   if(!state.me||state.page!==page)return;
+   if(state.me!==account||state.page!==page||state.pageLoadSerial!==serial){
+    // A cancelled previous page must not suppress the next genuine owner read.
+    if(state.resourceAttemptAt[key]===attempted)
+      delete state.resourceAttemptAt[key];
+    return;
+   }
    state.errors[key]=ex.message;
-   // Do not turn a previously verified set into an invented empty list.
-   if(!state.fetched[key]&&key!=='sync')state[key]=key==='system'?null:[];
+   if(!state.fetched[key]&&key!=='sync')
+    state[key]=key==='system'?null:[];
   }
  }));
+ if(state.me!==account||state.page!==page||state.pageLoadSerial!==serial)return;
  if(page==='dashboard'&&state.system?.engine){
   const cpu=Number(state.system.engine.cpu);
   if(Number.isFinite(cpu)){state.history.push(cpu);state.history=state.history.slice(-60);}
@@ -241,11 +295,21 @@ document.addEventListener('click',async ev=>{let el=ev.target.closest('[data-pag
 document.addEventListener('change',ev=>{if(ev.target.dataset.select){ev.target.checked?state.selected.add(ev.target.dataset.select):state.selected.delete(ev.target.dataset.select);}});
 let searchTimer;document.addEventListener('input',ev=>{if(ev.target.id==='search'){state.search=ev.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{const p=ev.target.selectionStart;await renderPage();$('#search')?.focus();try{$('#search')?.setSelectionRange(p,p);}catch{}},250);}});
 document.addEventListener('keydown',ev=>{if(ev.key==='Escape')closeDialog();});
-function loginPage(){state.clients=[];state.owners=[];state.resellers=[];state.inbounds=[];state.errors={};$('#app').innerHTML=`<div class="login-wrap"><article class="panel login-card">${brand()}<div class="login-caption">INDEPENDENT OPERATIONS CONSOLE</div><h1>ورود به مرکز کنترل DARK</h1><p class="login-note">این صفحه به سرویس و دیتابیس متصل است. حساب پیش‌فرض یا ورود نمایشی ندارد.</p><form id="login-form">${field('نام کاربری','username','','text','required autocomplete="username" dir="ltr"')}${field('رمز عبور','password','','password','required autocomplete="current-password"')}${field('کد TOTP یا بازیابی (در صورت فعال‌بودن)','otp','','text','autocomplete="one-time-code" dir="ltr"')}<div class="form-error" id="login-error"></div><button type="submit" class="btn btn-primary">${icon('lock')}ورود امن</button></form><p class="login-note">یک پنل، یک ورود و یک دیتابیس؛ هیچ پنل دیگری نصب نمی‌شود. هستهٔ محلی Xray را از همین پروژه مدیریت می‌کنی.</p></article></div>`;$('#login-form').addEventListener('submit',async ev=>{ev.preventDefault();let form=ev.target,b=form.querySelector('button[type="submit"]');b.disabled=true;try{let f=new FormData(form);await api('/api/auth/login','POST',{username:f.get('username'),password:f.get('password'),otp:f.get('otp')});state.me=await api('/api/me');if(!localStorage.getItem('dark_lang'))localStorage.setItem('dark_lang','en');state.page='dashboard';darkSession.setItem(LAST_PAGE_KEY,'dashboard');shell();await refresh();}catch(ex){if($('#login-error'))$('#login-error').textContent=ex.message;}finally{if(b.isConnected)b.disabled=false;}});}
-(async()=>{try{state.me=await api('/api/me');if(!localStorage.getItem('dark_lang'))localStorage.setItem('dark_lang','en');const saved=darkSession.getItem(LAST_PAGE_KEY)||'dashboard';if(/^[a-z0-9_-]+$/i.test(saved))state.page=saved;shell();await refresh();}catch{loginPage();}})();
-// Defer extensions (Restore/SWAP/etc.) execute before DOMContentLoaded. Rebuild once
-// after the complete script graph is registered so the first sidebar is never partial.
-window.addEventListener('DOMContentLoaded',()=>{if(state.me){shell();renderPage().catch(ex=>toast(ex.message,true));}},{once:true});
+function loginPage(){abortPageReads();state.clients=[];state.owners=[];state.resellers=[];state.inbounds=[];state.errors={};state.fetched={};state.resourceReadAt={};state.resourceAttemptAt={};state.resourceReadIdentity=null;$('#app').innerHTML=`<div class="login-wrap"><article class="panel login-card">${brand()}<div class="login-caption">INDEPENDENT OPERATIONS CONSOLE</div><h1>ورود به مرکز کنترل DARK</h1><p class="login-note">این صفحه به سرویس و دیتابیس متصل است. حساب پیش‌فرض یا ورود نمایشی ندارد.</p><form id="login-form">${field('نام کاربری','username','','text','required autocomplete="username" dir="ltr"')}${field('رمز عبور','password','','password','required autocomplete="current-password"')}${field('کد TOTP یا بازیابی (در صورت فعال‌بودن)','otp','','text','autocomplete="one-time-code" dir="ltr"')}<div class="form-error" id="login-error"></div><button type="submit" class="btn btn-primary">${icon('lock')}ورود امن</button></form><p class="login-note">یک پنل، یک ورود و یک دیتابیس؛ هیچ پنل دیگری نصب نمی‌شود. هستهٔ محلی Xray را از همین پروژه مدیریت می‌کنی.</p></article></div>`;$('#login-form').addEventListener('submit',async ev=>{ev.preventDefault();let form=ev.target,b=form.querySelector('button[type="submit"]');b.disabled=true;try{let f=new FormData(form);await api('/api/auth/login','POST',{username:f.get('username'),password:f.get('password'),otp:f.get('otp')});state.me=await api('/api/me');if(!localStorage.getItem('dark_lang'))localStorage.setItem('dark_lang','en');state.page='dashboard';darkSession.setItem(LAST_PAGE_KEY,'dashboard');shell();await refresh();}catch(ex){if($('#login-error'))$('#login-error').textContent=ex.message;}finally{if(b.isConnected)b.disabled=false;}});}
+// Wait for all defer-loaded modules (FastPath, UI stability, Clients, Nodes,
+// Restore and their wrappers) before ever authenticating or loading a route.
+// Starting the async session probe during live.js evaluation races the final
+// wrappers on fast responses, accidentally running the old eager 6-API loader.
+async function bootstrapPanel(){
+ try{
+  state.me=await api('/api/me');
+  if(!localStorage.getItem('dark_lang'))localStorage.setItem('dark_lang','en');
+  const saved=darkSession.getItem(LAST_PAGE_KEY)||'dashboard';
+  if(/^[a-z0-9_-]+$/i.test(saved))state.page=saved;
+  shell();await refresh();
+ }catch{loginPage();}
+}
+window.addEventListener('DOMContentLoaded',()=>{void bootstrapPanel();},{once:true});
 // The Dashboard has its own independent bounded telemetry sampler.
 // Background page refreshes must not flood the HUB with repeated list requests.
 setInterval(()=>{if(state.me&&!state.busy&&!document.hidden&&!$('#overlay').classList.contains('show')
