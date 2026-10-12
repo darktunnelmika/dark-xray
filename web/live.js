@@ -248,7 +248,8 @@ function loginPage(){state.clients=[];state.owners=[];state.resellers=[];state.i
 window.addEventListener('DOMContentLoaded',()=>{if(state.me){shell();renderPage().catch(ex=>toast(ex.message,true));}},{once:true});
 // The Dashboard has its own independent bounded telemetry sampler.
 // Background page refreshes must not flood the HUB with repeated list requests.
-setInterval(()=>{if(state.me&&!state.busy&&!document.hidden&&!$('#overlay').classList.contains('show')&&!enginePages[state.page])void refresh();},45000);
+setInterval(()=>{if(state.me&&!state.busy&&!document.hidden&&!$('#overlay').classList.contains('show')
+ &&['dashboard','clients','inbounds'].includes(state.page))void refresh();},45000);
 
 function area(label,name,value,rows=7){return `<label class="span-2">${e(label)}<textarea class="field-input" dir="ltr" style="font-family:monospace;min-height:${rows*21}px" name="${e(name)}">${e(JSON.stringify(value,null,2))}</textarea></label>`;}
 async function sectionForm(section){
