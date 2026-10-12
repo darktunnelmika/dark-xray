@@ -52,7 +52,7 @@ function ensure(){
     attempts:Object.create(null),status:Object.create(null),
     errors:Object.create(null),inflight:Object.create(null),
     controllers:Object.create(null),queue:[],queued:new Set(),
-    active:0,renderTimer:null,navigation:0,pageLast:Object.create(null)};
+    active:0,renderTimer:null,navigation:0,pageLoadVersion:0,pageLast:Object.create(null)};
   if(state.dashboardFast){
     state.clients=[];state.inbounds=[];state.owners=[];state.resellers=[];
     state.sync=null;state.system=null;state.errors={};state.history=[];
@@ -196,6 +196,7 @@ async function hydratePage(page,{fresh=false}={}){
 load=async function(){
   if(!state.me)return;
   if(state.page==='dashboard')return dashboardLoad();
+  const box=ensure();box.pageLoadVersion++;
   return hydratePage(state.page,{fresh:true});
 };
 if(previousGo){
@@ -203,7 +204,7 @@ if(previousGo){
     if(!state.me)return previousGo(page);
     const box=ensure();
     box.navigation++;
-    const seq=box.navigation,oldPage=state.page;
+    const seq=box.navigation,oldPage=state.page,loadMarker=box.pageLoadVersion;
     if(oldPage==='dashboard'&&page!=='dashboard'){
       for(const ctl of Object.values(box.controllers))ctl.abort();
       box.queue=[];box.queued.clear();
@@ -222,7 +223,9 @@ if(previousGo){
         (localStorage.getItem('dark_lang')==='fa'?
          'در حال دریافت اطلاعات واقعی این بخش…':'Loading current page data…')+'</div>';
     }
-    await hydratePage(page,{fresh:false});
+    // Fresh navigation must never reuse recent Sync/Client data after external
+    // changes. Avoid a duplicate fetch only if the base go() already loaded it.
+    if(box.pageLoadVersion===loadMarker)await hydratePage(page,{fresh:true});
     if(same(box)&&state.page===page&&seq===box.navigation)await renderPage();
   };
 }
