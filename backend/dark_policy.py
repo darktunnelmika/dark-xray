@@ -535,15 +535,23 @@ class Store:
                        (new_volume,new_unlimited,owner))
             return True
 
-    def owner_stats(self, actor: Actor, owner: str) -> dict[str, Any]:
+    def owner_stats(self, actor: Actor, owner: str, *, include_usage: bool = True) -> dict[str, Any]:
         actor.require("owners", "read", owner)
         with self.lock:
             r = self.db.execute("SELECT * FROM owners WHERE id=?", (owner,)).fetchone()
             if not r: raise PolicyError("Owner does not exist")
             allocated_volume,allocated_unlimited=self._allocation(self.db,owner)
             enforced=self._resource_credit_enforced(self.db,owner,actor)
-            return {**dict(r), "used_bytes": self._usage(self.db, owner, r["period"]),
-                    "lifetime_used_bytes": self._usage(self.db, owner),
+            # All monetary/resource authorization remains in register_client /
+            # adjust_resource_credit. The fast UI summary MUST NOT scan the
+            # immutable 9.5M-event ledger while holding Store.lock.
+            # Null is deliberately NOT zero: historical totals are unavailable
+            # in credit-only mode; the full owner_stats route stays exact.
+            used = self._usage(self.db, owner, r["period"]) if include_usage else None
+            lifetime = self._usage(self.db, owner) if include_usage else None
+            return {**dict(r), "used_bytes": used,
+                    "lifetime_used_bytes": lifetime,
+                    "traffic_totals_available": bool(include_usage),
                     "client_count": self.db.execute("SELECT COUNT(*) FROM clients WHERE owner=?", (owner,)).fetchone()[0],
                     "resource_credit_enforced":enforced,
                     "allocated_volume_bytes":allocated_volume,

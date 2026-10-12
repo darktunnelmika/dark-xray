@@ -46,19 +46,24 @@ financePage=async function(){
  const credits=await api('/api/ledger/credits');let traffic=[];try{traffic=await api('/api/ledger/traffic');}catch{}
  const profiles=selectedProfiles(),visibleTraffic=filterRepresentative(traffic),visibleCredits=filterRepresentative(credits);
  const statsAvailable=profiles.length>0;
- const currentUsage=statsAvailable?sum(profiles,o=>o.used_bytes??o.used??0):null;
- const lifetime=statsAvailable?sum(profiles,o=>o.lifetime_used_bytes??0):null;
+ // The credit view intentionally does not calculate 9.5M historical events.
+ // A missing lifetime total is not zero actual traffic.
+ const periodAvailable=statsAvailable&&profiles.every(o=>o.traffic_totals_available!==false&&o.used_bytes!=null);
+ const lifetimeAvailable=statsAvailable&&profiles.every(o=>o.traffic_totals_available!==false&&o.lifetime_used_bytes!=null);
+ const currentUsage=periodAvailable?sum(profiles,o=>o.used_bytes):null;
+ const lifetime=lifetimeAvailable?sum(profiles,o=>o.lifetime_used_bytes):null;
  const volumeRemaining=statsAvailable?sum(profiles,o=>o.volume_credit_remaining_bytes??0):null;
  const unlimitedRemaining=statsAvailable?sum(profiles,o=>o.unlimited_credit_remaining??0):null;
  const repChips=ownerMode()?[chip(L('All representatives','همه نماینده‌ها'),'representative','all',FV.representative),...reps().map(r=>chip(r.name||r.id,'representative',r.id,FV.representative))].join(''):'';
  const missing=L('Representative profile statistics are not available','آمار پروفایل نماینده در دسترس نیست');
+ const trafficNotLoaded=L('Historical traffic totals are not loaded in the quick credit view; saved ledger events remain below.','جمع مصرف تاریخی در نمای سریع اعتبار بارگذاری نشده؛ رویدادهای ثبت‌شده دفتر مصرف پایین صفحه محفوظ‌اند.');
  const repControl=ownerMode()?`<div><small>${L('Representative','نماینده')}</small><div class="fv2-chips">${reps().length?repChips:`<span class="fv2-muted">${L('No representatives yet','هنوز نماینده‌ای ساخته نشده')}</span>`}</div></div>`:'';
  return heading(L('Representative Credits & Ledger','اعتبار و دفتر نمایندگان'),L('Sellable Volume/Unlimited credits are separate from observed Xray traffic. No customer sale price is stored in DARK.','اعتبار قابل‌فروش حجمی/نامحدود از مصرف واقعی Xray جداست؛ قیمت فروش مشتری در DARK ذخیره نمی‌شود.'))+
  `<div class="fv2-shell"><div class="fv2-summary">
  ${stat(L('Volume credit remaining','اعتبار حجمی باقی‌مانده'),volumeRemaining===null?'—':bytes(volumeRemaining),volumeRemaining===null?missing:L('Assignable limited-service capacity','ظرفیت قابل تخصیص سرویس حجمی'))}
  ${stat(L('Unlimited credit remaining','اعتبار نامحدود باقی‌مانده'),unlimitedRemaining===null?'—':fa(unlimitedRemaining),unlimitedRemaining===null?missing:L('1 unit = 1 user × 30 days','هر واحد = ۱ کاربر × ۳۰ روز'))}
- ${stat(L('Current-period traffic','مصرف واقعی دوره'),currentUsage===null?'—':bytes(currentUsage),currentUsage===null?missing:L('Analytics only; does not spend credit','فقط آمار؛ از اعتبار کم نمی‌کند'))}
- ${stat(L('Lifetime representative traffic','مصرف تاریخی نماینده‌ها'),lifetime===null?'—':bytes(lifetime),lifetime===null?missing:L('Immutable observed traffic history','تاریخچه ماندگار مصرف مشاهده‌شده'))}
+ ${stat(L('Current-period traffic','مصرف واقعی دوره'),currentUsage===null?'—':bytes(currentUsage),currentUsage===null?trafficNotLoaded:L('Analytics only; does not spend credit','فقط آمار؛ از اعتبار کم نمی‌کند'))}
+ ${stat(L('Lifetime representative traffic','مصرف تاریخی نماینده‌ها'),lifetime===null?'—':bytes(lifetime),lifetime===null?trafficNotLoaded:L('Immutable observed traffic history','تاریخچه ماندگار مصرف مشاهده‌شده'))}
  </div><article class="panel fv2-controls">${repControl}</article>
  <div class="notice">${L('A limited client reserves its configured quota from Volume Credit. Unlimited service spends users × months (30 days). Deleting, disabling or expiring it does not refund spent units. Volume reservations remain separate.','کاربر حجمی به اندازهٔ حجم پلن از اعتبار حجمی رزرو می‌کند و کاربر نامحدود برحسب کاربر × ماه ۳۰روزه اعتبار مصرف می‌کند؛ حذف، قطع یا انقضا اعتبار را برنمی‌گرداند. رزرو حجمی جداست.')}</div>
  <article class="panel"><div class="panel-head"><div><h2>${L('Current representative credit position','وضعیت فعلی اعتبار نمایندگان')}</h2><p>${L('Total, allocated and remaining sellable capacity.','ظرفیت کل، رزروشده و باقی‌مانده قابل‌فروش.')}</p></div><span class="tag">${fa(profiles.length)}</span></div>${positionTable(profiles)}</article>

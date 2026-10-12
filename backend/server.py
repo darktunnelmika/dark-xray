@@ -715,7 +715,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.tick(suppress=True)
         return {'updated':True,'sessions_revoked':True}
 
-    def representative_rows(p:Principal)->list[dict]:
+    def representative_rows(p:Principal,*,include_usage:bool=True)->list[dict]:
         with store.lock:
             primary={r[0] for r in store.db.execute("SELECT id FROM api_admins WHERE role='owner'")}
             profiles=[dict(r) for r in store.db.execute('SELECT * FROM owner_profiles ORDER BY name,id')]
@@ -724,7 +724,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         for profile in profiles:
             rid=str(profile['id'])
             if rid in primary:continue
-            try:stats=store.owner_stats(p.actor,rid)
+            try:stats=store.owner_stats(p.actor,rid,include_usage=include_usage)
             except PolicyError:continue
             account=accounts.get(rid)
             out.append({**stats,**manager.profile(rid),
@@ -732,6 +732,11 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                         'login_disabled':bool(account['disabled']) if account else True,
                         'enabled':bool(account and not account['disabled'] and not stats.get('manual') and not stats.get('account_disabled'))})
         return out
+
+    @app.get('/api/resellers/quick')
+    def representatives_quick(p:Principal=Depends(owner)):
+        # Credit position only: never await historical ledger aggregation.
+        return representative_rows(p,include_usage=False)
 
     @app.get('/api/resellers')
     def representatives(p:Principal=Depends(owner)):
@@ -743,7 +748,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         if not NAME_RE.fullmatch(reseller_id):raise HTTPException(400,'Invalid representative ID')
         with store.lock:
             primary=store.db.execute("SELECT 1 FROM api_admins WHERE id=? AND role='owner'",(reseller_id,)).fetchone()
-            account=store.db.execute('SELECT role FROM api_admins WHERE id=?',(reseller_id,)).fetchone()
+            account=store.db.execute('SELECT role,disabled,permissions FROM api_admins WHERE id=?',(reseller_id,)).fetchone()
         if primary:raise HTTPException(409,'Primary owner cannot be converted to a representative')
         if account and account['role']!='reseller':raise HTTPException(409,'Account ID belongs to a legacy non-representative role')
         if not account and not body.password:raise HTTPException(400,'Password is required when creating a representative')
@@ -753,14 +758,21 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                           prefix=body.prefix,max_client_ips=body.max_client_ips,max_client_hwid=body.max_client_hwid)
         if not account:
             auth.admin_create(p.actor,reseller_id,body.password or '','reseller',DEFAULTS['reseller'])
-        auth.admin_edit(p.actor,reseller_id,disabled=not body.enabled,password=body.password,
-                        permissions=DEFAULTS['reseller'])
+        # A credit/display-name edit must not invalidate an active reseller
+        # session. Revoke only for an actual credential, status or permissions
+        # change. Auth.admin_edit keeps fail-closed session revocation.
+        login_changed=(not account or bool(body.password)
+                       or bool(account['disabled'])==bool(body.enabled)
+                       or json.loads(account['permissions'])!=DEFAULTS['reseller'])
+        if login_changed:
+            auth.admin_edit(p.actor,reseller_id,disabled=not body.enabled,password=body.password,
+                            permissions=DEFAULTS['reseller'])
         manager.tick(suppress=True)
         manager.audit(p.actor,reseller_id,'representative.save',reseller_id,
                       'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed))+
                       '; volume_credit_bytes='+str(body.volume_credit_bytes)+
                       '; unlimited_credit='+str(body.unlimited_credit))
-        return next(r for r in representative_rows(p) if r['id']==reseller_id)
+        return next(r for r in representative_rows(p,include_usage=False) if r['id']==reseller_id)
 
     @app.post('/api/resellers/{reseller_id}/credits')
     def representative_credit_adjust(reseller_id:str,body:ResourceCredit,p:Principal=Depends(owner)):
@@ -772,7 +784,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         # Resource credit gates future allocation. Existing clients do not derive
         # runtime enablement from remaining credit, and reductions below current
         # allocation are rejected transactionally by Store.adjust_resource_credit.
-        row=next((r for r in representative_rows(p) if r['id']==reseller_id),None)
+        row=next((r for r in representative_rows(p,include_usage=False) if r['id']==reseller_id),None)
         if not row:raise HTTPException(404,'Representative not found')
         return {'recorded':recorded,'representative':row}
 
@@ -796,6 +808,12 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             db.execute('DELETE FROM owners WHERE id=?',(reseller_id,))
         manager.audit(p.actor,reseller_id,'representative.delete',reseller_id,'Historical ledgers are preserved')
         return {'deleted':True}
+
+    @app.get('/api/owners/quick')
+    def owners_quick(p:Principal=Depends(current)):
+        with store.lock:ids=[r[0] for r in store.db.execute('SELECT id FROM owner_profiles')]
+        return [store.owner_stats(p.actor,i,include_usage=False)|manager.profile(i)
+                for i in ids if p.actor.can('owners','read',i)]
 
     @app.get('/api/owners')
     def owners(p:Principal=Depends(current)):
