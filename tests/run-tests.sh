@@ -75,6 +75,7 @@ python -m pytest tests/test_api_key_boundaries.py -q --junitxml=qa/junit/api-key
 python -m pytest tests/test_totp_replay.py -q --junitxml=qa/junit/totp-replay.xml
 python -m pytest tests/test_rbac_hardening.py -q --junitxml=qa/junit/rbac-hardening.xml
 python -m pytest tests/test_representatives_v2.py -q --junitxml=qa/junit/representatives-v2.xml
+python -m pytest tests/test_representatives_credit_fast.py -q --junitxml=qa/junit/representatives-credit-fast.xml
 python -m pytest tests/test_sync_redaction.py -q --junitxml=qa/junit/sync-redaction.xml
 python -m pytest tests/test_backup_hardening.py -q --junitxml=qa/junit/backup-hardening.xml
 python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
