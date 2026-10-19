@@ -100,8 +100,23 @@ def test_representative_credit_form_fast_and_replay_safe():
                 page.goto(f"http://127.0.0.1:{srv.server_port}/",wait_until="domcontentloaded")
                 nav=page.locator('.nav-btn[data-page="resellers"]')
                 expect(nav).to_be_visible(timeout=10000)
+                # Hold route hydration so loading-state assertions cannot race
+                # a fast localhost response or a newly rebuilt page shell.
+                page.evaluate("""() => {
+                    const original = load; let held = false;
+                    load = async function() {
+                        if (!held && state.page === 'resellers') {
+                            held = true;
+                            await new Promise(resolve => { window.releaseRouteLoad = resolve; });
+                        }
+                        return original();
+                    };
+                }""")
                 nav.click()
+                expect(page.locator("#content")).to_have_attribute("aria-busy","true")
+                page.evaluate("() => window.releaseRouteLoad()")
                 expect(page.locator("#content")).to_contain_text("Synthetic Seller",timeout=10000)
+                expect(page.locator("#content")).not_to_have_attribute("aria-busy","true")
                 assert calls["/api/resellers/quick"]>=1
                 assert calls["/api/resellers"]==calls["/api/owners"]==0
 
