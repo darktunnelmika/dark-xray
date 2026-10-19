@@ -45,13 +45,14 @@ def main()->int:
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest='action',required=True)
     b=sub.add_parser('backup');b.add_argument('--config',type=Path,required=True);b.add_argument('--data',type=Path,required=True);b.add_argument('--output',type=Path,required=True)
+    b.add_argument('--full-history',action='store_true',help='Include the complete historical ledger; large archival backup')
     r=sub.add_parser('restore');r.add_argument('--archive',type=Path,required=True);r.add_argument('--destination',type=Path,required=True)
     v=sub.add_parser('verify');v.add_argument('--archive',type=Path,required=True)
     a=p.parse_args()
     try:
         if a.action=='backup':
             password=new_secret()
-            result=create_backup(a.data,a.config,a.output,password)
+            result=create_backup(a.data,a.config,a.output,password,profile="full" if a.full_history else "operational")
             emit({'ok':True,'action':'backup','output':str(a.output.absolute()),'manifest':result});return 0
         if a.action=='restore':
             password=secret('Backup passphrase: ')

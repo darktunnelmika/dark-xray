@@ -78,7 +78,7 @@ python -m pytest tests/test_rbac_hardening.py -q --junitxml=qa/junit/rbac-harden
 python -m pytest tests/test_representatives_v2.py -q --junitxml=qa/junit/representatives-v2.xml
 python -m pytest tests/test_representatives_credit_fast.py -q --junitxml=qa/junit/representatives-credit-fast.xml
 python -m pytest tests/test_sync_redaction.py -q --junitxml=qa/junit/sync-redaction.xml
-python -m pytest tests/test_backup_hardening.py -q --junitxml=qa/junit/backup-hardening.xml
+python -m pytest tests/test_backup_hardening.py tests/test_backup_streaming.py -q --junitxml=qa/junit/backup-hardening.xml
 python -m pytest tests/test_update_permissions.py -q --junitxml=qa/junit/update-permissions.xml
 python -m pytest tests/test_update_transaction.py -q --junitxml=qa/junit/update-transaction.xml
 python -m pytest tests/test_update_bounded_health.py -q --junitxml=qa/junit/update-bounded-health.xml
@@ -149,3 +149,5 @@ node --test tests/backup-recovery-ui.test.cjs
 python -m pytest tests/test_stable_release_checks.py -q --junitxml=qa/junit/stable-release-checks.xml
 
 python -m pytest tests/test_unlimited_user_month.py tests/test_unlimited_credit_integration.py tests/test_node_credit_dependency.py -q --junitxml=qa/junit/unlimited-user-month.xml
+
+python -m pytest tests/test_traffic_summary.py -q --junitxml=qa/junit/traffic-summary.xml

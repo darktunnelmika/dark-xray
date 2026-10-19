@@ -165,9 +165,10 @@ function nodeCard(){
 function backupCard(){
  const b=sourceReady('backup',180000)?state.ov2?.backup||{}:{};
  return `<article class="ov4-card ov4-backup-card"><header class="ov4-card-head"><div><span>${L('BACKUP & RECOVERY','بکاپ و بازیابی')}</span><small>${L('Rollback-safe operations','عملیات امن با قابلیت بازگشت')}</small></div><button class="ov4-link" data-act="ov4backup">${L('Open','بازکردن')} →</button></header>
- <div class="ov4-backup-main"><div><span>${L('Database snapshot','اسنپ‌شات دیتابیس')}</span><b>${b.database_bytes===undefined?'—':bytes(b.database_bytes)}</b></div><div><span>${L('Managed clients','کاربران')}</span><b>${b.managed_clients===undefined?'—':fa(b.managed_clients)}</b></div></div>
+ <div class="ov4-backup-main"><div><span>${L('Last compact encrypted backup','آخرین بکاپ سبک رمزدار')}</span><b>${b.last_operational_backup?bytes(b.last_operational_backup.archive_bytes):'—'}</b></div><div><span>${L('Managed clients','کاربران')}</span><b>${b.managed_clients===undefined?'—':fa(b.managed_clients)}</b></div></div>
+ <p class="ov4-empty">${L('Live database including history','دیتابیس زنده همراه تاریخچه')}: ${b.database_bytes===undefined?'—':bytes(b.database_bytes)} · ${L('Separate from backup size','جدا از حجم بکاپ')}</p>
  <div class="ov4-safe"><i></i><span>${!sourceReady('backup',180000)?sourcePending('backup'):b.restore_isolated===true?L('Isolated restore enforced','بازیابی ایزوله اجباری است'):L('Restore isolation unavailable','ایزوله‌سازی بازیابی در دسترس نیست')}</span></div>
- <div class="ov4-card-actions"><button class="ov4-small-button" data-act="backupfull">${icon('shield')}${L('Encrypted full backup','بکاپ کامل رمزدار')}</button><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('Verify / Restore','بررسی / بازیابی')}</button></div></article>`;
+ <div class="ov4-card-actions"><button class="ov4-small-button" data-act="backupfull">${icon('shield')}${L('Compact encrypted backup','بکاپ سبک رمزدار')}</button><a class="ov4-small-button" href="${appUrl(b.database_download||'/api/backup')}">${icon('download')}${L('Download snapshot','دانلود اسنپ‌شات')}</a><button class="ov4-small-button" data-act="ov2restorehelp">${icon('refresh')}${L('Verify / Restore','بررسی / بازیابی')}</button></div></article>`;
 }
 
 function repsCard(){

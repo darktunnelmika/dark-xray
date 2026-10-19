@@ -32,6 +32,7 @@ import psutil
 from fastapi import FastAPI,Depends,HTTPException,Request
 from fastapi.responses import JSONResponse,FileResponse,Response,RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from pydantic import BaseModel,ConfigDict,Field,StrictInt
 
 from auth import Auth,Principal,DEFAULTS,PERMISSIONS,digest
@@ -715,6 +716,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.tick(suppress=True)
         return {'updated':True,'sessions_revoked':True}
 
+    def quick_usage_available()->bool:
+        from traffic_summary import ready
+        with store.lock:return ready(store.db)
+
     def representative_rows(p:Principal,*,include_usage:bool=True)->list[dict]:
         with store.lock:
             primary={r[0] for r in store.db.execute("SELECT id FROM api_admins WHERE role='owner'")}
@@ -735,8 +740,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/resellers/quick')
     def representatives_quick(p:Principal=Depends(owner)):
-        # Credit position only: never await historical ledger aggregation.
-        return representative_rows(p,include_usage=False)
+        # Exact period/lifetime totals are cheap once the transactional summary is ready.
+        return representative_rows(p,include_usage=quick_usage_available())
 
     @app.get('/api/resellers')
     def representatives(p:Principal=Depends(owner)):
@@ -772,7 +777,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                       'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed))+
                       '; volume_credit_bytes='+str(body.volume_credit_bytes)+
                       '; unlimited_credit='+str(body.unlimited_credit))
-        return next(r for r in representative_rows(p,include_usage=False) if r['id']==reseller_id)
+        return next(r for r in representative_rows(p,include_usage=quick_usage_available()) if r['id']==reseller_id)
 
     @app.post('/api/resellers/{reseller_id}/credits')
     def representative_credit_adjust(reseller_id:str,body:ResourceCredit,p:Principal=Depends(owner)):
@@ -784,7 +789,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         # Resource credit gates future allocation. Existing clients do not derive
         # runtime enablement from remaining credit, and reductions below current
         # allocation are rejected transactionally by Store.adjust_resource_credit.
-        row=next((r for r in representative_rows(p,include_usage=False) if r['id']==reseller_id),None)
+        row=next((r for r in representative_rows(p,include_usage=quick_usage_available()) if r['id']==reseller_id),None)
         if not row:raise HTTPException(404,'Representative not found')
         return {'recorded':recorded,'representative':row}
 
@@ -812,7 +817,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/owners/quick')
     def owners_quick(p:Principal=Depends(current)):
         with store.lock:ids=[r[0] for r in store.db.execute('SELECT id FROM owner_profiles')]
-        return [store.owner_stats(p.actor,i,include_usage=False)|manager.profile(i)
+        return [store.owner_stats(p.actor,i,include_usage=quick_usage_available())|manager.profile(i)
                 for i in ids if p.actor.can('owners','read',i)]
 
     @app.get('/api/owners')
@@ -2583,11 +2588,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             managed=store.db.execute("SELECT COUNT(*) FROM managed_clients WHERE state!='deleted'").fetchone()[0]
             audits=store.db.execute('SELECT COUNT(*) FROM live_audit').fetchone()[0]
             groups=store.db.execute('SELECT COUNT(*) FROM client_groups').fetchone()[0] if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_groups'").fetchone() else 0
-        return {'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
+        from backup import last_operational_backup
+        latest=last_operational_backup(dbpath.parent) if dbpath else None
+        return {'last_operational_backup':latest,'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
                 'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup',
                 'full_backup_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup/full',
                 'full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
-                'central_node_state_included':True,'restore_isolated':True}
+                'central_node_state_included':True,'restore_isolated':True,'backup_profile':'operational','history_included':False}
 
     @app.post('/api/backup/full')
     def backup_full(body:FullBackupBody,p:Principal=Depends(owner)):
@@ -2595,37 +2602,50 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         config_path=Path(str(getattr(config,'_path','')))
         if not str(getattr(config,'_path','')) or config_path.is_symlink() or not config_path.is_file():
             raise HTTPException(409,'Full Web backup requires a file-backed DARK configuration')
-        with tempfile.TemporaryDirectory(prefix='dark-web-backup.') as td:
-            path=Path(td)/'dark-xray-full.darkbackup'
-            manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase)
-            raw=path.read_bytes()
-        manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
-        stamp=time.strftime('%Y%m%d-%H%M%S');filename=f'DARK-XRAY-full-{stamp}.darkbackup'
-        runtime=getattr(app.state,'telegram_runtime',None)
-        if runtime:
-            try:
-                sha=hashlib.sha256(raw).hexdigest()
-                caption=f"DARK XRAY encrypted backup\nSchema: {manifest.get('schema',0)}\nBytes: {len(raw)}\nSHA256: {sha}"
-                if runtime.send_backup(p.actor.id,filename,raw,caption):
-                    manager.audit(p.actor,p.actor.id,'backup.telegram_sent','dark',filename+'; sha256='+sha)
-            except Exception as ex:
-                manager.audit(p.actor,p.actor.id,'backup.telegram_error','dark',type(ex).__name__+': '+str(ex)[:300])
-        return Response(raw,media_type='application/octet-stream',
-                        headers={'Content-Disposition':f'attachment; filename="{filename}"',
-                                 'X-DARK-Backup-Schema':str(manifest.get('schema',0))})
+        temp=tempfile.TemporaryDirectory(prefix='dark-web-backup.')
+        try:
+            path=Path(temp.name)/'dark-xray-full.darkbackup'
+            manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase,profile="operational")
+            manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
+            stamp=time.strftime('%Y%m%d-%H%M%S');filename=f'DARK-XRAY-full-{stamp}.darkbackup'
+            runtime=getattr(app.state,'telegram_runtime',None)
+            if runtime:
+                try:
+                    # Telegram's upload API cannot deliver multi-gigabyte backups.
+                    if path.stat().st_size<=45*1024*1024:
+                        raw=path.read_bytes();sha=hashlib.sha256(raw).hexdigest()
+                        caption=f"DARK XRAY encrypted backup\nSchema: {manifest.get('schema',0)}\nBytes: {len(raw)}\nSHA256: {sha}"
+                        if runtime.send_backup(p.actor.id,filename,raw,caption):
+                            manager.audit(p.actor,p.actor.id,'backup.telegram_sent','dark',filename+'; sha256='+sha)
+                    else:
+                        manager.audit(p.actor,p.actor.id,'backup.telegram_skipped','dark','Archive exceeds upload limit; download through panel')
+                except Exception as ex:
+                    manager.audit(p.actor,p.actor.id,'backup.telegram_error','dark',type(ex).__name__+': '+str(ex)[:300])
+            return FileResponse(path,media_type='application/octet-stream',filename=filename,
+                                headers={'X-DARK-Backup-Schema':str(manifest.get('schema',0))},
+                                background=BackgroundTask(temp.cleanup))
+        except BaseException:
+            temp.cleanup();raise
 
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp:
-            path=Path(temp)/'dark.sqlite3';store.backup(path)
-            data=path.read_bytes();stream=io.BytesIO()
-            manifest={'version':VERSION,'scope':'standalone-dark-database','runtime_tables_included':True,
-                'sha256':hashlib.sha256(data).hexdigest(),'requires_original_mfa_key':True}
-            with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as z:
-                z.writestr('dark.sqlite3',data);z.writestr('manifest.json',json.dumps(manifest,indent=2))
-        manager.audit(p.actor,p.actor.id,'backup.database','dark','MFA encryption key, certificates, runtime files and config must be backed up separately')
-        return Response(stream.getvalue(),media_type='application/zip',headers={'Content-Disposition':'attachment; filename="DARK-standalone-backup.zip"'})
+        from backup import backup_slot,file_hash
+        from traffic_summary import operational_snapshot
+        temp=tempfile.TemporaryDirectory(prefix='dark-database-backup.')
+        try:
+            path=Path(temp.name)/'dark.sqlite3';archive=Path(temp.name)/'backup.zip'
+            with backup_slot():
+                recovery=operational_snapshot(Path(store.path),path)
+                manifest={'version':VERSION,'scope':'operational-dark-database','runtime_tables_included':True,'recovery':recovery,
+                    'sha256':file_hash(path),'requires_original_mfa_key':True}
+                with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
+                    z.write(path,'dark.sqlite3');z.writestr('manifest.json',json.dumps(manifest,indent=2))
+                path.unlink()
+            manager.audit(p.actor,p.actor.id,'backup.database','dark','MFA encryption key, certificates, runtime files and config must be backed up separately')
+            return FileResponse(archive,media_type='application/zip',filename='DARK-standalone-backup.zip',
+                                background=BackgroundTask(temp.cleanup))
+        except BaseException:
+            temp.cleanup();raise
 
     @app.get('/sub/{public_token}')
     def subscription(public_token:str,request:Request):
@@ -2858,6 +2878,7 @@ def main():
     serve=subs.add_parser('serve');serve.add_argument('--host',default=None);serve.add_argument('--port',type=int,default=None)
     subs.add_parser('check')
     b=subs.add_parser('backup');b.add_argument('--output',type=Path,required=True)
+    b.add_argument('--full-history',action='store_true',help='Include complete traffic history for archival recovery')
     r=subs.add_parser('restore');r.add_argument('--archive',type=Path,required=True);r.add_argument('--destination',type=Path,required=True)
     args=p.parse_args()
     if args.command in ('backup','restore'):
@@ -2866,7 +2887,7 @@ def main():
         pwd=getpass('Backup passphrase (at least 12 characters): ')
         if args.command=='backup':
             if pwd!=getpass('Repeat passphrase: '):raise SystemExit('Passphrases differ')
-            result=create_backup(args.data,args.config,args.output,pwd)
+            result=create_backup(args.data,args.config,args.output,pwd,profile="full" if args.full_history else "operational")
         else: result=restore_backup(args.archive,args.destination,pwd)
         print(json.dumps(result,indent=2));return
     args.data.mkdir(parents=True,exist_ok=True,mode=0o700)
