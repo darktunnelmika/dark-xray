@@ -763,6 +763,7 @@ def main(argv: list[str] | None=None) -> int:
 
 # Preload the shared policy before restricted workers drop source-tree access.
 import unlimited_credit as _unlimited_credit
+import traffic_summary as _traffic_summary
 
 if __name__=="__main__":
     raise SystemExit(main())
