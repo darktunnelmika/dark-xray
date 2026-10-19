@@ -16,13 +16,104 @@ import sqlite3
 import tempfile
 import time
 import zipfile
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import shutil
+import threading
+from contextlib import contextmanager
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.exceptions import InvalidTag
 from dark_policy import PolicyError
 
 MAGIC = b'DARK-XRAY-BACKUP-1\x00'
-LIMIT = 256 * 1024 * 1024
+LIMIT = 16 * 1024 * 1024 * 1024
+CHUNK = 1024 * 1024
+METADATA_LIMIT = 8 * 1024 * 1024
+_backup_lock = threading.Lock()
 ALLOWED_BASE = {'manifest.json', 'data/dark.sqlite3', 'data/secret.key', 'config.json', 'tls/cert.pem', 'tls/key.pem'}
 ROOT = Path(__file__).resolve().parents[1]
+
+@contextmanager
+def backup_slot():
+    if not _backup_lock.acquire(blocking=False):
+        raise PolicyError('Another backup is already running; retry after it finishes')
+    try:yield
+    finally:_backup_lock.release()
+
+def file_hash(path: Path) -> str:
+    with Path(path).open('rb') as stream:
+        digest=hashlib.sha256()
+        while block:=stream.read(CHUNK):digest.update(block)
+    return digest.hexdigest()
+
+def snapshot_database(source_path: Path, destination: Path):
+    """Pin one WAL read snapshot without holding the live Store/accounting lock."""
+    source_path,destination=Path(source_path),Path(destination)
+    if source_path.is_symlink() or not source_path.is_file():raise PolicyError('Unsafe database source')
+    if destination.exists() or destination.is_symlink():raise PolicyError('Backup target already exists')
+    if source_path.stat().st_size>LIMIT:raise PolicyError('Database exceeds 16 GiB backup limit')
+    destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if shutil.disk_usage(destination.parent).free < source_path.stat().st_size+64*CHUNK:
+        raise PolicyError('Insufficient free disk space for database snapshot')
+    fd=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(fd)
+    source=dest=None
+    try:
+        source=sqlite3.connect(source_path.resolve().as_uri()+'?mode=ro',uri=True,timeout=30)
+        source.execute('PRAGMA mmap_size=268435456')
+        source.execute('BEGIN')
+        source.execute('SELECT rootpage FROM sqlite_master LIMIT 1').fetchone()
+        dest=sqlite3.connect(destination)
+        page_size=source.execute('PRAGMA page_size').fetchone()[0]
+        started=time.monotonic()
+        def progress(status,remaining,total):
+            if time.monotonic()-started>600:raise PolicyError('Database snapshot timed out; retry later')
+            if total*page_size>LIMIT:
+                raise PolicyError('Database exceeds 16 GiB backup limit')
+        source.backup(dest,pages=1024,progress=progress,sleep=0.05)
+    except Exception:
+        if dest:dest.close();dest=None
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        if dest:dest.close()
+        if source:source.close()
+
+def encrypt_file(source: Path, output: Path, password: str):
+    """Legacy AES-GCM wire format, processed in bounded chunks."""
+    salt,nonce=os.urandom(16),os.urandom(12)
+    enc=Cipher(algorithms.AES(derive(password,salt)),modes.GCM(nonce)).encryptor()
+    enc.authenticate_additional_data(MAGIC)
+    output.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if shutil.disk_usage(output.parent).free<source.stat().st_size+64*CHUNK:
+        raise PolicyError('Insufficient free disk space for encrypted archive')
+    with tempfile.TemporaryDirectory(prefix='.dark-encrypt-',dir=output.parent) as td:
+        staged=Path(td)/'archive'
+        with staged.open('xb') as dst,source.open('rb') as src:
+            os.chmod(staged,0o600);dst.write(MAGIC+salt+nonce)
+            while block:=src.read(CHUNK):dst.write(enc.update(block))
+            dst.write(enc.finalize());dst.write(enc.tag);dst.flush();os.fsync(dst.fileno())
+        if staged.stat().st_size>LIMIT:raise PolicyError('Encrypted archive exceeds 16 GiB limit')
+        # Atomic publication without overwriting an existing file or symlink.
+        os.link(staged,output)
+
+def decrypt_file(archive: Path, output: Path, password: str):
+    with archive.open('rb') as src:
+        if src.read(len(MAGIC))!=MAGIC:raise PolicyError('Unknown encrypted backup format')
+        salt,nonce=src.read(16),src.read(12)
+        size=archive.stat().st_size;remaining=size-len(MAGIC)-28-16
+        if remaining<0:raise PolicyError('Unknown encrypted backup format')
+        src.seek(-16,os.SEEK_END);tag=src.read(16);src.seek(len(MAGIC)+28)
+        dec=Cipher(algorithms.AES(derive(password,salt)),modes.GCM(nonce,tag)).decryptor()
+        dec.authenticate_additional_data(MAGIC)
+        try:
+            with output.open('xb') as dst:
+                os.chmod(output,0o600)
+                while remaining:
+                    block=src.read(min(CHUNK,remaining))
+                    if not block:raise PolicyError('Truncated encrypted backup')
+                    remaining-=len(block);dst.write(dec.update(block))
+                dst.write(dec.finalize())
+        except InvalidTag as ex:
+            output.unlink(missing_ok=True)
+            raise PolicyError('Incorrect passphrase or corrupted encrypted backup') from ex
 
 def project_version() -> str:
     path=ROOT/'VERSION'
@@ -169,6 +260,10 @@ def prepare_restore_domain_recovery(db: sqlite3.Connection) -> dict:
 
 
 def create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
+    with backup_slot():
+        return _create_backup(data,config,output,password)
+
+def _create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
     data,config,output=Path(data),Path(config),Path(output)
     # These are privileged runtime inputs. Refuse indirection before resolve() so
     # a replaced config/database symlink cannot smuggle unrelated host files into
@@ -187,63 +282,62 @@ def create_backup(data: Path, config: Path, output: Path, password: str) -> dict
     dbfile, secret = data/'dark.sqlite3', data/'secret.key'
     if dbfile.is_symlink() or secret.is_symlink() or not dbfile.is_file() or not secret.is_file():
         raise PolicyError('An initialized non-symlink DARK database and original secret.key are required')
+    if secret.stat().st_size>CHUNK:raise PolicyError('Invalid encryption key file size')
     try:cfg=json.loads(config.read_text(encoding='utf-8'))
     except (OSError,UnicodeError,json.JSONDecodeError) as ex:raise PolicyError('Panel configuration is not valid JSON') from ex
     if not isinstance(cfg,dict):raise PolicyError('Panel configuration must be a JSON object')
+    if not isinstance(password,str) or len(password)<12:
+        raise PolicyError('Backup passphrase must contain at least 12 characters')
     files = {'config.json': config.read_bytes(), 'data/secret.key': secret.read_bytes()}
-    with tempfile.TemporaryDirectory() as temp:
-        snapshot = Path(temp)/'snapshot.sqlite3'
-        source = sqlite3.connect(dbfile.resolve().as_uri()+'?mode=ro', uri=True, timeout=30)
-        dest = sqlite3.connect(snapshot)
-        try:
-            source.backup(dest)
-            if dest.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
-                raise PolicyError('Database consistency check failed')
-        except sqlite3.Error as ex:
-            raise PolicyError('Database snapshot could not be created safely') from ex
-        finally:
-            dest.close(); source.close()
-        if snapshot.stat().st_size > LIMIT:
-            raise PolicyError('Database exceeds this backup utility limit of 256 MiB')
-        external_files,external_map=inbound_tls_files(snapshot)
-        files['data/dark.sqlite3'] = snapshot.read_bytes()
-        files.update(external_files)
     for key, name in [('tls_certificate','tls/cert.pem'),('tls_private_key','tls/key.pem')]:
         if cfg.get(key):
             path = Path(cfg[key])
-            if not path.is_file() or path.stat().st_size > 1024*1024:
+            if not path.is_file() or path.stat().st_size > CHUNK:
                 raise PolicyError('Configured panel TLS file missing or too large')
             files[name] = path.read_bytes()
-    manifest = {'schema': 2, 'project': 'DARK XRAY', 'version': project_version(),
-                'files': {name: hashlib.sha256(raw).hexdigest() for name,raw in files.items()},
-                'external_files': external_map,
-                'telegram_disaster_recovery':{
-                    'business_state_in_database':True,
-                    'bot_token_reset_on_restore':True,
-                    'forum_and_topics_preserved':True,
-                    'forum_rebind_required_after_restore':True},
-                'dark_restore_disaster_recovery':{
-                    'subscriptions_mappings_usage_preserved':True,
-                    'domain_readiness_reset_on_restore':True,
-                    'frontend_rebuild_required_after_restore':True},
-                'excluded': ['ACME-managed Dark Restore frontend TLS, renewal accounts and service configuration',
-                             'Xray binary and geo assets','root firewall allowlist','systemd service definitions',
-                             'Node Agent host TLS (reissued when a disposable node is reinstalled)'],
-                'restore_into_empty_destination_only': True}
-    files['manifest.json'] = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
-    stream = io.BytesIO()
-    with zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as z:
-        for name, raw in files.items():
-            z.writestr(name, raw)
-    if sum(len(raw) for raw in files.values())>LIMIT:raise PolicyError('Backup contents exceed the 256 MiB restore limit')
-    salt, nonce = os.urandom(16), os.urandom(12)
-    encrypted = AESGCM(derive(password, salt)).encrypt(nonce, stream.getvalue(), MAGIC)
-    if len(MAGIC)+28+len(encrypted)>LIMIT:raise PolicyError('Encrypted archive exceeds the 256 MiB restore limit')
-    try:
-        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        private_write(output, MAGIC + salt + nonce + encrypted)
-    except OSError as ex:
-        raise PolicyError('Backup archive could not be written to target path') from ex
+    with tempfile.TemporaryDirectory(prefix='dark-snapshot.') as temp:
+        snapshot = Path(temp)/'snapshot.sqlite3'
+        if shutil.disk_usage(temp).free<2*dbfile.stat().st_size+64*CHUNK:
+            raise PolicyError('Insufficient free disk space for snapshot and archive')
+        try:
+            snapshot_database(dbfile,snapshot)
+            db=sqlite3.connect(snapshot)
+            try:
+                db.execute('PRAGMA mmap_size=268435456')
+                if db.execute('PRAGMA quick_check').fetchone()[0]!='ok':
+                    raise PolicyError('Database consistency check failed')
+            finally:db.close()
+        except sqlite3.Error as ex:
+            raise PolicyError('Database snapshot could not be created safely') from ex
+        external_files,external_map=inbound_tls_files(snapshot)
+        files.update(external_files)
+        if sum(map(len,files.values()))>METADATA_LIMIT:
+            raise PolicyError('Backup metadata exceeds limit')
+        manifest = {'schema': 2, 'project': 'DARK XRAY', 'version': project_version(),
+                    'files': {**{name: hashlib.sha256(raw).hexdigest() for name,raw in files.items()}, 'data/dark.sqlite3':file_hash(snapshot)},
+                    'external_files': external_map,
+                    'telegram_disaster_recovery':{
+                        'business_state_in_database':True,
+                        'bot_token_reset_on_restore':True,
+                        'forum_and_topics_preserved':True,
+                        'forum_rebind_required_after_restore':True},
+                    'dark_restore_disaster_recovery':{
+                        'subscriptions_mappings_usage_preserved':True,
+                        'domain_readiness_reset_on_restore':True,
+                        'frontend_rebuild_required_after_restore':True},
+                    'excluded': ['ACME-managed Dark Restore frontend TLS, renewal accounts and service configuration',
+                                 'Xray binary and geo assets','root firewall allowlist','systemd service definitions',
+                                 'Node Agent host TLS (reissued when a disposable node is reinstalled)'],
+                    'restore_into_empty_destination_only': True}
+        files['manifest.json'] = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
+        if snapshot.stat().st_size+sum(map(len,files.values()))>LIMIT:
+            raise PolicyError('Backup contents exceed 16 GiB restore limit')
+        zipped=Path(temp)/'backup.zip'
+        with zipfile.ZipFile(zipped,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+            z.write(snapshot,'data/dark.sqlite3')
+            for name,raw in files.items():z.writestr(name,raw)
+        try:encrypt_file(zipped,output,password)
+        except OSError as ex:raise PolicyError('Backup archive could not be written to target path') from ex
     return manifest
 
 def restore_backup(archive: Path, destination: Path, password: str) -> dict:
@@ -253,57 +347,65 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
     dest = destination.absolute()
     if dest.exists() or dest.is_symlink():
         raise PolicyError('Restore destination must not already exist; current installation is never overwritten')
-    raw = archive.read_bytes()
-    if not raw.startswith(MAGIC) or len(raw) < len(MAGIC)+44:
-        raise PolicyError('Unknown encrypted backup format')
-    offset = len(MAGIC)
-    salt, nonce, payload = raw[offset:offset+16], raw[offset+16:offset+28], raw[offset+28:]
-    try:
-        plain = AESGCM(derive(password, salt)).decrypt(nonce, payload, MAGIC)
-    except Exception as exc:
-        raise PolicyError('Incorrect passphrase or corrupted encrypted backup') from exc
-    try:
-        with zipfile.ZipFile(io.BytesIO(plain)) as z:
-            names = z.namelist()
-            if len(names) != len(set(names)) or not all(safe_member(n) for n in names):
-                raise PolicyError('Unsafe or duplicate backup members')
-            if sum(i.file_size for i in z.infolist()) > LIMIT:
-                raise PolicyError('Decompressed backup exceeds 256 MiB')
-            files = {n:z.read(n) for n in names}
-    except (zipfile.BadZipFile,KeyError) as exc:
-        raise PolicyError('Invalid backup contents') from exc
-    try:
-        manifest = json.loads(files['manifest.json'])
-        if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') not in (1,2):
-            raise PolicyError('Unknown backup schema')
-        manifest_files=manifest.get('files')
-        excluded=manifest.get('excluded')
-        external_map=manifest.get('external_files',{}) if manifest.get('schema')==2 else {}
-        if not isinstance(manifest_files,dict) or not isinstance(excluded,list) or not all(isinstance(x,str) for x in excluded):
-            raise PolicyError('Invalid backup manifest')
-        if not isinstance(external_map,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not safe_member(v) for k,v in external_map.items()):
-            raise PolicyError('Invalid inbound TLS backup mapping')
-        if any(v not in manifest_files for v in external_map.values()):raise PolicyError('Inbound TLS mapping references a missing member')
-        if set(manifest_files) != set(files)-{'manifest.json'}:
-            raise PolicyError('Incomplete backup manifest')
-        for name, expected in manifest_files.items():
-            if not isinstance(expected,str) or hashlib.sha256(files[name]).hexdigest() != expected:
-                raise PolicyError('Backup hash mismatch')
-        for name in ('data/dark.sqlite3','data/secret.key','config.json'):
-            if not files[name]:raise PolicyError('Required backup member empty')
-        cfg = json.loads(files['config.json'])
-        if not isinstance(cfg,dict):raise PolicyError('Panel configuration must be a JSON object')
-    except (KeyError,ValueError,TypeError,AttributeError) as exc:
-        raise PolicyError('Invalid required backup members') from exc
     dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with tempfile.TemporaryDirectory(prefix='.dark-restore-',dir=dest.parent) as tmp:
+        plain=Path(tmp)/'authenticated.zip'
+        if shutil.disk_usage(dest.parent).free<archive.stat().st_size+64*CHUNK:
+            raise PolicyError('Insufficient free disk space for restore')
+        decrypt_file(archive,plain,password)
         staging = Path(tmp)/'staging';staging.mkdir(mode=0o700)
-        for name, content in files.items():
-            out = staging/name;out.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-            private_write(out, content)
+        files={};hashes={};sizes={}
+        try:
+            with zipfile.ZipFile(plain) as z:
+                names=z.namelist();infos=z.infolist()
+                if len(names)>4096 or len(names)!=len(set(names)) or not all(safe_member(n) for n in names):
+                    raise PolicyError('Unsafe or duplicate backup members')
+                total=sum(i.file_size for i in infos)
+                if total>LIMIT:raise PolicyError('Decompressed backup exceeds 16 GiB')
+                if total+64*CHUNK>shutil.disk_usage(dest.parent).free:
+                    raise PolicyError('Insufficient free disk space for restore')
+                if sum(i.file_size for i in infos if i.filename!='data/dark.sqlite3')>METADATA_LIMIT:
+                    raise PolicyError('Backup metadata exceeds limit')
+                for info in infos:
+                    name=info.filename;out=staging/name
+                    out.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+                    digest=hashlib.sha256();size=0
+                    with z.open(info) as src,out.open('xb') as dst:
+                        os.chmod(out,0o600)
+                        while block:=src.read(CHUNK):
+                            size+=len(block)
+                            if size>info.file_size:raise PolicyError('Invalid backup member size')
+                            digest.update(block);dst.write(block)
+                    hashes[name]=digest.hexdigest();sizes[name]=size
+                    if name!='data/dark.sqlite3':files[name]=out.read_bytes()
+        except (zipfile.BadZipFile,KeyError) as ex:raise PolicyError('Invalid backup contents') from ex
+        try:
+            manifest = json.loads(files['manifest.json'])
+            if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') not in (1,2):
+                raise PolicyError('Unknown backup schema')
+            manifest_files=manifest.get('files')
+            excluded=manifest.get('excluded')
+            external_map=manifest.get('external_files',{}) if manifest.get('schema')==2 else {}
+            if not isinstance(manifest_files,dict) or not isinstance(excluded,list) or not all(isinstance(x,str) for x in excluded):
+                raise PolicyError('Invalid backup manifest')
+            if not isinstance(external_map,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not safe_member(v) for k,v in external_map.items()):
+                raise PolicyError('Invalid inbound TLS backup mapping')
+            if any(v not in manifest_files for v in external_map.values()):raise PolicyError('Inbound TLS mapping references a missing member')
+            if set(manifest_files) != set(hashes)-{'manifest.json'}:
+                raise PolicyError('Incomplete backup manifest')
+            for name, expected in manifest_files.items():
+                if not isinstance(expected,str) or hashes[name] != expected:
+                    raise PolicyError('Backup hash mismatch')
+            for name in ('data/dark.sqlite3','data/secret.key','config.json'):
+                if sizes.get(name,0)==0:raise PolicyError('Required backup member empty')
+            cfg = json.loads(files['config.json'])
+            if not isinstance(cfg,dict):raise PolicyError('Panel configuration must be a JSON object')
+        except (KeyError,ValueError,TypeError,AttributeError) as exc:
+            raise PolicyError('Invalid required backup members') from exc
         try:db = sqlite3.connect(staging/'data/dark.sqlite3')
         except sqlite3.Error as ex:raise PolicyError('Restored database cannot be opened') from ex
         try:
+            db.execute('PRAGMA mmap_size=268435456')
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':raise PolicyError('Restored database is invalid')
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {'clients','owners','api_admins','core_clients'} <= tables:raise PolicyError('Not a standalone DARK database')

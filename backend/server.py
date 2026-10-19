@@ -32,6 +32,7 @@ import psutil
 from fastapi import FastAPI,Depends,HTTPException,Request
 from fastapi.responses import JSONResponse,FileResponse,Response,RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from pydantic import BaseModel,ConfigDict,Field,StrictInt
 
 from auth import Auth,Principal,DEFAULTS,PERMISSIONS,digest
@@ -2595,37 +2596,49 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         config_path=Path(str(getattr(config,'_path','')))
         if not str(getattr(config,'_path','')) or config_path.is_symlink() or not config_path.is_file():
             raise HTTPException(409,'Full Web backup requires a file-backed DARK configuration')
-        with tempfile.TemporaryDirectory(prefix='dark-web-backup.') as td:
-            path=Path(td)/'dark-xray-full.darkbackup'
+        temp=tempfile.TemporaryDirectory(prefix='dark-web-backup.')
+        try:
+            path=Path(temp.name)/'dark-xray-full.darkbackup'
             manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase)
-            raw=path.read_bytes()
-        manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
-        stamp=time.strftime('%Y%m%d-%H%M%S');filename=f'DARK-XRAY-full-{stamp}.darkbackup'
-        runtime=getattr(app.state,'telegram_runtime',None)
-        if runtime:
-            try:
-                sha=hashlib.sha256(raw).hexdigest()
-                caption=f"DARK XRAY encrypted backup\nSchema: {manifest.get('schema',0)}\nBytes: {len(raw)}\nSHA256: {sha}"
-                if runtime.send_backup(p.actor.id,filename,raw,caption):
-                    manager.audit(p.actor,p.actor.id,'backup.telegram_sent','dark',filename+'; sha256='+sha)
-            except Exception as ex:
-                manager.audit(p.actor,p.actor.id,'backup.telegram_error','dark',type(ex).__name__+': '+str(ex)[:300])
-        return Response(raw,media_type='application/octet-stream',
-                        headers={'Content-Disposition':f'attachment; filename="{filename}"',
-                                 'X-DARK-Backup-Schema':str(manifest.get('schema',0))})
+            manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
+            stamp=time.strftime('%Y%m%d-%H%M%S');filename=f'DARK-XRAY-full-{stamp}.darkbackup'
+            runtime=getattr(app.state,'telegram_runtime',None)
+            if runtime:
+                try:
+                    # Telegram's upload API cannot deliver multi-gigabyte backups.
+                    if path.stat().st_size<=45*1024*1024:
+                        raw=path.read_bytes();sha=hashlib.sha256(raw).hexdigest()
+                        caption=f"DARK XRAY encrypted backup\nSchema: {manifest.get('schema',0)}\nBytes: {len(raw)}\nSHA256: {sha}"
+                        if runtime.send_backup(p.actor.id,filename,raw,caption):
+                            manager.audit(p.actor,p.actor.id,'backup.telegram_sent','dark',filename+'; sha256='+sha)
+                    else:
+                        manager.audit(p.actor,p.actor.id,'backup.telegram_skipped','dark','Archive exceeds upload limit; download through panel')
+                except Exception as ex:
+                    manager.audit(p.actor,p.actor.id,'backup.telegram_error','dark',type(ex).__name__+': '+str(ex)[:300])
+            return FileResponse(path,media_type='application/octet-stream',filename=filename,
+                                headers={'X-DARK-Backup-Schema':str(manifest.get('schema',0))},
+                                background=BackgroundTask(temp.cleanup))
+        except BaseException:
+            temp.cleanup();raise
 
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
-        import tempfile
-        with tempfile.TemporaryDirectory() as temp:
-            path=Path(temp)/'dark.sqlite3';store.backup(path)
-            data=path.read_bytes();stream=io.BytesIO()
-            manifest={'version':VERSION,'scope':'standalone-dark-database','runtime_tables_included':True,
-                'sha256':hashlib.sha256(data).hexdigest(),'requires_original_mfa_key':True}
-            with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as z:
-                z.writestr('dark.sqlite3',data);z.writestr('manifest.json',json.dumps(manifest,indent=2))
-        manager.audit(p.actor,p.actor.id,'backup.database','dark','MFA encryption key, certificates, runtime files and config must be backed up separately')
-        return Response(stream.getvalue(),media_type='application/zip',headers={'Content-Disposition':'attachment; filename="DARK-standalone-backup.zip"'})
+        from backup import backup_slot,file_hash
+        temp=tempfile.TemporaryDirectory(prefix='dark-database-backup.')
+        try:
+            path=Path(temp.name)/'dark.sqlite3';archive=Path(temp.name)/'backup.zip'
+            with backup_slot():
+                store.backup(path)
+                manifest={'version':VERSION,'scope':'standalone-dark-database','runtime_tables_included':True,
+                    'sha256':file_hash(path),'requires_original_mfa_key':True}
+                with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
+                    z.write(path,'dark.sqlite3');z.writestr('manifest.json',json.dumps(manifest,indent=2))
+                path.unlink()
+            manager.audit(p.actor,p.actor.id,'backup.database','dark','MFA encryption key, certificates, runtime files and config must be backed up separately')
+            return FileResponse(archive,media_type='application/zip',filename='DARK-standalone-backup.zip',
+                                background=BackgroundTask(temp.cleanup))
+        except BaseException:
+            temp.cleanup();raise
 
     @app.get('/sub/{public_token}')
     def subscription(public_token:str,request:Request):

@@ -593,10 +593,14 @@ class Store:
     def backup(self, destination: Path) -> None:
         if destination.exists(): raise PolicyError("Backup target already exists")
         destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-        with self.lock:
-            other=sqlite3.connect(destination)
-            try:self.db.backup(other)
-            finally:other.close()
+        if self.path != ':memory:':
+            from backup import snapshot_database
+            snapshot_database(Path(self.path),destination)
+        else:
+            with self.lock:
+                other=sqlite3.connect(destination)
+                try:self.db.backup(other)
+                finally:other.close()
         os.chmod(destination,0o600)
 
 
