@@ -188,9 +188,15 @@ async function go(page){setMobileMenu(false);state.page=page;darkSession.setItem
  // Show an honest loading state, fetch only this page's resource subset, and
  // fence late results when operators switch pages quickly.
  const hydration=++state.renderSeq,section=$('#content');
- if(section)section.textContent=uiText('Loading this section…','در حال دریافت اطلاعات همین بخش…');
- await load();
- if(state.page===page&&state.renderSeq===hydration)await renderPage();
+ if(section){section.setAttribute('aria-busy','true');section.textContent=uiText('Loading this section…','در حال دریافت اطلاعات همین بخش…');}
+ try{
+  await load();
+  if(state.page===page&&state.renderSeq===hydration)await renderPage();
+ }finally{
+  // An outer workspace loader may replace the shell before calling this router.
+  // Keep the new content busy too; never clear a newer navigation's marker.
+  if(state.page===page&&$('#content')===section)section?.removeAttribute('aria-busy');
+ }
 }
 function closeDialog(){const o=$('#overlay');o.classList.remove('show');o.style.display='none';o.innerHTML='';}
 function dialog(title,body,onSubmit=null,label='ذخیره'){const o=$('#overlay');o.innerHTML=`<div class="dialog" role="dialog" aria-modal="true" aria-label="${e(title)}"><form id="dialog-form"><header class="dialog-head"><h2>${e(title)}</h2><button type="button" class="icon-btn" data-act="close">${icon('close')}</button></header><div class="dialog-body">${body}<div class="form-error" id="form-error"></div></div><footer class="dialog-foot"><button type="button" class="btn" data-act="close">بستن</button>${onSubmit?`<button class="btn btn-primary" type="submit" id="submit-dialog">${e(label)}</button>`:''}</footer></form></div>`;o.style.display='flex';o.classList.add('show');if(onSubmit)$('#dialog-form').addEventListener('submit',async ev=>{ev.preventDefault();const b=$('#submit-dialog');b.disabled=true;$('#form-error').textContent='';try{await onSubmit(new FormData(ev.target),ev.target);}catch(ex){if($('#form-error'))$('#form-error').textContent=ex.message;else toast(ex.message,true);}finally{if(b.isConnected)b.disabled=false;}});setTimeout(()=>o.querySelector('input,select,button')?.focus(),20);}
