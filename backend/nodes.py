@@ -1054,7 +1054,7 @@ class NodeRegistry:
                 tuple(inbound_ids)).fetchall()
         return [str(r[0]) for r in rows]
 
-    def _node_source_scope_complete(self,node_id:str)->bool:
+    def _node_source_scope_complete(self,node_id:str,*,cache:dict|None=None)->bool:
         """True only when every desired customer listener on the Node exposes an end-user source.
 
         A shadow tunnel listener is intentionally treated as opaque until a
@@ -1063,7 +1063,19 @@ class NodeRegistry:
         with self.store.lock:
             row=self.store.db.execute('SELECT desired_json FROM remote_node_desired_state WHERE node_id=?',(node_id,)).fetchone()
         if not row:return False
-        try:payload=json.loads(row['desired_json'] or '{}')
+        raw=row['desired_json'] or '{}'
+        # Keep this cache local to one reconciliation, and compare the exact
+        # persisted payload on EVERY read. Even an unversioned concurrent edit
+        # must invalidate a prior result before it can clear a security block.
+        previous=cache.get(node_id) if cache is not None else None
+        if previous is not None and previous[0]==raw:return previous[1]
+        complete=self._source_scope_payload_complete(raw)
+        if cache is not None:cache[node_id]=(raw,complete)
+        return complete
+
+    @staticmethod
+    def _source_scope_payload_complete(raw:str)->bool:
+        try:payload=json.loads(raw)
         except Exception:return False
         assignments=payload.get('assignments',[]) if isinstance(payload,dict) else []
         if not isinstance(assignments,list):return False
@@ -1174,7 +1186,7 @@ class NodeRegistry:
                 args=tuple(scoped)
             sql+='ORDER BY c.id'
             metas=[dict(r) for r in self.store.db.execute(sql,args)]
-        changed=[];items=[]
+        changed=[];items=[];source_scope_cache={}
         for meta in metas:
             client_id=str(meta['id']);assigned=self._assigned_node_ids(client_id)
             try:local_required=any(int(i) not in remote_only for i in json.loads(meta['inbounds']))
@@ -1188,7 +1200,7 @@ class NodeRegistry:
             fresh=all(n in states and states[n]['last_sync'] and now-float(states[n]['last_sync'])<180
                       and not states[n]['last_error'] for n in assigned)
             verified=fresh and all(bool(states[n]['source_verified']) for n in assigned)
-            remote_scope_complete=fresh and all(self._node_source_scope_complete(n) for n in assigned)
+            remote_scope_complete=fresh and all(self._node_source_scope_complete(n,cache=source_scope_cache) for n in assigned)
             ip_values=set()
             if local_source_verified and local_required:
                 with self.store.lock:
