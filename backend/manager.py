@@ -233,7 +233,8 @@ class Manager:
         except Exception:pass
         best=(0.0,'none')
         with self.store.lock:
-            row=self.store.db.execute('SELECT MAX(observed_at) FROM traffic_ledger WHERE client_id=?',(email,)).fetchone()
+            from traffic_summary import activity
+            row=(activity(self.store.db,email),)
             if row and row[0]:best=(float(row[0]),'traffic')
             if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone():
                 row=self.store.db.execute('SELECT MAX(last_seen) FROM observations WHERE client_id=?',(email,)).fetchone()
@@ -257,13 +258,16 @@ class Manager:
             if old is None or value>old[0]:latest[str(email)]=(value,source)
         with self.store.lock:
             if emails is None:
-                for email,at in self.store.db.execute('SELECT client_id,MAX(observed_at) FROM traffic_ledger GROUP BY client_id'):
+                from traffic_summary import ready
+                query='SELECT client_id,last_seen FROM traffic_activity' if ready(self.store.db) else 'SELECT client_id,MAX(observed_at) FROM traffic_ledger GROUP BY client_id'
+                for email,at in self.store.db.execute(query):
                     keep(email,at,'traffic')
             else:
                 # Seek the last event for each requested client. Grouping the
                 # entire immutable ledger blocks every bot sharing this lock.
                 for email in dict.fromkeys(emails):
-                    row=self.store.db.execute('SELECT MAX(observed_at) FROM traffic_ledger WHERE client_id=?',(email,)).fetchone()
+                    from traffic_summary import activity
+                    row=(activity(self.store.db,email),)
                     if row and row[0]:keep(email,row[0],'traffic')
             if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='observations'").fetchone():
                 for email,at in self.store.db.execute('SELECT client_id,MAX(last_seen) FROM observations GROUP BY client_id'):

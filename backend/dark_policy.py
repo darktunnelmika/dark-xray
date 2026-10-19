@@ -210,7 +210,7 @@ class Store:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA busy_timeout=30000")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, SCHEMA_VERSION):
+        if version not in (0, 1, 2, 3, SCHEMA_VERSION, 5):
             raise PolicyError("Unrecognized database schema; refusing automatic downgrade")
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS owners(
@@ -293,6 +293,9 @@ class Store:
             self.db.execute("ALTER TABLE clients ADD COLUMN global_device_block INTEGER NOT NULL DEFAULT 0")
         from unlimited_credit import migrate
         migrate(self)
+        from traffic_summary import ensure
+        ensure(self.db)
+        if version==5:self.db.execute("PRAGMA user_version=5")
         if self.path != ":memory:":
             os.chmod(self.path, 0o600)
 
@@ -374,7 +377,9 @@ class Store:
 
     @staticmethod
     def _usage(db: sqlite3.Connection, owner: str, period: int | None = None) -> int:
-        sql = "SELECT COALESCE(SUM(up_bytes+down_bytes),0) FROM traffic_ledger WHERE owner=?"
+        from traffic_summary import ready
+        table="traffic_totals" if ready(db) else "traffic_ledger"
+        sql = "SELECT COALESCE(SUM(up_bytes+down_bytes),0) FROM "+table+" WHERE owner=?"
         args: tuple = (owner,)
         if period is not None:
             sql += " AND period=?"; args = (owner, period)
@@ -478,6 +483,9 @@ class Store:
         if up + down > MAX_INT: raise PolicyError("Counter overflow")
         with self.transaction() as db:
             previous = db.execute("SELECT * FROM traffic_ledger WHERE event_id=?", (event_id,)).fetchone()
+            if not previous:
+                from traffic_summary import previous_event
+                previous=previous_event(db,event_id)
             if previous:
                 if (previous["client_id"], previous["up_bytes"], previous["down_bytes"]) != (client_id, up, down):
                     raise PolicyError("Idempotency key reused for different traffic data")

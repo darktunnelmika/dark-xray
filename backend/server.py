@@ -2588,7 +2588,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                 'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup',
                 'full_backup_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup/full',
                 'full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',
-                'central_node_state_included':True,'restore_isolated':True}
+                'central_node_state_included':True,'restore_isolated':True,'backup_profile':'operational','history_included':False}
 
     @app.post('/api/backup/full')
     def backup_full(body:FullBackupBody,p:Principal=Depends(owner)):
@@ -2599,7 +2599,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         temp=tempfile.TemporaryDirectory(prefix='dark-web-backup.')
         try:
             path=Path(temp.name)/'dark-xray-full.darkbackup'
-            manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase)
+            manifest=create_backup(Path(store.path).parent,config_path,path,body.passphrase,profile="operational")
             manager.audit(p.actor,p.actor.id,'backup.full','dark','Encrypted Hub backup created; passphrase was not persisted')
             stamp=time.strftime('%Y%m%d-%H%M%S');filename=f'DARK-XRAY-full-{stamp}.darkbackup'
             runtime=getattr(app.state,'telegram_runtime',None)
@@ -2624,12 +2624,13 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/backup')
     def backup(p:Principal=Depends(owner)):
         from backup import backup_slot,file_hash
+        from traffic_summary import operational_snapshot
         temp=tempfile.TemporaryDirectory(prefix='dark-database-backup.')
         try:
             path=Path(temp.name)/'dark.sqlite3';archive=Path(temp.name)/'backup.zip'
             with backup_slot():
-                store.backup(path)
-                manifest={'version':VERSION,'scope':'standalone-dark-database','runtime_tables_included':True,
+                recovery=operational_snapshot(Path(store.path),path)
+                manifest={'version':VERSION,'scope':'operational-dark-database','runtime_tables_included':True,'recovery':recovery,
                     'sha256':file_hash(path),'requires_original_mfa_key':True}
                 with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
                     z.write(path,'dark.sqlite3');z.writestr('manifest.json',json.dumps(manifest,indent=2))
@@ -2871,6 +2872,7 @@ def main():
     serve=subs.add_parser('serve');serve.add_argument('--host',default=None);serve.add_argument('--port',type=int,default=None)
     subs.add_parser('check')
     b=subs.add_parser('backup');b.add_argument('--output',type=Path,required=True)
+    b.add_argument('--full-history',action='store_true',help='Include complete traffic history for archival recovery')
     r=subs.add_parser('restore');r.add_argument('--archive',type=Path,required=True);r.add_argument('--destination',type=Path,required=True)
     args=p.parse_args()
     if args.command in ('backup','restore'):
@@ -2879,7 +2881,7 @@ def main():
         pwd=getpass('Backup passphrase (at least 12 characters): ')
         if args.command=='backup':
             if pwd!=getpass('Repeat passphrase: '):raise SystemExit('Passphrases differ')
-            result=create_backup(args.data,args.config,args.output,pwd)
+            result=create_backup(args.data,args.config,args.output,pwd,profile="full" if args.full_history else "operational")
         else: result=restore_backup(args.archive,args.destination,pwd)
         print(json.dumps(result,indent=2));return
     args.data.mkdir(parents=True,exist_ok=True,mode=0o700)

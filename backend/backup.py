@@ -259,11 +259,12 @@ def prepare_restore_domain_recovery(db: sqlite3.Connection) -> dict:
     return {'domain_rows_reset':len(domains),'domains':domains,'frontend_rebuild_required':True}
 
 
-def create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
+def create_backup(data: Path, config: Path, output: Path, password: str, *, profile: str='full') -> dict:
     with backup_slot():
-        return _create_backup(data,config,output,password)
+        return _create_backup(data,config,output,password,profile=profile)
 
-def _create_backup(data: Path, config: Path, output: Path, password: str) -> dict:
+def _create_backup(data: Path, config: Path, output: Path, password: str, *, profile: str='full') -> dict:
+    if profile not in ('full','operational'):raise PolicyError('Unknown backup profile')
     data,config,output=Path(data),Path(config),Path(output)
     # These are privileged runtime inputs. Refuse indirection before resolve() so
     # a replaced config/database symlink cannot smuggle unrelated host files into
@@ -297,10 +298,14 @@ def _create_backup(data: Path, config: Path, output: Path, password: str) -> dic
             files[name] = path.read_bytes()
     with tempfile.TemporaryDirectory(prefix='dark-snapshot.') as temp:
         snapshot = Path(temp)/'snapshot.sqlite3'
-        if shutil.disk_usage(temp).free<2*dbfile.stat().st_size+64*CHUNK:
+        if profile=='full' and shutil.disk_usage(temp).free<2*dbfile.stat().st_size+64*CHUNK:
             raise PolicyError('Insufficient free disk space for snapshot and archive')
         try:
-            snapshot_database(dbfile,snapshot)
+            recovery={"profile":"full","history_included":True}
+            if profile=="operational":
+                from traffic_summary import operational_snapshot
+                recovery=operational_snapshot(dbfile,snapshot)
+            else:snapshot_database(dbfile,snapshot)
             db=sqlite3.connect(snapshot)
             try:
                 db.execute('PRAGMA mmap_size=268435456')
@@ -313,7 +318,7 @@ def _create_backup(data: Path, config: Path, output: Path, password: str) -> dic
         files.update(external_files)
         if sum(map(len,files.values()))>METADATA_LIMIT:
             raise PolicyError('Backup metadata exceeds limit')
-        manifest = {'schema': 2, 'project': 'DARK XRAY', 'version': project_version(),
+        manifest = {'schema': 3 if recovery.get('requires_summary_aware_restore') else 2, 'recovery':recovery, 'project': 'DARK XRAY', 'version': project_version(),
                     'files': {**{name: hashlib.sha256(raw).hexdigest() for name,raw in files.items()}, 'data/dark.sqlite3':file_hash(snapshot)},
                     'external_files': external_map,
                     'telegram_disaster_recovery':{
@@ -381,11 +386,11 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
         except (zipfile.BadZipFile,KeyError) as ex:raise PolicyError('Invalid backup contents') from ex
         try:
             manifest = json.loads(files['manifest.json'])
-            if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') not in (1,2):
+            if not isinstance(manifest,dict) or manifest.get('project') != 'DARK XRAY' or manifest.get('schema') not in (1,2,3):
                 raise PolicyError('Unknown backup schema')
             manifest_files=manifest.get('files')
             excluded=manifest.get('excluded')
-            external_map=manifest.get('external_files',{}) if manifest.get('schema')==2 else {}
+            external_map=manifest.get('external_files',{}) if manifest.get('schema') in (2,3) else {}
             if not isinstance(manifest_files,dict) or not isinstance(excluded,list) or not all(isinstance(x,str) for x in excluded):
                 raise PolicyError('Invalid backup manifest')
             if not isinstance(external_map,dict) or any(not isinstance(k,str) or not isinstance(v,str) or not safe_member(v) for k,v in external_map.items()):
@@ -408,6 +413,10 @@ def restore_backup(archive: Path, destination: Path, password: str) -> dict:
             db.execute('PRAGMA mmap_size=268435456')
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':raise PolicyError('Restored database is invalid')
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if manifest.get('schema')==3:
+                from traffic_summary import ready
+                if not ready(db) or db.execute('PRAGMA user_version').fetchone()[0]!=5:
+                    raise PolicyError('Operational accounting recovery metadata missing')
             if not {'clients','owners','api_admins','core_clients'} <= tables:raise PolicyError('Not a standalone DARK database')
             # Stolen old session cookies must not survive recovery. Older lab
             # snapshots without live_sessions remain restorable.
