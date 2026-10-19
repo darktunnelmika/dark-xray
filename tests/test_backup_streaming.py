@@ -96,3 +96,32 @@ def test_atomic_archive_publication_never_overwrites_existing_target(tmp_path):
     output.write_bytes(b'keep-me')
     with pytest.raises(FileExistsError):backup.encrypt_file(source,output,PASS)
     assert output.read_bytes()==b'keep-me'
+
+
+from test_hub_node_control_live import hub
+
+
+def test_database_http_download_is_complete_and_removes_request_files(hub,monkeypatch):
+    import server
+    reg,client,engine=hub
+    created=[];original_temp=server.tempfile.TemporaryDirectory
+    def tracked(*args,**kwargs):
+        result=original_temp(*args,**kwargs)
+        if kwargs.get('prefix')=='dark-database-backup.':created.append(Path(result.name))
+        return result
+    monkeypatch.setattr(server.tempfile,'TemporaryDirectory',tracked)
+    original_read=Path.read_bytes
+    def bounded(path):
+        assert path.suffix!='.sqlite3','HTTP route loaded the entire database'
+        return original_read(path)
+    monkeypatch.setattr(Path,'read_bytes',bounded)
+    response=client.get('/api/backup')
+    assert response.status_code==200,response.text
+    assert response.headers['content-type']=='application/zip'
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        assert z.testzip() is None
+        manifest=json.loads(z.read('manifest.json'))
+        import hashlib
+        assert hashlib.sha256(z.read('dark.sqlite3')).hexdigest()==manifest['sha256']
+        assert manifest['runtime_tables_included'] is True
+    assert created and all(not path.exists() for path in created)
