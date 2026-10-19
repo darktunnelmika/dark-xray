@@ -27,6 +27,8 @@ def test_credit_summary_never_scans_immutable_usage_ledger(env, monkeypatch):
     def no_ledger_read(*args, **kwargs):
         raise AssertionError("Historical ledger was scanned by the quick credit API")
 
+    # An uninitialized historical database must still avoid a ledger scan.
+    store.db.execute("UPDATE traffic_summary_state SET ready=0 WHERE id=1")
     monkeypatch.setattr(store, "_usage", no_ledger_read)
     quick = client.get("/api/resellers/quick")
     assert quick.status_code == 200, quick.text
@@ -132,3 +134,29 @@ def test_exhausted_volume_credit_is_not_confused_with_unlimited_units(env):
         assert store.db.execute(
             "SELECT COUNT(*) FROM clients WHERE owner='seller'"
         ).fetchone()[0]==2
+
+
+
+def test_quick_summary_returns_exact_period_and_lifetime_without_ledger_reads(env):
+    from dark_policy import Actor
+    store,engine,manager,auth,client=env
+    inbound=create_inbound(client)
+    assert client.put('/api/resellers/seller',json=rep_body(inbound)).status_code==200
+    with store.transaction() as db:
+        db.execute("INSERT INTO clients(id,owner) VALUES('meter-client','seller')")
+    assert store.record_usage('first-period','meter-client',100,200)
+    store.reset_owner_period(Actor('dark','owner',{}),'seller')
+    assert store.record_usage('second-period','meter-client',7,8)
+    # Reset/deletion must not erase representative accounting history.
+    store.reset_client_usage(Actor('dark','owner',{}),'meter-client')
+    store.delete_client(Actor('dark','owner',{}),'meter-client')
+    def deny_ledger(action,table,column,database,trigger):
+        return sqlite3.SQLITE_DENY if action==sqlite3.SQLITE_READ and table=='traffic_ledger' else sqlite3.SQLITE_OK
+    store.db.set_authorizer(deny_ledger)
+    try:
+        for route in ('/api/resellers/quick','/api/owners/quick'):
+            response=client.get(route);assert response.status_code==200,response.text
+            row=next(x for x in response.json() if x['id']=='seller')
+            assert row['used_bytes']==15 and row['lifetime_used_bytes']==315
+            assert row['traffic_totals_available'] is True and row['period']==1
+    finally:store.db.set_authorizer(None)

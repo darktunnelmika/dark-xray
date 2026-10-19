@@ -125,3 +125,16 @@ def test_database_http_download_is_complete_and_removes_request_files(hub,monkey
         assert hashlib.sha256(z.read('dark.sqlite3')).hexdigest()==manifest['sha256']
         assert manifest['runtime_tables_included'] is True
     assert created and all(not path.exists() for path in created)
+
+
+def test_backup_status_records_real_compact_archive_without_confusing_live_db(tmp_path):
+    data,config=minimal_source(tmp_path);out=tmp_path/'compact.darkbackup'
+    assert backup.last_operational_backup(data) is None
+    manifest=create_backup(data,config,out,PASS,profile='operational')
+    stats=backup.last_operational_backup(data)
+    assert stats['archive_bytes']==out.stat().st_size
+    assert stats['database_bytes']==manifest['recovery']['database_bytes']
+    assert stats['created_at']>0 and stats['duration_ms']>=0
+    assert PASS not in (data/'backup-operational-status.json').read_text()
+    with pytest.raises(PolicyError):create_backup(data,config,out,PASS,profile='operational')
+    assert backup.last_operational_backup(data)==stats

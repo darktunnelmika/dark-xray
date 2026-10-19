@@ -716,6 +716,10 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         manager.tick(suppress=True)
         return {'updated':True,'sessions_revoked':True}
 
+    def quick_usage_available()->bool:
+        from traffic_summary import ready
+        with store.lock:return ready(store.db)
+
     def representative_rows(p:Principal,*,include_usage:bool=True)->list[dict]:
         with store.lock:
             primary={r[0] for r in store.db.execute("SELECT id FROM api_admins WHERE role='owner'")}
@@ -736,8 +740,8 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
 
     @app.get('/api/resellers/quick')
     def representatives_quick(p:Principal=Depends(owner)):
-        # Credit position only: never await historical ledger aggregation.
-        return representative_rows(p,include_usage=False)
+        # Exact period/lifetime totals are cheap once the transactional summary is ready.
+        return representative_rows(p,include_usage=quick_usage_available())
 
     @app.get('/api/resellers')
     def representatives(p:Principal=Depends(owner)):
@@ -773,7 +777,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
                       'enabled='+str(body.enabled)+'; inbounds='+str(len(body.allowed))+
                       '; volume_credit_bytes='+str(body.volume_credit_bytes)+
                       '; unlimited_credit='+str(body.unlimited_credit))
-        return next(r for r in representative_rows(p,include_usage=False) if r['id']==reseller_id)
+        return next(r for r in representative_rows(p,include_usage=quick_usage_available()) if r['id']==reseller_id)
 
     @app.post('/api/resellers/{reseller_id}/credits')
     def representative_credit_adjust(reseller_id:str,body:ResourceCredit,p:Principal=Depends(owner)):
@@ -785,7 +789,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
         # Resource credit gates future allocation. Existing clients do not derive
         # runtime enablement from remaining credit, and reductions below current
         # allocation are rejected transactionally by Store.adjust_resource_credit.
-        row=next((r for r in representative_rows(p,include_usage=False) if r['id']==reseller_id),None)
+        row=next((r for r in representative_rows(p,include_usage=quick_usage_available()) if r['id']==reseller_id),None)
         if not row:raise HTTPException(404,'Representative not found')
         return {'recorded':recorded,'representative':row}
 
@@ -813,7 +817,7 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
     @app.get('/api/owners/quick')
     def owners_quick(p:Principal=Depends(current)):
         with store.lock:ids=[r[0] for r in store.db.execute('SELECT id FROM owner_profiles')]
-        return [store.owner_stats(p.actor,i,include_usage=False)|manager.profile(i)
+        return [store.owner_stats(p.actor,i,include_usage=quick_usage_available())|manager.profile(i)
                 for i in ids if p.actor.can('owners','read',i)]
 
     @app.get('/api/owners')
@@ -2584,7 +2588,9 @@ def make_app(manager:Manager,auth:Auth,*,background:bool=True)->FastAPI:
             managed=store.db.execute("SELECT COUNT(*) FROM managed_clients WHERE state!='deleted'").fetchone()[0]
             audits=store.db.execute('SELECT COUNT(*) FROM live_audit').fetchone()[0]
             groups=store.db.execute('SELECT COUNT(*) FROM client_groups').fetchone()[0] if store.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_groups'").fetchone() else 0
-        return {'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
+        from backup import last_operational_backup
+        latest=last_operational_backup(dbpath.parent) if dbpath else None
+        return {'last_operational_backup':latest,'database_bytes':database_bytes,'managed_clients':managed,'audit_rows':audits,'groups':groups,
                 'database_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup',
                 'full_backup_download':(config.panel_path if config.panel_path!='/' else '')+'/api/backup/full',
                 'full_backup_command':'sudo darkxray backup --output /root/dark-full.darkbackup',

@@ -75,6 +75,12 @@ with tempfile.TemporaryDirectory(prefix='dark-backup-browser-') as td:
                         with page.expect_download() as info:form.locator('button[type=submit]').click()
                         archive=root/f'{width}-{lang}.darkbackup';info.value.save_as(archive)
                         assert archive.is_file() and not archive.read_bytes().startswith(b'PK')
+                        page.wait_for_function("()=>document.querySelector('#overlay').style.display==='none'")
+                        shown=page.locator('.ov2-backup').inner_text()
+                        assert ('Last compact encrypted backup' if lang=='en' else 'آخرین بکاپ سبک رمزدار') in shown
+                        assert page.evaluate('bytes('+str(archive.stat().st_size)+')') in shown
+                        status=page.request.get(origin+'/api/backup/status').json()
+                        assert status['last_operational_backup']['archive_bytes']==archive.stat().st_size
                         restored=root/f'restored-{width}-{lang}'
                         result=restore_backup(archive,restored,archive_password)
                         assert result['dark_restore_recovery']['frontend_rebuild_required'] is True
@@ -104,3 +110,4 @@ with tempfile.TemporaryDirectory(prefix='dark-backup-browser-') as td:
         manager.close();engine.close();store.close()
         (OUT/'backup-recovery-browser.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
 print(json.dumps(report,ensure_ascii=False,indent=2))
+

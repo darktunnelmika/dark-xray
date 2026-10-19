@@ -259,9 +259,40 @@ def prepare_restore_domain_recovery(db: sqlite3.Connection) -> dict:
     return {'domain_rows_reset':len(domains),'domains':domains,'frontend_rebuild_required':True}
 
 
+def last_operational_backup(data: Path) -> dict | None:
+    path=Path(data)/'backup-operational-status.json'
+    try:
+        if path.is_symlink() or path.stat().st_size>4096:return None
+        value=json.loads(path.read_text())
+        if not isinstance(value,dict) or value.get('profile')!='operational':return None
+        for key in ('archive_bytes','database_bytes','created_at','duration_ms'):
+            if type(value.get(key)) is not int or value[key]<0:return None
+        return {key:value[key] for key in ('profile','archive_bytes','database_bytes','created_at','duration_ms')}
+    except (OSError,ValueError,TypeError):return None
+
+
 def create_backup(data: Path, config: Path, output: Path, password: str, *, profile: str='full') -> dict:
     with backup_slot():
-        return _create_backup(data,config,output,password,profile=profile)
+        started=time.monotonic()
+        manifest=_create_backup(data,config,output,password,profile=profile)
+        if profile=='operational':
+            # Record the completed archive size, never the historical live DB size.
+            # This is display metadata only; failure must not invalidate the archive.
+            temporary=None
+            try:
+                info={'profile':'operational','archive_bytes':Path(output).stat().st_size,
+                      'database_bytes':manifest['recovery']['database_bytes'],
+                      'created_at':int(time.time()),'duration_ms':round((time.monotonic()-started)*1000)}
+                fd,name=tempfile.mkstemp(prefix='.backup-status-',dir=data)
+                temporary=Path(name)
+                with os.fdopen(fd,'w') as stream:json.dump(info,stream)
+                if hasattr(os,'geteuid') and os.geteuid()==0:
+                    owner=Path(data).stat();os.chown(temporary,owner.st_uid,owner.st_gid)
+                os.replace(temporary,Path(data)/'backup-operational-status.json')
+            except OSError:pass
+            finally:
+                if temporary:temporary.unlink(missing_ok=True)
+        return manifest
 
 def _create_backup(data: Path, config: Path, output: Path, password: str, *, profile: str='full') -> dict:
     if profile not in ('full','operational'):raise PolicyError('Unknown backup profile')
@@ -314,6 +345,7 @@ def _create_backup(data: Path, config: Path, output: Path, password: str, *, pro
             finally:db.close()
         except sqlite3.Error as ex:
             raise PolicyError('Database snapshot could not be created safely') from ex
+        recovery['database_bytes']=snapshot.stat().st_size
         external_files,external_map=inbound_tls_files(snapshot)
         files.update(external_files)
         if sum(map(len,files.values()))>METADATA_LIMIT:
