@@ -1358,31 +1358,8 @@ class NodeRegistry:
         return {'nodes':len(items),'items':items,'kind':kind}
 
     def reset_client_traffic(self,client_id:str,reset_id:str)->dict:
-        if not isinstance(reset_id,str) or not 8<=len(reset_id)<=128:raise PolicyError('Invalid remote reset ID')
-        with self.store.lock:
-            meta=self.store.db.execute("SELECT inbounds FROM managed_clients WHERE email=? AND state!='deleted'",(client_id,)).fetchone()
-            if not meta:return {'nodes':0,'reset':True}
-            inbound_ids=sorted({int(x) for x in json.loads(meta['inbounds'])})
-            if not inbound_ids:return {'nodes':0,'reset':True}
-            marks=','.join('?' for _ in inbound_ids)
-            node_ids=[r[0] for r in self.store.db.execute(
-                'SELECT DISTINCT node_id FROM remote_node_inbounds WHERE remote_inbound_id>0 AND local_inbound_id IN ('+marks+') ORDER BY node_id',
-                tuple(inbound_ids))]
-        results=[]
-        for node_id in node_ids:
-            with self.installations.operation(node_id):
-                doc,ms=self._request(node_id,'/node/api/mirrors/traffic/reset','POST',
-                                      {'sourceEmail':client_id,'resetId':reset_id},12.0)
-                if not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id or type(doc.get('up')) is not int or type(doc.get('down')) is not int:
-                    raise PolicyError('Invalid node traffic reset response')
-                snap=self.apply_traffic_snapshot(node_id,[{'sourceEmail':client_id,'up':doc['up'],'down':doc['down']}],
-                                                 captured_at=time.time())
-                with self._node_transaction(node_id) as db:
-                    db.execute('''UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,current_up=0,current_down=0,
-                                  initialized=1,last_seen=? WHERE node_id=? AND client_id=?''',(time.time(),node_id,client_id))
-                    self._recompute_client_usage(db,client_id)
-                results.append({'node_id':node_id,'latency_ms':ms,'snapshot':snap,'cached':bool(doc.get('cached'))})
-        return {'nodes':len(results),'items':results,'reset':True}
+        from node_reset_accounting import reset_client_traffic
+        return reset_client_traffic(self,client_id,reset_id)
 
 
     @staticmethod
