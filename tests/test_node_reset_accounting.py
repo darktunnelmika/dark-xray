@@ -16,7 +16,7 @@ class Store:
         self.db.row_factory=sqlite3.Row
         self.lock=threading.RLock()
         self.db.executescript("""
-        CREATE TABLE remote_nodes(id TEXT PRIMARY KEY,enabled INT,maintenance INT);
+        CREATE TABLE remote_nodes(id TEXT PRIMARY KEY,enabled INT,maintenance INT,last_seen REAL DEFAULT 0);
         CREATE TABLE remote_node_inbounds(node_id TEXT,local_inbound_id INT,remote_inbound_id INT);
         CREATE TABLE managed_clients(email TEXT PRIMARY KEY,inbounds TEXT,state TEXT);
         CREATE TABLE remote_node_client_usage(node_id TEXT,client_id TEXT,raw_up INT,raw_down INT,
@@ -29,7 +29,7 @@ class Store:
         INSERT INTO owners VALUES('owner',0);
         INSERT INTO clients VALUES('alice','owner',250);
         INSERT INTO managed_clients VALUES('alice','[1]','applied');
-        INSERT INTO remote_nodes VALUES('de',1,0);
+        INSERT INTO remote_nodes(id,enabled,maintenance) VALUES('de',1,0);
         INSERT INTO remote_node_inbounds VALUES('de',1,1);
         INSERT INTO remote_node_client_usage VALUES('de','alice',100,150,100,150,5,1,0);
         """)
@@ -114,11 +114,44 @@ class TestResetOnce(unittest.TestCase):
 
     def test_disabled_retired_node_is_excluded(self):
         r=Registry()
-        r.store.db.execute("insert into remote_nodes values('nl',0,1)")
+        r.store.db.execute("insert into remote_nodes(id,enabled,maintenance) values('nl',0,1)")
         r.store.db.execute("insert into remote_node_inbounds values('nl',1,1)")
         r.store.db.commit()
         reset_client_traffic(r,'alice','idempotent-3')
         self.assertEqual(r.agent.calls,1)
+
+    def test_retired_node_usage_is_archived_then_reset_once(self):
+        r=Registry()
+        r.store.db.execute("insert into remote_nodes(id,enabled,maintenance,last_seen) values('nl',0,1,0)")
+        r.store.db.execute("insert into remote_node_inbounds values('nl',1,0)")
+        r.store.db.execute("insert into remote_node_client_usage values('nl','alice',200,328,200,328,8,1,0)")
+        r.store.db.execute("update clients set used_bytes=778 where id='alice'")
+        r.store.db.commit()
+        result=reset_client_traffic(r,'alice','retired-reset-1')
+        self.assertEqual(result['retired_usage_archived'],1)
+        row=r.store.db.execute(
+            "select raw_up,raw_down,current_up,current_down,initialized "
+            "from remote_node_client_usage where node_id='nl'").fetchone()
+        self.assertEqual(tuple(row),(0,0,0,0,0))
+        original=r.store.db.execute(
+            "select raw_up+raw_down,current_up+current_down from remote_retired_reset_archive"
+        ).fetchone()
+        self.assertEqual(tuple(original),(528,528))
+        self.assertEqual(r.store.db.execute("select used_bytes from clients").fetchone()[0],0)
+        reset_client_traffic(r,'alice','retired-reset-1')
+        self.assertEqual(r.agent.calls,1)
+        self.assertEqual(r.store.db.execute('select count(*) from remote_retired_reset_archive').fetchone()[0],1)
+
+    def test_recently_alive_retired_node_refuses_archival_reset(self):
+        r=Registry()
+        r.store.db.execute("insert into remote_nodes(id,enabled,maintenance,last_seen) values('nl',0,1,?)",(time.time(),))
+        r.store.db.execute("insert into remote_node_inbounds values('nl',1,0)")
+        r.store.db.execute("insert into remote_node_client_usage values('nl','alice',200,328,200,328,8,1,0)")
+        r.store.db.commit()
+        with self.assertRaises(PolicyError):
+            reset_client_traffic(r,'alice','retired-reset-2')
+        self.assertEqual(r.store.db.execute('select count(*) from remote_retired_reset_archive').fetchone()[0],0)
+        self.assertEqual(r.store.db.execute("select current_up+current_down from remote_node_client_usage where node_id='nl'").fetchone()[0],528)
 
     def test_enabled_node_in_maintenance_fails_closed(self):
         r=Registry()
@@ -138,7 +171,7 @@ class TestResetOnce(unittest.TestCase):
 
     def test_unretired_disabled_node_fails_closed(self):
         r=Registry()
-        r.store.db.execute("insert into remote_nodes values('nl',0,0)")
+        r.store.db.execute("insert into remote_nodes(id,enabled,maintenance) values('nl',0,0)")
         r.store.db.execute("insert into remote_node_inbounds values('nl',1,1)")
         r.store.db.commit()
         with self.assertRaises(PolicyError):
