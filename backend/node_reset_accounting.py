@@ -20,6 +20,69 @@ def ensure_schema(db):
         response_up INTEGER NOT NULL DEFAULT 0, response_down INTEGER NOT NULL DEFAULT 0,
         created_at REAL NOT NULL, applied_at REAL NOT NULL DEFAULT 0,
         PRIMARY KEY(node_id,reset_id))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS remote_retired_reset_archive(
+        node_id TEXT NOT NULL, reset_id TEXT NOT NULL, client_id TEXT NOT NULL,
+        raw_up INTEGER NOT NULL,raw_down INTEGER NOT NULL,
+        current_up INTEGER NOT NULL,current_down INTEGER NOT NULL,
+        seq INTEGER NOT NULL,was_initialized INTEGER NOT NULL,
+        retired_at REAL NOT NULL,
+        PRIMARY KEY(node_id,reset_id))""")
+
+
+def _archive_explicitly_retired_node_usage(registry, client_id, reset_id, inbound_ids):
+    """Preserve historical offboarded usage, never carry it into a new reset cycle.
+
+    A retired/unassigned Node cannot produce a new authenticated reset receipt.
+    Require explicit retirement AND an old enough heartbeat; retain the
+    immutable original traffic ledger and an archival pre-reset counter row.
+    Mark the offboarded raw baseline uninitialized so any future authorized
+    replacement cannot replay old counters as fresh traffic.
+    """
+    marks=','.join('?' for _ in inbound_ids)
+    with registry.store.transaction() as db:
+        rows=db.execute(
+            'SELECT DISTINCT r.node_id FROM remote_node_inbounds r '
+            'JOIN remote_nodes n ON n.id=r.node_id '
+            'WHERE r.local_inbound_id IN ('+marks+') '
+            'AND r.remote_inbound_id=0 AND n.enabled=0 AND n.maintenance=1 '
+            'ORDER BY r.node_id',tuple(inbound_ids)).fetchall()
+        changed=0
+        for node in rows:
+            node_id=node['node_id']
+            check=db.execute('SELECT enabled,maintenance,last_seen FROM remote_nodes '
+                             'WHERE id=?',(node_id,)).fetchone()
+            if not check or check['enabled'] or not check['maintenance'] or (
+                    float(check['last_seen'] or 0)>time.time()-3600):
+                raise PolicyError('Retired Node had a recent heartbeat; refusing local reset')
+            existing=db.execute(
+                'SELECT client_id FROM remote_retired_reset_archive '
+                'WHERE node_id=? AND reset_id=?',(node_id,reset_id)).fetchone()
+            if existing:
+                if existing['client_id']!=client_id:
+                    raise PolicyError('Retired Node archival reset identity conflict')
+                continue
+            state=db.execute(
+                'SELECT raw_up,raw_down,current_up,current_down,seq,initialized '
+                'FROM remote_node_client_usage WHERE node_id=? AND client_id=?',
+                (node_id,client_id)).fetchone()
+            if not state:
+                continue
+            now=time.time()
+            db.execute(
+                'INSERT INTO remote_retired_reset_archive '
+                '(node_id,reset_id,client_id,raw_up,raw_down,current_up,current_down,seq,was_initialized,retired_at) '
+                'VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (node_id,reset_id,client_id,
+                 state['raw_up'],state['raw_down'],state['current_up'],state['current_down'],
+                 state['seq'],state['initialized'],now))
+            db.execute(
+                'UPDATE remote_node_client_usage SET raw_up=0,raw_down=0,'
+                'current_up=0,current_down=0,initialized=0 '
+                'WHERE node_id=? AND client_id=?',(node_id,client_id))
+            changed+=1
+        if changed:
+            registry._recompute_client_usage(db,client_id)
+        return changed
 
 
 def reset_client_traffic(registry, client_id: str, reset_id: str) -> dict:
@@ -135,4 +198,5 @@ def reset_client_traffic(registry, client_id: str, reset_id: str) -> dict:
                            ('applied',doc['up'],doc['down'],time.time(),node_id,reset_id,'prepared'))
             items.append({'node_id':node_id,'latency_ms':latency,'cached':bool(doc.get('cached')),
                           'accounted_once':True})
-    return {'nodes':len(items),'items':items,'reset':True}
+    archived=_archive_explicitly_retired_node_usage(registry,client_id,reset_id,inbound_ids)
+    return {'nodes':len(items),'items':items,'reset':True,'retired_usage_archived':archived}
