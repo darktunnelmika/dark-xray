@@ -60,10 +60,9 @@ def reset_client_traffic(registry, client_id: str, reset_id: str) -> dict:
                     items.append({'node_id':node_id,'cached':True,'accounted_once':True})
                     continue
             else:
-                # Durable final checkpoint before mutating the remote counter.
-                # The remote Agent returns the pre-reset counters at the exact
-                # reset boundary so any small post-checkpoint difference is metered.
-                registry.sync_traffic(node_id)
+                # Persist the most recent Hub-metered Node baseline BEFORE the
+                # remote mutation. The Agent's final pre-reset receipt supplies
+                # any unmetered delta since this saved checkpoint.
                 with registry._node_transaction(node_id) as db:
                     existing=db.execute(
                         'SELECT * FROM remote_node_reset_receipts WHERE node_id=? AND reset_id=?',
