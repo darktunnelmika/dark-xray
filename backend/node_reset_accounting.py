@@ -136,5 +136,3 @@ def reset_client_traffic(registry, client_id: str, reset_id: str) -> dict:
             items.append({'node_id':node_id,'latency_ms':latency,'cached':bool(doc.get('cached')),
                           'accounted_once':True})
     return {'nodes':len(items),'items':items,'reset':True}
-
-[executed on device: dark-tr-01 (6a9f9955-05e2-4f3b-b6eb-ebd7dcbfe215)]
