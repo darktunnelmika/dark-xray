@@ -163,5 +163,3 @@ class TestResetOnce(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main(verbosity=2)
-
-[executed on device: dark-tr-01 (6a9f9955-05e2-4f3b-b6eb-ebd7dcbfe215)]
