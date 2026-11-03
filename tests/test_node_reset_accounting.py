@@ -120,6 +120,22 @@ class TestResetOnce(unittest.TestCase):
         reset_client_traffic(r,'alice','idempotent-3')
         self.assertEqual(r.agent.calls,1)
 
+    def test_enabled_node_in_maintenance_fails_closed(self):
+        r=Registry()
+        r.store.db.execute("update remote_nodes set maintenance=1 where id='de'")
+        r.store.db.commit()
+        with self.assertRaises(PolicyError):
+            reset_client_traffic(r,'alice','idempotent-8')
+        self.assertEqual(r.agent.calls,0)
+
+    def test_invalid_agent_receipt_does_not_mutate_counters(self):
+        r=Registry()
+        r._request=lambda *args: (None,3)
+        with self.assertRaises(PolicyError):
+            reset_client_traffic(r,'alice','idempotent-9')
+        self.assertEqual(r.store.db.execute('select up_bytes from traffic_ledger').fetchone(),None)
+        self.assertEqual(r.store.db.execute('select used_bytes from clients').fetchone()[0],250)
+
     def test_unretired_disabled_node_fails_closed(self):
         r=Registry()
         r.store.db.execute("insert into remote_nodes values('nl',0,0)")
