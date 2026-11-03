@@ -42,8 +42,10 @@ def reset_client_traffic(registry, client_id: str, reset_id: str) -> dict:
             tuple(inbound_ids)).fetchall()
         # A temporarily disabled Node still holds customer state. Only explicit
         # retirement (maintenance=1 + disabled) may exclude a former target.
-        if any(not bool(r['enabled']) and not bool(r['maintenance']) for r in rows):
-            raise PolicyError('Remote reset target is disabled but not retired')
+        if any(bool(r['enabled']) == bool(r['maintenance']) for r in rows):
+            # Both disabled-unretired and enabled-in-maintenance are unsafe.
+            # A maintenance flag alone never proves traffic has stopped.
+            raise PolicyError('Remote reset target has inconsistent retirement/maintenance state')
         node_ids=[r['node_id'] for r in rows if bool(r['enabled']) and not bool(r['maintenance'])]
     items=[]
     for node_id in node_ids:
@@ -86,14 +88,13 @@ def reset_client_traffic(registry, client_id: str, reset_id: str) -> dict:
             # because the Hub has committed the initial PREPARED baseline.
             doc,latency=registry._request(node_id,'/node/api/mirrors/traffic/reset','POST',
                 {'sourceEmail':client_id,'resetId':reset_id},12.0)
-            if bool(doc.get('cached')) and fresh_intent:
-                # After restoring an older Hub database, the Agent may have
-                # already executed this reset. Do not charge its old counters.
-                raise PolicyError('Cached Node reset predates durable Hub intent; manual reconciliation required')
             if (not isinstance(doc,dict) or doc.get('sourceEmail')!=client_id or
                 type(doc.get('up')) is not int or type(doc.get('down')) is not int or
                 doc['up']<0 or doc['down']<0 or doc['up']+doc['down']>MAX_INT):
                 raise PolicyError('Invalid durable Node reset receipt')
+            if doc.get('cached') is True and fresh_intent:
+                # An old Agent reset predating the Hub receipt cannot be replayed.
+                raise PolicyError('Cached Node reset predates durable Hub intent; manual reconciliation required')
             with registry._node_transaction(node_id) as db:
                 receipt=db.execute(
                     'SELECT * FROM remote_node_reset_receipts WHERE node_id=? AND reset_id=?',
