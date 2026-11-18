@@ -11,7 +11,7 @@
 #  DARKVPN-GRE-SCRIPT
 # ==============================================================================
 
-SCRIPT_VER="0.12.0-rc12"
+SCRIPT_VER="0.13.0"
 DEV_ID="@mikakhadm"
 BASE_DIR="/etc/dark-gre"
 TUN_DIR="$BASE_DIR/tunnels"
@@ -264,6 +264,10 @@ conf="$TUN_DIR/$name/meta.conf"; [ -r "$conf" ] || { echo "missing $conf" >&2; e
 . "$conf"
 GRE_KEY="${GRE_KEY:-0}"
 MTU_MODE="${MTU_MODE:-custom}"; PATH_MTU="${PATH_MTU:-0}"; RESTART_EVERY="${RESTART_EVERY:-off}"
+# Peer watch: one small ping through the tunnel every KEEPALIVE_SEC keeps the
+# path's GRE state alive on firewalls in between and tells us when it is lost.
+KEEPALIVE_SEC="${KEEPALIVE_SEC:-5}"; WATCH_FAILS="${WATCH_FAILS:-4}"
+STATE_DIR="/run/dark-gre"; state_file="$STATE_DIR/$name.state"
 PEER_ID="${PEER_ID:-$(printf '%s\n%s\n' "$LOCAL_PUBLIC" "$REMOTE_PUBLIC" | sort | tr '\n' '|' | sha256sum | cut -c1-12)}"
 nat_chain="DGRN_${ID}"; post_chain="DGRP_${ID}"; fw_chain="DGRF_${ID}"; mss_chain="DGRM_${ID}"
 sec_in_chain="DGRI_${ID}"; sec_out_chain="DGRO_${ID}"
@@ -292,6 +296,14 @@ apply_mss(){
   iptables -t mangle -C OUTPUT -j "$mss_chain" 2>/dev/null || iptables -t mangle -I OUTPUT 1 -j "$mss_chain"
   iptables -t mangle -C "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null ||
     iptables -t mangle -A "$mss_chain" -o "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+  # Both directions get the tunnel's own MSS as a ceiling (never raises one):
+  # the reply SYN coming out of the tunnel is not covered by the rule above.
+  local mss=$((MTU-40)) dir
+  [ "$mss" -ge 536 ] 2>/dev/null || return 0
+  for dir in -o -i; do
+    iptables -t mangle -C "$mss_chain" "$dir" "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$mss" 2>/dev/null ||
+      iptables -t mangle -A "$mss_chain" "$dir" "$IFNAME" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$mss" 2>/dev/null || true
+  done
 }
 apply_outer_guard(){
   remove_outer_guard
@@ -347,10 +359,58 @@ reconcile(){
   apply_outer_guard || return 1
   return 0
 }
+log(){ logger -t "darkgre[$name]" -- "$*" 2>/dev/null || true; echo "$*"; }
+write_state(){ # status fails rtt_ms
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  printf 'STATUS=%s\nFAILS=%s\nRTT_MS=%s\nSINCE=%s\nCHECKED=%s\nHEALS=%s\n' "$1" "$2" "$3" "$since" "$(date +%s)" "$heals" >"$state_file.tmp" 2>/dev/null &&
+    mv -f "$state_file.tmp" "$state_file" 2>/dev/null || true
+}
+peer_ping(){ # prints the round trip in ms; fails when the peer does not answer
+  local out
+  out="$(ping -4 -n -c 1 -W 2 -I "$IFNAME" "$REMOTE_TUN" 2>/dev/null)" || return 1
+  printf '%s\n' "$out" | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n1
+}
+# First a light repair (forget stale GRE flow state for this peer), later a
+# full rebuild of the tunnel interface and its rules.
+heal_soft(){
+  command -v conntrack >/dev/null 2>&1 || return 0
+  conntrack -D -p gre -s "$REMOTE_PUBLIC" >/dev/null 2>&1 || true
+  conntrack -D -p gre -d "$REMOTE_PUBLIC" >/dev/null 2>&1 || true
+}
+heal_hard(){ gre_down || true; gre_up || true; heals=$((heals+1)); }
 watch_loop(){
+  local fails=0 status=unknown seen=0 rtt tick=0
+  since="$(date +%s)"; heals=0
+  case "$KEEPALIVE_SEC" in ''|*[!0-9]*|0) KEEPALIVE_SEC=5;; esac
+  case "$WATCH_FAILS" in ''|*[!0-9]*|0) WATCH_FAILS=4;; esac
   while :; do
-    reconcile || true
-    sleep 15
+    # Every ~15 s as before: the interface and its rules must exist.
+    if [ $((tick % 3)) -eq 0 ]; then reconcile || true; fi
+    tick=$((tick+1))
+    if rtt="$(peer_ping)"; then
+      if [ "$status" != up ]; then
+        [ "$status" = down ] && log "peer $REMOTE_TUN answers again after $fails missed checks"
+        status=up; since="$(date +%s)"
+      fi
+      fails=0; seen=1
+      write_state up 0 "${rtt:-0}"
+    else
+      fails=$((fails+1))
+      if [ "$fails" -eq "$WATCH_FAILS" ]; then
+        status=down; since="$(date +%s)"
+        log "peer $REMOTE_TUN silent for $fails checks - clearing stale GRE state"
+        heal_soft
+      fi
+      # Rebuild only a tunnel that has worked since this watcher started: a peer
+      # that never answers ping (ICMP closed there) must not be rebuilt in a loop.
+      if [ "$seen" = 1 ] && [ "$fails" -ge $((WATCH_FAILS*2)) ] &&
+         { [ "$fails" -eq $((WATCH_FAILS*2)) ] || [ $(( (fails - WATCH_FAILS*2) % 60 )) -eq 0 ]; }; then
+        log "peer $REMOTE_TUN still silent - rebuilding tunnel $IFNAME"
+        heal_hard
+      fi
+      [ "$fails" -ge "$WATCH_FAILS" ] && write_state down "$fails" 0 || write_state "$status" "$fails" 0
+    fi
+    sleep "$KEEPALIVE_SEC"
   done
 }
 case "$action" in
@@ -587,6 +647,15 @@ pair_integrity_check(){
   fi
   bot
 }
+# What the peer watcher last saw: round trip, and rebuilds since it started.
+watch_note(){
+  local f="/run/dark-gre/$1.state" STATUS="" RTT_MS="" HEALS="" FAILS="" SINCE="" CHECKED=""
+  [ -r "$f" ] || return 0
+  . "$f" 2>/dev/null || return 0
+  [ "$STATUS" = up ] && printf '  rtt=%sms' "${RTT_MS:-?}"
+  [ "${HEALS:-0}" -gt 0 ] 2>/dev/null && printf '  rebuilds=%s' "$HEALS"
+  return 0
+}
 health_check(){
   header "HEALTH CHECK"
   local d st rx tx okn=0 badn=0
@@ -595,7 +664,7 @@ health_check(){
     [ -r "$d/meta.conf" ] || continue; . "$d/meta.conf"; st="$(service_state "$NAME")"
     read -r rx tx <<<"$(tunnel_traffic "$NAME")"
     if [ "$st" = active ] && ip link show "$IFNAME" >/dev/null 2>&1 && ping -c1 -W1 "$REMOTE_TUN" >/dev/null 2>&1; then
-      ok "$NAME  $ROLE  peer ok  mtu=$MTU  mode=plain  traffic $(human_bytes "$rx")/$(human_bytes "$tx")"; okn=$((okn+1))
+      ok "$NAME  $ROLE  peer ok  mtu=$MTU  mode=plain  traffic $(human_bytes "$rx")/$(human_bytes "$tx")$(watch_note "$NAME")"; okn=$((okn+1))
     else
       bad "$NAME  state=$st  peer=$REMOTE_TUN  mode=plain"; badn=$((badn+1))
     fi
