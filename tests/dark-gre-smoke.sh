@@ -45,7 +45,7 @@ grep -q 'Restart=always' "$WATCH_UNIT"
 ! grep -q 'strongswan' "$UNIT_FILE"
 ! grep -q 'strongswan' "$WATCH_UNIT"
 test ! -e "$WATCH_TIMER"
-grep -q 'sleep 15' "$RUNNER"
+grep -q 'sleep "$KEEPALIVE_SEC"' "$RUNNER"
 grep -q 'DARK_GRE_REPAIR_ONLY=1' "$INSTALLER"
 
 NAME=testgre
